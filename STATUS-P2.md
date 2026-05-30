@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-p2-background-origin: background-origin rendering — вычисление positioning area из `layer.origin` в display list + renderer  branch: p2-background-origin
-Next step: добавить `origin_rect: Rect` к `DrawBackgroundImage` в `paint/src/display_list.rs:284`
+_(none)_
 
 ---
 
@@ -23,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-background-origin** ✅ 2026-05-30 — `background-origin` rendering: `background_origin_rect()` в `paint/src/display_list.rs` вычисляет positioning area (border/padding/content-box). `DrawBackgroundImage.origin_rect: Rect` — отдельный positioning rect независимо от clip. Renderer использует `oarea` для cover/contain ratio и `background-position` % offset, `area` (clip) только для x_end/y_end тайл-границ. 4 unit-теста. Graphic test 53.
 - **p2-print-pages-renderer** ✅ 2026-05-30 — Print PDF renderer side: `DisplayCommand::PageBreak` маркер страницы, `build_print_display_list(pages: &[Page]) -> DisplayList` (фрагменты → page-local координаты через `PushTransform`), `split_at_page_breaks(cmds) -> Vec<Vec<DisplayCommand>>` (разбивает DL по маркерам), `Renderer::render_print_pages(font_bytes, pages, w, h) -> Result<Vec<Image>, _>` (headless render per page). 6 новых unit-тестов. Всего lumen-paint: 411 unit + 21 snapshot. P3 handoff: shell `--print-to-pdf` → собирает `Vec<Image>` → PDF через pdf-writer crate.
 - **p2-memory-pressure** ✅ 2026-05-30 — `MemoryPressureSource` trait + `MemoryPressureLevel { Low, Medium, High }` + `NullMemoryPressureSource` в `lumen-core::ext`. Платформенные реализации в `core/src/memory_pressure.rs`: `Win32MemoryPressureSource` (`GlobalMemoryStatusEx`, `cfg(windows)`) + `LinuxMemoryPressureSource` (`/proc/pressure/memory` PSI avg10, `cfg(linux)`). Кэши подписаны: `ImageDecodeCache::on_memory_pressure` (4 теста), `GlyphAtlas::on_memory_pressure` (3 теста), `LayerCache::on_memory_pressure` (3 теста). 13 новых unit-тестов. Pending: macOS impl (10H.4) + shell integration (poll loop + tier trigger).
 - **p2-text-shadow-blur** ✅ 2026-05-30 — `text-shadow` blur рендеринг: `emit_text_shadows()` в `paint/src/display_list.rs` оборачивает `DrawText` в `PushFilter{Blur(sigma)}/PopFilter` когда `shadow.blur > 0` (sigma = blur/2.0). Повторно использует Gaussian blur GPU-пасс из box-shadow и CSS `filter:blur()`. Порядок сохранён (обратный CSS-список). 3 unit-теста. Graphic test 52.
