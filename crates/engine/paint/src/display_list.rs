@@ -3281,16 +3281,16 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                 }
                 // CSS: stroke-linecap, stroke-linejoin, stroke-miterlimit — P4 wires.
                 // CSS: stroke-dasharray, stroke-dashoffset — P4 wires.
-                if let Some(sc) = stroke_color {
-                    if stroke_w > 0.0 {
-                        let vertices = crate::svg_path::tessellate_stroke(&contours, stroke_w * 0.5);
-                        if !vertices.is_empty() {
-                            let shifted: Vec<[f32; 2]> = vertices
-                                .iter()
-                                .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
-                                .collect();
-                            out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
-                        }
+                if let Some(sc) = stroke_color
+                    && stroke_w > 0.0
+                {
+                    let vertices = crate::svg_path::tessellate_stroke(&contours, stroke_w * 0.5);
+                    if !vertices.is_empty() {
+                        let shifted: Vec<[f32; 2]> = vertices
+                            .iter()
+                            .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
+                            .collect();
+                        out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
                     }
                 }
             }
