@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+**8A.6(б-12) фильтры (blur + color) в cpu_raster + страницы 15/52**  branch: `p3-8a6-cpu-filter`
+Next step: реализовать `PushFilter`/`PopFilter` в `crates/engine/paint/src/cpu_raster.rs:243` (ветка `_`), затем добавить `15-box-shadow`/`52-text-shadow-blur` в `PAGES` (`crates/driver/tests/snapshot_cpu.rs:57`).
 
 ## Next
 
