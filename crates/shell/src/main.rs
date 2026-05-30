@@ -4233,6 +4233,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskRadialGradient { rect, .. }
             | DisplayCommand::PushMaskConicGradient { rect, .. }
             | DisplayCommand::PushMaskLayer { rect, .. } => rect,
+            DisplayCommand::DrawCrossFade { dest, .. } => dest,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
@@ -4287,6 +4288,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskRadialGradient { rect, .. }
             | DisplayCommand::PushMaskConicGradient { rect, .. }
             | DisplayCommand::PushMaskLayer { rect, .. } => rect,
+            DisplayCommand::DrawCrossFade { dest, .. } => dest,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity

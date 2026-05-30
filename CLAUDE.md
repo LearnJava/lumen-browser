@@ -367,17 +367,20 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 23 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 24 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
 covers FillRect/FillRoundedRect/DrawBorder/DrawOutline, linear+radial gradients (incl.
 repeating; page `39-gradients`), tessellated SVG paths (`DrawSvgPath`; SVG basic shapes
 rect/circle/ellipse/line reuse the rect/rounded-rect/border primitives — page `47-svg-basic`)
-and rectangular clipping (`PushClipRect`/`PopClip` + `PushScrollLayer`/`PopScrollLayer`, i.e.
+rectangular clipping (`PushClipRect`/`PopClip` + `PushScrollLayer`/`PopScrollLayer`, i.e.
 `overflow: hidden/scroll/auto` — page `14-overflow`; a tiny-skia `Mask` is applied only to draws
 that actually cross a clip edge, so fully-contained content stays byte-identical to the unclipped
-path). Coverage of text/image pages grows as `cpu_raster` gains those primitives.
+path), and the `<img>` grey placeholder quad (`DrawImage` → `rgba8(217,217,217,255)`; the headless
+CPU path registers no decoded pixels, so it mirrors the GPU renderer's placeholder fallback — page
+`18-images`, all `<img>` have empty `alt`). Coverage of text pages grows as `cpu_raster` gains
+the text primitive.
 
 ---
 

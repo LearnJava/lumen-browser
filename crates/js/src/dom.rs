@@ -684,6 +684,7 @@ fn install_primitives(
 
         let cache: Arc<Mutex<Option<FetchCache>>> = Arc::new(Mutex::new(None));
 
+        let fp2 = fetch_provider.clone();
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
         reg!("_lumen_fetch_sync", move |url: String, method: String| -> bool {
             let Some(ref provider) = fp else { return false };
@@ -740,6 +741,42 @@ fn install_primitives(
                 .as_ref()
                 .map_or_else(Vec::new, |r| r.body.clone())
         });
+
+        // _lumen_fetch_sync_with_body(url, method, content_type, body_bytes) → bool
+        // Used by fetch() when init.body is present (FormData, string, ArrayBuffer).
+        // Shares the same FetchCache slot as _lumen_fetch_sync.
+        {
+            let fetch_provider2 = fp2;
+            let c2 = Arc::clone(&cache);
+            reg!(
+                "_lumen_fetch_sync_with_body",
+                move |url: String, method: String, content_type: String, body: Vec<u8>| -> bool {
+                    let Some(ref provider) = fetch_provider2 else {
+                        return false;
+                    };
+                    match provider.fetch_with_body_sync(&url, &method, &content_type, &body) {
+                        Ok(resp) => {
+                            let mut flat = Vec::with_capacity(resp.headers.len() * 2);
+                            for (k, v) in resp.headers {
+                                flat.push(k);
+                                flat.push(v);
+                            }
+                            *c2.lock().unwrap() = Some(FetchCache {
+                                status: resp.status,
+                                status_text: resp.status_text,
+                                headers: flat,
+                                body: resp.body,
+                            });
+                            true
+                        }
+                        Err(e) => {
+                            eprintln!("fetch_with_body error: {e}");
+                            false
+                        }
+                    }
+                }
+            );
+        }
     }
 
     // ── WebSocket API ─────────────────────────────────────────────────────────
@@ -2407,13 +2444,225 @@ Request.prototype.clone = function() {
     });
 };
 
+// ── FormData (XHR Spec §4 / Fetch Spec) ────────────────────────────────────
+// Stores an ordered list of (name, value) pairs. Values are always strings
+// (File/Blob support is Phase 2+). Serializes to application/x-www-form-urlencoded.
+
+function FormData(formEl) {
+    this._entries = [];
+    if (formEl && typeof formEl === 'object' && formEl.tagName === 'FORM') {
+        var inputs = formEl.querySelectorAll('input,select,textarea');
+        for (var i = 0; i < inputs.length; i++) {
+            var el = inputs[i];
+            var name = el.getAttribute('name');
+            if (!name) { continue; }
+            var type = (el.getAttribute('type') || '').toLowerCase();
+            if (type === 'checkbox' || type === 'radio') {
+                if (!el.checked) { continue; }
+            }
+            if (type === 'submit' || type === 'reset' || type === 'button' || type === 'image') { continue; }
+            this._entries.push([String(name), String(el.value || '')]);
+        }
+    }
+}
+
+FormData.prototype.append = function(name, value) {
+    this._entries.push([String(name), String(value)]);
+};
+
+FormData.prototype.delete = function(name) {
+    var n = String(name);
+    this._entries = this._entries.filter(function(e) { return e[0] !== n; });
+};
+
+FormData.prototype.get = function(name) {
+    var n = String(name);
+    for (var i = 0; i < this._entries.length; i++) {
+        if (this._entries[i][0] === n) { return this._entries[i][1]; }
+    }
+    return null;
+};
+
+FormData.prototype.getAll = function(name) {
+    var n = String(name);
+    return this._entries.filter(function(e) { return e[0] === n; }).map(function(e) { return e[1]; });
+};
+
+FormData.prototype.has = function(name) {
+    var n = String(name);
+    return this._entries.some(function(e) { return e[0] === n; });
+};
+
+FormData.prototype.set = function(name, value) {
+    var n = String(name), v = String(value);
+    var found = false;
+    this._entries = this._entries.filter(function(e) {
+        if (e[0] === n) {
+            if (!found) { found = true; e[1] = v; return true; }
+            return false;
+        }
+        return true;
+    });
+    if (!found) { this._entries.push([n, v]); }
+};
+
+FormData.prototype.entries = function() {
+    var arr = this._entries.slice();
+    var i = 0;
+    return {
+        next: function() {
+            if (i < arr.length) { return { value: arr[i++], done: false }; }
+            return { value: undefined, done: true };
+        },
+        [Symbol.iterator]: function() { return this; }
+    };
+};
+
+FormData.prototype.keys = function() {
+    var arr = this._entries.map(function(e) { return e[0]; });
+    var i = 0;
+    return {
+        next: function() {
+            if (i < arr.length) { return { value: arr[i++], done: false }; }
+            return { value: undefined, done: true };
+        },
+        [Symbol.iterator]: function() { return this; }
+    };
+};
+
+FormData.prototype.values = function() {
+    var arr = this._entries.map(function(e) { return e[1]; });
+    var i = 0;
+    return {
+        next: function() {
+            if (i < arr.length) { return { value: arr[i++], done: false }; }
+            return { value: undefined, done: true };
+        },
+        [Symbol.iterator]: function() { return this; }
+    };
+};
+
+FormData.prototype.forEach = function(cb, thisArg) {
+    for (var i = 0; i < this._entries.length; i++) {
+        cb.call(thisArg, this._entries[i][1], this._entries[i][0], this);
+    }
+};
+
+FormData.prototype[Symbol.iterator] = function() { return this.entries(); };
+
+/// Serialize to application/x-www-form-urlencoded (RFC 3986 percent-encoding).
+FormData.prototype._toUrlEncoded = function() {
+    return this._entries.map(function(e) {
+        return encodeURIComponent(e[0]) + '=' + encodeURIComponent(e[1]);
+    }).join('&');
+};
+
+// ── TextEncoder / TextDecoder (WHATWG Encoding §8–9) ─────────────────────────
+// Pure-JS UTF-8 implementation; QuickJS does not provide a built-in.
+
+function TextEncoder() {}
+TextEncoder.prototype.encoding = 'utf-8';
+TextEncoder.prototype.encode = function(str) {
+    var s = String(str === undefined ? '' : str);
+    var bytes = [];
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charCodeAt(i);
+        if (c < 0x80) {
+            bytes.push(c);
+        } else if (c < 0x800) {
+            bytes.push(0xC0 | (c >> 6));
+            bytes.push(0x80 | (c & 0x3F));
+        } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
+            var lo = s.charCodeAt(i + 1);
+            var cp = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
+            bytes.push(0xF0 | (cp >> 18));
+            bytes.push(0x80 | ((cp >> 12) & 0x3F));
+            bytes.push(0x80 | ((cp >> 6) & 0x3F));
+            bytes.push(0x80 | (cp & 0x3F));
+            i++;
+        } else {
+            bytes.push(0xE0 | (c >> 12));
+            bytes.push(0x80 | ((c >> 6) & 0x3F));
+            bytes.push(0x80 | (c & 0x3F));
+        }
+    }
+    return new Uint8Array(bytes);
+};
+
+function TextDecoder(label) {
+    this.encoding = (label || 'utf-8').toLowerCase();
+}
+TextDecoder.prototype.decode = function(buf) {
+    var bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf instanceof ArrayBuffer ? buf : new ArrayBuffer(0));
+    var str = '', i = 0;
+    while (i < bytes.length) {
+        var b = bytes[i++];
+        if (b < 0x80) {
+            str += String.fromCharCode(b);
+        } else if ((b & 0xE0) === 0xC0) {
+            str += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i++] & 0x3F));
+        } else if ((b & 0xF0) === 0xE0) {
+            str += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F));
+        } else {
+            var hi = ((b & 0x07) << 18) | ((bytes[i++] & 0x3F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F);
+            hi -= 0x10000;
+            str += String.fromCharCode(0xD800 + (hi >> 10), 0xDC00 + (hi & 0x3FF));
+        }
+    }
+    return str;
+};
+
 // fetch() (Fetch Standard §3) — synchronous under the hood, wrapped in Promise.
+// Supports request body: FormData → application/x-www-form-urlencoded,
+// string → text/plain;charset=UTF-8, Uint8Array/ArrayBuffer → application/octet-stream.
 function fetch(input, init) {
     try {
         var url = typeof input === 'string' ? input : (input && input.url ? input.url : String(input));
         var method = (init && init.method) ? String(init.method).toUpperCase() :
                      (typeof input === 'object' && input.method ? input.method.toUpperCase() : 'GET');
-        var ok = _lumen_fetch_sync(url, method);
+
+        var reqBody = (init && init.body !== undefined && init.body !== null) ? init.body
+                    : (typeof input === 'object' && input.body ? input.body : null);
+
+        var ok;
+        if (reqBody !== null && reqBody !== undefined) {
+            var bodyBytes, contentType;
+            if (reqBody instanceof FormData) {
+                var enc = reqBody._toUrlEncoded();
+                bodyBytes = Array.from(new TextEncoder().encode(enc));
+                contentType = 'application/x-www-form-urlencoded';
+            } else if (typeof reqBody === 'string') {
+                bodyBytes = Array.from(new TextEncoder().encode(reqBody));
+                contentType = 'text/plain;charset=UTF-8';
+            } else if (reqBody instanceof Uint8Array || reqBody instanceof ArrayBuffer) {
+                bodyBytes = reqBody instanceof Uint8Array ? Array.from(reqBody) : Array.from(new Uint8Array(reqBody));
+                contentType = 'application/octet-stream';
+            } else {
+                var s = String(reqBody);
+                bodyBytes = Array.from(new TextEncoder().encode(s));
+                contentType = 'text/plain;charset=UTF-8';
+            }
+            // Caller may override Content-Type via headers.
+            var initHeaders = (init && init.headers) ? init.headers : null;
+            if (initHeaders) {
+                var lowerKeys = {};
+                if (Array.isArray(initHeaders)) {
+                    for (var i = 0; i < initHeaders.length; i++) {
+                        if (initHeaders[i][0].toLowerCase() === 'content-type') {
+                            contentType = initHeaders[i][1];
+                        }
+                    }
+                } else if (typeof initHeaders === 'object') {
+                    for (var k in initHeaders) {
+                        if (k.toLowerCase() === 'content-type') { contentType = initHeaders[k]; }
+                    }
+                }
+            }
+            ok = _lumen_fetch_sync_with_body(url, method, contentType, bodyBytes);
+        } else {
+            ok = _lumen_fetch_sync(url, method);
+        }
+
         if (!ok) {
             return Promise.reject(new TypeError('fetch: network error for ' + url));
         }
@@ -2919,6 +3168,9 @@ var window = {
     Headers: Headers,
     AbortController: AbortController,
     AbortSignal: AbortSignal,
+    FormData: FormData,
+    TextEncoder: TextEncoder,
+    TextDecoder: TextDecoder,
     localStorage: localStorage,
     sessionStorage: sessionStorage,
     _lumen_dispatch_composition: _lumen_dispatch_composition,
@@ -6539,11 +6791,11 @@ mod tests {
             super::find_element_by_tag(&doc, "body").unwrap().index() as u32
         };
         rt.update_layout_rects([(nid, [5.0, 10.0, 200.0, 100.0])].into_iter().collect());
-        let x = rt.eval(&format!("document.body.getBoundingClientRect().x")).unwrap();
+        let x = rt.eval("document.body.getBoundingClientRect().x").unwrap();
         assert_eq!(x, lumen_core::JsValue::Number(5.0));
-        let w = rt.eval(&format!("document.body.getBoundingClientRect().width")).unwrap();
+        let w = rt.eval("document.body.getBoundingClientRect().width").unwrap();
         assert_eq!(w, lumen_core::JsValue::Number(200.0));
-        let bottom = rt.eval(&format!("document.body.getBoundingClientRect().bottom")).unwrap();
+        let bottom = rt.eval("document.body.getBoundingClientRect().bottom").unwrap();
         assert_eq!(bottom, lumen_core::JsValue::Number(110.0));
     }
 
@@ -7542,5 +7794,246 @@ mod tests {
         "#).unwrap();
         // A read-only flush must not have re-persisted (sentinel intact).
         assert_eq!(cell.lock().unwrap().as_deref(), Some("SENTINEL"));
+    }
+
+    // ── FormData API tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn formdata_class_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof FormData === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_window_constructor_exposed() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.FormData === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_append_and_get() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var fd = new FormData(); fd.append('name', 'alice'); fd.get('name')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("alice".into()));
+    }
+
+    #[test]
+    fn formdata_get_missing_returns_null() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var fd = new FormData(); fd.get('nope') === null").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_has_returns_true_when_present() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var fd = new FormData(); fd.append('k', 'v'); fd.has('k')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_has_returns_false_when_absent() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var fd = new FormData(); fd.has('nope')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn formdata_delete_removes_entries() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('x', '1'); fd.append('x', '2'); \
+             fd.delete('x'); fd.has('x')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn formdata_get_all_returns_all_values() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('k', 'a'); fd.append('k', 'b'); \
+             fd.getAll('k').join(',')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("a,b".into()));
+    }
+
+    #[test]
+    fn formdata_set_replaces_first_occurrence() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('k', 'old1'); fd.append('k', 'old2'); \
+             fd.set('k', 'new'); fd.getAll('k').length + ':' + fd.get('k')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("1:new".into()));
+    }
+
+    #[test]
+    fn formdata_to_url_encoded_basic() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('a', '1'); fd.append('b', '2'); \
+             fd._toUrlEncoded()"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("a=1&b=2".into()));
+    }
+
+    #[test]
+    fn formdata_to_url_encoded_percent_encodes_spaces() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('full name', 'hello world'); \
+             fd._toUrlEncoded()"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("full%20name=hello%20world".into()));
+    }
+
+    #[test]
+    fn formdata_to_url_encoded_percent_encodes_ampersand() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('q', 'a&b=c'); \
+             fd._toUrlEncoded()"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("q=a%26b%3Dc".into()));
+    }
+
+    #[test]
+    fn formdata_keys_iterator() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('x', '1'); fd.append('y', '2'); \
+             var keys = []; var it = fd.keys(); var n; \
+             while (!(n = it.next()).done) { keys.push(n.value); } \
+             keys.join(',')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("x,y".into()));
+    }
+
+    #[test]
+    fn formdata_values_iterator() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('x', 'p'); fd.append('y', 'q'); \
+             var vals = []; var it = fd.values(); var n; \
+             while (!(n = it.next()).done) { vals.push(n.value); } \
+             vals.join(',')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("p,q".into()));
+    }
+
+    #[test]
+    fn formdata_foreach_iterates_value_name() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('a', '1'); fd.append('b', '2'); \
+             var out = []; \
+             fd.forEach(function(v, k) { out.push(k + '=' + v); }); \
+             out.join('&')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("a=1&b=2".into()));
+    }
+
+    #[test]
+    fn formdata_symbol_iterator_same_as_entries() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('k', 'v'); \
+             var it = fd[Symbol.iterator](); var n = it.next(); \
+             n.value[0] + '=' + n.value[1]"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("k=v".into()));
+    }
+
+    // Mock fetch provider that records calls to fetch_with_body_sync.
+    type FetchCall = (String, String, String, Vec<u8>);
+    struct CaptureFetch {
+        calls: std::sync::Mutex<Vec<FetchCall>>,
+    }
+    impl CaptureFetch {
+        fn new() -> Arc<Self> {
+            Arc::new(Self { calls: std::sync::Mutex::new(vec![]) })
+        }
+    }
+    impl lumen_core::ext::JsFetchProvider for CaptureFetch {
+        fn fetch_sync(&self, url: &str, method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            self.calls.lock().unwrap().push((url.into(), method.into(), String::new(), vec![]));
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_with_body_sync(&self, url: &str, method: &str, content_type: &str, body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            self.calls.lock().unwrap().push((url.into(), method.into(), content_type.into(), body.to_vec()));
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+    }
+
+    fn runtime_with_fetch(provider: Arc<CaptureFetch>) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None).unwrap();
+        rt
+    }
+
+    #[test]
+    fn fetch_post_formdata_sends_url_encoded_body() {
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        rt.eval(
+            "var fd = new FormData(); fd.append('user', 'bob'); fd.append('age', '30'); \
+             fetch('https://example.com/api', { method: 'POST', body: fd })"
+        ).unwrap();
+        let calls = capture.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (url, method, ct, body) = &calls[0];
+        assert_eq!(url, "https://example.com/api");
+        assert_eq!(method, "POST");
+        assert_eq!(ct, "application/x-www-form-urlencoded");
+        assert_eq!(std::str::from_utf8(body).unwrap(), "user=bob&age=30");
+    }
+
+    #[test]
+    fn fetch_post_string_body_sends_text_plain() {
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        rt.eval(
+            "fetch('https://example.com/api', { method: 'POST', body: 'hello world' })"
+        ).unwrap();
+        let calls = capture.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (_, method, ct, body) = &calls[0];
+        assert_eq!(method, "POST");
+        assert_eq!(ct, "text/plain;charset=UTF-8");
+        assert_eq!(std::str::from_utf8(body).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn fetch_post_uint8array_body_sends_octet_stream() {
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        rt.eval(
+            "fetch('https://example.com/bin', { method: 'PUT', body: new Uint8Array([1, 2, 3]) })"
+        ).unwrap();
+        let calls = capture.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (_, method, ct, body) = &calls[0];
+        assert_eq!(method, "PUT");
+        assert_eq!(ct, "application/octet-stream");
+        assert_eq!(body, &[1u8, 2, 3]);
+    }
+
+    #[test]
+    fn fetch_post_content_type_override() {
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        rt.eval(
+            "var fd = new FormData(); fd.append('x', '1'); \
+             fetch('https://example.com/', { method: 'POST', body: fd, \
+               headers: {'Content-Type': 'application/json'} })"
+        ).unwrap();
+        let calls = capture.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (_, _, ct, _) = &calls[0];
+        assert_eq!(ct, "application/json");
     }
 }

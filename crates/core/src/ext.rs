@@ -1402,11 +1402,30 @@ pub struct JsFetchResult {
 /// trait from `lumen-core`, avoiding a direct `lumen-js → lumen-network` edge.
 ///
 /// Phase 0 constraints: GET + HEAD only, no request body, no streaming.
+/// Phase 1 extension: `fetch_with_body_sync` adds POST/PUT/PATCH/DELETE with body.
 pub trait JsFetchProvider: Send + Sync {
     /// Perform a blocking HTTP request and return the full response.
     ///
     /// Returns `Err` for network errors or unsupported methods.
     fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult>;
+
+    /// Perform a blocking HTTP request with a request body (POST/PUT/PATCH/DELETE).
+    ///
+    /// `content_type` is the `Content-Type` header value (e.g. `"application/x-www-form-urlencoded"`).
+    /// `body` is the raw request body bytes.
+    ///
+    /// Default implementation delegates to `fetch_sync` (ignores body) for backward
+    /// compatibility. Override in `HttpClient` for real POST support.
+    fn fetch_with_body_sync(
+        &self,
+        url: &str,
+        method: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<JsFetchResult> {
+        let _ = (content_type, body);
+        self.fetch_sync(url, method)
+    }
 }
 
 /// A single queued event from a WebSocket connection, ready for delivery to JS.
