@@ -6,9 +6,7 @@
 
 ## In progress
 
-**Element geometry API — `getBoundingClientRect` + scroll properties**
-branch: `p1-clickable-iterator`
-Next step: add geometry methods to `_lumen_make_element` in `crates/js/src/dom.rs` + scroll state bindings in `crates/js/src/lib.rs`
+_(none)_
 
 ---
 
@@ -24,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-clickable-iterator** ✅ 2026-05-30 — Element geometry API: `getBoundingClientRect()`, `offsetWidth/Height/Top/Left`, `clientWidth/Height`, `scrollTop/Left` (get+set), `scrollWidth/Height`, `scrollTo()`, `scrollBy()`, `scrollIntoView()` на всех DOM-элементах. `QuickJsRuntime` получил `scroll_states` + `pending_scrolls` fields с `update_scroll_states()` / `take_scroll_requests()`. `_lumen_get_scroll_state` + `_lumen_request_scroll` биндинги. 5 новых JS-тестов (302 итого). Shell handoff: `update_scroll_states` после `collect_scroll_containers()`, дренировать `take_scroll_requests()` → `set_scroll_position()`.
 - **p1-scroll-snap** ✅ 2026-05-29 — CSS Scroll Snap L1 algorithm stub в `lumen-layout`: `SnapPoint` + `SnapContainer` + `collect_snap_containers(root)` + `find_snap_target(container, current_scroll, target_scroll)` в `lib.rs`. mandatory/proximity strictness, `scroll-snap-stop: always` barrier, NodeId dedup. 10 unit-тестов. CSS-парсинг уже был в ComputedStyle (P4). STATUS-P4.md "Needs wiring" обновлён для P3 shell integration.
 - **p1-roadmap-audit** ✅ 2026-05-29 — Синхронизация маркеров в `lumen-plan.md`: 18 позиций ⬜→✅ (Composite glyphs / HTTP+TLS / lumen-driver / Tab lifecycle инварианты / 8A.1 / 8A.2 / 8C.2 / 10B-10G / 10E.3). Crate descriptions: lumen-layout += StickyBox + image_gating; lumen-storage += IdbBackend. CLAUDE.md ext traits обновлён.
 - **p1-indexeddb-persist** ✅ 2026-05-29 — IndexedDB persistence: новый трейт `IdbBackend` (`lumen-core::ext`) + impl `IdbStore` поверх `StorageBackend` (`lumen-storage`, работает с in-memory и SQLite). JS-шим сериализует все базы origin в один tagged-JSON снимок (Date сохраняются как `{__idb_date__: ms}`), `_lumen_idb_persist` пишет после каждого мутирующего flush, `_lumen_idb_load` восстанавливает при init → базы переживают reload. Read-only транзакции не пере-сохраняют (флаг `_idb_dirty`). Shell подключает общий `InMemoryStorage` (на процесс, как localStorage) + per-origin `IdbStore`; диск (SQLite) — замена бэкенда в одну строку. install_dom получил параметр `idb_backend`. 5 JS-тестов персистентности + 7 storage-тестов (267 JS, 267 storage). Обнаружен pre-existing BUG-044 (shell не компилируется: non-exhaustive match по DisplayCommand от P2-мерджей).
