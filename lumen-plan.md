@@ -97,7 +97,7 @@
 - ✅ Layout — block/inline/flex/grid/positioned layout, CSS Variables, math-функции, text-decoration, visibility, opacity, Shadow DOM, CSS Transitions, CSS Transforms; полный CSS cascade с specificity
 - ✅ Paint — display list + wgpu-rasterizer + glyph atlas + text rendering
 - ✅ Связка движка с UI: shell открывает `samples/page.html` с фонами и текстом
-- ✅ lumen-image — PNG (8/16-bit + palette + tRNS + Adam7) + JPEG baseline (DCT/Huffman/YCbCr) + WebP (VP8 lossy + VP8L lossless, `image-webp`) декодеры; `ImageDecoder` trait в `lumen-core::ext`; `supported_mime_types()` для `<picture>` type-filter; AVIF/GIF — отдельными задачами
+- ✅ lumen-image — PNG (8/16-bit + palette + tRNS + Adam7) + JPEG baseline (DCT/Huffman/YCbCr) + WebP (VP8 lossy + VP8L lossless, `image-webp`) декодеры; **GIF static + animated** (`decode_gif_animated` → `AnimatedGif { frames, width, height, loop_count }`, `AnimatedFrame { image, delay_cs }`, `frame_index_at(elapsed_ms)`, `frame_at(elapsed_ms)`; shell-handoff: P3 вызывает `frame_at(elapsed_ms)` на каждом тике); `ImageDecoder` trait в `lumen-core::ext`; `supported_mime_types()` для `<picture>` type-filter; AVIF — отдельной задачей
 - ✅ Composite glyphs в lumen-font (Cyrillic 'А' и другие) — `Anchor` enum (Offset/Points), `glyph_resolved` point-alignment; `crates/engine/font/src/glyf.rs`
 - ✅ Свой HTTP/1.1 + TLS через `rustls` — `lumen-network::HttpClient` (redirect, chunked, keep-alive, pool, DoH/DoT, HSTS, auth, CORS, HTTP/2); `crates/network/`
 - ✅ **`lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** — `core/src/ext.rs:1514` + `driver/src/session.rs`; §6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md). 8A.1+8A.2 завершены; 8A.6 (migration graphic_tests) 🟡 in progress.
@@ -351,9 +351,9 @@
 | 9D.1 | ✅ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
 | 9D.2 | 🟡 WebGL renderer/vendor normalization | `js/src/webgl_bindings.rs` | P1 done: GpuFingerprint normalization (paint/fingerprint.rs), JS stub (_LUMEN_GPU_VENDOR/_RENDERER); P3 pending: wire to getParameter(UNMASKED_VENDOR/RENDERER_WEBGL) |
 | 9D.3 | ✅ AudioContext fingerprint noise | `js/src/audio_bindings.rs` | 2026-05-30 |
-| 9D.4 | ⬜ Battery API disable on Strict | `js/src/battery_bindings.rs` | — |
+| 9D.4 | ✅ Battery API disable on Strict | `js/src/battery_bindings.rs` | 2026-05-30: navigator.getBattery() → rejected Promise, 4 unit-тестов |
 | 9D.5 | ⬜ WebRTC mDNS-only host candidates | `network/src/webrtc/candidates.rs` | при наличии WebRTC; иначе noop |
-| 9D.6 | ⬜ Hardware concurrency / screen / timezone normalization per profile | `js/src/navigator_bindings.rs` | — |
+| 9D.6 | ✅ Hardware concurrency / screen / timezone normalization per profile | `js/src/navigator_bindings.rs` | 2026-05-30: hardwareConcurrency=2, deviceMemory=8, platform=Win32, screen 1920×1080, getTimezoneOffset→0, 10 unit-тестов |
 | 9E | ⬜ **`[P3]` Layer 5: behavioral mimicry (opt-in)** (Phase 1, **для automation API**) | `InputMode::HumanLike` для тестировщиков | `shell/src/input/humanlike.rs` |
 | 9E.1 | ⬜ Bézier-curve mouse paths between coordinates | `shell/src/input/humanlike.rs` | — |
 | 9E.2 | ⬜ Variable inter-keystroke timing (Gaussian) | `shell/src/input/humanlike.rs` | — |
