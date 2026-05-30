@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(none)_
+**p1-formdata** branch: `p1-formdata`
+Next step: add `fetch_with_body_sync` to `JsFetchProvider` trait in `crates/core/src/ext.rs:1405`, then implement in `crates/network/src/lib.rs:2000`, then `FormData` JS class + binding in `crates/js/src/dom.rs`
 
 ---
 
