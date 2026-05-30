@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(none)_
+`window.getComputedStyle()` — Phase 2 web compatibility  branch: p1-get-computed-style
+Next step: add computed_style_to_map() in selector_query.rs, then collect_computed_styles() in lib.rs
 
 ---
 
