@@ -6,8 +6,7 @@
 
 ## In progress
 
-**p1-formdata** branch: `p1-formdata`
-Next step: add `fetch_with_body_sync` to `JsFetchProvider` trait in `crates/core/src/ext.rs:1405`, then implement in `crates/network/src/lib.rs:2000`, then `FormData` JS class + binding in `crates/js/src/dom.rs`
+_(none)_
 
 ---
 
@@ -23,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-formdata** ✅ 2026-05-30 — FormData API + TextEncoder/TextDecoder + fetch POST body. `FormData` JS class: append/delete/get/getAll/has/set, entries/keys/values/forEach, Symbol.iterator, `_toUrlEncoded()` (RFC 3986). `TextEncoder`/`TextDecoder` — чистый UTF-8 JS (QuickJS нет built-in). `window.FormData/TextEncoder/TextDecoder` экспортированы. `JsFetchProvider::fetch_with_body_sync` в `lumen-core::ext:1419`. `HttpClient::fetch_with_body_sync` в `lumen-network` (POST/PUT/PATCH/DELETE, H1 pool). `_lumen_fetch_sync_with_body` binding в `crates/js/src/dom.rs:752`. 20 новых тестов (322 итого lumen-js).
 - **p1-dom-gc-hooks** ✅ 2026-05-30 — GC integration DOM-side: `Document::acquire_js_ref(NodeId) -> u32` / `release_js_ref` / `js_ref_count` / `is_detached` / `dead_node_ids() -> Vec<NodeId>` в `lumen-dom`. `js_refs: HashMap<NodeId,u32>` (#[serde(skip)] — не сериализуется при гибернации). P3 handoff: вызвать `acquire_js_ref` при allocate rquickjs class instance, `release_js_ref` в QuickJS finalizer; idle GC tick дренирует `dead_node_ids()` в shell. 11 unit-тестов. 208 тестов итого.
 - **p1-clickable-iterator** ✅ 2026-05-30 — Element geometry API: `getBoundingClientRect()`, `offsetWidth/Height/Top/Left`, `clientWidth/Height`, `scrollTop/Left` (get+set), `scrollWidth/Height`, `scrollTo()`, `scrollBy()`, `scrollIntoView()` на всех DOM-элементах. `QuickJsRuntime` получил `scroll_states` + `pending_scrolls` fields с `update_scroll_states()` / `take_scroll_requests()`. `_lumen_get_scroll_state` + `_lumen_request_scroll` биндинги. 5 новых JS-тестов (302 итого). Shell handoff: `update_scroll_states` после `collect_scroll_containers()`, дренировать `take_scroll_requests()` → `set_scroll_position()`.
 - **p1-scroll-snap** ✅ 2026-05-29 — CSS Scroll Snap L1 algorithm stub в `lumen-layout`: `SnapPoint` + `SnapContainer` + `collect_snap_containers(root)` + `find_snap_target(container, current_scroll, target_scroll)` в `lib.rs`. mandatory/proximity strictness, `scroll-snap-stop: always` barrier, NodeId dedup. 10 unit-тестов. CSS-парсинг уже был в ComputedStyle (P4). STATUS-P4.md "Needs wiring" обновлён для P3 shell integration.
