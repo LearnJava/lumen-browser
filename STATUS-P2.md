@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-9D.3 — AudioContext fingerprint noise  branch: p2-audio-fp-noise
-Next step: create `crates/js/src/audio_bindings.rs` with LCG noise + JS shim for AudioContext/OfflineAudioContext/AudioBuffer  `crates/js/src/audio_bindings.rs:1`
+_(none)_
 
 ---
 
@@ -23,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-audio-fp-noise** ✅ 2026-05-30 — ADR-007 Layer 4, 9D.3: `AudioContext` fingerprint noise в `lumen-js`. Новый модуль `audio_bindings`: `install_audio_bindings(ctx, seed)` + `new_session_seed()` (AtomicU32 счётчик). JS шим (IIFE) определяет `AudioContext`/`webkitAudioContext`/`OfflineAudioContext`/`AudioBuffer` с LCG-шумом ±1e-7 в `getChannelData()`/`copyFromChannel()`/`getFloatFrequencyData()`. `install_dom()` автоматически вызывает биндинги с уникальным seed на вкладку. 14 новых unit-тестов. 280 JS-тестов всего.
 - **p2-macos-memory-pressure** ✅ 2026-05-30 — ADR-008 §10H.4: `MacosMemoryPressureSource` в `lumen-core::memory_pressure`. Polling через `host_statistics64(HOST_VM_INFO64)` — mach kernel, без новых зависимостей. Метрика: `used_ratio = (active + wire) / (free + active + inactive + wire)`, пороги 75%→Medium, 90%→High. Целочисленное сравнение без float. 4 unit-теста threshold logic (platform-independent) + 1 live call тест (cfg macOS). Трек 10H завершён — все три платформы (Win32/Linux/macOS) покрыты.
 - **p2-cross-tab-cache** ✅ 2026-05-30 — ADR-008 §10D.3: `EvictableCache` trait + `CacheRegistry` в `lumen-core::ext`. Единый интерфейс для всех разделяемых между вкладками кэшей: `on_memory_pressure(level)`, `used_bytes()`, `budget_bytes()`, `clear()`, `cache_name()`. `CacheRegistry` хранит `Vec<Box<dyn EvictableCache>>`, методы: `register()`, `broadcast_pressure()`, `total_used_bytes()`, `total_budget_bytes()`, `clear_all()`. Реализации: `GlyphAtlas` (used = pixels.len(), budget = MAX), `ImageDecodeCache` (делегирует inherent-методам), `LayerCache` (u32→usize). 8 unit-тестов CacheRegistry в lumen-core. P3 handoff: создать `CacheRegistry` в shell, зарегистрировать все три кэша, вызывать `broadcast_pressure()` из poll-loop `MemoryPressureSource`.
 - **p2-depth-z-all-vertices** ✅ 2026-05-30 — GPU depth buffer расширен на `TextVertex`/`ImageVertex`/`RRectVertex`. Каждая из трёх вершин получила поле `z: f32` (CSS depth px); WGSL TEXT/IMAGE/RRECT шейдеры мапят z через ту же формулу `clamp(0.5 - z/20000, 0, 1)`, что и FillVertex; их pipeline'ы получили `DepthStencilState { Depth32Float, LessEqual }`. `VertexPos::set_depth` реализован для всех трёх — `apply_affine_to_verts` автоматически прокидывает projected z через 3D-путь. `apply_affine_to_rrect_verts` 3D-ветка использует `project_point_z` и пишет в `RRectVertex.z`. Теперь cross-type depth testing полный: 3D-transformed текст/картинки/SDF-rrect корректно перекрываются с background-rect под `preserve-3d`. 8 новых unit-тестов (423 total). Прежнее ограничение «depth только для FillVertex» снято.
