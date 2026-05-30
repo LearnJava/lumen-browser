@@ -690,6 +690,7 @@ fn install_primitives(
         let cache: Arc<Mutex<Option<FetchCache>>> = Arc::new(Mutex::new(None));
 
         let fp2 = fetch_provider.clone();
+        let fp_beacon = fetch_provider.clone();
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
         reg!("_lumen_fetch_sync", move |url: String, method: String| -> bool {
             let Some(ref provider) = fp else { return false };
@@ -779,6 +780,27 @@ fn install_primitives(
                             false
                         }
                     }
+                }
+            );
+        }
+
+        // _lumen_send_beacon(url, body, content_type) → bool
+        // Beacon API (W3C Beacon §3): fire-and-forget POST; response is ignored.
+        // Returns false if no network provider is available.
+        {
+            let fp = fp_beacon;
+            reg!(
+                "_lumen_send_beacon",
+                move |url: String, body: String, content_type: String| -> bool {
+                    let Some(ref provider) = fp else { return false };
+                    let ct = if content_type.is_empty() {
+                        "text/plain;charset=UTF-8"
+                    } else {
+                        &content_type
+                    };
+                    provider
+                        .fetch_with_body_sync(&url, "POST", ct, body.as_bytes())
+                        .is_ok()
                 }
             );
         }
@@ -2218,6 +2240,12 @@ var _lumen_selection = (function() {
     };
 }());
 
+// ── Page Visibility API + document.readyState state vars ─────────────────────
+// Declared before `document` because getters below capture these by name.
+var _doc_hidden = false;
+var _doc_visibility_state = 'visible';
+var _doc_ready_state = 'loading';
+
 var document = {
     get title()  { return _lumen_get_document_title(); },
     set title(v) { _lumen_set_document_title(String(v)); },
@@ -2248,9 +2276,35 @@ var document = {
         if (c && c.__nid__ !== undefined) _lumen_append_child(_lumen_root_nid, c.__nid__);
         return c;
     },
-    addEventListener:    function(type, fn) { _lumen_add_listener(_LUMEN_DOC_LISTENER_NID, type, fn); },
+    // Page Visibility API (HTML LS §15.1) — state vars declared after navigator
+    get hidden()          { return _doc_hidden; },
+    get visibilityState() { return _doc_visibility_state; },
+    // Document lifecycle (HTML LS §8.5) — readyState driven by _lumen_apply_ready_state()
+    get readyState()      { return _doc_ready_state; },
+    // addEventListener intercepts DOMContentLoaded to fire immediately when already ready
+    addEventListener: function(type, fn, opts) {
+        if (type === 'DOMContentLoaded' && _doc_ready_state !== 'loading') {
+            queueMicrotask(function() {
+                try { fn(new Event('DOMContentLoaded', { bubbles: true })); } catch(e) {}
+            });
+            return;
+        }
+        _lumen_add_listener(_LUMEN_DOC_LISTENER_NID, type, fn);
+    },
     removeEventListener: function(type, fn) { _lumen_rm_listener(_LUMEN_DOC_LISTENER_NID, type, fn); },
-    dispatchEvent:       function() { return true; },
+    // dispatchEvent: fire all document-level listeners for the given event
+    dispatchEvent: function(evt) {
+        if (!evt || !evt.type) return false;
+        var key = String(_LUMEN_DOC_LISTENER_NID) + ':' + String(evt.type);
+        var arr = _lumen_listeners[key];
+        if (arr) {
+            var copy = arr.slice();
+            for (var i = 0; i < copy.length; i++) {
+                try { copy[i].call(document, evt); } catch(e) {}
+            }
+        }
+        return !evt.defaultPrevented;
+    },
     get fonts() {
         return _lumen_get_fonts();
     },
@@ -2554,6 +2608,28 @@ var navigator = {
     language: 'en-US',
     onLine: false,
     serviceWorker: _sw_container,
+    // Beacon API (W3C Beacon §3.1): fire-and-forget POST to url.
+    // data may be string | URLSearchParams | FormData | Blob | ArrayBuffer | null.
+    sendBeacon: function(url, data) {
+        var body = '';
+        var ct = '';
+        if (data == null) {
+            body = '';
+        } else if (typeof data === 'string') {
+            body = data;
+            ct = 'text/plain;charset=UTF-8';
+        } else if (typeof URLSearchParams !== 'undefined' && data instanceof URLSearchParams) {
+            body = data.toString();
+            ct = 'application/x-www-form-urlencoded;charset=UTF-8';
+        } else if (typeof FormData !== 'undefined' && data instanceof FormData) {
+            body = typeof data._toUrlEncoded === 'function' ? data._toUrlEncoded() : '';
+            ct = 'application/x-www-form-urlencoded;charset=UTF-8';
+        } else if (typeof Blob !== 'undefined' && data instanceof Blob) {
+            body = typeof data._data === 'string' ? data._data : '';
+            ct = data.type || 'application/octet-stream';
+        }
+        try { return _lumen_send_beacon(url, body, ct); } catch(e) { return false; }
+    },
 };
 // ── Timer queue (HTML LS §8.6 «timers») ──────────────────────────────────────
 // Timers are stored as a JS-side array; Rust drains them each event loop tick
@@ -3600,12 +3676,18 @@ function _lumen_deliver_intersection_observers() {
 // ── postMessage (HTML LS §7.7.4) ─────────────────────────────────────────────
 var _message_listeners = [];
 
+// ── Window load / DOMContentLoaded / visibilitychange listener arrays ─────────
+var _load_listeners = [];
+var _domcontentloaded_win_listeners = [];
+var _visibilitychange_listeners = [];
+
 var window = {
     history: history,
     onpopstate: null,
     onmessage: null,
     onpageshow: null,
     onpagehide: null,
+    onload: null,
     location: location,
     navigator: navigator,
     alert: alert,
@@ -3650,6 +3732,25 @@ var window = {
             _pagehide_listeners.push(fn);
         } else if (type === 'message') {
             _message_listeners.push(fn);
+        } else if (type === 'load') {
+            if (_doc_ready_state === 'complete') {
+                // already loaded — fire async per spec
+                queueMicrotask(function() {
+                    try { fn(new Event('load', { bubbles: false })); } catch(e) {}
+                });
+            } else {
+                _load_listeners.push(fn);
+            }
+        } else if (type === 'DOMContentLoaded') {
+            if (_doc_ready_state !== 'loading') {
+                queueMicrotask(function() {
+                    try { fn(new Event('DOMContentLoaded', { bubbles: true })); } catch(e) {}
+                });
+            } else {
+                _domcontentloaded_win_listeners.push(fn);
+            }
+        } else if (type === 'visibilitychange') {
+            _visibilitychange_listeners.push(fn);
         }
     },
     removeEventListener: function(type, fn) {
@@ -3658,11 +3759,26 @@ var window = {
         else if (type === 'pageshow') arr = _pageshow_listeners;
         else if (type === 'pagehide') arr = _pagehide_listeners;
         else if (type === 'message') arr = _message_listeners;
+        else if (type === 'load') arr = _load_listeners;
+        else if (type === 'DOMContentLoaded') arr = _domcontentloaded_win_listeners;
+        else if (type === 'visibilitychange') arr = _visibilitychange_listeners;
         else return;
         var idx = arr.indexOf(fn);
         if (idx >= 0) arr.splice(idx, 1);
     },
-    dispatchEvent: function() { return true; },
+    dispatchEvent: function(evt) {
+        if (!evt || !evt.type) return true;
+        if (evt.type === 'load') {
+            var arr = _load_listeners.slice();
+            for (var i = 0; i < arr.length; i++) {
+                try { arr[i].call(window, evt); } catch(e) {}
+            }
+            if (typeof window.onload === 'function') {
+                try { window.onload.call(window, evt); } catch(e) {}
+            }
+        }
+        return !evt.defaultPrevented;
+    },
     /// postMessage (HTML LS §7.7.4): dispatch a MessageEvent to this window.
     /// targetOrigin '*' → always deliver; '/' → same-origin only;
     /// any other string → must equal location.origin.
@@ -5347,6 +5463,57 @@ function structuredClone(val) {
     return out;
 }
 window.structuredClone = structuredClone;
+
+// ── Page lifecycle driver functions (called from Rust via QuickJsRuntime) ─────
+
+// Drive document.readyState forward: 'loading' → 'interactive' → 'complete'.
+// Idempotent — state only advances forward.
+// Called by Rust: after HTML parse → 'interactive'; after all resources loaded → 'complete'.
+function _lumen_apply_ready_state(state) {
+    if (state === 'interactive' && _doc_ready_state !== 'loading') return;
+    if (state === 'complete' && _doc_ready_state === 'complete') return;
+    _doc_ready_state = state;
+    // readystatechange on document
+    var rsEv = new Event('readystatechange', { bubbles: false, cancelable: false });
+    document.dispatchEvent(rsEv);
+    if (state === 'interactive') {
+        // DOMContentLoaded fires on document (bubbles) then window
+        var dcl = new Event('DOMContentLoaded', { bubbles: true, cancelable: false });
+        document.dispatchEvent(dcl);
+        var winArr = _domcontentloaded_win_listeners.slice();
+        for (var i = 0; i < winArr.length; i++) {
+            try { winArr[i].call(window, dcl); } catch(e) {}
+        }
+    } else if (state === 'complete') {
+        // load fires on window (does not bubble)
+        var loadEv = new Event('load', { bubbles: false, cancelable: false });
+        var loadArr = _load_listeners.slice();
+        for (var j = 0; j < loadArr.length; j++) {
+            try { loadArr[j].call(window, loadEv); } catch(e) {}
+        }
+        if (typeof window.onload === 'function') {
+            try { window.onload.call(window, loadEv); } catch(e) {}
+        }
+    }
+}
+
+// Drive document.visibilityState.  Called from Rust on window focus/blur.
+// hidden=true → 'hidden'; hidden=false → 'visible'.
+// Fires visibilitychange on document + window listeners if state changed.
+function _lumen_apply_visibility(hidden) {
+    if (_doc_hidden === hidden) return;
+    _doc_hidden = hidden;
+    _doc_visibility_state = hidden ? 'hidden' : 'visible';
+    var ev = new Event('visibilitychange', { bubbles: true, cancelable: false });
+    document.dispatchEvent(ev);
+    var vcArr = _visibilitychange_listeners.slice();
+    for (var i = 0; i < vcArr.length; i++) {
+        try { vcArr[i].call(window, ev); } catch(e) {}
+    }
+}
+
+window._lumen_apply_ready_state = _lumen_apply_ready_state;
+window._lumen_apply_visibility  = _lumen_apply_visibility;
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -9773,6 +9940,139 @@ mod tests {
             // May be null if microtask hasn't run yet in this environment
             // Acceptable for now — event delivery model tested separately
         }
+    }
+
+    // ─── Page Visibility API tests ───────────────────────────────────────────
+
+    #[test]
+    fn page_visibility_initial_visible() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.visibilityState === 'visible' && document.hidden === false").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn apply_visibility_hidden() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fired = false; \
+             document.addEventListener('visibilitychange', function() { fired = true; }); \
+             _lumen_apply_visibility(true); \
+             document.visibilityState === 'hidden' && document.hidden === true && fired"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn apply_visibility_noop_when_same() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var count = 0; \
+             document.addEventListener('visibilitychange', function() { count++; }); \
+             _lumen_apply_visibility(false); \
+             count"  // already visible → no event
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    // ─── document.readyState + lifecycle tests ───────────────────────────────
+
+    #[test]
+    fn ready_state_initial_loading() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.readyState").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("loading".into()));
+    }
+
+    #[test]
+    fn ready_state_interactive_fires_dcl() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dcl = false; var rsc = false; \
+             document.addEventListener('readystatechange', function() { rsc = true; }); \
+             document.addEventListener('DOMContentLoaded', function() { dcl = true; }); \
+             _lumen_apply_ready_state('interactive'); \
+             document.readyState === 'interactive' && rsc && dcl"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn ready_state_complete_fires_load() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var loaded = false; \
+             window.addEventListener('load', function() { loaded = true; }); \
+             _lumen_apply_ready_state('interactive'); \
+             _lumen_apply_ready_state('complete'); \
+             document.readyState === 'complete' && loaded"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn ready_state_onload_handler() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var called = false; \
+             window.onload = function() { called = true; }; \
+             _lumen_apply_ready_state('interactive'); \
+             _lumen_apply_ready_state('complete'); \
+             called"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn ready_state_forward_only() {
+        let rt = runtime_with_dom(make_doc());
+        // Cannot go backward from 'complete' to 'interactive'
+        let r = rt.eval(
+            "_lumen_apply_ready_state('interactive'); \
+             _lumen_apply_ready_state('complete'); \
+             _lumen_apply_ready_state('interactive'); \
+             document.readyState"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("complete".into()));
+    }
+
+    #[test]
+    fn window_dcl_listener() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var got = false; \
+             window.addEventListener('DOMContentLoaded', function() { got = true; }); \
+             _lumen_apply_ready_state('interactive'); \
+             got"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ─── navigator.sendBeacon tests ──────────────────────────────────────────
+
+    #[test]
+    fn send_beacon_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof navigator.sendBeacon === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn send_beacon_no_provider_returns_false() {
+        let rt = runtime_with_dom(make_doc());
+        // No fetch provider registered → _lumen_send_beacon returns false
+        let r = rt.eval("navigator.sendBeacon('https://example.com/beacon', 'data')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn send_beacon_urlsearchparams_body() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "typeof navigator.sendBeacon === 'function' && \
+             navigator.sendBeacon('https://example.com/', new URLSearchParams('k=v')) === false"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
     // ─── URL.createObjectURL tests ────────────────────────────────────────────

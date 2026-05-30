@@ -498,6 +498,18 @@ trait PersistentJs {
     /// `window.getComputedStyle()` and CSS property reads.
     #[allow(dead_code)]
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>);
+    /// Advance `document.readyState` to `"interactive"` and fire
+    /// `readystatechange` + `DOMContentLoaded` on `document`.
+    ///
+    /// Call after HTML is fully parsed and inline scripts have run.
+    #[allow(dead_code)]
+    fn notify_dom_content_loaded(&self);
+    /// Advance `document.readyState` to `"complete"` and fire
+    /// `readystatechange` on `document` + `load` on `window`.
+    ///
+    /// Call after all subresources (images, fonts) are decoded and registered.
+    #[allow(dead_code)]
+    fn notify_window_loaded(&self);
 }
 
 #[cfg(feature = "quickjs")]
@@ -571,6 +583,12 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
         self.rt.update_computed_styles(styles);
+    }
+    fn notify_dom_content_loaded(&self) {
+        self.rt.notify_dom_content_loaded();
+    }
+    fn notify_window_loaded(&self) {
+        self.rt.notify_window_loaded();
     }
 }
 
@@ -1284,6 +1302,12 @@ fn parse_and_layout(
         ls_store,
         idb_backend,
     );
+    // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
+    // + DOMContentLoaded event. Fires before images/fonts are decoded.
+    #[cfg(feature = "quickjs")]
+    if let Some(js) = &js_ctx {
+        js.notify_dom_content_loaded();
+    }
 
     // CSS Selectors L4 §9.6 `:target`: set current target from URL fragment so
     // the matcher has the correct target_id before style cascade in layout.
@@ -2627,6 +2651,11 @@ impl Lumen {
         }
         // JS may have requested navigation via location.href= etc.
         self.pending_js_navigate = page.js_navigate;
+        // HTML LS §8.2.3 — all resources loaded: readyState → "complete" + window.load event.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            js.notify_window_loaded();
+        }
     }
 }
 
