@@ -24,30 +24,91 @@ pub(crate) fn rasterize_cpu(
     // Fill background with white.
     pixmap.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
 
+    // Active rectangular clip regions (CSS `overflow: hidden`, `PushClipRect`).
+    // Stored as a stack of axis-aligned rects; the effective clip is their
+    // intersection (`clip_rect`), realised as a tiny-skia mask (`clip_mask`).
+    // Mirrors the GPU renderer pushing/popping scissor-style clip layers.
+    // Transforms are not modelled in the CPU path, so the intersection of
+    // axis-aligned rects is exact here.
+    //
+    // The mask is passed to a draw *only* when the draw's bounding box is not
+    // fully inside `clip_rect` — i.e. only when it actually crosses a clip edge.
+    // tiny-skia's masked-blend path rounds ±1 differently from the unmasked
+    // path, so skipping the mask for fully-contained draws keeps non-overflowing
+    // content byte-identical to the unclipped output (only genuinely overflowing
+    // geometry is altered, exactly the visible effect of `overflow: hidden`).
+    let mut clip_stack: Vec<Rect> = Vec::new();
+    let mut clip_mask: Option<tiny_skia::Mask> = None;
+    let mut clip_rect: Option<Rect> = None;
+
     for cmd in commands {
         match cmd {
             DisplayCommand::FillRect { rect, color } => {
-                rasterize_fill_rect(&mut pixmap, rect, color)?;
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                rasterize_fill_rect(&mut pixmap, rect, color, c)?;
             }
             DisplayCommand::FillRoundedRect { rect, color, radii } => {
-                rasterize_fill_rounded_rect(&mut pixmap, rect, color, radii)?;
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                rasterize_fill_rounded_rect(&mut pixmap, rect, color, radii, c)?;
             }
             DisplayCommand::DrawBorder { rect, widths, colors, styles: _, radii } => {
-                rasterize_draw_border(&mut pixmap, rect, widths, colors, radii)?;
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                rasterize_draw_border(&mut pixmap, rect, widths, colors, radii, c)?;
             }
             DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
-                rasterize_draw_outline(&mut pixmap, rect, *width, color, *offset)?;
+                // Outline expands the rect by `offset` on every side.
+                let b = (
+                    rect.x - offset,
+                    rect.y - offset,
+                    rect.x + rect.width + offset,
+                    rect.y + rect.height + offset,
+                );
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                rasterize_draw_outline(&mut pixmap, rect, *width, color, *offset, c)?;
             }
             DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
-                rasterize_linear_gradient(&mut pixmap, rect, *angle_deg, stops, *repeating)?;
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                rasterize_linear_gradient(&mut pixmap, rect, *angle_deg, stops, *repeating, c)?;
             }
             DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_radial_gradient(
-                    &mut pixmap, rect, *center_x_pct, *center_y_pct, stops, *repeating,
+                    &mut pixmap, rect, *center_x_pct, *center_y_pct, stops, *repeating, c,
                 )?;
             }
             DisplayCommand::DrawSvgPath { vertices, color } => {
-                rasterize_svg_path(&mut pixmap, vertices, color)?;
+                let c = effective_clip(
+                    clip_mask.as_ref(),
+                    clip_rect.as_ref(),
+                    vertices_bounds(vertices),
+                );
+                rasterize_svg_path(&mut pixmap, vertices, color, c)?;
+            }
+            DisplayCommand::PushClipRect { rect } => {
+                clip_stack.push(*rect);
+                clip_rect = clip_intersection(&clip_stack);
+                clip_mask = build_clip_mask(width, height, clip_rect);
+            }
+            DisplayCommand::PopClip => {
+                clip_stack.pop();
+                clip_rect = clip_intersection(&clip_stack);
+                clip_mask = build_clip_mask(width, height, clip_rect);
+            }
+            // CSS Overflow L3 §3.2 — `overflow: scroll/auto` (and the `auto`
+            // axis a mismatched `overflow` pair coerces to). Treated as a clip
+            // to `clip_rect`; the scroll translation is not modelled, matching
+            // the CPU path's handling of `PushTransform`. Offscreen snapshots
+            // render a freshly-loaded page, so `scroll_x`/`scroll_y` are always
+            // 0 and the clip is exact.
+            DisplayCommand::PushScrollLayer { clip_rect: cr, .. } => {
+                clip_stack.push(*cr);
+                clip_rect = clip_intersection(&clip_stack);
+                clip_mask = build_clip_mask(width, height, clip_rect);
+            }
+            DisplayCommand::PopScrollLayer => {
+                clip_stack.pop();
+                clip_rect = clip_intersection(&clip_stack);
+                clip_mask = build_clip_mask(width, height, clip_rect);
             }
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
@@ -66,10 +127,118 @@ pub(crate) fn rasterize_cpu(
     })
 }
 
+/// Geometric intersection of every clip rect on the stack.
+///
+/// Each `PushClipRect` narrows the active clip (CSS `overflow: hidden` on a
+/// descendant). Returns `None` when the stack is empty (no clipping). A
+/// non-overlapping stack yields a zero-area `Rect` (width/height clamped to 0),
+/// which contains nothing — so every subsequent draw is fully clipped.
+fn clip_intersection(stack: &[Rect]) -> Option<Rect> {
+    if stack.is_empty() {
+        return None;
+    }
+    let mut left = f32::NEG_INFINITY;
+    let mut top = f32::NEG_INFINITY;
+    let mut right = f32::INFINITY;
+    let mut bottom = f32::INFINITY;
+    for r in stack {
+        left = left.max(r.x);
+        top = top.max(r.y);
+        right = right.min(r.x + r.width);
+        bottom = bottom.min(r.y + r.height);
+    }
+    Some(Rect {
+        x: left,
+        y: top,
+        width: (right - left).max(0.0),
+        height: (bottom - top).max(0.0),
+    })
+}
+
+/// Build a tiny-skia clip mask covering `clip_rect`.
+///
+/// Returns `None` when there is no clip (so draws receive `None` and skip
+/// masking). A zero-area `clip_rect` (empty intersection) yields an all-zero
+/// mask, which clips everything out. tiny-skia masks are deterministic across
+/// platforms, so the produced mask is identical on Windows/macOS/Linux.
+fn build_clip_mask(width: u32, height: u32, clip_rect: Option<Rect>) -> Option<tiny_skia::Mask> {
+    let cr = clip_rect?;
+    let mut mask = tiny_skia::Mask::new(width, height)?;
+    if cr.width <= 0.0 || cr.height <= 0.0 {
+        // Empty intersection → leave the all-zero mask (everything clipped out).
+        return Some(mask);
+    }
+    let rect = tiny_skia::Rect::from_xywh(cr.x, cr.y, cr.width, cr.height)?;
+    let path = tiny_skia::PathBuilder::from_rect(rect);
+    mask.fill_path(
+        &path,
+        tiny_skia::FillRule::Winding,
+        true,
+        tiny_skia::Transform::identity(),
+    );
+    Some(mask)
+}
+
+/// Axis-aligned bounding box `(left, top, right, bottom)` of a rect.
+fn rect_bounds(r: &Rect) -> (f32, f32, f32, f32) {
+    (r.x, r.y, r.x + r.width, r.y + r.height)
+}
+
+/// Axis-aligned bounding box `(left, top, right, bottom)` of a vertex list.
+/// Empty input yields a degenerate box at the origin (never contained, but
+/// `DrawSvgPath` with no vertices is a no-op anyway).
+fn vertices_bounds(vertices: &[[f32; 2]]) -> (f32, f32, f32, f32) {
+    let mut l = f32::INFINITY;
+    let mut t = f32::INFINITY;
+    let mut r = f32::NEG_INFINITY;
+    let mut b = f32::NEG_INFINITY;
+    for v in vertices {
+        l = l.min(v[0]);
+        t = t.min(v[1]);
+        r = r.max(v[0]);
+        b = b.max(v[1]);
+    }
+    (l, t, r, b)
+}
+
+/// Effective clip mask for a draw whose bounding box is `bounds`.
+///
+/// Returns the mask only when a clip is active *and* `bounds` is not fully
+/// inside `clip_rect` — i.e. only when the draw actually crosses a clip edge.
+/// A draw entirely inside the clip receives `None` and so renders byte-identical
+/// to the unclipped path (avoids tiny-skia's ±1 masked-blend rounding). An empty
+/// intersection (`clip_rect` zero-area) contains nothing, so the all-zero mask
+/// is always returned and the draw is fully clipped out.
+fn effective_clip<'a>(
+    clip_mask: Option<&'a tiny_skia::Mask>,
+    clip_rect: Option<&Rect>,
+    bounds: (f32, f32, f32, f32),
+) -> Option<&'a tiny_skia::Mask> {
+    match (clip_mask, clip_rect) {
+        (Some(m), Some(cr)) if !rect_contains(cr, bounds) => Some(m),
+        _ => None,
+    }
+}
+
+/// Whether the draw bounds `(left, top, right, bottom)` lie fully inside `outer`.
+///
+/// Used to skip clip masking for draws that don't touch a clip edge, keeping
+/// their pixels byte-identical to the unclipped path. A small epsilon absorbs
+/// float rounding so a draw flush against the clip edge still counts as inside.
+fn rect_contains(outer: &Rect, bounds: (f32, f32, f32, f32)) -> bool {
+    const EPS: f32 = 0.01;
+    let (l, t, r, b) = bounds;
+    l >= outer.x - EPS
+        && t >= outer.y - EPS
+        && r <= outer.x + outer.width + EPS
+        && b <= outer.y + outer.height + EPS
+}
+
 fn rasterize_fill_rect(
     pixmap: &mut tiny_skia::Pixmap,
     rect: &Rect,
     color: &Color,
+    clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::Paint;
 
@@ -83,7 +252,7 @@ fn rasterize_fill_rect(
     let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
         .ok_or("Invalid rect dimensions")?;
 
-    pixmap.fill_rect(skia_rect, &paint, tiny_skia::Transform::identity(), None);
+    pixmap.fill_rect(skia_rect, &paint, tiny_skia::Transform::identity(), clip);
     Ok(())
 }
 
@@ -92,6 +261,7 @@ fn rasterize_fill_rounded_rect(
     rect: &Rect,
     color: &Color,
     radii: &CornerRadii,
+    clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::Paint;
 
@@ -174,7 +344,7 @@ fn rasterize_fill_rounded_rect(
             &paint,
             tiny_skia::FillRule::Winding,
             tiny_skia::Transform::identity(),
-            None,
+            clip,
         );
     }
 
@@ -187,6 +357,7 @@ fn rasterize_draw_border(
     widths: &[f32; 4],
     colors: &[Color; 4],
     _radii: &CornerRadii,
+    clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::Paint;
 
@@ -205,7 +376,7 @@ fn rasterize_draw_border(
         };
         let r = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, *top_w)
             .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), None);
+        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
     }
 
     // Right border.
@@ -223,7 +394,7 @@ fn rasterize_draw_border(
             rect.height,
         )
         .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), None);
+        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
     }
 
     // Bottom border.
@@ -241,7 +412,7 @@ fn rasterize_draw_border(
             *bottom_w,
         )
         .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), None);
+        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
     }
 
     // Left border.
@@ -254,7 +425,7 @@ fn rasterize_draw_border(
         };
         let r =
             tiny_skia::Rect::from_xywh(rect.x, rect.y, *left_w, rect.height).ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), None);
+        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
     }
 
     Ok(())
@@ -266,6 +437,7 @@ fn rasterize_draw_outline(
     width: f32,
     color: &Color,
     offset: f32,
+    clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::Paint;
 
@@ -305,7 +477,7 @@ fn rasterize_draw_outline(
             &paint,
             &stroke,
             tiny_skia::Transform::identity(),
-            None,
+            clip,
         );
     }
 
@@ -430,6 +602,7 @@ fn rasterize_linear_gradient(
     angle_deg: f32,
     stops: &[GradientStop],
     repeating: bool,
+    clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::{LinearGradient, Paint, Point, SpreadMode, Transform};
 
@@ -459,7 +632,7 @@ fn rasterize_linear_gradient(
     };
     let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
         .ok_or("Invalid rect dimensions")?;
-    pixmap.fill_rect(skia_rect, &paint, Transform::identity(), None);
+    pixmap.fill_rect(skia_rect, &paint, Transform::identity(), clip);
     Ok(())
 }
 
@@ -476,6 +649,7 @@ fn rasterize_radial_gradient(
     center_y_pct: f32,
     stops: &[GradientStop],
     repeating: bool,
+    clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::{Paint, Point, RadialGradient, SpreadMode, Transform};
 
@@ -516,7 +690,7 @@ fn rasterize_radial_gradient(
     };
     let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
         .ok_or("Invalid rect dimensions")?;
-    pixmap.fill_rect(skia_rect, &paint, Transform::identity(), None);
+    pixmap.fill_rect(skia_rect, &paint, Transform::identity(), clip);
     Ok(())
 }
 
@@ -535,6 +709,7 @@ fn rasterize_svg_path(
     pixmap: &mut tiny_skia::Pixmap,
     vertices: &[[f32; 2]],
     color: &Color,
+    clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::Paint;
 
@@ -561,7 +736,7 @@ fn rasterize_svg_path(
         &paint,
         tiny_skia::FillRule::Winding,
         tiny_skia::Transform::identity(),
-        None,
+        clip,
     );
     Ok(())
 }
@@ -609,5 +784,68 @@ mod tests {
         }];
         let img = rasterize_cpu(8, 8, &cmds, 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
+    }
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect { x, y, width: w, height: h }
+    }
+
+    /// `PushClipRect` confines a following `FillRect` to the clip region;
+    /// pixels outside the clip keep the white background.
+    #[test]
+    fn push_clip_rect_clips_fill() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushClipRect { rect: rect(10.0, 10.0, 20.0, 20.0) },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Inside the clip [10,30) — filled blue.
+        assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "inside clip is blue");
+        // Outside the clip — background white.
+        assert_eq!(px(&img, 45, 45), (255, 255, 255, 255), "outside clip stays white");
+        assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "above-left of clip stays white");
+    }
+
+    /// `PopClip` removes the clip so a later `FillRect` paints everywhere again.
+    #[test]
+    fn pop_clip_restores_full_drawing() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let green = Color { r: 0, g: 255, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushClipRect { rect: rect(10.0, 10.0, 10.0, 10.0) },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
+            DisplayCommand::PopClip,
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: green },
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // A point that was outside the first (clipped) fill is painted by the
+        // second, unclipped fill → green, proving the clip was popped.
+        assert_eq!(px(&img, 45, 45), (0, 255, 0, 255), "post-pop fill reaches outside old clip");
+    }
+
+    /// Nested `PushClipRect`s intersect: only the overlap of both clip rects is
+    /// drawn; regions inside one but not the other are clipped out.
+    #[test]
+    fn nested_clip_intersects() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushClipRect { rect: rect(10.0, 10.0, 40.0, 40.0) }, // x,y ∈ [10,50)
+            DisplayCommand::PushClipRect { rect: rect(30.0, 30.0, 40.0, 40.0) }, // x,y ∈ [30,70)
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
+            DisplayCommand::PopClip,
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Intersection [30,50) — blue.
+        assert_eq!(px(&img, 40, 40), (0, 0, 255, 255), "intersection is blue");
+        // Inside outer clip only (x=20 < 30) — clipped out by inner.
+        assert_eq!(px(&img, 20, 20), (255, 255, 255, 255), "outer-only region clipped");
+        // Inside inner clip only (x=60 ≥ 50) — clipped out by outer.
+        assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "inner-only region clipped");
     }
 }
