@@ -9,11 +9,12 @@
 //! cross-OS-stable regression gate the 8A.6 migration targets.
 //!
 //! The CPU rasterizer currently covers the geometric primitives
-//! (`FillRect` / `FillRoundedRect` / `DrawBorder` / `DrawOutline`) plus linear
-//! and radial gradients (`DrawLinearGradient` / `DrawRadialGradient`, including
-//! repeating); text and images are skipped. The chosen pages exercise exactly
-//! these primitives, so the references capture meaningful geometry rather than
-//! blank frames. As `cpu_raster` grows, add the relevant pages to `PAGES`.
+//! (`FillRect` / `FillRoundedRect` / `DrawBorder` / `DrawOutline`), linear and
+//! radial gradients (`DrawLinearGradient` / `DrawRadialGradient`, including
+//! repeating), and tessellated SVG paths (`DrawSvgPath`); text and images are
+//! skipped. The chosen pages exercise exactly these primitives, so the
+//! references capture meaningful geometry rather than blank frames. As
+//! `cpu_raster` grows, add the relevant pages to `PAGES`.
 //!
 //! Run:        cargo test -p lumen-driver --features cpu-render
 //! Regenerate: SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render -- --nocapture
@@ -57,6 +58,7 @@ const PAGES: &[&str] = &[
     "41-table",
     "42-position-sticky",
     "43-intrinsic-sizing",
+    "47-svg-basic",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
