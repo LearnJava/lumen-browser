@@ -8,7 +8,7 @@ pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
 pub use jpeg::{decode_jpeg, JpegError};
 pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
-pub use gif::{decode_gif, GifError, is_gif};
+pub use gif::{decode_gif, decode_gif_animated, AnimatedFrame, AnimatedGif, GifError, GifLoopCount, is_gif};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
