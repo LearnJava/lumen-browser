@@ -17,5 +17,12 @@ lumen-paint = { workspace = true }
 # Permanent #5 (§5): JS engine. QuickJS for Phase 0–1; rusty_v8 planned for v1.0+.
 # Rationale: writing a JS engine from scratch is not in scope for Lumen.
 rquickjs = "0.11"
+# Permanent: OS CSPRNG bytes for Web Crypto API (getRandomValues/randomUUID).
+# Minimal dep — delegates directly to OS (CryptGenRandom/getrandom syscall).
+getrandom = "0.2"
+# Permanent: SHA-1/256/384/512 for SubtleCrypto.digest(). Tiny pure-Rust crate.
+# Security-critical; pure-JS alternatives are slower and harder to audit.
+sha2 = "0.10"
+sha1 = "0.10"
 
 [dev-dependencies]
