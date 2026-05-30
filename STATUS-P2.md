@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+**10H — MemoryPressureSource** branch: p2-memory-pressure
+Next step: Add `MemoryPressureLevel` + `MemoryPressureSource` trait to `lumen-core/src/ext.rs`, then Win32/Linux impls, then wire caches.
 
 ---
 
