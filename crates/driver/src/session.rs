@@ -133,10 +133,12 @@ impl InProcessSession {
     /// основа для snapshot-тестов уровня 3 (задача 8A.6).
     ///
     /// Текущий CPU-растеризатор покрывает геометрические примитивы
-    /// (`FillRect`/`FillRoundedRect`/`DrawBorder`/`DrawOutline`), линейные и
-    /// радиальные градиенты, тесселированные SVG-пути и серый placeholder
-    /// `<img>` (`DrawImage` — без зарегистрированных пикселей рисуется
-    /// заглушка, как в GPU-fallback); текст пока пропускается.
+    /// (`FillRect`/`FillRoundedRect`/`DrawBorder`/`DrawOutline`), линейные,
+    /// радиальные и конические градиенты, тесселированные SVG-пути, серый
+    /// placeholder `<img>` (`DrawImage` — без зарегистрированных пикселей
+    /// рисуется заглушка, как в GPU-fallback) и текст (`DrawText` — глифы
+    /// bundled-шрифта Inter Regular растеризуются через `lumen_font::Rasterizer`
+    /// и композитятся через coverage-маску).
     ///
     /// # Errors
     /// Возвращает `Err`, если сессия не инициализирована или растеризация

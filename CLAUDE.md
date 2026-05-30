@@ -367,20 +367,30 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 24 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 27 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
 covers FillRect/FillRoundedRect/DrawBorder/DrawOutline, linear+radial gradients (incl.
-repeating; page `39-gradients`), tessellated SVG paths (`DrawSvgPath`; SVG basic shapes
+repeating; page `39-gradients`), the per-pixel conic gradient (`DrawConicGradient`; no native
+tiny-skia angular shader, so the sweep is computed with a deterministic libm-free `atan2`
+approximation for cross-OS bit-identity — page `40-conic-gradients`), tessellated SVG paths (`DrawSvgPath`; SVG basic shapes
 rect/circle/ellipse/line reuse the rect/rounded-rect/border primitives — page `47-svg-basic`)
 rectangular clipping (`PushClipRect`/`PopClip` + `PushScrollLayer`/`PopScrollLayer`, i.e.
 `overflow: hidden/scroll/auto` — page `14-overflow`; a tiny-skia `Mask` is applied only to draws
 that actually cross a clip edge, so fully-contained content stays byte-identical to the unclipped
 path), and the `<img>` grey placeholder quad (`DrawImage` → `rgba8(217,217,217,255)`; the headless
 CPU path registers no decoded pixels, so it mirrors the GPU renderer's placeholder fallback — page
-`18-images`, all `<img>` have empty `alt`). Coverage of text pages grows as `cpu_raster` gains
-the text primitive.
+`18-images`, all `<img>` have empty `alt`), and text (`DrawText` — glyphs of the bundled Inter
+Regular face rasterized via `lumen_font::Rasterizer` directly at `font_size`, no atlas size-binning,
+then composited through a single coverage `tiny_skia::Mask` so anti-aliased edges blend exactly like
+fills; baseline + advance mirror the GPU `push_text_glyphs`; family/weight/style ignored — only the
+bundled face exists on the CPU path; page `55-text-rendering`, a snapshot-only page **not** registered
+in `run.py` because glyph anti-aliasing always diverges from Edge), and group opacity
+(`PushOpacity`/`PopOpacity`, emitted for `opacity < 1`; the subtree is drawn into a full-size,
+initially-transparent off-screen `tiny_skia::Pixmap` layer pushed on a stack, then composited onto
+the layer below with the group alpha via `draw_pixmap` — CSS Color L3 §3.2 group opacity, faded as a
+unit not per-child; page `13-visibility-opacity`).
 
 ---
 

@@ -8,6 +8,13 @@ use lumen_layout::{Color, GradientStop, Length};
 use crate::{DisplayCommand, CornerRadii};
 use lumen_core::geom::Rect;
 
+/// Bundled Inter Regular — the only face the deterministic CPU path can
+/// rasterize. Mirrors `INTER_FONT` in `lumen-driver`; real font matching
+/// (family/weight/style/fallback) is a GPU-renderer concern, so the CPU
+/// snapshot path always renders text with this single face. Pure-Rust glyph
+/// scanline fill (`lumen_font::Rasterizer`) keeps output cross-OS bit-identical.
+const BUNDLED_FONT: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+
 /// Rasterize display commands to an image using tiny-skia (CPU only, deterministic).
 pub(crate) fn rasterize_cpu(
     width: u32,
@@ -18,11 +25,21 @@ pub(crate) fn rasterize_cpu(
 ) -> Result<Image, Box<dyn std::error::Error>> {
     use tiny_skia::Pixmap;
 
-    let mut pixmap = Pixmap::new(width, height)
+    let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
 
     // Fill background with white.
-    pixmap.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+    base.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+
+    // Off-screen layer stack for group opacity (`PushOpacity` / `PopOpacity`,
+    // emitted for `opacity < 1`). `layers[0]` is the white base; each open
+    // opacity group pushes a fully-transparent full-size layer that becomes the
+    // active draw target. On `PopOpacity` the top layer is composited onto the
+    // layer below with its group alpha (CSS Color L3 §3.2 — the whole subtree is
+    // rendered as a unit, then alpha-blended). Full-size layers keep the page
+    // coordinate space and clip masks valid without translation.
+    let mut layers: Vec<Pixmap> = vec![base];
+    let mut layer_alpha: Vec<f32> = Vec::new();
 
     // Active rectangular clip regions (CSS `overflow: hidden`, `PushClipRect`).
     // Stored as a stack of axis-aligned rects; the effective clip is their
@@ -45,15 +62,19 @@ pub(crate) fn rasterize_cpu(
         match cmd {
             DisplayCommand::FillRect { rect, color } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_fill_rect(&mut pixmap, rect, color, c)?;
+                rasterize_fill_rect(layers.last_mut().expect("base layer"), rect, color, c)?;
             }
             DisplayCommand::FillRoundedRect { rect, color, radii } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_fill_rounded_rect(&mut pixmap, rect, color, radii, c)?;
+                rasterize_fill_rounded_rect(
+                    layers.last_mut().expect("base layer"), rect, color, radii, c,
+                )?;
             }
             DisplayCommand::DrawBorder { rect, widths, colors, styles: _, radii } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_draw_border(&mut pixmap, rect, widths, colors, radii, c)?;
+                rasterize_draw_border(
+                    layers.last_mut().expect("base layer"), rect, widths, colors, radii, c,
+                )?;
             }
             DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
                 // Outline expands the rect by `offset` on every side.
@@ -64,16 +85,30 @@ pub(crate) fn rasterize_cpu(
                     rect.y + rect.height + offset,
                 );
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
-                rasterize_draw_outline(&mut pixmap, rect, *width, color, *offset, c)?;
+                rasterize_draw_outline(
+                    layers.last_mut().expect("base layer"), rect, *width, color, *offset, c,
+                )?;
             }
             DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_linear_gradient(&mut pixmap, rect, *angle_deg, stops, *repeating, c)?;
+                rasterize_linear_gradient(
+                    layers.last_mut().expect("base layer"), rect, *angle_deg, stops, *repeating, c,
+                )?;
             }
             DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_radial_gradient(
-                    &mut pixmap, rect, *center_x_pct, *center_y_pct, stops, *repeating, c,
+                    layers.last_mut().expect("base layer"), rect, *center_x_pct, *center_y_pct,
+                    stops, *repeating, c,
+                )?;
+            }
+            DisplayCommand::DrawConicGradient {
+                rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating,
+            } => {
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                rasterize_conic_gradient(
+                    layers.last_mut().expect("base layer"), rect, *center_x_pct, *center_y_pct,
+                    *from_angle_deg, stops, *repeating, c,
                 )?;
             }
             DisplayCommand::DrawSvgPath { vertices, color } => {
@@ -82,7 +117,7 @@ pub(crate) fn rasterize_cpu(
                     clip_rect.as_ref(),
                     vertices_bounds(vertices),
                 );
-                rasterize_svg_path(&mut pixmap, vertices, color, c)?;
+                rasterize_svg_path(layers.last_mut().expect("base layer"), vertices, color, c)?;
             }
             DisplayCommand::PushClipRect { rect } => {
                 clip_stack.push(*rect);
@@ -112,7 +147,36 @@ pub(crate) fn rasterize_cpu(
             }
             DisplayCommand::DrawImage { rect, .. } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_image_placeholder(&mut pixmap, rect, c)?;
+                rasterize_image_placeholder(layers.last_mut().expect("base layer"), rect, c)?;
+            }
+            DisplayCommand::DrawText {
+                rect, text, font_size, color, tab_size, ..
+            } => {
+                // Text uses the bundled Inter face only; family/weight/style are
+                // ignored on the CPU path (no FontProvider here). Clip is the
+                // active rectangular `overflow` region, applied per glyph pixel.
+                rasterize_text(
+                    layers.last_mut().expect("base layer"), rect, text, *font_size, color,
+                    *tab_size, clip_rect.as_ref(),
+                )?;
+            }
+            // CSS Color L3 §3.2 — `opacity < 1` renders the element's subtree as
+            // an off-screen group, then alpha-blends it. Push a transparent
+            // full-size layer that becomes the active draw target; draws between
+            // here and the matching `PopOpacity` accumulate into it.
+            DisplayCommand::PushOpacity { alpha } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create opacity layer")?;
+                layers.push(layer);
+                layer_alpha.push(alpha.clamp(0.0, 1.0));
+            }
+            // Composite the finished group onto the layer below with its alpha.
+            DisplayCommand::PopOpacity => {
+                if let (Some(top), Some(a)) = (layers.pop(), layer_alpha.pop())
+                    && let Some(dst) = layers.last_mut()
+                {
+                    composite_layer(dst, &top, a);
+                }
             }
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
@@ -121,6 +185,16 @@ pub(crate) fn rasterize_cpu(
         }
     }
 
+    // Defensive: composite any opacity layers the emitter left unbalanced
+    // (the display-list emitter always pairs Push/Pop, so this is a no-op there).
+    while layers.len() > 1 {
+        let top = layers.pop().expect("len > 1");
+        let a = layer_alpha.pop().unwrap_or(1.0);
+        if let Some(dst) = layers.last_mut() {
+            composite_layer(dst, &top, a);
+        }
+    }
+    let pixmap = layers.pop().expect("base layer");
     let data = pixmap.data().to_vec();
     Ok(Image {
         width,
@@ -129,6 +203,22 @@ pub(crate) fn rasterize_cpu(
         data,
         icc_profile: None,
     })
+}
+
+/// Composite an off-screen opacity layer `src` onto `dst` with group `alpha`.
+///
+/// Used by `PopOpacity`: the whole subtree was rendered into `src` (a full-size,
+/// initially transparent pixmap), so blending it as a unit with a single alpha
+/// reproduces CSS group opacity (the children are *not* individually faded).
+/// tiny-skia's `draw_pixmap` blends premultiplied RGBA deterministically, so the
+/// result is cross-OS bit-identical like the rest of the CPU path.
+fn composite_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, alpha: f32) {
+    let paint = tiny_skia::PixmapPaint {
+        opacity: alpha.clamp(0.0, 1.0),
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(0, 0, src.as_ref(), &paint, tiny_skia::Transform::identity(), None);
 }
 
 /// Geometric intersection of every clip rect on the stack.
@@ -698,6 +788,178 @@ fn rasterize_radial_gradient(
     Ok(())
 }
 
+/// CSS Images L4 §3.7 — `conic-gradient(...)` rasterized per-pixel.
+///
+/// tiny-skia has no native conic (angular) shader, so the angular sweep is
+/// computed directly: for every pixel centre inside `rect` the polar angle
+/// around `(center_x_pct, center_y_pct)` is measured in box-space and mapped to
+/// gradient position `t`. Mirrors the GPU conic shader: CSS convention 0° = top
+/// (-y), clockwise, with `from_angle_deg` as the starting angle; `repeating`
+/// tiles the resolved-stop span within one revolution.
+///
+/// All math uses only IEEE-exact primitive ops (no platform `atan2`/`sin`), so
+/// the output is bit-identical across Windows/macOS/Linux — required for the
+/// exact-match CPU snapshot gate. Colours are composited `SourceOver` onto the
+/// premultiplied RGBA8 backing buffer.
+///
+/// `clip`, when present, is the active rectangular clip coverage mask (one byte
+/// per pixel): each composited source alpha is scaled by that coverage so the
+/// per-pixel path honours `overflow`/scroll clipping exactly like the tiny-skia
+/// draws. A fully-contained draw is handed `None` and stays unclipped.
+#[allow(clippy::too_many_arguments)]
+fn rasterize_conic_gradient(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    center_x_pct: f32,
+    center_y_pct: f32,
+    from_angle_deg: f32,
+    stops: &[GradientStop],
+    repeating: bool,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return Ok(());
+    }
+    // Conic stop positions are revolution fractions (angle stops already
+    // converted to percent on parse); GPU resolves with line_len = 1.0.
+    let resolved = resolve_stop_positions(stops, 1.0);
+    if resolved.is_empty() {
+        return Ok(());
+    }
+
+    let from_rad = from_angle_deg.to_radians();
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+
+    // Integer pixel-center bounds of the rect, clamped to the pixmap.
+    let x0 = (rect.x.floor() as i32).max(0);
+    let y0 = (rect.y.floor() as i32).max(0);
+    let x1 = ((rect.x + rect.width).ceil() as i32).min(pw);
+    let y1 = ((rect.y + rect.height).ceil() as i32).min(ph);
+
+    let cx = rect.x + center_x_pct * rect.width;
+    let cy = rect.y + center_y_pct * rect.height;
+
+    let first_pos = resolved.first().map(|s| s.0).unwrap_or(0.0);
+    let span = (resolved.last().map(|s| s.0).unwrap_or(1.0) - first_pos).max(0.0);
+
+    // One coverage byte per pixel when a clip is active; `None` means unclipped.
+    let clip_data = clip.map(tiny_skia::Mask::data);
+    let data = pixmap.data_mut();
+    for py in y0..y1 {
+        let fy = py as f32 + 0.5;
+        if fy < rect.y || fy >= rect.y + rect.height {
+            continue;
+        }
+        for px in x0..x1 {
+            let fx = px as f32 + 0.5;
+            if fx < rect.x || fx >= rect.x + rect.width {
+                continue;
+            }
+            let idx = (py * pw + px) as usize;
+            let coverage = clip_data.map_or(255u8, |m| m[idx]);
+            if coverage == 0 {
+                continue;
+            }
+            // CSS convention: 0° = top (-y), angles grow clockwise.
+            let raw = atan2_det(fx - cx, -(fy - cy)) - from_rad;
+            let frac = raw / std::f32::consts::TAU;
+            let norm = frac - frac.floor(); // [0, 1)
+            let t = if repeating && resolved.len() > 1 && span > 1e-4 {
+                let mod_s = norm - (norm / span).floor() * span;
+                first_pos + mod_s
+            } else {
+                norm
+            };
+            let mut color = sample_gradient_color(&resolved, t, repeating);
+            if coverage != 255 {
+                color.a = ((color.a as u16 * coverage as u16 + 127) / 255) as u8;
+            }
+            composite_over(data, idx, color);
+        }
+    }
+    Ok(())
+}
+
+/// Deterministic `atan2(y, x)` returning radians in `(-π, π]`.
+///
+/// Pure approximation (Rajan's formula) using only IEEE-exact ops
+/// (`+`,`-`,`*`,`/`,`min`,`max`,`abs`) — no platform libm — so the result is
+/// bit-identical across Windows/macOS/Linux. Accuracy ≈ 0.004 rad, ample for an
+/// angular gradient whose reference PNG is self-generated by this same path.
+fn atan2_det(y: f32, x: f32) -> f32 {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+    let ax = x.abs();
+    let ay = y.abs();
+    let max = ax.max(ay);
+    if max == 0.0 {
+        return 0.0;
+    }
+    let a = ax.min(ay) / max; // tan of the smaller angle, [0, 1]
+    let mut r = a * FRAC_PI_4 + 0.273 * a * (1.0 - a); // ≈ atan(a)
+    if ay > ax {
+        r = FRAC_PI_2 - r; // reflect across the 45° line
+    }
+    if x < 0.0 {
+        r = PI - r;
+    }
+    if y < 0.0 {
+        r = -r;
+    }
+    r
+}
+
+/// Sample a resolved gradient stop list at position `t` (straight-colour linear
+/// interpolation), mirroring the GPU `sample_grad`: `repeating` wraps `t` to
+/// `[0,1)`, otherwise it clamps; positions outside the first/last stop take the
+/// boundary colour.
+fn sample_gradient_color(resolved: &[(f32, Color)], t: f32, repeating: bool) -> Color {
+    let n = resolved.len();
+    if n == 0 {
+        return Color { r: 0, g: 0, b: 0, a: 0 };
+    }
+    if n == 1 {
+        return resolved[0].1;
+    }
+    let tc = if repeating { t - t.floor() } else { t.clamp(0.0, 1.0) };
+    if tc <= resolved[0].0 {
+        return resolved[0].1;
+    }
+    let last = n - 1;
+    if tc >= resolved[last].0 {
+        return resolved[last].1;
+    }
+    for i in 0..last {
+        let (ap, ac) = resolved[i];
+        let (bp, bc) = resolved[i + 1];
+        if tc >= ap && tc <= bp {
+            let s = bp - ap;
+            let f = if s > 1e-4 { (tc - ap) / s } else { 0.0 };
+            return lerp_color(ac, bc, f);
+        }
+    }
+    resolved[last].1
+}
+
+/// Linear interpolation between two straight (non-premultiplied) RGBA8 colours.
+fn lerp_color(a: Color, b: Color, f: f32) -> Color {
+    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * f).round().clamp(0.0, 255.0) as u8;
+    Color { r: l(a.r, b.r), g: l(a.g, b.g), b: l(a.b, b.b), a: l(a.a, b.a) }
+}
+
+/// Composite a straight-alpha `src` colour `SourceOver` onto the premultiplied
+/// RGBA8 pixel at `pixel_idx` in tiny-skia's backing buffer.
+fn composite_over(data: &mut [u8], pixel_idx: usize, src: Color) {
+    let i = pixel_idx * 4;
+    let sa = src.a as f32 / 255.0;
+    let inv = 1.0 - sa;
+    let out = |s: u8, d: u8| (s as f32 * sa + d as f32 * inv).round().clamp(0.0, 255.0) as u8;
+    data[i] = out(src.r, data[i]);
+    data[i + 1] = out(src.g, data[i + 1]);
+    data[i + 2] = out(src.b, data[i + 2]);
+    data[i + 3] = (src.a as f32 + data[i + 3] as f32 * inv).round().clamp(0.0, 255.0) as u8;
+}
+
 /// SVG 1.1 §11 — pre-tessellated SVG shape (flat triangle list) filled with a
 /// solid colour.
 ///
@@ -768,6 +1030,170 @@ fn color_to_skia(color: Color) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.a)
 }
 
+/// Parsed bundled face plus the tables `rasterize_text` needs. `None` if the
+/// embedded font fails to parse (should never happen for committed Inter).
+struct CpuFace<'a> {
+    font: lumen_font::Font<'a>,
+    units_per_em: u16,
+    ascent: f32,
+    descent: f32,
+    cmap: lumen_font::Cmap<'a>,
+    hmtx: lumen_font::Hmtx<'a>,
+}
+
+/// Parse the bundled Inter face once per `DrawText` run.
+fn load_bundled_face() -> Option<CpuFace<'static>> {
+    let font = lumen_font::Font::parse(BUNDLED_FONT).ok()?;
+    let head = font.head().ok()?;
+    let hhea = font.hhea().ok()?;
+    let cmap = font.cmap().ok()?;
+    let hmtx = font.hmtx().ok()?;
+    Some(CpuFace {
+        font,
+        units_per_em: head.units_per_em,
+        ascent: f32::from(hhea.ascent),
+        descent: f32::from(hhea.descent),
+        cmap,
+        hmtx,
+    })
+}
+
+/// Render a `DrawText` run with the bundled Inter face, compositing each
+/// glyph's coverage onto `pixmap`.
+///
+/// Geometry mirrors the GPU renderer (`push_text_glyphs`): the baseline sits
+/// at `rect.y + font_size * ascent / (ascent − descent)`, the pen starts at
+/// `rect.x`, and each glyph advances by `advance_width * font_size /
+/// units_per_em`. Glyphs are rasterized directly at `font_size` (no atlas
+/// size-binning), so the CPU output is sharper than the GPU path but stays
+/// cross-OS bit-identical — the snapshot reference is generated from this same
+/// path. `clip` is the active rectangular `overflow` region; pixels outside it
+/// are dropped.
+///
+/// Coverage from all glyphs is accumulated into a single tiny-skia `Mask`,
+/// then a one-shot `fill_rect` paints the text colour through it — the same
+/// `SourceOver` blend as every other CPU primitive, so anti-aliased glyph
+/// edges composite identically to fills.
+fn rasterize_text(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    text: &str,
+    font_size: f32,
+    color: &Color,
+    tab_size: f32,
+    clip: Option<&Rect>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if text.is_empty() || font_size <= 0.0 || color.a == 0 {
+        return Ok(());
+    }
+    let Some(face) = load_bundled_face() else {
+        return Ok(());
+    };
+    let denom = face.ascent - face.descent;
+    let ascent_ratio = if denom != 0.0 { face.ascent / denom } else { 0.8 };
+    let baseline_y = rect.y + font_size * ascent_ratio;
+    let advance_scale = font_size / f32::from(face.units_per_em);
+    let rasterizer = lumen_font::Rasterizer::new(font_size, face.units_per_em);
+
+    let width = pixmap.width();
+    let height = pixmap.height();
+    let mut mask = tiny_skia::Mask::new(width, height).ok_or("Failed to create glyph mask")?;
+    let mut any_coverage = false;
+
+    let mut cursor_x = rect.x;
+    for ch in text.chars() {
+        // CSS Text L3 §10.1 — tab advances by tab_size pixels, draws nothing.
+        if ch == '\t' && tab_size > 0.0 {
+            cursor_x += tab_size;
+            continue;
+        }
+        // No fallback faces on the CPU path: a missing codepoint resolves to
+        // glyph 0 (.notdef), matching the GPU renderer's `(primary, 0)` result.
+        let glyph_id = face.cmap.glyph_index(ch as u32).unwrap_or(0);
+        if let Ok(Some(glyph)) = face.font.glyph_resolved(glyph_id)
+            && let Some(bitmap) = rasterizer.rasterize(&glyph)
+            && blit_glyph_coverage(&mut mask, &bitmap, cursor_x, baseline_y, clip, width, height)
+        {
+            any_coverage = true;
+        }
+        let advance = face.hmtx.advance_width(glyph_id).unwrap_or(0);
+        cursor_x += f32::from(advance) * advance_scale;
+    }
+
+    if !any_coverage {
+        return Ok(());
+    }
+
+    let paint = tiny_skia::Paint {
+        shader: tiny_skia::Shader::SolidColor(color_to_skia(*color)),
+        anti_alias: false,
+        force_hq_pipeline: false,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+    };
+    let full = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)
+        .ok_or("Invalid pixmap dimensions")?;
+    pixmap.fill_rect(full, &paint, tiny_skia::Transform::identity(), Some(&mask));
+    Ok(())
+}
+
+/// Composite one glyph's coverage bitmap into `mask`, returning whether any
+/// pixel was written. The bitmap's top-left maps to page coordinates
+/// `(pen_x + bitmap.left, baseline_y − bitmap.top)`, rounded to the nearest
+/// pixel for a deterministic pen-to-pixel snap. Pixels outside the pixmap or
+/// the rectangular `clip` are dropped; overlapping glyph pixels keep the max
+/// coverage (glyphs in a run rarely overlap, but kerning-tight pairs can).
+fn blit_glyph_coverage(
+    mask: &mut tiny_skia::Mask,
+    bitmap: &lumen_font::Bitmap,
+    pen_x: f32,
+    baseline_y: f32,
+    clip: Option<&Rect>,
+    width: u32,
+    height: u32,
+) -> bool {
+    if bitmap.width == 0 || bitmap.height == 0 {
+        return false;
+    }
+    let origin_x = (pen_x + bitmap.left).round() as i32;
+    let origin_y = (baseline_y - bitmap.top).round() as i32;
+    let w = width as i32;
+    let h = height as i32;
+    let data = mask.data_mut();
+    let mut wrote = false;
+    for gy in 0..bitmap.height as i32 {
+        let dy = origin_y + gy;
+        if dy < 0 || dy >= h {
+            continue;
+        }
+        if let Some(cr) = clip
+            && ((dy as f32) < cr.y || (dy as f32) >= cr.y + cr.height)
+        {
+            continue;
+        }
+        for gx in 0..bitmap.width as i32 {
+            let dx = origin_x + gx;
+            if dx < 0 || dx >= w {
+                continue;
+            }
+            if let Some(cr) = clip
+                && ((dx as f32) < cr.x || (dx as f32) >= cr.x + cr.width)
+            {
+                continue;
+            }
+            let cov = bitmap.pixels[(gy as u32 * bitmap.width + gx as u32) as usize];
+            if cov == 0 {
+                continue;
+            }
+            let idx = (dy * w + dx) as usize;
+            if cov > data[idx] {
+                data[idx] = cov;
+            }
+            wrote = true;
+        }
+    }
+    wrote
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -825,6 +1251,53 @@ mod tests {
         let cmds = vec![DisplayCommand::DrawSvgPath {
             vertices: vec![],
             color: Color { r: 0, g: 0, b: 0, a: 255 },
+        }];
+        let img = rasterize_cpu(8, 8, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
+    }
+
+    /// A two-stop conic (red at 0° → blue at one revolution, centre, from 0°)
+    /// sweeps clockwise: the top-centre is the start (red), the bottom-centre is
+    /// half a revolution in (≈ midway red→blue).
+    #[test]
+    fn conic_sweeps_first_to_last_stop() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![DisplayCommand::DrawConicGradient {
+            rect: Rect { x: 0.0, y: 0.0, width: 64.0, height: 64.0 },
+            center_x_pct: 0.5,
+            center_y_pct: 0.5,
+            from_angle_deg: 0.0,
+            stops: vec![
+                GradientStop { color: red, position: None },
+                GradientStop { color: blue, position: None },
+            ],
+            repeating: false,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Top-centre column ≈ start of the sweep → essentially red.
+        let (tr, _tg, tb, ta) = px(&img, 32, 2);
+        assert!(tr > 200 && tb < 50 && ta == 255, "top is red-ish, got ({tr},{_tg},{tb},{ta})");
+
+        // Bottom-centre column ≈ half a revolution → midway red→blue.
+        let (br, _bg, bb, ba) = px(&img, 32, 61);
+        assert!(
+            (80..=180).contains(&br) && (80..=180).contains(&bb) && ba == 255,
+            "bottom is midway, got ({br},{_bg},{bb},{ba})"
+        );
+    }
+
+    /// A conic with no stops is a no-op, not a panic.
+    #[test]
+    fn conic_empty_stops_noop() {
+        let cmds = vec![DisplayCommand::DrawConicGradient {
+            rect: Rect { x: 0.0, y: 0.0, width: 8.0, height: 8.0 },
+            center_x_pct: 0.5,
+            center_y_pct: 0.5,
+            from_angle_deg: 0.0,
+            stops: vec![],
+            repeating: false,
         }];
         let img = rasterize_cpu(8, 8, &cmds, 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
@@ -891,5 +1364,153 @@ mod tests {
         assert_eq!(px(&img, 20, 20), (255, 255, 255, 255), "outer-only region clipped");
         // Inside inner clip only (x=60 ≥ 50) — clipped out by outer.
         assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "inner-only region clipped");
+    }
+
+    /// `DrawText` paints the bundled Inter glyphs: a large opaque-coloured run
+    /// must darken/colour some pixels away from the white background. Exact
+    /// glyph pixels are font-dependent, so we only assert "ink appeared" within
+    /// the run box, which is enough to catch a regression to the no-op path.
+    #[test]
+    fn draw_text_renders_ink() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![DisplayCommand::DrawText {
+            rect: rect(2.0, 2.0, 120.0, 40.0),
+            text: "Hi".to_string(),
+            font_size: 32.0,
+            color: blue,
+            font_family: Vec::new(),
+            font_weight: lumen_layout::FontWeight::default(),
+            font_style: lumen_layout::FontStyle::default(),
+            font_variation_axes: Vec::new(),
+            tab_size: 0.0,
+        }];
+        let img = rasterize_cpu(128, 48, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // At least one pixel in the run box must carry blue ink (not white bg).
+        let mut inked = false;
+        for y in 2..44 {
+            for x in 2..120 {
+                let (r, g, b, _) = px(&img, x, y);
+                if b > r && b > g {
+                    inked = true;
+                }
+            }
+        }
+        assert!(inked, "DrawText produced no blue ink");
+    }
+
+    /// Empty text is a no-op: the background stays pure white.
+    #[test]
+    fn draw_text_empty_is_noop() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![DisplayCommand::DrawText {
+            rect: rect(0.0, 0.0, 64.0, 64.0),
+            text: String::new(),
+            font_size: 20.0,
+            color: black,
+            font_family: Vec::new(),
+            font_weight: lumen_layout::FontWeight::default(),
+            font_style: lumen_layout::FontStyle::default(),
+            font_variation_axes: Vec::new(),
+            tab_size: 0.0,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "empty text left bg white");
+    }
+
+    /// A rectangular clip drops glyph pixels outside it: text drawn fully to the
+    /// left of a clip that starts at x=200 leaves the clipped sample untouched.
+    #[test]
+    fn draw_text_respects_clip() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            // Clip to the right half; the text sits in the left half → no ink.
+            DisplayCommand::PushClipRect { rect: rect(200.0, 0.0, 100.0, 64.0) },
+            DisplayCommand::DrawText {
+                rect: rect(2.0, 2.0, 180.0, 40.0),
+                text: "Hidden".to_string(),
+                font_size: 32.0,
+                color: black,
+                font_family: Vec::new(),
+                font_weight: lumen_layout::FontWeight::default(),
+                font_style: lumen_layout::FontStyle::default(),
+                font_variation_axes: Vec::new(),
+                tab_size: 0.0,
+            },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(320, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // Left half (outside clip) must remain white.
+        for x in (5..180).step_by(10) {
+            assert_eq!(
+                px(&img, x, 20),
+                (255, 255, 255, 255),
+                "glyph pixel at x={x} should be clipped out",
+            );
+        }
+    }
+
+    /// `PushOpacity { 0.5 }` around an opaque blue fill blends it 50/50 with the
+    /// white background: result ≈ (127, 127, 255).
+    #[test]
+    fn opacity_half_blends_blue_over_white() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::FillRect { rect: rect(10.0, 10.0, 40.0, 40.0), color: blue },
+            DisplayCommand::PopOpacity,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        let (r, g, b, a) = px(&img, 30, 30);
+        assert!(
+            (120..=135).contains(&r) && (120..=135).contains(&g) && b > 250 && a == 255,
+            "blue at 0.5 opacity over white ≈ (127,127,255), got ({r},{g},{b},{a})",
+        );
+        // Outside the group's box stays white.
+        assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// `PushOpacity { 0.0 }` makes the whole group invisible: the background is
+    /// untouched.
+    #[test]
+    fn opacity_zero_keeps_background() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushOpacity { alpha: 0.0 },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
+            DisplayCommand::PopOpacity,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 32, 32), (255, 255, 255, 255), "fully transparent group");
+    }
+
+    /// Group opacity fades the *whole* subtree by one alpha: two sibling fills in
+    /// the same group are each blended 50/50 with the background (not stacked or
+    /// double-faded).
+    #[test]
+    fn opacity_group_fades_whole_subtree() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 20.0, 20.0), color: red },
+            DisplayCommand::FillRect { rect: rect(20.0, 0.0, 20.0, 20.0), color: green },
+            DisplayCommand::PopOpacity,
+        ];
+        let img = rasterize_cpu(64, 32, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Red box ≈ (255,127,127).
+        let (rr, rg, rb, _) = px(&img, 10, 10);
+        assert!(
+            rr > 250 && (120..=135).contains(&rg) && (120..=135).contains(&rb),
+            "red faded, got ({rr},{rg},{rb})",
+        );
+        // Green box ≈ (127,191,127): blended from (0,128,0) over white at 0.5.
+        let (gr, gg, gb, _) = px(&img, 30, 10);
+        assert!(
+            (120..=135).contains(&gr) && (185..=197).contains(&gg) && (120..=135).contains(&gb),
+            "green faded, got ({gr},{gg},{gb})",
+        );
     }
 }
