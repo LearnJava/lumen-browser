@@ -303,7 +303,7 @@
 | 8A.3 | ✅ **`[P3+P2]` Off-screen рендер** (`Renderer::render_to_image() -> Image`) | `paint/src/renderer.rs` | P2/P3: `new_headless()` без winit + `render_to_image()` GPU readback — 2026-05-27 |
 | 8A.4 | ✅ **`[P3+P1]` Structural getters**: `layout_box`, `computed_style` через handle / selector | `layout` exposers: `find_box_by_selector`, `computed_style_by_selector`, `ComputedStyleSnapshot` | 2026-05-27 |
 | 8A.5 | ✅ Software rasterizer для тестов (`tiny-skia` opt-in под `cfg(test)`) | `paint/src/cpu_raster.rs` | детерминизм пикселей Windows/macOS/Linux CI — 2026-05-27 |
-| 8A.6 | 🟡 Миграция `graphic_tests/`: structural-assert Rust-тесты + `graphic_tests/snapshots/*.png` эталоны | `driver/tests/graphic_*.rs` + `graphic_tests/snapshots/` | в процессе, P3 |
+| 8A.6 | 🟡 Миграция `graphic_tests/`: structural-assert Rust-тесты + `graphic_tests/snapshots/*.png` эталоны | `driver/tests/graphic_*.rs` + `graphic_tests/snapshots/` | в процессе, P3; cpu_raster покрывает 29 страниц (б-1..б-11) вкл. mix-blend-mode |
 | 8A.7 | ⬜ Шелл переписать как первого клиента trait-а (winit/wgpu → один из транспортов) | `shell/src/main.rs` | — |
 | 8B | ⬜ **`[P3]` `lumen-mcp-server` крейт** (Phase 1) | AI-агенты (Claude/GPT/Browser Use) без обёрток | `crates/mcp/` |
 | 8B.1 | ⬜ JSON-RPC over stdio + UNIX/TCP socket transport | `mcp/src/transport.rs` | — |
