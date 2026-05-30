@@ -53,7 +53,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
 `crates/engine/canvas/src/rasterize.rs:41` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
 
-## lumen-core  (164 symbols)
+## lumen-core  (169 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -127,18 +127,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:1514` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
 `crates/core/src/ext.rs:1586` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
 `crates/core/src/ext.rs:1686` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
-`crates/core/src/ext.rs:1705` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
-`crates/core/src/ext.rs:1712` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
-`crates/core/src/ext.rs:1734` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:1768` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:1774` **fn** `new` — Create an empty registry
-`crates/core/src/ext.rs:1779` **fn** `register` — Register a cache. Caches are notified in registration order
-`crates/core/src/ext.rs:1784` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
-`crates/core/src/ext.rs:1791` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
-`crates/core/src/ext.rs:1799` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
-`crates/core/src/ext.rs:1808` **fn** `clear_all` — Evict all entries in every registered cache
-`crates/core/src/ext.rs:1815` **fn** `len` — Number of registered caches
-`crates/core/src/ext.rs:1820` **fn** `is_empty` — `true` if no caches are registered
+`crates/core/src/ext.rs:1706` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
+`crates/core/src/ext.rs:1713` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
+`crates/core/src/ext.rs:1735` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:1769` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:1775` **fn** `new` — Create an empty registry
+`crates/core/src/ext.rs:1780` **fn** `register` — Register a cache. Caches are notified in registration order
+`crates/core/src/ext.rs:1785` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
+`crates/core/src/ext.rs:1792` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
+`crates/core/src/ext.rs:1800` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
+`crates/core/src/ext.rs:1809` **fn** `clear_all` — Evict all entries in every registered cache
+`crates/core/src/ext.rs:1816` **fn** `len` — Number of registered caches
+`crates/core/src/ext.rs:1821` **fn** `is_empty` — `true` if no caches are registered
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -172,11 +172,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/json.rs:73` **enum** `JsonError`
 `crates/core/src/json.rs:159` **type** `JsonResult`
 `crates/core/src/json.rs:161` **fn** `parse`
-`crates/core/src/memory_pressure.rs:21` **struct** `Win32MemoryPressureSource` — Win32 memory pressure source via `GlobalMemoryStatusEx` polling
-`crates/core/src/memory_pressure.rs:27` **struct** `MemoryStatusEx` — MEMORYSTATUSEX (Windows SDK, winbase.h)
-`crates/core/src/memory_pressure.rs:41` **fn** `GlobalMemoryStatusEx`
-`crates/core/src/memory_pressure.rs:45` **fn** `memory_load_percent` — Returns memory load as a percentage (0–100), or `None` on API failure
-`crates/core/src/memory_pressure.rs:93` **struct** `LinuxMemoryPressureSource` — Linux memory pressure source via `/proc/pressure/memory` PSI polling
+`crates/core/src/memory_pressure.rs:22` **struct** `Win32MemoryPressureSource` — Win32 memory pressure source via `GlobalMemoryStatusEx` polling
+`crates/core/src/memory_pressure.rs:28` **struct** `MemoryStatusEx` — MEMORYSTATUSEX (Windows SDK, winbase.h)
+`crates/core/src/memory_pressure.rs:42` **fn** `GlobalMemoryStatusEx`
+`crates/core/src/memory_pressure.rs:46` **fn** `memory_load_percent` — Returns memory load as a percentage (0–100), or `None` on API failure
+`crates/core/src/memory_pressure.rs:94` **struct** `LinuxMemoryPressureSource` — Linux memory pressure source via `/proc/pressure/memory` PSI polling
+`crates/core/src/memory_pressure.rs:143` **struct** `MacosMemoryPressureSource` — macOS memory pressure source via `host_statistics64(HOST_VM_INFO64)` polling
+`crates/core/src/memory_pressure.rs:153` **struct** `VmStatistics64` — Subset of `vm_statistics64` from `<mach/vm_statistics.h>` needed for
+`crates/core/src/memory_pressure.rs:189` **fn** `mach_host_self` — Returns the mach port for the current host (libSystem, always available)
+`crates/core/src/memory_pressure.rs:193` **fn** `host_statistics64` — Fills `host_info_out` with `HOST_VM_INFO64_COUNT` × `u32` words of
+`crates/core/src/memory_pressure.rs:202` **fn** `vm_used_total` — Polls VM statistics and returns `(used_pages, total_pages)`, or `None` on error
 `crates/core/src/module.rs:9` **trait** `Module`
 `crates/core/src/punycode.rs:49` **fn** `encode` — Кодирует Unicode-строку в Punycode согласно RFC 3492
 `crates/core/src/sandbox.rs:22` **struct** `SandboxFlags` — Битовое поле sandbox-ограничений. Конкретный бит == «**запрет** этой
@@ -2165,4 +2170,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2103 symbols in 19 crates*
+*Total: 2108 symbols in 19 crates*

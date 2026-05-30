@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+**10H.4 — macOS `MemoryPressureSource`** branch: `p2-macos-memory-pressure`
+Next step: implement `MacosMemoryPressureSource` via `host_statistics64` FFI  `crates/core/src/memory_pressure.rs`
 
 ---
 

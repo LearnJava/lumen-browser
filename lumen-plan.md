@@ -58,7 +58,7 @@
 - ⬜ Trait-ы для 4 exceptions: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime` — задокументированы как future в `lumen-core::ext`, code-уровень добавим при первом использовании
 - ⬜ `KnowledgeStore` (§12) — FTS / read-later / notes. Phase 2
 - ⬜ `AiBackend` (§12.5) — embed / generate, опционально. Phase 3+
-- 🟡 **`MemoryPressureSource`** (ADR-008, task 10H) — `MemoryPressureLevel` + trait + `NullMemoryPressureSource` в `core/src/ext.rs`; Win32 (`GlobalMemoryStatusEx`) + Linux PSI (`/proc/pressure/memory`) реализации в `core/src/memory_pressure.rs`; `on_memory_pressure(level)` в `ImageDecodeCache` / `GlyphAtlas` / `LayerCache`. macOS impl ⬜. Shell integration ⬜.
+- ✅ **`MemoryPressureSource`** (ADR-008, task 10H) — `MemoryPressureLevel` + trait + `NullMemoryPressureSource` в `core/src/ext.rs`; Win32 (`GlobalMemoryStatusEx`) + Linux PSI (`/proc/pressure/memory`) + macOS (`host_statistics64(HOST_VM_INFO64)`) реализации в `core/src/memory_pressure.rs`; `on_memory_pressure(level)` в `ImageDecodeCache` / `GlyphAtlas` / `LayerCache`. Shell integration ⬜.
 - ✅ **`JsRuntime` расширение** (ADR-008, task 10C) — `pause()` / `unpause()` / `suspend() -> SuspendedHeap` / `resume(SuspendedHeap)` реализованы в `rquickjs` через `JS_WriteObject`/`JS_ReadObject`. V8 в Phase 3 — отдельная задача.
 
 ### Уникальные фичи (§12) — план на Phase 1-4
@@ -395,11 +395,11 @@
 | 10F.1 | ✅ `LayerCache` с LRU + GPU memory budget | `paint/src/layer_cache.rs` | — |
 | 10F.2 | ✅ Texture pool recycling (одна `wgpu::Texture` переиспользуется для разных layers) | `paint/src/texture_pool.rs` | P3 lifecycle integration pending |
 | 10G | ✅ **`[P1+P2+P3]` T0 экономия: glyph atlas LRU eviction** | LRU eviction в `paint/src/atlas.rs` (`get_lru_candidates`, `remove_keys`) — 4 теста | `paint/src/atlas.rs` |
-| 10H | 🟡 **`[P2]` `MemoryPressureSource` trait** (Phase 1) | OS-сигналы памяти управляют tier-переходами | `core/src/ext.rs` + `core/src/memory_pressure.rs` |
+| 10H | ✅ **`[P2]` `MemoryPressureSource` trait** (Phase 1) | OS-сигналы памяти управляют tier-переходами | `core/src/ext.rs` + `core/src/memory_pressure.rs` |
 | 10H.1 | ✅ Trait + `enum MemoryPressureLevel { Low, Medium, High }` + `NullMemoryPressureSource` | `core/src/ext.rs` (ADR-008); 3 unit-тесты | — |
 | 10H.2 | ✅ Win32 impl: `Win32MemoryPressureSource` — `GlobalMemoryStatusEx` polling | `core/src/memory_pressure.rs`; 1 unit-тест (live Windows call) | — |
 | 10H.3 | ✅ Linux impl: `LinuxMemoryPressureSource` — `/proc/pressure/memory` PSI polling | `core/src/memory_pressure.rs`; 3 unit-тесты | — |
-| 10H.4 | ⬜ macOS impl: `dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE)` | `core/src/memory_pressure.rs` | — |
+| 10H.4 | ✅ macOS impl: `MacosMemoryPressureSource` — `host_statistics64(HOST_VM_INFO64)` polling | `core/src/memory_pressure.rs`; 4 unit-тесты (threshold logic) | — |
 | 10H.5 | ✅ Подписка кэшей на pressure events: `on_memory_pressure(level)` | `ImageDecodeCache` (4 тесты) + `GlyphAtlas` (3 тесты) + `LayerCache` (3 тесты) | — |
 | 10I | ⬜ **`[P3]` T2 → SQLite JS heap snapshot persistence** (Phase 2) | JS heap на диск при T2; restore при T0 | `storage/src/tab_snapshot.rs` |
 | 10I.1 | ⬜ Schema: `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll, form_state, ts)` | `storage/migrations/0NN_tab_snapshots.sql` | — |
@@ -2021,7 +2021,7 @@ Capability-модель плагинов (§11.4) расширяется:
 - **GPU layer LRU + texture recycling.** Off-viewport stacking contexts освобождают свои textures когда удалены от viewport больше N экранов.
 - **Glyph atlas LRU eviction.** Атлас не растёт безгранично; редко используемые глифы вытесняются.
 - **JS heap GC tuning.** QuickJS GC thresholds настраиваются per-tab; pinned tabs получают более мягкий GC, идлящие — более агрессивный.
-- **`MemoryPressureSource` trait** (`lumen-core::ext`, новый) — слушает OS-сигналы (Win32 `QueryMemoryResourceNotification`, Linux PSI `/proc/pressure/memory`, macOS `dispatch_source MEMORYPRESSURE`) и эмитит `Low / Medium / High` события. Подсистемы (caches, GPU layers, decoders) подписываются.
+- **`MemoryPressureSource` trait** (`lumen-core::ext`) ✅ — слушает OS-сигналы (Win32 `GlobalMemoryStatusEx`, Linux PSI `/proc/pressure/memory`, macOS `host_statistics64(HOST_VM_INFO64)`) и эмитит `Low / Medium / High` события. Подсистемы (caches, GPU layers, decoders) подписываются.
 
 #### Сводные RAM-targets
 
@@ -2222,7 +2222,7 @@ CI gate (задачи 9G.3 + 9G.5 в Roadmap): `cargo run -p lumen-bench --relea
   - **A11y tree first-class** — крейт `lumen-a11y` (P1) поднимается до уровня semantic locator surface; `BrowserSession::query(Role/Name/Text)` использует его, а не DOM-селекторы.
 - **Tab lifecycle Phase 1** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):
   - **`TabState` enum + state machine T0-T4** (трек 10A) — состояния, transitions, per-user конфиг таймаутов.
-  - **`MemoryPressureSource` trait** + три OS-impls (Win32 / Linux PSI / macOS dispatch) (трек 10H).
+  - **`MemoryPressureSource` trait** ✅ + три OS-impls (Win32 / Linux PSI / macOS `host_statistics64`) (трек 10H).
   - **Image decode cache LRU + viewport-gating** (трек 10E) — главный источник экономии T0: `ImageHandle` индирекция вместо прямых `DecodedImage` ссылок; decode только viewport ± 2 экрана; scroll-discard.
   - **Базовый T1 (paused)** — JS event loop pause/unpause при hide/show вкладки.
 - **Цель:** ежедневный браузер для чтения статей; AI-агенты могут управлять Lumen через MCP без обёрток; **простая вкладка занимает ≤ 100 MB peak RSS**.
