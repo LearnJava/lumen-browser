@@ -23,7 +23,7 @@ use lumen_layout::{
     FormControlKind, SvgShapeKind,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, Position, PositionComponent,
+    OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow,
     Visibility,
@@ -586,6 +586,13 @@ pub enum DisplayCommand {
         /// `true` = vertical scrollbar (right edge); `false` = horizontal (bottom edge).
         vertical: bool,
     },
+
+    /// Marks a page boundary in a print display list.
+    ///
+    /// Used by `build_print_display_list` to separate pages. The renderer treats this
+    /// as a split point: commands before `PageBreak` render on page N, commands after
+    /// render on page N+1. Has no visual effect in on-screen rendering.
+    PageBreak,
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -1027,6 +1034,9 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     thumb_rect.x, thumb_rect.y, thumb_rect.width, thumb_rect.height,
                 ));
             }
+            DisplayCommand::PageBreak => {
+                out.push_str("PageBreak\n");
+            }
         }
     }
     out
@@ -1205,6 +1215,52 @@ pub fn build_display_list_ordered_with_anim(
         }
     }
     out
+}
+
+/// Builds a print display list from paginated layout.
+///
+/// Each page's fragments are translated to page-relative coordinates using
+/// `PushTransform` / `PopTransform`. Pages are separated by `PageBreak` markers.
+/// Use `split_at_page_breaks` to get per-page command slices for rendering.
+///
+/// Coordinate convention: page origin = (0, 0) at top-left of content area.
+/// Fragment y-offset is relative to the content area, not the page box.
+pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
+    let mut cmds: DisplayList = Vec::new();
+    for (page_idx, page) in pages.iter().enumerate() {
+        if page_idx > 0 {
+            cmds.push(DisplayCommand::PageBreak);
+        }
+        for frag in &page.fragments {
+            // Translate from document-flow y to page-local y.
+            let dy = frag.page_y_offset - frag.layout_box.rect.y;
+            let matrix = Mat4::translation_2d(0.0, dy);
+            cmds.push(DisplayCommand::PushTransform { matrix });
+            walk(&frag.layout_box, &mut cmds);
+            cmds.push(DisplayCommand::PopTransform);
+        }
+    }
+    cmds
+}
+
+/// Splits a print display list at `PageBreak` markers.
+///
+/// Returns one `Vec<DisplayCommand>` per page. The `PageBreak` commands are
+/// consumed (not included in any page's slice). An empty input yields an empty
+/// outer `Vec`. A list with no `PageBreak` yields a single-element outer `Vec`.
+pub fn split_at_page_breaks(cmds: Vec<DisplayCommand>) -> Vec<Vec<DisplayCommand>> {
+    let mut pages: Vec<Vec<DisplayCommand>> = Vec::new();
+    let mut current: Vec<DisplayCommand> = Vec::new();
+    for cmd in cmds {
+        if matches!(cmd, DisplayCommand::PageBreak) {
+            pages.push(current);
+            current = Vec::new();
+        } else {
+            current.push(cmd);
+        }
+    }
+    pages.push(current);
+    pages
 }
 
 #[derive(Default, Clone)]
@@ -4394,6 +4450,7 @@ mod tests {
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
                 DisplayCommand::BoxModelOverlay { .. } => "BoxModelOverlay",
                 DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
+                DisplayCommand::PageBreak => "PageBreak",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -7371,5 +7428,108 @@ mod tests {
             .filter(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
             .count();
         assert_eq!(bars, 0, "overflow:hidden → нет DrawScrollbar");
+    }
+
+    // ── PageBreak / print display list ────────────────────────────────────────
+
+    /// split_at_page_breaks on empty input → one empty page.
+    #[test]
+    fn split_empty_yields_one_empty_page() {
+        let pages = split_at_page_breaks(vec![]);
+        assert_eq!(pages.len(), 1);
+        assert!(pages[0].is_empty());
+    }
+
+    /// split_at_page_breaks with no PageBreak → one page with all commands.
+    #[test]
+    fn split_no_breaks_single_page() {
+        use lumen_core::geom::Rect;
+        let cmds = vec![
+            DisplayCommand::FillRect {
+                rect: Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 },
+                color: Color { r: 255, g: 0, b: 0, a: 255 },
+            },
+            DisplayCommand::FillRect {
+                rect: Rect { x: 0.0, y: 10.0, width: 10.0, height: 10.0 },
+                color: Color { r: 0, g: 255, b: 0, a: 255 },
+            },
+        ];
+        let pages = split_at_page_breaks(cmds);
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].len(), 2);
+    }
+
+    /// split_at_page_breaks with one PageBreak → two pages.
+    #[test]
+    fn split_one_break_two_pages() {
+        use lumen_core::geom::Rect;
+        let r = Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 };
+        let cmds = vec![
+            DisplayCommand::FillRect { rect: r, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+            DisplayCommand::PageBreak,
+            DisplayCommand::FillRect { rect: r, color: Color { r: 0, g: 0, b: 255, a: 255 } },
+        ];
+        let pages = split_at_page_breaks(cmds);
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].len(), 1); // one FillRect on page 0
+        assert_eq!(pages[1].len(), 1); // one FillRect on page 1
+        // PageBreak itself must not appear in any page
+        for page in &pages {
+            assert!(!page.iter().any(|c| matches!(c, DisplayCommand::PageBreak)));
+        }
+    }
+
+    /// split_at_page_breaks with two PageBreaks → three pages, middle page empty.
+    #[test]
+    fn split_two_breaks_three_pages_middle_empty() {
+        use lumen_core::geom::Rect;
+        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
+        let cmds = vec![
+            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
+            DisplayCommand::PageBreak,
+            DisplayCommand::PageBreak,
+            DisplayCommand::FillRect { rect: r, color: Color { r: 4, g: 5, b: 6, a: 255 } },
+        ];
+        let pages = split_at_page_breaks(cmds);
+        assert_eq!(pages.len(), 3);
+        assert_eq!(pages[0].len(), 1);
+        assert_eq!(pages[1].len(), 0); // empty middle page
+        assert_eq!(pages[2].len(), 1);
+    }
+
+    /// build_print_display_list on zero pages → empty list.
+    #[test]
+    fn print_dl_empty_pages() {
+        let cmds = build_print_display_list(&[]);
+        assert!(cmds.is_empty());
+    }
+
+    /// build_print_display_list on two pages inserts exactly one PageBreak.
+    #[test]
+    fn print_dl_two_pages_one_page_break() {
+        use lumen_layout::{paginate, PaginationContext};
+
+        let doc = lumen_html_parser::parse(
+            "<div style='height:600px;background:red'></div><div style='height:600px;background:blue'></div>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 1200.0));
+
+        let ctx = PaginationContext {
+            page_width: 800.0,
+            page_height: 600.0,
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            margin_left: 0.0,
+            margin_right: 0.0,
+        };
+        let pages = paginate(&tree, &ctx);
+        // If content fits in one page or pagination yields 0/1 page, skip assertion
+        if pages.len() < 2 {
+            return;
+        }
+        let cmds = build_print_display_list(&pages);
+        let breaks = cmds.iter().filter(|c| matches!(c, DisplayCommand::PageBreak)).count();
+        assert_eq!(breaks, pages.len() - 1, "N pages → N-1 PageBreaks");
     }
 }

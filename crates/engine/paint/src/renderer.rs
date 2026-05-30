@@ -4680,6 +4680,9 @@ impl Renderer {
                         }
                     }
                 }
+                DisplayCommand::PageBreak => {
+                    // No-op in on-screen rendering; only meaningful in render_print_pages().
+                }
             }
         }
         flush_batch!();
@@ -5865,6 +5868,39 @@ impl Renderer {
             data: pixels,
             icc_profile: None,
         })
+    }
+
+    /// Renders a print display list into one `Image` per page.
+    ///
+    /// Creates a temporary headless renderer at `page_w × page_h` and calls
+    /// `render_to_image` for each page's command slice (separated by `PageBreak`
+    /// markers in the input). Returns one `Image` per page, in order.
+    ///
+    /// Typical usage:
+    /// ```ignore
+    /// let pages = paginate(&layout_root, &ctx);
+    /// let cmds  = build_print_display_list(&pages);
+    /// let images = Renderer::render_print_pages(font_bytes, &split_at_page_breaks(cmds), w, h)?;
+    /// ```
+    ///
+    /// # Errors
+    /// Returns `Err` if headless renderer initialisation fails or GPU readback fails.
+    pub fn render_print_pages(
+        font_bytes: Vec<u8>,
+        pages: &[Vec<crate::DisplayCommand>],
+        page_w: u32,
+        page_h: u32,
+    ) -> Result<Vec<lumen_image::Image>, Box<dyn std::error::Error>> {
+        if pages.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut renderer = Renderer::new_headless(font_bytes, page_w, page_h)?;
+        let mut images = Vec::with_capacity(pages.len());
+        for page_cmds in pages {
+            let img = renderer.render_to_image(page_cmds, 0.0, 0.0)?;
+            images.push(img);
+        }
+        Ok(images)
     }
 }
 
