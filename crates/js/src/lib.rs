@@ -48,6 +48,14 @@ pub struct QuickJsRuntime {
     /// JS calls this when `_lumen_deliver_lazy_images()` detects an image within the
     /// lazy-load margin.  Shell drains after each `deliver_lazy_images()` call.
     lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
+    /// Scroll state per scroll-container node, updated after each relayout.
+    /// Maps NodeId index → [scroll_x, scroll_y, scroll_width, scroll_height].
+    /// Read by `_lumen_get_scroll_state(nid)` from JS (`scrollTop`/`scrollLeft`/`scrollWidth`/`scrollHeight`).
+    scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// Pending scroll requests queued by JS via `_lumen_request_scroll`.
+    /// Each entry is (nid, target_scroll_x, target_scroll_y).
+    /// Shell drains via `take_scroll_requests()` and calls `set_scroll_position()`.
+    pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
 }
 
 struct Inner {
@@ -75,6 +83,8 @@ impl QuickJsRuntime {
             layout_rects: Arc::new(Mutex::new(HashMap::new())),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
+            scroll_states: Arc::new(Mutex::new(HashMap::new())),
+            pending_scrolls: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -139,6 +149,8 @@ impl QuickJsRuntime {
                 Arc::clone(&self.lazy_img_requests),
                 None,
                 idb_backend,
+                Arc::clone(&self.scroll_states),
+                Arc::clone(&self.pending_scrolls),
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
@@ -213,6 +225,27 @@ impl QuickJsRuntime {
     /// Returns `(node_id, url)` pairs; clears the internal queue.
     pub fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
         std::mem::take(&mut self.lazy_img_requests.lock().unwrap())
+    }
+
+    /// Replace the scroll-state table with a fresh snapshot from the layout tree.
+    ///
+    /// Called by the shell after every `relayout_page` call.  Maps `NodeId` index →
+    /// `[scroll_x, scroll_y, scroll_width, scroll_height]` for every `overflow: scroll`
+    /// / `overflow: auto` container.  Non-scroll elements are absent from the map.
+    ///
+    /// P3 shell integration: call after every `collect_scroll_containers()` pass,
+    /// e.g. `rt.update_scroll_states(containers.iter().map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height])).collect())`.
+    pub fn update_scroll_states(&self, states: HashMap<u32, [f32; 4]>) {
+        *self.scroll_states.lock().unwrap() = states;
+    }
+
+    /// Drain JS-initiated scroll requests queued by `_lumen_request_scroll`.
+    ///
+    /// Returns `(node_id, target_x, target_y)` triples; clears the queue.
+    /// Shell calls this after each rendering step and routes each entry through
+    /// `set_scroll_position(root, NodeId::from_index(nid), x, y)`.
+    pub fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
+        std::mem::take(&mut self.pending_scrolls.lock().unwrap())
     }
 }
 

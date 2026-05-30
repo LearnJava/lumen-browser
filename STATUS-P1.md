@@ -5,7 +5,10 @@
 ---
 
 ## In progress
-_(none)_
+
+**Element geometry API — `getBoundingClientRect` + scroll properties**
+branch: `p1-clickable-iterator`
+Next step: add geometry methods to `_lumen_make_element` in `crates/js/src/dom.rs` + scroll state bindings in `crates/js/src/lib.rs`
 
 ---
 
