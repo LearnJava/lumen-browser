@@ -1504,7 +1504,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/tls.rs:108` **fn** `ja3_string` — Построить JA3 string из handshake information
 `crates/network/src/tls.rs:143` **struct** `ChromeJa3Snapshot` — Chrome TLS handshake parameters snapshot (const version)
 
-## lumen-paint  (139 symbols)
+## lumen-paint  (140 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -1627,11 +1627,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:5968` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
-`crates/engine/paint/src/svg_path.rs:15` **enum** `PathSegment` — One SVG path command (absolute coords, after normalization)
-`crates/engine/paint/src/svg_path.rs:35` **fn** `parse_svg_path` — Parses SVG path `d` attribute into absolute-coordinate segments
-`crates/engine/paint/src/svg_path.rs:307` **fn** `flatten_path` — Flatten path segments to a list of closed contours
-`crates/engine/paint/src/svg_path.rs:551` **fn** `tessellate_polygon` — Tessellate a single closed polygon (no holes) using ear-clipping
-`crates/engine/paint/src/svg_path.rs:585` **fn** `tessellate_fill` — Tessellate a path (all contours) into triangles. Multi-contour paths are
+`crates/engine/paint/src/svg_path.rs:16` **enum** `PathSegment` — One SVG path command (absolute coords, after normalization)
+`crates/engine/paint/src/svg_path.rs:36` **fn** `parse_svg_path` — Parses SVG path `d` attribute into absolute-coordinate segments
+`crates/engine/paint/src/svg_path.rs:308` **fn** `flatten_path` — Flatten path segments to a list of closed contours
+`crates/engine/paint/src/svg_path.rs:552` **fn** `tessellate_polygon` — Tessellate a single closed polygon (no holes) using ear-clipping
+`crates/engine/paint/src/svg_path.rs:586` **fn** `tessellate_fill` — Tessellate a path (all contours) into triangles. Multi-contour paths are
+`crates/engine/paint/src/svg_path.rs:683` **fn** `tessellate_stroke` — Tessellate stroke outlines for all contours into a flat triangle vertex list
 `crates/engine/paint/src/texture_pool.rs:15` **struct** `TextureKey` — Key for a pool entry: texture dimensions
 `crates/engine/paint/src/texture_pool.rs:24` **fn** `new` — Create a new texture pool key
 `crates/engine/paint/src/texture_pool.rs:32` **struct** `PooledTexture` — A pooled GPU texture resource
@@ -2183,4 +2184,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2121 symbols in 19 crates*
+*Total: 2122 symbols in 19 crates*
