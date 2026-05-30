@@ -25,11 +25,21 @@ pub(crate) fn rasterize_cpu(
 ) -> Result<Image, Box<dyn std::error::Error>> {
     use tiny_skia::Pixmap;
 
-    let mut pixmap = Pixmap::new(width, height)
+    let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
 
     // Fill background with white.
-    pixmap.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+    base.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+
+    // Off-screen layer stack for group opacity (`PushOpacity` / `PopOpacity`,
+    // emitted for `opacity < 1`). `layers[0]` is the white base; each open
+    // opacity group pushes a fully-transparent full-size layer that becomes the
+    // active draw target. On `PopOpacity` the top layer is composited onto the
+    // layer below with its group alpha (CSS Color L3 §3.2 — the whole subtree is
+    // rendered as a unit, then alpha-blended). Full-size layers keep the page
+    // coordinate space and clip masks valid without translation.
+    let mut layers: Vec<Pixmap> = vec![base];
+    let mut layer_alpha: Vec<f32> = Vec::new();
 
     // Active rectangular clip regions (CSS `overflow: hidden`, `PushClipRect`).
     // Stored as a stack of axis-aligned rects; the effective clip is their
@@ -52,15 +62,19 @@ pub(crate) fn rasterize_cpu(
         match cmd {
             DisplayCommand::FillRect { rect, color } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_fill_rect(&mut pixmap, rect, color, c)?;
+                rasterize_fill_rect(layers.last_mut().expect("base layer"), rect, color, c)?;
             }
             DisplayCommand::FillRoundedRect { rect, color, radii } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_fill_rounded_rect(&mut pixmap, rect, color, radii, c)?;
+                rasterize_fill_rounded_rect(
+                    layers.last_mut().expect("base layer"), rect, color, radii, c,
+                )?;
             }
             DisplayCommand::DrawBorder { rect, widths, colors, styles: _, radii } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_draw_border(&mut pixmap, rect, widths, colors, radii, c)?;
+                rasterize_draw_border(
+                    layers.last_mut().expect("base layer"), rect, widths, colors, radii, c,
+                )?;
             }
             DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
                 // Outline expands the rect by `offset` on every side.
@@ -71,16 +85,21 @@ pub(crate) fn rasterize_cpu(
                     rect.y + rect.height + offset,
                 );
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
-                rasterize_draw_outline(&mut pixmap, rect, *width, color, *offset, c)?;
+                rasterize_draw_outline(
+                    layers.last_mut().expect("base layer"), rect, *width, color, *offset, c,
+                )?;
             }
             DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_linear_gradient(&mut pixmap, rect, *angle_deg, stops, *repeating, c)?;
+                rasterize_linear_gradient(
+                    layers.last_mut().expect("base layer"), rect, *angle_deg, stops, *repeating, c,
+                )?;
             }
             DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_radial_gradient(
-                    &mut pixmap, rect, *center_x_pct, *center_y_pct, stops, *repeating, c,
+                    layers.last_mut().expect("base layer"), rect, *center_x_pct, *center_y_pct,
+                    stops, *repeating, c,
                 )?;
             }
             DisplayCommand::DrawConicGradient {
@@ -88,8 +107,8 @@ pub(crate) fn rasterize_cpu(
             } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_conic_gradient(
-                    &mut pixmap, rect, *center_x_pct, *center_y_pct, *from_angle_deg, stops,
-                    *repeating, c,
+                    layers.last_mut().expect("base layer"), rect, *center_x_pct, *center_y_pct,
+                    *from_angle_deg, stops, *repeating, c,
                 )?;
             }
             DisplayCommand::DrawSvgPath { vertices, color } => {
@@ -98,7 +117,7 @@ pub(crate) fn rasterize_cpu(
                     clip_rect.as_ref(),
                     vertices_bounds(vertices),
                 );
-                rasterize_svg_path(&mut pixmap, vertices, color, c)?;
+                rasterize_svg_path(layers.last_mut().expect("base layer"), vertices, color, c)?;
             }
             DisplayCommand::PushClipRect { rect } => {
                 clip_stack.push(*rect);
@@ -128,7 +147,7 @@ pub(crate) fn rasterize_cpu(
             }
             DisplayCommand::DrawImage { rect, .. } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_image_placeholder(&mut pixmap, rect, c)?;
+                rasterize_image_placeholder(layers.last_mut().expect("base layer"), rect, c)?;
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, tab_size, ..
@@ -137,8 +156,27 @@ pub(crate) fn rasterize_cpu(
                 // ignored on the CPU path (no FontProvider here). Clip is the
                 // active rectangular `overflow` region, applied per glyph pixel.
                 rasterize_text(
-                    &mut pixmap, rect, text, *font_size, color, *tab_size, clip_rect.as_ref(),
+                    layers.last_mut().expect("base layer"), rect, text, *font_size, color,
+                    *tab_size, clip_rect.as_ref(),
                 )?;
+            }
+            // CSS Color L3 §3.2 — `opacity < 1` renders the element's subtree as
+            // an off-screen group, then alpha-blends it. Push a transparent
+            // full-size layer that becomes the active draw target; draws between
+            // here and the matching `PopOpacity` accumulate into it.
+            DisplayCommand::PushOpacity { alpha } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create opacity layer")?;
+                layers.push(layer);
+                layer_alpha.push(alpha.clamp(0.0, 1.0));
+            }
+            // Composite the finished group onto the layer below with its alpha.
+            DisplayCommand::PopOpacity => {
+                if let (Some(top), Some(a)) = (layers.pop(), layer_alpha.pop())
+                    && let Some(dst) = layers.last_mut()
+                {
+                    composite_layer(dst, &top, a);
+                }
             }
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
@@ -147,6 +185,16 @@ pub(crate) fn rasterize_cpu(
         }
     }
 
+    // Defensive: composite any opacity layers the emitter left unbalanced
+    // (the display-list emitter always pairs Push/Pop, so this is a no-op there).
+    while layers.len() > 1 {
+        let top = layers.pop().expect("len > 1");
+        let a = layer_alpha.pop().unwrap_or(1.0);
+        if let Some(dst) = layers.last_mut() {
+            composite_layer(dst, &top, a);
+        }
+    }
+    let pixmap = layers.pop().expect("base layer");
     let data = pixmap.data().to_vec();
     Ok(Image {
         width,
@@ -155,6 +203,22 @@ pub(crate) fn rasterize_cpu(
         data,
         icc_profile: None,
     })
+}
+
+/// Composite an off-screen opacity layer `src` onto `dst` with group `alpha`.
+///
+/// Used by `PopOpacity`: the whole subtree was rendered into `src` (a full-size,
+/// initially transparent pixmap), so blending it as a unit with a single alpha
+/// reproduces CSS group opacity (the children are *not* individually faded).
+/// tiny-skia's `draw_pixmap` blends premultiplied RGBA deterministically, so the
+/// result is cross-OS bit-identical like the rest of the CPU path.
+fn composite_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, alpha: f32) {
+    let paint = tiny_skia::PixmapPaint {
+        opacity: alpha.clamp(0.0, 1.0),
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(0, 0, src.as_ref(), &paint, tiny_skia::Transform::identity(), None);
 }
 
 /// Geometric intersection of every clip rect on the stack.
@@ -1384,5 +1448,69 @@ mod tests {
                 "glyph pixel at x={x} should be clipped out",
             );
         }
+    }
+
+    /// `PushOpacity { 0.5 }` around an opaque blue fill blends it 50/50 with the
+    /// white background: result ≈ (127, 127, 255).
+    #[test]
+    fn opacity_half_blends_blue_over_white() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::FillRect { rect: rect(10.0, 10.0, 40.0, 40.0), color: blue },
+            DisplayCommand::PopOpacity,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        let (r, g, b, a) = px(&img, 30, 30);
+        assert!(
+            (120..=135).contains(&r) && (120..=135).contains(&g) && b > 250 && a == 255,
+            "blue at 0.5 opacity over white ≈ (127,127,255), got ({r},{g},{b},{a})",
+        );
+        // Outside the group's box stays white.
+        assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// `PushOpacity { 0.0 }` makes the whole group invisible: the background is
+    /// untouched.
+    #[test]
+    fn opacity_zero_keeps_background() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushOpacity { alpha: 0.0 },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
+            DisplayCommand::PopOpacity,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 32, 32), (255, 255, 255, 255), "fully transparent group");
+    }
+
+    /// Group opacity fades the *whole* subtree by one alpha: two sibling fills in
+    /// the same group are each blended 50/50 with the background (not stacked or
+    /// double-faded).
+    #[test]
+    fn opacity_group_fades_whole_subtree() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 20.0, 20.0), color: red },
+            DisplayCommand::FillRect { rect: rect(20.0, 0.0, 20.0, 20.0), color: green },
+            DisplayCommand::PopOpacity,
+        ];
+        let img = rasterize_cpu(64, 32, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Red box ≈ (255,127,127).
+        let (rr, rg, rb, _) = px(&img, 10, 10);
+        assert!(
+            rr > 250 && (120..=135).contains(&rg) && (120..=135).contains(&rb),
+            "red faded, got ({rr},{rg},{rb})",
+        );
+        // Green box ≈ (127,191,127): blended from (0,128,0) over white at 0.5.
+        let (gr, gg, gb, _) = px(&img, 30, 10);
+        assert!(
+            (120..=135).contains(&gr) && (185..=197).contains(&gg) && (120..=135).contains(&gb),
+            "green faded, got ({gr},{gg},{gb})",
+        );
     }
 }

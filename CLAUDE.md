@@ -367,7 +367,7 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 26 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 27 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
@@ -386,7 +386,11 @@ Regular face rasterized via `lumen_font::Rasterizer` directly at `font_size`, no
 then composited through a single coverage `tiny_skia::Mask` so anti-aliased edges blend exactly like
 fills; baseline + advance mirror the GPU `push_text_glyphs`; family/weight/style ignored — only the
 bundled face exists on the CPU path; page `55-text-rendering`, a snapshot-only page **not** registered
-in `run.py` because glyph anti-aliasing always diverges from Edge).
+in `run.py` because glyph anti-aliasing always diverges from Edge), and group opacity
+(`PushOpacity`/`PopOpacity`, emitted for `opacity < 1`; the subtree is drawn into a full-size,
+initially-transparent off-screen `tiny_skia::Pixmap` layer pushed on a stack, then composited onto
+the layer below with the group alpha via `draw_pixmap` — CSS Color L3 §3.2 group opacity, faded as a
+unit not per-child; page `13-visibility-opacity`).
 
 ---
 

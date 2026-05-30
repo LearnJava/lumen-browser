@@ -19,7 +19,9 @@
 //! placeholder, matching the GPU renderer's fallback), and text (`DrawText` —
 //! glyphs of the bundled Inter Regular face rasterized via `lumen_font::
 //! Rasterizer` and composited through a coverage `Mask`; page
-//! `55-text-rendering`). The chosen pages exercise exactly these primitives, so
+//! `55-text-rendering`), and group opacity (`PushOpacity` / `PopOpacity` —
+//! the subtree is rendered into an off-screen layer and alpha-blended as a
+//! unit; page `13-visibility-opacity`). The chosen pages exercise exactly these primitives, so
 //! the references capture meaningful geometry rather than blank frames. As
 //! `cpu_raster` grows, add the relevant pages to `PAGES`.
 //!
@@ -61,6 +63,7 @@ const PAGES: &[&str] = &[
     "10-min-max-width",
     "11-min-max-height",
     "12-display",
+    "13-visibility-opacity",
     "14-overflow",
     "16-outline",
     "17-calc",
