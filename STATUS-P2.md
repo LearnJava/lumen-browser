@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+Print PDF renderer side  branch: p2-print-pages-renderer
+Next step: add DisplayCommand::PageBreak + build_print_display_list() in paint/src/display_list.rs
 
 ---
 
