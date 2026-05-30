@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TEST-55: text rendering</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; }
+    .__f {
+      background: #12141c;
+      width: 1022px; height: 718px;
+      margin: 1px;
+      padding: 24px;
+      overflow: hidden;
+    }
+    .big   { font-size: 48px; color: #f5f5f5; }
+    .mid   { font-size: 28px; color: #6ad6ff; }
+    .body  { font-size: 18px; color: #cfcfcf; }
+    .small { font-size: 13px; color: #9aa7b0; }
+    .red   { font-size: 22px; color: #e74c3c; }
+    .green { font-size: 22px; color: #2ecc71; }
+    .clip  { width: 360px; height: 30px; overflow: hidden; font-size: 20px; color: #ffd166; }
+    .row   { margin-top: 14px; }
+  </style>
+</head>
+<body>
+<div class="__f">
+
+  <div class="big">Lumen Engine</div>
+  <div class="mid row">Deterministic CPU text rasterization</div>
+
+  <div class="body row">The quick brown fox jumps over the lazy dog.</div>
+  <div class="body">0123456789 &amp; punctuation: . , ; : ! ? ( ) [ ] / -</div>
+
+  <div class="row">
+    <span class="red">Crimson words</span>
+    <span class="green">emerald words</span>
+  </div>
+
+  <div class="small row">Small caption line rendered with the bundled Inter Regular face.</div>
+
+  <!-- overflow: hidden must truncate the trailing words at the box edge -->
+  <div class="clip row">This single line is wider than its clipping box and gets cut off.</div>
+
+</div>
+</body>
+</html>
