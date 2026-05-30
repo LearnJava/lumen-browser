@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+
+- **depth-z extension to TextVertex/ImageVertex/RRectVertex** — branch: `p2-depth-z-all-vertices`. Расширить GPU depth-buffer (p2-css-3d-depth-buffer) на текст/картинки/SDF-rrect, чтобы 3D-transformed элементы получали корректную глубину. Изменения в `crates/engine/paint/src/renderer.rs`.
 
 ---
 
