@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+9D.4 + 9D.6 — Battery API disable + navigator/screen/timezone normalization  branch: p2-fp-battery-navigator
+Next step: tests pass → clippy → commit  crates/js/src/battery_bindings.rs + navigator_bindings.rs
 
 ---
 
