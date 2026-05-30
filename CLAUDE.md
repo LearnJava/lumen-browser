@@ -367,7 +367,7 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 29 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 31 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
@@ -406,7 +406,20 @@ element renders into a transparent full-size layer on the same `LayerComposite` 
 → tiny-skia `Plus`. The simple `walk` builder (`build_display_list`, used by the driver CPU/GPU
 snapshot path) now emits `PushBlendMode` ordered Clip → Blend → Opacity, matching `box_layer_ops`
 in the stacking-aware `build_display_list_ordered` used by the shell/GPU; CSS Compositing &
-Blending L1 §5; page `56-mix-blend-mode`).
+Blending L1 §5; page `56-mix-blend-mode`), and the CSS `filter` chain
+(`PushFilter`/`PopFilter`, `LayerComposite::Filter`; emitted by `walk` to wrap box-shadow and
+text-shadow blur — `PushFilter { Blur(σ) }` around the shadow `FillRect`/`DrawText` — and by the
+stacking-aware builder for the element's own `filter`. On `PopFilter` the chain is applied
+pixel-wise to the off-screen layer then composited `SourceOver`. **Gaussian blur** uses the SVG
+Filter Effects three-box-blur approximation: radius `r = round((√(4σ²+1)−1)/2)`, three separable
+box-blur passes per axis (running-sum, replicate-edge), integer-only so it is cross-OS bit-identical
+— the exact-match snapshot gate rules out `f32::exp`, same constraint that forced the conic-gradient
+`atan2` approximation. **Colour filters** (brightness/contrast/grayscale/hue-rotate/invert/opacity/
+saturate/sepia) mirror the GPU `apply_filter_fn` shader on un-premultiplied sRGB; `hue-rotate` uses a
+libm-free `sin`/`cos` minimax polynomial for the same determinism reason. CSS Filter Effects L1 §4/§7;
+pages `15-box-shadow` and `52-text-shadow-blur` — `52` carries text so, like `55`, it is snapshot-only,
+not in `run.py`. The element `filter` property page `30-css-filter` is **not** yet covered because the
+simple `walk` builder does not emit the element-level `PushFilter` — deferred to a later subtask).
 
 ---
 

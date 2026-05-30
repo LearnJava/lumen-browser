@@ -41,14 +41,18 @@ use std::path::{Path, PathBuf};
 
 /// Pages that exercise the CPU primitives (rect / rounded-rect / border /
 /// outline / linear+radial+conic gradient / SVG path / clip / image
-/// placeholder / text). Each name is the `graphic_tests/<name>.html` stem and
-/// the `graphic_tests/snapshots/cpu/<name>.png` reference stem.
+/// placeholder / text / opacity / transform / blend / filter). Each name is the
+/// `graphic_tests/<name>.html` stem and the
+/// `graphic_tests/snapshots/cpu/<name>.png` reference stem.
 ///
 /// Every page here was verified to render meaningful geometry through the CPU
 /// path (≥2% non-background pixels), so each reference captures real layout
-/// output rather than a blank frame. Pages whose *meaning* depends on box-shadow
-/// or other still-unimplemented primitives are deliberately excluded until those
-/// land. `18-images` is included because all its `<img>` boxes carry empty `alt`
+/// output rather than a blank frame. Pages whose *meaning* depends on a still
+/// unimplemented primitive are deliberately excluded until it lands. `15-box-shadow`
+/// and `52-text-shadow-blur` exercise the `PushFilter`/`PopFilter` Gaussian blur
+/// (the deterministic three-box-blur approximation); `52` carries text so, like
+/// `55`, it is a snapshot-only page not registered in `run.py`.
+/// `18-images` is included because all its `<img>` boxes carry empty `alt`
 /// and explicit `width`/`height`, so the grey placeholder fully reproduces the
 /// (text-free) GPU headless output. `55-text-rendering` exercises the `DrawText`
 /// primitive (bundled Inter glyphs); it is a snapshot-only page, not registered
@@ -83,6 +87,8 @@ const PAGES: &[&str] = &[
     "47-svg-basic",
     "55-text-rendering",
     "56-mix-blend-mode",
+    "15-box-shadow",
+    "52-text-shadow-blur",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
