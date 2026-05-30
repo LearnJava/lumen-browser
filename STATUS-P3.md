@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+8A.6 (a) — усиление заглушек graphic_tests  branch: `p3-8a6-migrate-graphic-tests`
+Next step: 35 пустых тестов `crates/driver/tests/test_NN.rs` навигируют на несуществующие `NN.html` (вместо `NN-name.html`), ассерт пропускается через `if navigate().is_ok()`. Чиню имена + добавляю структурные ассерты по ground-truth из HTML/dump-layout. crates/driver/tests/test_07.rs:1
 
 ## Next
 
