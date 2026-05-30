@@ -367,7 +367,7 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 27 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 28 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
@@ -390,7 +390,15 @@ in `run.py` because glyph anti-aliasing always diverges from Edge), and group op
 (`PushOpacity`/`PopOpacity`, emitted for `opacity < 1`; the subtree is drawn into a full-size,
 initially-transparent off-screen `tiny_skia::Pixmap` layer pushed on a stack, then composited onto
 the layer below with the group alpha via `draw_pixmap` — CSS Color L3 §3.2 group opacity, faded as a
-unit not per-child; page `13-visibility-opacity`).
+unit not per-child; page `13-visibility-opacity`), and 2D transforms
+(`PushTransform`/`PopTransform`, emitted for `transform != none`; the subtree renders into a
+full-size off-screen `tiny_skia::Pixmap` layer in page coordinates, then composites down through
+the box's affine via `draw_pixmap` with bilinear filtering — CSS Transforms L1 §13:
+translate/rotate/scale/skew/matrix2d. The `Mat4` carried by the command is column-major
+(`x'=a·x+c·y+e`, `y'=b·x+d·y+f`) and already bakes in `T(pivot)·M·T(-pivot)` from `transform-origin`,
+so resampling a page-space layer through it lands exactly where the GPU vertex transform would.
+Opacity and transform share one layer stack via `LayerComposite`; nested groups composite back in
+turn so a child transform `B` under a parent `A` yields `A·B`; page `22-transform`).
 
 ---
 

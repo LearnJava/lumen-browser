@@ -19,11 +19,15 @@
 //! placeholder, matching the GPU renderer's fallback), and text (`DrawText` —
 //! glyphs of the bundled Inter Regular face rasterized via `lumen_font::
 //! Rasterizer` and composited through a coverage `Mask`; page
-//! `55-text-rendering`), and group opacity (`PushOpacity` / `PopOpacity` —
+//! `55-text-rendering`), group opacity (`PushOpacity` / `PopOpacity` —
 //! the subtree is rendered into an off-screen layer and alpha-blended as a
-//! unit; page `13-visibility-opacity`). The chosen pages exercise exactly these primitives, so
-//! the references capture meaningful geometry rather than blank frames. As
-//! `cpu_raster` grows, add the relevant pages to `PAGES`.
+//! unit; page `13-visibility-opacity`), and 2D transforms (`PushTransform` /
+//! `PopTransform` — the subtree renders into an off-screen layer in page
+//! coordinates, then composites down through the box's affine via `draw_pixmap`;
+//! translate / rotate / scale / skew / matrix2d, page `22-transform`). The chosen
+//! pages exercise exactly these primitives, so the references capture meaningful
+//! geometry rather than blank frames. As `cpu_raster` grows, add the relevant
+//! pages to `PAGES`.
 //!
 //! Run:        cargo test -p lumen-driver --features cpu-render
 //! Regenerate: SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render -- --nocapture
@@ -69,6 +73,7 @@ const PAGES: &[&str] = &[
     "17-calc",
     "18-images",
     "36-border-radius",
+    "22-transform",
     "38-z-index",
     "39-gradients",
     "40-conic-gradients",

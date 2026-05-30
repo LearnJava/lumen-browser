@@ -15,6 +15,27 @@ use lumen_core::geom::Rect;
 /// scanline fill (`lumen_font::Rasterizer`) keeps output cross-OS bit-identical.
 const BUNDLED_FONT: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
 
+/// How a pushed off-screen layer is composited back onto the layer below when
+/// its group closes (`PopOpacity` / `PopTransform`).
+///
+/// The two share the same full-size off-screen pixmap stack: the subtree draws
+/// into a transparent layer in untransformed page coordinates, and the close op
+/// decides *how* that layer merges down. Nesting (e.g. opacity wrapping a
+/// transform — the emitter order is `PushOpacity → PushTransform → … →
+/// PopTransform → PopOpacity`) is handled by successive composites, so each
+/// layer carries only its own relative op, not an accumulated one.
+enum LayerComposite {
+    /// CSS Color L3 §3.2 group opacity — blend the whole layer with this alpha.
+    Opacity(f32),
+    /// CSS Transforms L1 §13 — map the layer through this 2D affine when
+    /// compositing it down (`draw_pixmap` resamples). The transform is already
+    /// in viewport/page coordinates (`forward_box_transform` bakes in
+    /// `T(pivot)·M·T(-pivot)` from `transform-origin`), so a full-size layer at
+    /// page coordinates composited through it lands exactly where the GPU
+    /// vertex transform would place it.
+    Transform(tiny_skia::Transform),
+}
+
 /// Rasterize display commands to an image using tiny-skia (CPU only, deterministic).
 pub(crate) fn rasterize_cpu(
     width: u32,
@@ -31,15 +52,16 @@ pub(crate) fn rasterize_cpu(
     // Fill background with white.
     base.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
 
-    // Off-screen layer stack for group opacity (`PushOpacity` / `PopOpacity`,
-    // emitted for `opacity < 1`). `layers[0]` is the white base; each open
-    // opacity group pushes a fully-transparent full-size layer that becomes the
-    // active draw target. On `PopOpacity` the top layer is composited onto the
-    // layer below with its group alpha (CSS Color L3 §3.2 — the whole subtree is
-    // rendered as a unit, then alpha-blended). Full-size layers keep the page
-    // coordinate space and clip masks valid without translation.
+    // Off-screen layer stack for group effects: group opacity (`PushOpacity` /
+    // `PopOpacity`, emitted for `opacity < 1`) and 2D transforms (`PushTransform`
+    // / `PopTransform`). `layers[0]` is the white base; each open group pushes a
+    // fully-transparent full-size layer that becomes the active draw target. On
+    // the matching pop the top layer is composited onto the layer below per its
+    // `LayerComposite` op (alpha-blend for opacity, affine `draw_pixmap` for
+    // transform). Full-size layers keep the page coordinate space and clip masks
+    // valid without translation.
     let mut layers: Vec<Pixmap> = vec![base];
-    let mut layer_alpha: Vec<f32> = Vec::new();
+    let mut layer_ops: Vec<LayerComposite> = Vec::new();
 
     // Active rectangular clip regions (CSS `overflow: hidden`, `PushClipRect`).
     // Stored as a stack of axis-aligned rects; the effective clip is their
@@ -168,14 +190,32 @@ pub(crate) fn rasterize_cpu(
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create opacity layer")?;
                 layers.push(layer);
-                layer_alpha.push(alpha.clamp(0.0, 1.0));
+                layer_ops.push(LayerComposite::Opacity(alpha.clamp(0.0, 1.0)));
             }
-            // Composite the finished group onto the layer below with its alpha.
-            DisplayCommand::PopOpacity => {
-                if let (Some(top), Some(a)) = (layers.pop(), layer_alpha.pop())
+            // CSS Transforms L1 §13 — the box's subtree (own background/border +
+            // children) renders as an off-screen group, then composites down
+            // through the 2D affine. Like `PushOpacity`, push a transparent
+            // full-size layer; the affine maps page coordinates and is applied at
+            // composite time so geometry need not be transformed per-draw. The
+            // `Mat4` is column-major (`x' = a·x + c·y + e`, `y' = b·x + d·y + f`):
+            // `a=[0] b=[1] c=[4] d=[5] e=[12] f=[13]` → `Transform::from_row`.
+            DisplayCommand::PushTransform { matrix } => {
+                let m = &matrix.0;
+                let t = tiny_skia::Transform::from_row(m[0], m[1], m[4], m[5], m[12], m[13]);
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create transform layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::Transform(t));
+            }
+            // Close the current off-screen group (opacity or transform) and
+            // composite it onto the layer below per its recorded op. Both pops
+            // share the logic because the emitter guarantees balanced, properly
+            // nested Push/Pop, so the top op always matches the closing command.
+            DisplayCommand::PopOpacity | DisplayCommand::PopTransform => {
+                if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
                     && let Some(dst) = layers.last_mut()
                 {
-                    composite_layer(dst, &top, a);
+                    close_layer(dst, &top, &op);
                 }
             }
             // Remaining commands not implemented for CPU rasterization yet.
@@ -185,13 +225,13 @@ pub(crate) fn rasterize_cpu(
         }
     }
 
-    // Defensive: composite any opacity layers the emitter left unbalanced
+    // Defensive: composite any group layers the emitter left unbalanced
     // (the display-list emitter always pairs Push/Pop, so this is a no-op there).
     while layers.len() > 1 {
         let top = layers.pop().expect("len > 1");
-        let a = layer_alpha.pop().unwrap_or(1.0);
+        let op = layer_ops.pop().unwrap_or(LayerComposite::Opacity(1.0));
         if let Some(dst) = layers.last_mut() {
-            composite_layer(dst, &top, a);
+            close_layer(dst, &top, &op);
         }
     }
     let pixmap = layers.pop().expect("base layer");
@@ -219,6 +259,36 @@ fn composite_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, alpha: 
         quality: tiny_skia::FilterQuality::Nearest,
     };
     dst.draw_pixmap(0, 0, src.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Composite an off-screen group layer `src` onto `dst` per its `LayerComposite`
+/// op. Used by `PopOpacity` / `PopTransform` (and the trailing balance loop).
+fn close_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, op: &LayerComposite) {
+    match op {
+        LayerComposite::Opacity(a) => composite_layer(dst, src, *a),
+        LayerComposite::Transform(t) => composite_transform_layer(dst, src, *t),
+    }
+}
+
+/// Composite an off-screen transform layer `src` onto `dst` through `transform`.
+///
+/// Used by `PopTransform`: the whole subtree was rendered into `src` (a
+/// full-size, initially transparent pixmap) in untransformed page coordinates,
+/// so resampling it through the box's viewport-space affine reproduces CSS
+/// transforms — translate / rotate / scale / skew / matrix2d (CSS Transforms L1
+/// §13). `draw_pixmap` with bilinear filtering is a pure-software path, so the
+/// result is cross-OS bit-identical like the rest of the CPU rasterizer.
+fn composite_transform_layer(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    transform: tiny_skia::Transform,
+) {
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Bilinear,
+    };
+    dst.draw_pixmap(0, 0, src.as_ref(), &paint, transform, None);
 }
 
 /// Geometric intersection of every clip rect on the stack.
@@ -1512,5 +1582,54 @@ mod tests {
             (120..=135).contains(&gr) && (185..=197).contains(&gg) && (120..=135).contains(&gb),
             "green faded, got ({gr},{gg},{gb})",
         );
+    }
+
+    /// `PushTransform` with an integer translation shifts the group's ink: a blue
+    /// fill at the origin lands at the translated position, and the original spot
+    /// is left at the background colour. Integer translate makes the bilinear
+    /// resample exact, so the moved fill is solid blue.
+    #[test]
+    fn transform_translate_shifts_fill() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::translation_2d(20.0, 10.0) },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 20.0, 20.0), color: blue },
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // Translated destination (20+5, 10+5) is solid blue.
+        assert_eq!(px(&img, 25, 15), (0, 0, 255, 255), "fill moved by (20,10)");
+        // The untranslated origin is now empty → background white.
+        assert_eq!(px(&img, 5, 5), (255, 255, 255, 255), "origin cleared by translate");
+    }
+
+    /// An identity `PushTransform` is a no-op: compositing the layer through the
+    /// identity affine copies it back byte-for-byte, so the fill is unchanged.
+    #[test]
+    fn transform_identity_is_noop() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::IDENTITY },
+            DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "identity transform unchanged");
+    }
+
+    /// `scale(2)` about the origin grows the group: a 10×10 fill at the origin
+    /// covers roughly a 20×20 area, so a sample well inside the scaled region
+    /// that was white before the scale is now blue.
+    #[test]
+    fn transform_scale_grows_fill() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::scale_2d(2.0, 2.0) },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 10.0, 10.0), color: blue },
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // Source (6,6) — interior of the 10×10 fill — maps to dest (12,12).
+        assert_eq!(px(&img, 12, 12), (0, 0, 255, 255), "scaled fill covers (12,12)");
     }
 }
