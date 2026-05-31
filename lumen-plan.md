@@ -331,7 +331,7 @@
 | 8H.3 | ⬜ **Ship BiDi gaps** (см. ADR-006): response body, locale/timezone/offline, per-context UA, viewport-before-popup, preload per-context, download lifecycle, cookie change events, per-origin clear | `bidi/src/extensions.rs` | gap-mapping в `subsystems/lumen-bidi-server.md` |
 | 8H.4 | ⬜ `lumen --bidi-port N` CLI flag | `shell/src/cli.rs` | — |
 | 8I | ⬜ **`[P3]` `lumen-cdp-shim` крейт** (Phase 3+, **opt-in, по реальному запросу**) | Legacy Puppeteer-совместимость | `crates/cdp-shim/` |
-| 9 | 🟡 **`[P1]` Anti-detection privacy stack** (§9.5, [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md)) | Privacy by default; устойчивость к Cloudflare/DataDome/Akamai false-positive. 9A ✅ Layer 1 (P1 2026-05-31); 9B-9C ⬜ TLS/HTTP fingerprint | `lumen-network`, `lumen-js`, `lumen-shell`, `lumen-paint` (минимально), `lumen-canvas` |
+| 9 | 🟡 **`[P1]` Anti-detection privacy stack** (§9.5, [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md)) | Privacy by default; устойчивость к Cloudflare/DataDome/Akamai false-positive. 9A ✅ Layer 1 (P1 2026-05-31); 9B ✅ TLS fingerprint (P1 2026-05-31); 9C ✅ HTTP fingerprint (P1 2026-05-31); 9D ⬜ rendering fingerprint | `lumen-network`, `lumen-js`, `lumen-shell`, `lumen-paint` (минимально), `lumen-canvas` |
 | 9A | ✅ **`[P1]` Layer 1: surface API без automation-маркеров** (Phase 1) | navigator.webdriver отсутствует; нет chrome.runtime/cdc_*/__playwright/etc.; event.isTrusted=true для native input; nav.appName/vendor/product/plugins/mimeTypes совместимы с Chrome | `lumen-js/src/surface_api.rs` P1 done 2026-05-31 |
 | 9A.1 | ✅ Audit JS bindings + `install_surface_api_protection` (hardening shim) | `js/src/surface_api.rs` (11 unit) + `js/tests/no_automation_markers.rs` (19 runtime) | — |
 | 9A.2 | ✅ Negative tests: `webdriver` absent, no automation globals, isTrusted, standard browser props | `js/tests/no_automation_markers.rs` (19 тестов); source audit — `driver/tests/antidetect_surface_api.rs` (7 тестов) | — |
@@ -341,12 +341,12 @@
 | 9B.3 | ⬜ ALPN order `h2`, `http/1.1` matching Chrome | `network/src/tls/fingerprint.rs` | — |
 | 9B.4 | ⬜ JA3/JA4 snapshot test против известных Chrome JA3 | `network/tests/ja3_match.rs` | обновляется per Chrome major release |
 | 9B.5 | ⬜ Per-profile TLS config (Standard / Strict / Tor) | `network/src/tls/profiles.rs` | — |
-| 9C | ⬜ **`[P3]` Layer 3: HTTP fingerprint Chrome-matching** (Phase 1) | Header order + casing + HTTP/2 SETTINGS как у Chrome | `lumen-network` http/h2 |
-| 9C.1 | ⬜ HTTP/1.1 header order + casing matching Chrome | `network/src/http/headers.rs` | — |
-| 9C.2 | ⬜ HTTP/2 SETTINGS frame values matching Chrome | `network/src/h2/settings.rs` | — |
-| 9C.3 | ⬜ HTTP/2 stream priority pattern matching Chrome | `network/src/h2/priority.rs` | — |
-| 9C.4 | ⬜ Accept-Language default `en-US,en;q=0.9` (не палит реальную локаль) | `network/src/http/headers.rs` | — |
-| 9C.5 | ⬜ Client Hints handling (опционально, выключено на Strict) | `network/src/http/client_hints.rs` | — |
+| 9C | ✅ **`[P1]` Layer 3: HTTP fingerprint Chrome-matching** (Phase 1) | Header order + casing + HTTP/2 SETTINGS как у Chrome | `lumen-network` http/h2 P1 done 2026-05-31 |
+| 9C.1 | ✅ HTTP/1.1 header order + casing matching Chrome | `network/src/http/headers.rs` + wired into `write_request()` | — |
+| 9C.2 | ✅ HTTP/2 SETTINGS frame values matching Chrome | `network/src/h2/conn.rs` `connect_with_profile()` | — |
+| 9C.3 | ✅ HTTP/2 stream priority pattern matching Chrome | `network/src/http/h2_settings.rs` `H2StreamPriority` | — |
+| 9C.4 | ✅ Accept-Language default `en-US,en;q=0.9` (не палит реальную локаль) | `network/src/http/mod.rs` `DEFAULT_ACCEPT_LANGUAGE` | — |
+| 9C.5 | ✅ Client Hints handling (опционально, выключено на Strict) | `network/src/http/client_hints.rs` | — |
 | 9D | ⬜ **`[P3+P2]` Layer 4: rendering fingerprint** (Phase 2) | Canvas/WebGL/audio randomization, Battery API disable, WebRTC mDNS-only | `lumen-canvas`, `lumen-paint`, `lumen-js` |
 | 9D.1 | ✅ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
 | 9D.2 | 🟡 WebGL renderer/vendor normalization | `js/src/webgl_bindings.rs` | P1 done: GpuFingerprint normalization (paint/fingerprint.rs), JS stub (_LUMEN_GPU_VENDOR/_RENDERER); P3 pending: wire to getParameter(UNMASKED_VENDOR/RENDERER_WEBGL) |

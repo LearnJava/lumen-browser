@@ -124,17 +124,24 @@ pub struct H2Conn<S: Read + Write> {
 }
 
 impl<S: Read + Write> H2Conn<S> {
-    /// Establish an HTTP/2 connection over `stream`.
+    /// Establish an HTTP/2 connection with Chrome-matching SETTINGS.
     ///
-    /// Sends the client connection preface (magic + Chrome-matching SETTINGS) and waits
+    /// Convenience wrapper for `connect_with_profile(stream, HttpProfile::Chrome)`.
+    pub fn connect(stream: S) -> Result<Self, Error> {
+        Self::connect_with_profile(stream, HttpProfile::Chrome)
+    }
+
+    /// Establish an HTTP/2 connection over `stream` with SETTINGS matching the given profile.
+    ///
+    /// Sends the client connection preface (magic + profile-matched SETTINGS) and waits
     /// for the server's initial SETTINGS frame, sending the required ACK.
-    /// Uses Chrome profile by default for broad server compatibility.
-    pub fn connect(mut stream: S) -> Result<Self, Error> {
+    /// Pass `HttpProfile::Chrome` for Chrome-matching (ADR-007 Layer 3).
+    pub fn connect_with_profile(mut stream: S, profile: HttpProfile) -> Result<Self, Error> {
         // Client connection preface (RFC 9113 §3.4): magic + SETTINGS.
-        let settings = H2Settings::for_profile(HttpProfile::Chrome);
+        let settings = H2Settings::for_profile(profile);
         let mut preface = CLIENT_PREFACE_MAGIC.to_vec();
 
-        // Build SETTINGS frame with Chrome-matching parameters.
+        // Build SETTINGS frame with profile-matching parameters.
         let settings_params = vec![
             (0x0001, settings.header_table_size),      // HEADER_TABLE_SIZE
             (0x0002, if settings.enable_push { 1 } else { 0 }), // ENABLE_PUSH
@@ -796,6 +803,62 @@ mod tests {
         let mock = MockStream::new(server_data);
         let conn = H2Conn::connect(mock).unwrap();
         assert_eq!(conn.remote_max_frame, 32_768);
+    }
+
+    #[test]
+    fn connect_with_profile_firefox_sends_firefox_settings() {
+        let server_data = server_preface_bytes();
+        let mock = MockStream::new(server_data);
+        let conn = H2Conn::connect_with_profile(mock, HttpProfile::Firefox).unwrap();
+        let written = conn.stream.written();
+        let after_magic = &written[CLIENT_PREFACE_MAGIC.len()..];
+        let (frame, _) = Frame::parse(after_magic, MAX_FRAME_PAYLOAD_DEFAULT)
+            .unwrap()
+            .unwrap();
+        match frame {
+            Frame::Settings { ack: false, params } => {
+                // Firefox uses initial_window_size = 2147483647 (max i32)
+                let window = params.iter().find(|(id, _)| *id == 4).map(|(_, v)| *v);
+                assert_eq!(window, Some(2147483647), "Firefox INITIAL_WINDOW_SIZE should be max i32");
+            }
+            _ => panic!("Expected Settings frame"),
+        }
+    }
+
+    #[test]
+    fn connect_with_profile_tor_sends_conservative_settings() {
+        let server_data = server_preface_bytes();
+        let mock = MockStream::new(server_data);
+        let conn = H2Conn::connect_with_profile(mock, HttpProfile::TorBrowser).unwrap();
+        let written = conn.stream.written();
+        let after_magic = &written[CLIENT_PREFACE_MAGIC.len()..];
+        let (frame, _) = Frame::parse(after_magic, MAX_FRAME_PAYLOAD_DEFAULT)
+            .unwrap()
+            .unwrap();
+        match frame {
+            Frame::Settings { ack: false, params } => {
+                // TorBrowser uses conservative settings: header_table_size = 4096 (RFC default)
+                let table_size = params.iter().find(|(id, _)| *id == 1).map(|(_, v)| *v);
+                assert_eq!(table_size, Some(4096), "TorBrowser HEADER_TABLE_SIZE should be RFC default 4096");
+                // max_concurrent_streams = 100
+                let max_streams = params.iter().find(|(id, _)| *id == 3).map(|(_, v)| *v);
+                assert_eq!(max_streams, Some(100), "TorBrowser MAX_CONCURRENT_STREAMS should be 100");
+            }
+            _ => panic!("Expected Settings frame"),
+        }
+    }
+
+    #[test]
+    fn connect_is_alias_for_chrome_profile() {
+        // connect() must behave identically to connect_with_profile(Chrome)
+        let server_data = server_preface_bytes();
+        let mock = MockStream::new(server_data.clone());
+        let conn_default = H2Conn::connect(mock).unwrap();
+
+        let mock2 = MockStream::new(server_data);
+        let conn_chrome = H2Conn::connect_with_profile(mock2, HttpProfile::Chrome).unwrap();
+
+        assert_eq!(conn_default.stream.written(), conn_chrome.stream.written());
     }
 
     // ── fetch() ───────────────────────────────────────────────────────────
