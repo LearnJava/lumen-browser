@@ -367,7 +367,7 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 32 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 33 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
@@ -427,6 +427,19 @@ blend), so only the region behind the element is affected; `PopBackdropFilter` i
 `30-css-filter` is now covered (element `filter` row + the `backdrop-filter` scene row), which also
 required fixing BUG-051 — abs-pos `inset:0` height-from-insets in `lay_out_abs_children` (the gradient
 backdrop had collapsed to height 0)).
+The `walk` builder also emits gradient `mask-image` (`PushMaskLinearGradient` /
+`PushMaskRadialGradient` / `PushMaskConicGradient` / `PushMaskImage` → `PopMask`, CSS Masking L1 §4;
+`emit_push_mask` wraps the box subtree as the outermost layer). `cpu_raster` handles them on the same
+`LayerComposite` stack via `LayerComposite::Mask(MaskSpec)`: each `PushMask*` pushes a transparent
+full-size layer the subtree draws into; `PopMask` rasterizes the gradient mask into its own pixmap
+(`render_mask`, reusing the `rasterize_*_gradient` helpers), multiplies the layer's alpha by the mask's
+alpha (`multiply_alpha_by_mask`, integer `(v·m+127)/255` on premultiplied RGBA), then composites the
+result `SourceOver` onto the backdrop. **The mask is the gradient's ALPHA channel** — mirroring the GPU
+`MASK_COMPOSITE_SHADER` (`result = vec4(c.rgb, c.a·m.a)`); `mask-mode: luminance` is not wired for
+gradient masks (the push commands carry no mode), so the `mask-mode: luminance` cell renders the full
+box — a CSS feature gap owned by P4, not a CPU-path divergence. `PushMaskImage` (image source) maps to
+`MaskSpec::None` (the headless CPU path registers no decoded pixels, so the mask is identity, matching
+the GPU fallback). Page `26-mask-image` is covered.
 
 ---
 

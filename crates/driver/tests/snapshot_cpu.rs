@@ -24,7 +24,10 @@
 //! unit; page `13-visibility-opacity`), and 2D transforms (`PushTransform` /
 //! `PopTransform` — the subtree renders into an off-screen layer in page
 //! coordinates, then composites down through the box's affine via `draw_pixmap`;
-//! translate / rotate / scale / skew / matrix2d, page `22-transform`). The chosen
+//! translate / rotate / scale / skew / matrix2d, page `22-transform`), and
+//! `mask-image` (`PushMask*` / `PopMask` — the element subtree renders into an
+//! off-screen layer whose alpha is then multiplied by the gradient mask's alpha;
+//! page `26-mask-image`). The chosen
 //! pages exercise exactly these primitives, so the references capture meaningful
 //! geometry rather than blank frames. As `cpu_raster` grows, add the relevant
 //! pages to `PAGES`.
@@ -56,6 +59,11 @@ use std::path::{Path, PathBuf};
 /// by `walk` around the box subtree) plus `backdrop-filter`
 /// (`PushBackdropFilter`/`PopBackdropFilter` — the backdrop region under the element
 /// is filtered in place, CSS Filter Effects L1 §6.2).
+/// `26-mask-image` exercises gradient `mask-image` (`PushMaskLinearGradient` /
+/// `PushMaskRadialGradient` → `PopMask` — the element layer's alpha is multiplied
+/// by the gradient's alpha, CSS Masking L1 §4; mask-mode is not wired for gradient
+/// masks, mirroring the GPU path, so the `mask-mode: luminance` cell shows the full
+/// box — a CSS feature gap owned by P4, not a CPU-path divergence).
 /// `18-images` is included because all its `<img>` boxes carry empty `alt`
 /// and explicit `width`/`height`, so the grey placeholder fully reproduces the
 /// (text-free) GPU headless output. `55-text-rendering` exercises the `DrawText`
@@ -94,6 +102,7 @@ const PAGES: &[&str] = &[
     "15-box-shadow",
     "52-text-shadow-blur",
     "30-css-filter",
+    "26-mask-image",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
