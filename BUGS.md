@@ -63,6 +63,7 @@ BUG-047 | FIXED 2026-05-30 | layout          | НЕ баг (мисдиагноз
 BUG-048 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант DrawScrollbar (p2-scrollbar-rendering merge) не обработан; скроллбар — UI, не контент → ветка continue (как BUG-044) | shell/src/main.rs:4219,4271
 BUG-049 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант PageBreak (p2 print-pages merge) не обработан; маркер пагинации печати, не контент, без rect → ветка continue (как BUG-048) | shell/src/main.rs:4219,4272
 BUG-050 | FIXED 2026-05-31 | network         | doctest mock.rs:16 не компилировался — fetch() is a trait method, но `use NetworkTransport` не импортирован в примере → добавлен импорт | crates/network/src/mock.rs:9
+BUG-051 | FIXED 2026-05-31 | layout          | abs-pos с top+bottom+height:auto (inset:0) схлопывался в height 0 — lay_out_abs_children резолвил ширину из left+right, но симметричной высоты из top+bottom не было (CSS Position L3 §6); страница 30 backdrop-filter рендерилась без фона | crates/engine/layout/src/box_tree.rs:3698
 ```
 
 ---
