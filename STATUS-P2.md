@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет активных задач)_
+**Basic tab strip UI** — branch: `p2-basic-tab-strip`
+Next step: create `shell/src/tabs/strip.rs` with TabStrip state + rendering
 
 ---
 
