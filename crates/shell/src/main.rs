@@ -35,6 +35,7 @@ mod scrollbar;
 mod tab_lifecycle;
 mod tabs;
 
+use crate::tab_lifecycle::state::TabState;
 use std::cell::Cell;
 use std::error::Error;
 use std::path::PathBuf;
@@ -5124,7 +5125,10 @@ impl Lumen {
     fn open_new_tab(&mut self) {
         let new_idx = self.tab_strip.push_blank();
         // Save current page into bg_tabs under the old active tab's id.
-        let old_id = self.tab_strip.tabs[self.tab_strip.active].id;
+        let old_active = self.tab_strip.active;
+        let old_id = self.tab_strip.tabs[old_active].id;
+        // Mark old tab as recently backgrounded so it gets a badge if it ages to T2.
+        self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
         let snap = self.save_page_snapshot();
         self.bg_tabs.insert(old_id, snap);
         self.tab_strip.active = new_idx;
@@ -5145,6 +5149,8 @@ impl Lumen {
             // restore the tab that will become active after removal.
             let new_active = self.tab_strip.remove(idx);
             let new_id = self.tab_strip.tabs[new_active].id;
+            // Mark the newly-activated tab as Active so its badge clears.
+            self.tab_strip.set_tab_state(new_active, TabState::Active);
             // Drop the current active page.
             self.reset_to_blank_tab();
             if let Some(snap) = self.bg_tabs.remove(&new_id) {
@@ -5163,12 +5169,15 @@ impl Lumen {
         if idx == self.tab_strip.active || idx >= self.tab_strip.len() {
             return;
         }
-        // Save current active tab.
-        let old_id = self.tab_strip.tabs[self.tab_strip.active].id;
+        // Save current active tab, marking it BackgroundRecent in the strip.
+        let old_active = self.tab_strip.active;
+        let old_id = self.tab_strip.tabs[old_active].id;
+        self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
         let snap = self.save_page_snapshot();
         self.bg_tabs.insert(old_id, snap);
-        // Restore new active tab.
+        // Restore new active tab, marking it Active so any badge clears.
         self.tab_strip.active = idx;
+        self.tab_strip.set_tab_state(idx, TabState::Active);
         let new_id = self.tab_strip.tabs[idx].id;
         self.reset_to_blank_tab();
         if let Some(snap) = self.bg_tabs.remove(&new_id) {
