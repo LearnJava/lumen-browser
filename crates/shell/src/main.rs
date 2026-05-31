@@ -21,6 +21,7 @@
 
 mod address_bar;
 mod animation_scheduler;
+mod download;
 mod find;
 mod forms;
 mod hints;
@@ -282,6 +283,7 @@ fn run_window_mode(
         input_rx,
         input_tx,
         focused_node: None,
+        downloads: download::DownloadManager::new(),
         tab_strip: tabs::strip::TabStrip::new(),
         bg_tabs: HashMap::new(),
     };
@@ -1208,6 +1210,8 @@ enum KeyCommand {
     CloseTab,
     /// Переключиться на следующую вкладку циклически (Ctrl+Tab).
     NextTab,
+    /// Открыть/закрыть панель загрузок (Ctrl+Shift+J).
+    DownloadsPanel,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1232,6 +1236,7 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
     let shift_only = mods == ModifiersState::SHIFT;
     let alt_only = mods == ModifiersState::ALT;
     let no_mods = mods.is_empty();
+    let ctrl_and_shift = mods == (ModifiersState::CONTROL | ModifiersState::SHIFT);
     match code {
         KeyCode::F5 if no_mods => Some(KeyCommand::Reload),
         KeyCode::KeyR if ctrl_only => Some(KeyCommand::Reload),
@@ -1255,6 +1260,7 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Space if shift_only => Some(KeyCommand::ScrollPageUp),
         KeyCode::Home if no_mods => Some(KeyCommand::ScrollHome),
         KeyCode::End if no_mods => Some(KeyCommand::ScrollEnd),
+        KeyCode::KeyJ if ctrl_and_shift => Some(KeyCommand::DownloadsPanel),
         _ => None,
     }
 }
@@ -2653,6 +2659,9 @@ struct Lumen {
     ///
     /// `None` until the first click is processed.  Updated by `handle_click_at`.
     focused_node: Option<lumen_dom::NodeId>,
+    /// Download manager: background download threads, progress channel, and
+    /// panel visibility state. Panel toggled via Ctrl+Shift+J.
+    downloads: download::DownloadManager,
     /// Tab strip state: open tabs (title, id) and active index.
     ///
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.
@@ -3384,6 +3393,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // Download manager: drain completion events from background threads.
+        self.downloads.poll();
+
         // Пост-дренажный check: reload, запланированный через queue_task
         // (UserInteraction source), исполняется после microtask checkpoint.
         // `take` атомарно сбрасывает флаг, чтобы reload вызвался только раз.
@@ -3863,6 +3875,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut hint_cmds);
                 }
 
+                // Download panel: viewport-locked bottom-right panel.
+                // Rendered before the tab bar so it appears below the tab strip.
+                if self.downloads.visible {
+                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let mut dl_cmds = download::build_download_bar(&self.downloads, win_size);
+                    overlay_buf.append(&mut dl_cmds);
+                }
+
                 // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
                 // Rendered last → always on top of all other overlays.
                 {
@@ -4246,6 +4269,10 @@ impl Lumen {
             KeyCommand::NextTab => {
                 let next = (self.tab_strip.active + 1) % self.tab_strip.len();
                 self.switch_tab(next);
+            }
+            KeyCommand::DownloadsPanel => {
+                self.downloads.toggle_visible();
+                self.request_redraw();
             }
         }
     }

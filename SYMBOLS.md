@@ -1703,7 +1703,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (158 symbols)
+## lumen-shell  (214 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1731,6 +1731,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/animation_scheduler.rs:54` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
 `crates/shell/src/animation_scheduler.rs:75` **fn** `clear` — Удалить все записи для элементов, которых больше нет в дереве
+`crates/shell/src/download.rs:45` **struct** `DownloadId` — Opaque identifier for a single download entry
+`crates/shell/src/download.rs:50` **enum** `DownloadStatus` — Current state of a download entry
+`crates/shell/src/download.rs:71` **struct** `DownloadEntry` — A single download: source URL, destination path, and current status
+`crates/shell/src/download.rs:99` **struct** `DownloadManager` — Manages concurrent background downloads and the visibility of the download
+`crates/shell/src/download.rs:119` **fn** `new` — Create a new, empty download manager
+`crates/shell/src/download.rs:138` **fn** `start_download` — Start a background download of `url` into `dest`
+`crates/shell/src/download.rs:173` **fn** `cancel` — Request cancellation of download `id`
+`crates/shell/src/download.rs:190` **fn** `open_download` — Open the file in the default OS application
+`crates/shell/src/download.rs:203` **fn** `poll` — Drain the internal mpsc channel and update entry statuses
+`crates/shell/src/download.rs:234` **fn** `entries` — All entries in insertion order (most recent last)
+`crates/shell/src/download.rs:239` **fn** `active_count` — Number of entries whose status is `InProgress` or `Pending`
+`crates/shell/src/download.rs:249` **fn** `toggle_visible` — Toggle panel visibility
+`crates/shell/src/download.rs:254` **fn** `open` — Show the panel
+`crates/shell/src/download.rs:259` **fn** `close` — Hide the panel
+`crates/shell/src/download.rs:419` **fn** `build_download_bar` — Build the viewport-locked download panel overlay
 `crates/shell/src/find.rs:29` **struct** `FindState` — Состояние find bar и текущего запроса
 `crates/shell/src/find.rs:38` **fn** `is_open`
 `crates/shell/src/find.rs:42` **fn** `query`
@@ -1781,7 +1796,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/hints.rs:99` **fn** `typed` — Characters typed so far — used to dim non-matching badges
 `crates/shell/src/hints.rs:107` **fn** `items` — Compute viewport-space hint items for the current scroll offsets
 `crates/shell/src/hints.rs:172` **fn** `build_hints_overlay` — Build the viewport-locked overlay display list for all active hint badges
-`crates/shell/src/input.rs:44` **struct** `InputInjectionQueue` — Placeholder для обработки injected input команд в event loop
+`crates/shell/src/input/humanlike.rs:136` **struct** `HumanLikeConfig` — Timing and motion parameters for [`HumanLikeSender`]
+`crates/shell/src/input/humanlike.rs:177` **enum** `InputMode` — Controls how injected inputs are delivered to the shell
+`crates/shell/src/input/humanlike.rs:202` **struct** `HumanLikeSender` — Wraps [`InputSender`] and injects human-like timing and mouse motion
+`crates/shell/src/input/humanlike.rs:216` **fn** `new` — Create a new sender wrapping `inner` with default configuration
+`crates/shell/src/input/humanlike.rs:226` **fn** `with_seed` — Create a sender with a fixed PRNG seed for deterministic replay
+`crates/shell/src/input/humanlike.rs:235` **fn** `click_at` — Move the cursor along a Bézier arc to `(x, y)`, then dwell, then click
+`crates/shell/src/input/humanlike.rs:267` **fn** `type_text` — Type `text` with Gaussian-distributed inter-keystroke delays
+`crates/shell/src/input/humanlike.rs:287` **fn** `scroll_to` — Scroll to `(x, y)` immediately (no path animation for scrolls)
+`crates/shell/src/input/humanlike.rs:295` **fn** `set_cursor_position` — Override the assumed cursor starting position without moving it
+`crates/shell/src/input/mod.rs:36` **enum** `InputCommand` — A single injected input command
+`crates/shell/src/input/mod.rs:88` **struct** `InputSender` — Sender side of the input injection channel
+`crates/shell/src/input/mod.rs:93` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:99` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:105` **fn** `type_text` — Send a synthetic text-typing command
+`crates/shell/src/input/mod.rs:111` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
+`crates/shell/src/input/mod.rs:119` **struct** `InputReceiver` — Receiver side of the input injection channel
+`crates/shell/src/input/mod.rs:123` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
+`crates/shell/src/input/mod.rs:132` **fn** `channel` — Create a new input injection channel
 `crates/shell/src/links.rs:15` **fn** `find_link_href` — Walk up the ancestor chain from `node_id` to find the nearest `<a>` element
 `crates/shell/src/links.rs:43` **fn** `is_navigable_href` — Return true if `href` is a URL scheme the browser should navigate to
 `crates/shell/src/links.rs:53` **fn** `fragment_only` — If `href` is a fragment-only reference (starts with `#`), return the
@@ -1852,17 +1884,41 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/scrollbar.rs:185` **struct** `ScrollDrag` — Снапшот состояния на момент начала drag-а: scroll_y страницы и cursor_y
 `crates/shell/src/scrollbar.rs:191` **fn** `new`
 `crates/shell/src/scrollbar.rs:199` **fn** `scroll_for` — Желаемый `scroll_y` при текущей позиции курсора. Если scrollbar
-`crates/shell/src/tab_lifecycle.rs:16` **enum** `TabState` — Tab lifecycle state (memory tier)
-`crates/shell/src/tab_lifecycle.rs:41` **enum** `TransitionReason` — Transition reason from one tier to another
-`crates/shell/src/tab_lifecycle.rs:64` **struct** `TabLifecycle` — Per-tab lifecycle state with timestamps
-`crates/shell/src/tab_lifecycle.rs:84` **struct** `TierTimeouts` — User-configurable timeouts for tier transitions
-`crates/shell/src/tab_lifecycle.rs:108` **fn** `new` — Create a new tab in T0 (Active) state
-`crates/shell/src/tab_lifecycle.rs:119` **fn** `activate` — Mark tab as visible/active (transition to T0)
-`crates/shell/src/tab_lifecycle.rs:127` **fn** `hide` — Mark tab as hidden (start idle timeout countdown for T0→T1)
-`crates/shell/src/tab_lifecycle.rs:133` **fn** `advance_tier` — Transition to next tier due to idle timeout or memory pressure
-`crates/shell/src/tab_lifecycle.rs:159` **fn** `should_transition_on_idle` — Check if idle timeout has been exceeded for current tier
-`crates/shell/src/tab_lifecycle.rs:193` **fn** `accelerate_on_memory_pressure` — Accelerate transitions due to memory pressure
-`crates/shell/src/tab_lifecycle.rs:235` **enum** `MemoryPressure` — OS memory pressure levels (from `MemoryPressureSource` trait)
+`crates/shell/src/tab_lifecycle/manager.rs:14` **type** `TabId` — Opaque tab identifier. Callers create sequential IDs (0, 1, 2, …) or any u64
+`crates/shell/src/tab_lifecycle/manager.rs:18` **struct** `TierTransition` — A tier transition that occurred during `tick_idle` or `lru_evict`
+`crates/shell/src/tab_lifecycle/manager.rs:35` **struct** `TabLifecycleManager` — Manages lifecycle state for all open tabs
+`crates/shell/src/tab_lifecycle/manager.rs:54` **fn** `new` — Create a new manager with the given timeouts and LRU budget
+`crates/shell/src/tab_lifecycle/manager.rs:68` **fn** `open_tab` — Open a new tab. The tab starts in Active state and becomes the foreground tab
+`crates/shell/src/tab_lifecycle/manager.rs:91` **fn** `activate_tab` — Switch to an existing tab, activating it and sending the previous active tab
+`crates/shell/src/tab_lifecycle/manager.rs:136` **fn** `close_tab` — Mark a tab as closed. Advances it to `TabState::Closed` and removes it
+`crates/shell/src/tab_lifecycle/manager.rs:157` **fn** `set_pinned` — Pin/unpin a tab. Pinned tabs are never evicted past T1
+`crates/shell/src/tab_lifecycle/manager.rs:164` **fn** `tab_state` — Returns the current state of a tab, or `None` if the tab is unknown
+`crates/shell/src/tab_lifecycle/manager.rs:169` **fn** `is_active` — Returns `true` if `id` is the foreground (Active) tab
+`crates/shell/src/tab_lifecycle/manager.rs:177` **fn** `tick_idle` — Advance all background tabs whose idle timeout has elapsed, and apply
+`crates/shell/src/tab_lifecycle/manager.rs:227` **fn** `lru_evict` — Evict least-recently-used background tabs until the number of
+`crates/shell/src/tab_lifecycle/manager.rs:283` **fn** `snapshot` — Returns a snapshot of all tab IDs and their current states
+`crates/shell/src/tab_lifecycle/state.rs:10` **enum** `TabState` — Tab lifecycle state (memory tier)
+`crates/shell/src/tab_lifecycle/state.rs:34` **enum** `TransitionReason` — Reason for a lifecycle tier transition
+`crates/shell/src/tab_lifecycle/state.rs:59` **struct** `TabLifecycle` — Per-tab lifecycle state tracking
+`crates/shell/src/tab_lifecycle/state.rs:78` **struct** `TierTimeouts` — User-configurable timeouts for tier transitions
+`crates/shell/src/tab_lifecycle/state.rs:101` **enum** `MemoryPressure` — OS memory pressure levels (mirrors `MemoryPressureLevel` from lumen-core)
+`crates/shell/src/tab_lifecycle/state.rs:109` **fn** `new` — New tab starts in T0 Active
+`crates/shell/src/tab_lifecycle/state.rs:120` **fn** `activate` — Transition to Active (T0), resetting idle counters
+`crates/shell/src/tab_lifecycle/state.rs:129` **fn** `hide` — Record the moment the tab was hidden, starting the idle countdown
+`crates/shell/src/tab_lifecycle/state.rs:136` **fn** `advance_tier` — Advance to the next tier. Returns `true` if a transition occurred
+`crates/shell/src/tab_lifecycle/state.rs:150` **fn** `should_transition_on_idle` — Returns `true` if the idle timeout for the current tier has elapsed
+`crates/shell/src/tab_lifecycle/state.rs:167` **fn** `suggested_pressure_state` — If memory pressure justifies an earlier-than-scheduled tier advance, returns
+`crates/shell/src/tabs/strip.rs:43` **struct** `TabEntry` — Metadata for one browser tab
+`crates/shell/src/tabs/strip.rs:51` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:62` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:71` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:76` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:85` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:97` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:108` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:128` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:154` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:231` **fn** `tab_page_push_transform` — Build a `PushTransform` display command that shifts page content below the
 
 ## lumen-storage  (373 symbols)
 
@@ -2241,4 +2297,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2179 symbols in 19 crates*
+*Total: 2235 symbols in 19 crates*
