@@ -13,7 +13,7 @@
 //!         └─ mpsc::Sender<InputCommand>
 //!               ↓
 //!         Lumen.input_rx  (drained each about_to_wait)
-//!               └─ handle_click_at / type_char / scroll_to
+//!               └─ handle_click_at / dispatch_mouse_move / type_char / scroll_to
 //! ```
 //!
 //! # isTrusted guarantee
@@ -21,6 +21,8 @@
 //! All injected events are dispatched via the Rust→JS bindings
 //! (`_lumen_dispatch_mouse_event`, `_lumen_dispatch_key_event`), which always
 //! create events with `isTrusted=true`.  JS `dispatchEvent()` is never used.
+
+pub mod humanlike;
 
 use std::sync::mpsc;
 
@@ -38,6 +40,19 @@ pub enum InputCommand {
     /// with `isTrusted=true`, handle form controls (checkbox, submit), and
     /// follow `<a href>` links — exactly as if the user clicked.
     Click {
+        /// CSS-pixel X coordinate (viewport-relative, not page-space).
+        x: f32,
+        /// CSS-pixel Y coordinate (viewport-relative, not page-space).
+        y: f32,
+    },
+
+    /// Synthetic mouse-move to the given CSS-pixel coordinates.
+    ///
+    /// Does **not** trigger a click.  Dispatches a JS `mousemove` `MouseEvent`
+    /// with `isTrusted=true` at the target position.  Used by
+    /// [`humanlike::HumanLikeSender`] to trace Bézier-curve paths before
+    /// the final click.
+    MouseMove {
         /// CSS-pixel X coordinate (viewport-relative, not page-space).
         x: f32,
         /// CSS-pixel Y coordinate (viewport-relative, not page-space).
@@ -77,6 +92,12 @@ impl InputSender {
     #[allow(dead_code)]
     pub fn click(&self, x: f32, y: f32) {
         let _ = self.0.send(InputCommand::Click { x, y });
+    }
+
+    /// Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`.
+    #[allow(dead_code)]
+    pub fn mouse_move(&self, x: f32, y: f32) {
+        let _ = self.0.send(InputCommand::MouseMove { x, y });
     }
 
     /// Send a synthetic text-typing command.
@@ -131,6 +152,21 @@ mod tests {
                 assert!((y - 200.0).abs() < f32::EPSILON);
             }
             _ => panic!("expected Click"),
+        }
+    }
+
+    #[test]
+    fn channel_mouse_move_roundtrip() {
+        let (tx, rx) = channel();
+        tx.mouse_move(50.0, 75.0);
+        let cmds = rx.drain();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            InputCommand::MouseMove { x, y } => {
+                assert!((x - 50.0).abs() < f32::EPSILON);
+                assert!((y - 75.0).abs() < f32::EPSILON);
+            }
+            _ => panic!("expected MouseMove"),
         }
     }
 

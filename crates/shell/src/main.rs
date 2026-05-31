@@ -3300,6 +3300,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.inject_char(ch);
                     }
                 }
+                input::InputCommand::MouseMove { x, y } => {
+                    self.dispatch_mouse_move(x, y);
+                }
                 input::InputCommand::Scroll { x, y } => {
                     self.scroll_x = clamp_scroll(x, (self.content_width - self.viewport_width_css()).max(0.0));
                     self.scroll_y = clamp_scroll(y, (self.content_height - self.viewport_height_css()).max(0.0));
@@ -3799,6 +3802,38 @@ impl Lumen {
     #[allow(dead_code)]
     pub fn input_sender(&self) -> input::InputSender {
         self.input_tx.clone()
+    }
+
+    /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.
+    ///
+    /// Hit-tests the position (accounting for current scroll offset) and fires
+    /// `_lumen_dispatch_mouse_event` with event type `"mousemove"`.  Used by
+    /// [`input::humanlike::HumanLikeSender`] to trace Bézier-curve paths before
+    /// a click.  No-op when there is no JS context or no element at the position.
+    fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
+        let page_x = x_css + self.scroll_x;
+        let page_y = y_css + self.scroll_y;
+        let hit = self.layout_box.as_ref().and_then(|lb| {
+            hit_test(Point::new(page_x, page_y), lb)
+        });
+        #[cfg(feature = "quickjs")]
+        if let (Some(result), Some(ctx)) = (hit.as_ref(), self.js_ctx.as_ref()) {
+            let mod_flags: u8 =
+                (self.modifiers.control_key() as u8)
+                | ((self.modifiers.shift_key()  as u8) << 1)
+                | ((self.modifiers.alt_key()    as u8) << 2)
+                | ((self.modifiers.super_key()  as u8) << 3);
+            let script = format!(
+                "_lumen_dispatch_mouse_event({}, 'mousemove', {}, {}, 0, 0, {})",
+                result.node.index(),
+                x_css as i32,
+                y_css as i32,
+                mod_flags,
+            );
+            ctx.eval_js(&script);
+        }
+        #[cfg(not(feature = "quickjs"))]
+        let _ = hit;
     }
 
     /// Handle a left-button click at CSS-pixel viewport coordinates `(x_css, y_css)`.
