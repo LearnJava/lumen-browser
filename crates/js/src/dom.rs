@@ -1567,6 +1567,244 @@ function CustomEvent(type, init) {
 CustomEvent.prototype = Object.create(Event.prototype);
 CustomEvent.prototype.constructor = CustomEvent;
 
+// ── UIEvent / MouseEvent / KeyboardEvent / InputEvent / FocusEvent ────────────
+// ── WheelEvent / PointerEvent / AnimationEvent / TransitionEvent / … ─────────
+// WHATWG UI Events spec — provides typed event classes for instanceof checks
+// and named properties (clientX, key, deltaY, …) that web apps depend on.
+
+function UIEvent(type, init) {
+    Event.call(this, type, init);
+    this.detail = (init && init.detail != null) ? (init.detail | 0) : 0;
+    this.view   = (init && init.view   != null) ? init.view   : null;
+}
+UIEvent.prototype = Object.create(Event.prototype);
+UIEvent.prototype.constructor = UIEvent;
+
+function MouseEvent(type, init) {
+    UIEvent.call(this, type, init);
+    this.screenX       = (init && init.screenX       != null) ? +init.screenX       : 0;
+    this.screenY       = (init && init.screenY       != null) ? +init.screenY       : 0;
+    this.clientX       = (init && init.clientX       != null) ? +init.clientX       : 0;
+    this.clientY       = (init && init.clientY       != null) ? +init.clientY       : 0;
+    this.pageX         = (init && init.pageX         != null) ? +init.pageX         : this.clientX;
+    this.pageY         = (init && init.pageY         != null) ? +init.pageY         : this.clientY;
+    this.offsetX       = (init && init.offsetX       != null) ? +init.offsetX       : 0;
+    this.offsetY       = (init && init.offsetY       != null) ? +init.offsetY       : 0;
+    this.movementX     = (init && init.movementX     != null) ? +init.movementX     : 0;
+    this.movementY     = (init && init.movementY     != null) ? +init.movementY     : 0;
+    this.button        = (init && init.button        != null) ? (init.button  | 0)  : 0;
+    this.buttons       = (init && init.buttons       != null) ? (init.buttons | 0)  : 0;
+    this.ctrlKey       = !!(init && init.ctrlKey);
+    this.shiftKey      = !!(init && init.shiftKey);
+    this.altKey        = !!(init && init.altKey);
+    this.metaKey       = !!(init && init.metaKey);
+    this.relatedTarget = (init && init.relatedTarget != null) ? init.relatedTarget : null;
+}
+MouseEvent.prototype = Object.create(UIEvent.prototype);
+MouseEvent.prototype.constructor = MouseEvent;
+MouseEvent.prototype.getModifierState = function(key) {
+    if (key === 'Control') return this.ctrlKey;
+    if (key === 'Shift')   return this.shiftKey;
+    if (key === 'Alt')     return this.altKey;
+    if (key === 'Meta')    return this.metaKey;
+    return false;
+};
+
+function KeyboardEvent(type, init) {
+    UIEvent.call(this, type, init);
+    this.key         = (init && init.key         != null) ? String(init.key)         : '';
+    this.code        = (init && init.code        != null) ? String(init.code)        : '';
+    this.keyCode     = (init && init.keyCode     != null) ? (init.keyCode  | 0)      : 0;
+    this.charCode    = (init && init.charCode    != null) ? (init.charCode | 0)      : 0;
+    this.which       = (init && init.which       != null) ? (init.which    | 0)      : this.keyCode;
+    this.location    = (init && init.location    != null) ? (init.location | 0)      : 0;
+    this.repeat      = !!(init && init.repeat);
+    this.isComposing = !!(init && init.isComposing);
+    this.ctrlKey     = !!(init && init.ctrlKey);
+    this.shiftKey    = !!(init && init.shiftKey);
+    this.altKey      = !!(init && init.altKey);
+    this.metaKey     = !!(init && init.metaKey);
+}
+KeyboardEvent.prototype = Object.create(UIEvent.prototype);
+KeyboardEvent.prototype.constructor = KeyboardEvent;
+KeyboardEvent.prototype.getModifierState = function(key) {
+    if (key === 'Control') return this.ctrlKey;
+    if (key === 'Shift')   return this.shiftKey;
+    if (key === 'Alt')     return this.altKey;
+    if (key === 'Meta')    return this.metaKey;
+    return false;
+};
+KeyboardEvent.DOM_KEY_LOCATION_STANDARD = 0;
+KeyboardEvent.DOM_KEY_LOCATION_LEFT     = 1;
+KeyboardEvent.DOM_KEY_LOCATION_RIGHT    = 2;
+KeyboardEvent.DOM_KEY_LOCATION_NUMPAD   = 3;
+
+function InputEvent(type, init) {
+    UIEvent.call(this, type, init);
+    this.data         = (init && init.data      != null) ? init.data      : null;
+    this.inputType    = (init && init.inputType != null) ? String(init.inputType) : '';
+    this.isComposing  = !!(init && init.isComposing);
+    this.dataTransfer = (init && init.dataTransfer != null) ? init.dataTransfer : null;
+}
+InputEvent.prototype = Object.create(UIEvent.prototype);
+InputEvent.prototype.constructor = InputEvent;
+InputEvent.prototype.getTargetRanges = function() { return []; };
+
+function FocusEvent(type, init) {
+    UIEvent.call(this, type, init);
+    this.relatedTarget = (init && init.relatedTarget != null) ? init.relatedTarget : null;
+}
+FocusEvent.prototype = Object.create(UIEvent.prototype);
+FocusEvent.prototype.constructor = FocusEvent;
+
+function WheelEvent(type, init) {
+    MouseEvent.call(this, type, init);
+    this.deltaX    = (init && init.deltaX    != null) ? +init.deltaX    : 0;
+    this.deltaY    = (init && init.deltaY    != null) ? +init.deltaY    : 0;
+    this.deltaZ    = (init && init.deltaZ    != null) ? +init.deltaZ    : 0;
+    this.deltaMode = (init && init.deltaMode != null) ? (init.deltaMode | 0) : 0;
+}
+WheelEvent.prototype = Object.create(MouseEvent.prototype);
+WheelEvent.prototype.constructor = WheelEvent;
+WheelEvent.DOM_DELTA_PIXEL = 0;
+WheelEvent.DOM_DELTA_LINE  = 1;
+WheelEvent.DOM_DELTA_PAGE  = 2;
+
+// Pointer Events Level 2 — pointerId=1 / pointerType='mouse' for mouse input
+function PointerEvent(type, init) {
+    MouseEvent.call(this, type, init);
+    this.pointerId          = (init && init.pointerId        != null) ? (init.pointerId | 0)      : 1;
+    this.pointerType        = (init && init.pointerType      != null) ? String(init.pointerType)  : 'mouse';
+    this.isPrimary          = (init && init.isPrimary        != null) ? !!init.isPrimary          : true;
+    this.width              = (init && init.width            != null) ? +init.width               : 1;
+    this.height             = (init && init.height           != null) ? +init.height              : 1;
+    this.pressure           = (init && init.pressure         != null) ? +init.pressure            : 0;
+    this.tangentialPressure = (init && init.tangentialPressure != null) ? +init.tangentialPressure : 0;
+    this.tiltX              = (init && init.tiltX            != null) ? (init.tiltX  | 0)         : 0;
+    this.tiltY              = (init && init.tiltY            != null) ? (init.tiltY  | 0)         : 0;
+    this.twist              = (init && init.twist            != null) ? (init.twist  | 0)         : 0;
+    this.altitudeAngle      = (init && init.altitudeAngle    != null) ? +init.altitudeAngle       : Math.PI / 2;
+    this.azimuthAngle       = (init && init.azimuthAngle     != null) ? +init.azimuthAngle        : 0;
+}
+PointerEvent.prototype = Object.create(MouseEvent.prototype);
+PointerEvent.prototype.constructor = PointerEvent;
+PointerEvent.prototype.getCoalescedEvents = function() { return []; };
+PointerEvent.prototype.getPredictedEvents = function() { return []; };
+
+// AnimationEvent — animationstart / animationend / animationiteration / animationcancel
+function AnimationEvent(type, init) {
+    Event.call(this, type, init);
+    this.animationName = (init && init.animationName != null) ? String(init.animationName) : '';
+    this.elapsedTime   = (init && init.elapsedTime   != null) ? +init.elapsedTime   : 0;
+    this.pseudoElement = (init && init.pseudoElement != null) ? String(init.pseudoElement) : '';
+}
+AnimationEvent.prototype = Object.create(Event.prototype);
+AnimationEvent.prototype.constructor = AnimationEvent;
+
+// TransitionEvent — transitionstart / transitionend / transitionrun / transitioncancel
+function TransitionEvent(type, init) {
+    Event.call(this, type, init);
+    this.propertyName  = (init && init.propertyName  != null) ? String(init.propertyName)  : '';
+    this.elapsedTime   = (init && init.elapsedTime   != null) ? +init.elapsedTime   : 0;
+    this.pseudoElement = (init && init.pseudoElement != null) ? String(init.pseudoElement) : '';
+}
+TransitionEvent.prototype = Object.create(Event.prototype);
+TransitionEvent.prototype.constructor = TransitionEvent;
+
+// StorageEvent — fires on localStorage/sessionStorage change in another context
+function StorageEvent(type, init) {
+    Event.call(this, type, init);
+    this.key         = (init && init.key         != null) ? init.key         : null;
+    this.oldValue    = (init && init.oldValue    != null) ? init.oldValue    : null;
+    this.newValue    = (init && init.newValue    != null) ? init.newValue    : null;
+    this.url         = (init && init.url         != null) ? String(init.url) : '';
+    this.storageArea = (init && init.storageArea != null) ? init.storageArea : null;
+}
+StorageEvent.prototype = Object.create(Event.prototype);
+StorageEvent.prototype.constructor = StorageEvent;
+StorageEvent.prototype.initStorageEvent = function(type, bubbles, cancelable, key, oldValue, newValue, url, storageArea) {
+    this.type = type; this.bubbles = !!bubbles; this.cancelable = !!cancelable;
+    this.key = key; this.oldValue = oldValue; this.newValue = newValue;
+    this.url = String(url); this.storageArea = storageArea;
+};
+
+// PopStateEvent — history.pushState / back / forward
+function PopStateEvent(type, init) {
+    Event.call(this, type, init);
+    this.state = (init && init.state !== undefined) ? init.state : null;
+}
+PopStateEvent.prototype = Object.create(Event.prototype);
+PopStateEvent.prototype.constructor = PopStateEvent;
+
+// HashChangeEvent — URL hash (#fragment) changes
+function HashChangeEvent(type, init) {
+    Event.call(this, type, init);
+    this.oldURL = (init && init.oldURL != null) ? String(init.oldURL) : '';
+    this.newURL = (init && init.newURL != null) ? String(init.newURL) : '';
+}
+HashChangeEvent.prototype = Object.create(Event.prototype);
+HashChangeEvent.prototype.constructor = HashChangeEvent;
+
+// ErrorEvent — uncaught script errors
+function ErrorEvent(type, init) {
+    Event.call(this, type, init);
+    this.message  = (init && init.message  != null) ? String(init.message)  : '';
+    this.filename = (init && init.filename != null) ? String(init.filename) : '';
+    this.lineno   = (init && init.lineno   != null) ? (init.lineno  | 0) : 0;
+    this.colno    = (init && init.colno    != null) ? (init.colno   | 0) : 0;
+    this.error    = (init && init.error    !== undefined) ? init.error : null;
+}
+ErrorEvent.prototype = Object.create(Event.prototype);
+ErrorEvent.prototype.constructor = ErrorEvent;
+
+// SubmitEvent — form submission; carries reference to the submitter button
+function SubmitEvent(type, init) {
+    Event.call(this, type, init);
+    this.submitter = (init && init.submitter != null) ? init.submitter : null;
+}
+SubmitEvent.prototype = Object.create(Event.prototype);
+SubmitEvent.prototype.constructor = SubmitEvent;
+
+// PageTransitionEvent — pageshow / pagehide (bfcache)
+function PageTransitionEvent(type, init) {
+    Event.call(this, type, init);
+    this.persisted = !!(init && init.persisted);
+}
+PageTransitionEvent.prototype = Object.create(Event.prototype);
+PageTransitionEvent.prototype.constructor = PageTransitionEvent;
+
+// BeforeUnloadEvent — fires before navigation away; returnValue triggers dialog
+function BeforeUnloadEvent(type, init) {
+    Event.call(this, type, init);
+    this.returnValue = '';
+}
+BeforeUnloadEvent.prototype = Object.create(Event.prototype);
+BeforeUnloadEvent.prototype.constructor = BeforeUnloadEvent;
+
+// DragEvent — drag-and-drop events
+function DragEvent(type, init) {
+    MouseEvent.call(this, type, init);
+    this.dataTransfer = (init && init.dataTransfer != null) ? init.dataTransfer : null;
+}
+DragEvent.prototype = Object.create(MouseEvent.prototype);
+DragEvent.prototype.constructor = DragEvent;
+
+// ClipboardEvent — copy / cut / paste
+function ClipboardEvent(type, init) {
+    Event.call(this, type, init);
+    this.clipboardData = (init && init.clipboardData != null) ? init.clipboardData : null;
+}
+ClipboardEvent.prototype = Object.create(Event.prototype);
+ClipboardEvent.prototype.constructor = ClipboardEvent;
+
+// CompositionEvent — IME compositionstart / compositionupdate / compositionend
+function CompositionEvent(type, init) {
+    UIEvent.call(this, type, init);
+    this.data = (init && init.data != null) ? String(init.data) : '';
+}
+CompositionEvent.prototype = Object.create(UIEvent.prototype);
+CompositionEvent.prototype.constructor = CompositionEvent;
+
 // ── Per-element event listener store ─────────────────────────────────────────
 // Key: String(nid) + ':' + type  →  Array of handler functions.
 
@@ -1636,6 +1874,73 @@ function _lumen_dispatch_bubble(start_nid, type) {
         }
     }
     return !evt.defaultPrevented;
+}
+
+// Bubble a pre-constructed event object (with target already set) through the DOM.
+// Used by _lumen_dispatch_mouse_event and _lumen_dispatch_key_event so they can
+// pass rich typed events instead of plain Event instances.
+function _lumen_dispatch_rich(start_nid, event) {
+    event.target = _lumen_make_element(start_nid);
+    var cur = start_nid;
+    while (cur !== null && cur !== undefined) {
+        var key = String(cur) + ':' + event.type;
+        var arr = _lumen_listeners[key];
+        if (arr) {
+            var copy = arr.slice();
+            var el = _lumen_make_element(cur);
+            for (var i = 0; i < copy.length; i++) {
+                if (event.cancelBubble) break;
+                try { copy[i].call(el, event); } catch(e) {}
+                if (event._stopImmediate) break;
+            }
+        }
+        if (event.cancelBubble || !event.bubbles) break;
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        cur = (pid !== null && pid !== undefined) ? pid : null;
+    }
+    if (!event.cancelBubble) {
+        var dkey = String(_LUMEN_DOC_LISTENER_NID) + ':' + event.type;
+        var darr = _lumen_listeners[dkey];
+        if (darr) {
+            var dcopy = darr.slice();
+            for (var i = 0; i < dcopy.length; i++) {
+                if (event.cancelBubble) break;
+                try { dcopy[i].call(document, event); } catch(e) {}
+                if (event._stopImmediate) break;
+            }
+        }
+    }
+    return !event.defaultPrevented;
+}
+
+// Called from shell with actual viewport coordinates and modifier state.
+// Creates a trusted MouseEvent and dispatches it through the DOM.
+// mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
+function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, buttons, mod) {
+    var ev = new MouseEvent(type, {
+        bubbles: true, cancelable: true, isTrusted: true,
+        clientX: clientX, clientY: clientY,
+        screenX: clientX, screenY: clientY,
+        pageX:   clientX, pageY:   clientY,
+        button: button, buttons: buttons,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8)
+    });
+    return _lumen_dispatch_rich(start_nid, ev);
+}
+
+// Called from shell for keydown / keyup / keypress events.
+// mod: same bit-mask as _lumen_dispatch_mouse_event
+function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
+    var ev = new KeyboardEvent(type, {
+        bubbles: true, cancelable: true, isTrusted: true,
+        key: key, code: code, keyCode: keyCode, charCode: keyCode,
+        which: keyCode, location: location,
+        repeat: !!repeat, isComposing: !!isComposing,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8)
+    });
+    return _lumen_dispatch_rich(start_nid, ev);
 }
 
 // ── DOMTokenList (classList) ──────────────────────────────────────────────────
@@ -3720,6 +4025,9 @@ var window = {
     localStorage: localStorage,
     sessionStorage: sessionStorage,
     _lumen_dispatch_composition: _lumen_dispatch_composition,
+    _lumen_dispatch_mouse_event: _lumen_dispatch_mouse_event,
+    _lumen_dispatch_key_event:   _lumen_dispatch_key_event,
+    _lumen_dispatch_rich:        _lumen_dispatch_rich,
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
     addEventListener: function(type, fn) {
@@ -4325,6 +4633,25 @@ window.performance           = performance;
 window.queueMicrotask        = queueMicrotask;
 window.Event                 = Event;
 window.CustomEvent           = CustomEvent;
+window.UIEvent               = UIEvent;
+window.MouseEvent            = MouseEvent;
+window.KeyboardEvent         = KeyboardEvent;
+window.InputEvent            = InputEvent;
+window.FocusEvent            = FocusEvent;
+window.WheelEvent            = WheelEvent;
+window.PointerEvent          = PointerEvent;
+window.AnimationEvent        = AnimationEvent;
+window.TransitionEvent       = TransitionEvent;
+window.StorageEvent          = StorageEvent;
+window.PopStateEvent         = PopStateEvent;
+window.HashChangeEvent       = HashChangeEvent;
+window.ErrorEvent            = ErrorEvent;
+window.SubmitEvent           = SubmitEvent;
+window.PageTransitionEvent   = PageTransitionEvent;
+window.BeforeUnloadEvent     = BeforeUnloadEvent;
+window.DragEvent             = DragEvent;
+window.ClipboardEvent        = ClipboardEvent;
+window.CompositionEvent      = CompositionEvent;
 window.scheduler             = scheduler;
 window.setTimeout            = setTimeout;
 window.clearTimeout          = clearTimeout;
@@ -10096,6 +10423,292 @@ mod tests {
              var u = URL.createObjectURL(b); \
              URL.revokeObjectURL(u); \
              u.startsWith('blob:lumen/')"  // revoke just removes from store, url string stays
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ─── Event class hierarchy tests ──────────────────────────────────────────
+
+    #[test]
+    fn uievent_instanceof_event() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new UIEvent('focus'); \
+             (e instanceof UIEvent) && (e instanceof Event)"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mouseevent_instanceof_chain() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new MouseEvent('click', {clientX: 10, clientY: 20, button: 0, buttons: 1}); \
+             (e instanceof MouseEvent) && (e instanceof UIEvent) && (e instanceof Event) && \
+             e.clientX === 10 && e.clientY === 20 && e.button === 0 && e.buttons === 1"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mouseevent_modifier_keys() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new MouseEvent('click', {ctrlKey: true, shiftKey: false, altKey: true}); \
+             e.ctrlKey && !e.shiftKey && e.altKey && \
+             e.getModifierState('Control') && e.getModifierState('Alt') && \
+             !e.getModifierState('Shift')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mouseevent_page_coords_default_to_client() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new MouseEvent('mousemove', {clientX: 42, clientY: 7}); \
+             e.pageX === 42 && e.pageY === 7"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn keyboardevent_instanceof_chain() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13}); \
+             (e instanceof KeyboardEvent) && (e instanceof UIEvent) && (e instanceof Event) && \
+             e.key === 'Enter' && e.code === 'Enter' && e.keyCode === 13"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn keyboardevent_location_constants() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "KeyboardEvent.DOM_KEY_LOCATION_STANDARD === 0 && \
+             KeyboardEvent.DOM_KEY_LOCATION_LEFT     === 1 && \
+             KeyboardEvent.DOM_KEY_LOCATION_RIGHT    === 2 && \
+             KeyboardEvent.DOM_KEY_LOCATION_NUMPAD   === 3"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn keyboardevent_repeat_and_composing() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new KeyboardEvent('keydown', {repeat: true, isComposing: false}); \
+             e.repeat === true && e.isComposing === false"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn inputevent_instanceof_chain() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new InputEvent('input', {data: 'a', inputType: 'insertText'}); \
+             (e instanceof InputEvent) && (e instanceof UIEvent) && \
+             e.data === 'a' && e.inputType === 'insertText' && \
+             Array.isArray(e.getTargetRanges())"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn focusevent_instanceof_chain() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new FocusEvent('focus', {relatedTarget: null}); \
+             (e instanceof FocusEvent) && (e instanceof UIEvent) && \
+             e.relatedTarget === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wheelevent_instanceof_chain_and_deltas() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new WheelEvent('wheel', {deltaX: 0, deltaY: 100, deltaMode: 0}); \
+             (e instanceof WheelEvent) && (e instanceof MouseEvent) && \
+             e.deltaY === 100 && e.deltaMode === WheelEvent.DOM_DELTA_PIXEL"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wheelevent_delta_constants() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "WheelEvent.DOM_DELTA_PIXEL === 0 && \
+             WheelEvent.DOM_DELTA_LINE  === 1 && \
+             WheelEvent.DOM_DELTA_PAGE  === 2"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointerevent_instanceof_chain_and_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new PointerEvent('pointerdown', {pointerId: 1, pointerType: 'mouse', isPrimary: true}); \
+             (e instanceof PointerEvent) && (e instanceof MouseEvent) && \
+             e.pointerId === 1 && e.pointerType === 'mouse' && e.isPrimary === true && \
+             Array.isArray(e.getCoalescedEvents()) && Array.isArray(e.getPredictedEvents())"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn animationevent_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new AnimationEvent('animationend', {animationName: 'fade', elapsedTime: 0.5}); \
+             (e instanceof AnimationEvent) && (e instanceof Event) && \
+             e.animationName === 'fade' && e.elapsedTime === 0.5 && e.pseudoElement === ''"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn transitionevent_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new TransitionEvent('transitionend', {propertyName: 'opacity', elapsedTime: 0.3}); \
+             (e instanceof TransitionEvent) && e.propertyName === 'opacity' && e.elapsedTime === 0.3"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn storageevent_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new StorageEvent('storage', {key: 'x', oldValue: 'a', newValue: 'b', url: 'http://ex.com/'}); \
+             e.key === 'x' && e.oldValue === 'a' && e.newValue === 'b' && e.url === 'http://ex.com/'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn popstateevent_state() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new PopStateEvent('popstate', {state: {page: 2}}); \
+             e.state && e.state.page === 2"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn hashchangeevent_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new HashChangeEvent('hashchange', {oldURL: 'http://ex.com/#a', newURL: 'http://ex.com/#b'}); \
+             e.oldURL === 'http://ex.com/#a' && e.newURL === 'http://ex.com/#b'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn errorevent_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new ErrorEvent('error', {message: 'oops', filename: 'app.js', lineno: 10, colno: 5}); \
+             e.message === 'oops' && e.filename === 'app.js' && e.lineno === 10 && e.colno === 5"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn submitevent_submitter() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var btn = document.createElement('button'); \
+             var e = new SubmitEvent('submit', {bubbles: true, cancelable: true, submitter: btn}); \
+             e.submitter === btn"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compositionevent_data() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var e = new CompositionEvent('compositionupdate', {data: 'あ'}); \
+             (e instanceof CompositionEvent) && (e instanceof UIEvent) && e.data === 'あ'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_mouse_event_delivers_coordinates() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var received = null; \
+             var el = document.getElementById('main'); \
+             el.addEventListener('click', function(e) { received = e; }); \
+             _lumen_dispatch_mouse_event(el.__nid__, 'click', 42, 99, 0, 1, 0); \
+             received !== null && received instanceof MouseEvent && \
+             received.clientX === 42 && received.clientY === 99 && \
+             received.button === 0 && received.buttons === 1 && received.isTrusted === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_key_event_delivers_properties() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var received = null; \
+             var el = document.getElementById('main'); \
+             el.addEventListener('keydown', function(e) { received = e; }); \
+             _lumen_dispatch_key_event(el.__nid__, 'keydown', 'Enter', 'Enter', 13, 0, 0, false, false); \
+             received !== null && received instanceof KeyboardEvent && \
+             received.key === 'Enter' && received.code === 'Enter' && received.keyCode === 13 && \
+             received.isTrusted === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_mouse_event_modifier_flags() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var received = null; \
+             var el = document.getElementById('main'); \
+             el.addEventListener('click', function(e) { received = e; }); \
+             _lumen_dispatch_mouse_event(el.__nid__, 'click', 0, 0, 0, 1, 3); \
+             received !== null && received.ctrlKey === true && received.shiftKey === true && \
+             received.altKey === false && received.metaKey === false"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn window_exports_all_event_classes() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "typeof window.UIEvent === 'function' && \
+             typeof window.MouseEvent === 'function' && \
+             typeof window.KeyboardEvent === 'function' && \
+             typeof window.InputEvent === 'function' && \
+             typeof window.FocusEvent === 'function' && \
+             typeof window.WheelEvent === 'function' && \
+             typeof window.PointerEvent === 'function' && \
+             typeof window.AnimationEvent === 'function' && \
+             typeof window.TransitionEvent === 'function' && \
+             typeof window.StorageEvent === 'function' && \
+             typeof window.PopStateEvent === 'function' && \
+             typeof window.HashChangeEvent === 'function' && \
+             typeof window.ErrorEvent === 'function' && \
+             typeof window.SubmitEvent === 'function' && \
+             typeof window.DragEvent === 'function' && \
+             typeof window.ClipboardEvent === 'function' && \
+             typeof window.CompositionEvent === 'function'"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
