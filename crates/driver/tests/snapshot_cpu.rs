@@ -81,7 +81,14 @@ use std::path::{Path, PathBuf};
 /// backgrounds), `32-list-markers` (disc/circle/square/decimal ::marker geometry),
 /// `48-line-clamp` (-webkit-line-clamp: transparent text, coloured box geometry
 /// captures clamp heights), `27-direction-rtl` (LTR/RTL bar alignment via
-/// `DrawLinearGradient`).
+/// `DrawLinearGradient`). Layout correctness pages added in б-18: `34-forms`
+/// (form controls: input/checkbox/radio/button/textarea — rendered as FillRect +
+/// DrawBorder quads), `45-multiple-backgrounds` (multiple CSS gradient layers per
+/// element — DrawLinearGradient/DrawRadialGradient stacked, including positioned
+/// and sized layers), `51-scrollbar-rendering` (overflow:scroll containers —
+/// PushScrollLayer geometry, inner content clipped via PushScrollLayer bounds;
+/// DrawScrollbar is not emitted in the headless pipeline so only box geometry is
+/// captured).
 const PAGES: &[&str] = &[
     "00-calibration",
     "01-sanity",
@@ -135,6 +142,10 @@ const PAGES: &[&str] = &[
     "32-list-markers",
     "48-line-clamp",
     "27-direction-rtl",
+    // б-18: form controls, multiple backgrounds, scrollbar layout
+    "34-forms",
+    "45-multiple-backgrounds",
+    "51-scrollbar-rendering",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
