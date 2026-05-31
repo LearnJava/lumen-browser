@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет активных задач)_
+`--print-to-pdf` CLI flag  branch: p2-print-to-pdf
+Next step: export build_print_display_list+split_at_page_breaks from lumen-paint, add pdf-writer dep, implement CliMode::PrintToPdf in shell/src/main.rs
 
 ---
 
