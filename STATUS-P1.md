@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+MessageChannel/MessagePort + navigator.clipboard + isSecureContext + navigator.permissions  branch: p1-message-channel-clipboard
+Next step: add JS shim in crates/js/src/dom.rs — MessageChannel/MessagePort classes
 
 ---
 
