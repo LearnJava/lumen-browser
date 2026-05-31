@@ -2153,6 +2153,109 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
     return sr;
 }
 
+// ── Form Constraint Validation API (HTML LS §4.10.21) ────────────────────────
+// Per-nid storage: persists across multiple _lumen_make_element calls for the
+// same node (elements are fresh objects each time; state lives in these maps).
+
+// nid → custom validity message set via setCustomValidity() ('' → no custom error)
+var _validity_msg = {};
+// nid → current input value (undefined → fall back to value attribute)
+var _input_values = {};
+
+// ValidityState — readonly snapshot of one form control's validity.
+function ValidityState(flags) {
+    this.valueMissing    = !!flags.valueMissing;
+    this.typeMismatch    = !!flags.typeMismatch;
+    this.patternMismatch = !!flags.patternMismatch;
+    this.tooLong         = !!flags.tooLong;
+    this.tooShort        = !!flags.tooShort;
+    this.rangeUnderflow  = !!flags.rangeUnderflow;
+    this.rangeOverflow   = !!flags.rangeOverflow;
+    this.stepMismatch    = !!flags.stepMismatch;
+    this.badInput        = !!flags.badInput;
+    this.customError     = !!flags.customError;
+    this.valid = !this.valueMissing   && !this.typeMismatch  && !this.patternMismatch
+              && !this.tooLong        && !this.tooShort
+              && !this.rangeUnderflow && !this.rangeOverflow && !this.stepMismatch
+              && !this.badInput       && !this.customError;
+}
+
+// Computes ValidityState for a form control element (HTML LS §4.10.21.1).
+function _compute_validity(el) {
+    var flags = {};
+    var type  = (el.type || 'text').toLowerCase();
+    var val   = (el.value != null) ? String(el.value) : '';
+    var enid  = el.__nid__;
+    var customMsg = (enid !== undefined && _validity_msg[enid]) ? _validity_msg[enid] : '';
+
+    // §4.10.21.1 #1: valueMissing — required + empty
+    if (el.hasAttribute && el.hasAttribute('required') && val.trim() === '') {
+        flags.valueMissing = true;
+    }
+
+    // §4.10.21.1 #3: typeMismatch — email/url/number format
+    if (!flags.valueMissing && val !== '') {
+        if (type === 'email') {
+            // Simplified email check: user@domain.tld
+            if (!/^[^\\s@,;]+@[^\\s@,;]+\\.[^\\s@,;]+$/.test(val)) flags.typeMismatch = true;
+        } else if (type === 'url') {
+            try { new URL(val); } catch(e) { flags.typeMismatch = true; }
+        } else if (type === 'number') {
+            if (isNaN(Number(val))) flags.typeMismatch = true;
+        }
+    }
+
+    // §4.10.21.1 #4: patternMismatch — pattern attribute
+    if (!flags.typeMismatch && val !== '' && el.hasAttribute && el.hasAttribute('pattern')) {
+        var pat = el.getAttribute('pattern');
+        if (pat) {
+            try {
+                if (!(new RegExp('^(?:' + pat + ')$')).test(val)) flags.patternMismatch = true;
+            } catch(e) {}
+        }
+    }
+
+    // §4.10.21.1 #6/#7: tooLong / tooShort
+    if (el.hasAttribute && el.hasAttribute('maxlength')) {
+        var maxL = parseInt(el.getAttribute('maxlength'), 10);
+        if (!isNaN(maxL) && val.length > maxL) flags.tooLong = true;
+    }
+    if (val !== '' && el.hasAttribute && el.hasAttribute('minlength')) {
+        var minL = parseInt(el.getAttribute('minlength'), 10);
+        if (!isNaN(minL) && val.length < minL) flags.tooShort = true;
+    }
+
+    // §4.10.21.1 #5: rangeUnderflow / rangeOverflow / stepMismatch (number + range)
+    if (type === 'number' || type === 'range') {
+        var num = Number(val);
+        if (!isNaN(num) && val !== '') {
+            if (el.hasAttribute && el.hasAttribute('min')) {
+                var mn = Number(el.getAttribute('min'));
+                if (!isNaN(mn) && num < mn) flags.rangeUnderflow = true;
+            }
+            if (el.hasAttribute && el.hasAttribute('max')) {
+                var mx = Number(el.getAttribute('max'));
+                if (!isNaN(mx) && num > mx) flags.rangeOverflow = true;
+            }
+            if (el.hasAttribute && el.hasAttribute('step')) {
+                var stepA = el.getAttribute('step');
+                if (stepA && stepA !== 'any') {
+                    var st = Number(stepA);
+                    var base = el.hasAttribute('min') ? Number(el.getAttribute('min')) : 0;
+                    if (!isNaN(st) && st > 0 && Math.abs((num - base) % st) > 1e-9) {
+                        flags.stepMismatch = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // §4.10.21.1 #10: customError
+    if (customMsg) flags.customError = true;
+
+    return new ValidityState(flags);
+}
+
 // ── Element factory ───────────────────────────────────────────────────────────
 
 function _lumen_make_element(nid) {
@@ -2320,6 +2423,86 @@ function _lumen_make_element(nid) {
                 }
                 parent = _lumen_u2n(_lumen_get_parent(parent));
             }
+        },
+        // ── HTMLInputElement / HTMLTextAreaElement / HTMLSelectElement properties ──
+        // Reflected HTML attributes (HTML LS §4.10.x).
+        get type()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'type')); return v !== null ? v.toLowerCase() : 'text'; },
+        get name()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'name')); return v !== null ? v : ''; },
+        set name(v) { _lumen_set_attr(nid, 'name', String(v)); },
+        // Current value — stored in _input_values map so it survives re-calls to _lumen_make_element.
+        get value() {
+            if (_input_values[nid] !== undefined) return _input_values[nid];
+            var av = _lumen_u2n(_lumen_get_attr(nid, 'value'));
+            return av !== null ? av : '';
+        },
+        set value(v) { _input_values[nid] = String(v); },
+        get checked() { return _lumen_get_attr(nid, 'checked') !== undefined; },
+        set checked(v) {
+            if (v) _lumen_set_attr(nid, 'checked', '');
+            else _lumen_remove_attr(nid, 'checked');
+        },
+        // ── Constraint Validation API (HTML LS §4.10.21) ─────────────────────────
+        get validity() { return _compute_validity(this); },
+        get validationMessage() {
+            var cm = _validity_msg[nid] || '';
+            if (cm) return cm;
+            var vs = _compute_validity(this);
+            if (vs.valueMissing)    return 'Please fill out this field.';
+            if (vs.typeMismatch)    return 'Please enter a valid ' + (this.type || 'value') + '.';
+            if (vs.patternMismatch) return 'Please match the requested format.';
+            if (vs.tooLong)         return 'Please shorten this text.';
+            if (vs.tooShort)        return 'Please lengthen this text.';
+            if (vs.rangeUnderflow)  return 'Value must be >= ' + this.getAttribute('min') + '.';
+            if (vs.rangeOverflow)   return 'Value must be <= ' + this.getAttribute('max') + '.';
+            if (vs.stepMismatch)    return 'Please enter a valid value.';
+            return '';
+        },
+        // true when the element participates in constraint validation
+        get willValidate() {
+            var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') return false;
+            var t = (this.type || '').toLowerCase();
+            if (t === 'hidden' || t === 'button' || t === 'submit' || t === 'reset' || t === 'image') return false;
+            if (this.hasAttribute('disabled')) return false;
+            return true;
+        },
+        // Fires 'invalid' event and returns false if the element fails constraint validation.
+        checkValidity: function() {
+            if (!this.willValidate) return true;
+            var vs = this.validity;
+            if (!vs.valid) {
+                var ev = new Event('invalid', { bubbles: false, cancelable: true });
+                this.dispatchEvent(ev);
+                return false;
+            }
+            return true;
+        },
+        // Like checkValidity(); may show the browser's default validation UI (Phase 0: same as checkValidity).
+        reportValidity: function() { return this.checkValidity(); },
+        // Overrides validity with a custom message; empty string clears the override (HTML LS §4.10.21.2).
+        setCustomValidity: function(msg) {
+            var m = String(msg);
+            if (m) _validity_msg[nid] = m;
+            else delete _validity_msg[nid];
+        },
+        // HTMLFormElement.elements — live collection of associated form controls.
+        // Phase 0: selector engine handles only single-tag selectors, so query
+        // each tag separately and merge (avoids comma-selector limitation).
+        get elements() {
+            var self = this;
+            var tags = ['input', 'select', 'textarea', 'button'];
+            var out = [];
+            for (var _ti = 0; _ti < tags.length; _ti++) {
+                var found = self.querySelectorAll(tags[_ti]);
+                for (var _fi = 0; _fi < found.length; _fi++) out.push(found[_fi]);
+            }
+            return out;
+        },
+        // Reflects the novalidate content attribute (disables constraint validation on submit).
+        get noValidate() { return this.hasAttribute('novalidate'); },
+        set noValidate(v) {
+            if (v) this.setAttribute('novalidate', '');
+            else this.removeAttribute('novalidate');
         },
     };
     Object.defineProperty(_obj, 'shadowRoot', {
@@ -5169,6 +5352,32 @@ var scheduler = {
     },
 };
 
+// ── requestIdleCallback / cancelIdleCallback (HTML LS §8.6) ──────────────────
+// Stub: fires via setTimeout(~50ms) with a synthetic IdleDeadline that always
+// reports 50ms remaining — Lumen is single-process, so there is no real idle
+// detection. The timeout option is honoured as the scheduling delay.
+var _idle_cbs    = {};
+var _idle_seq    = 1;
+
+function requestIdleCallback(cb, opts) {
+    if (typeof cb !== 'function') throw new TypeError('requestIdleCallback: argument must be a function');
+    var delay = (opts && typeof opts.timeout === 'number' && opts.timeout > 0) ? Math.min(opts.timeout, 50) : 50;
+    var id = _idle_seq++;
+    _idle_cbs[id] = cb;
+    setTimeout(function() {
+        var fn = _idle_cbs[id];
+        if (!fn) return;
+        delete _idle_cbs[id];
+        var deadline = { timeRemaining: function() { return 50; }, didTimeout: false };
+        try { fn(deadline); } catch(e) {}
+    }, delay);
+    return id;
+}
+
+function cancelIdleCallback(id) {
+    delete _idle_cbs[id | 0];
+}
+
 // Expose new globals on window object (defined after window literal because
 // `var performance` is not hoisted with its value, only its name).
 window.URL                   = URL;
@@ -5196,7 +5405,10 @@ window.BeforeUnloadEvent     = BeforeUnloadEvent;
 window.DragEvent             = DragEvent;
 window.ClipboardEvent        = ClipboardEvent;
 window.CompositionEvent      = CompositionEvent;
-window.scheduler             = scheduler;
+window.scheduler                = scheduler;
+window.requestIdleCallback      = requestIdleCallback;
+window.cancelIdleCallback       = cancelIdleCallback;
+window.ValidityState            = ValidityState;
 window.setTimeout            = setTimeout;
 window.clearTimeout          = clearTimeout;
 window.setInterval           = setInterval;
@@ -12088,5 +12300,292 @@ mod tests {
         // cancel was prevented, so dialog stays open
         assert!(bool_eval(&rt,
             "document.getElementById('dlg').hasAttribute('open')"));
+    }
+
+    // ── Form Constraint Validation API tests ──────────────────────────────────
+
+    /// Helper: build a document with a <form> containing one <input>.
+    fn make_form_doc() -> Arc<Mutex<Document>> {
+        let mut doc = Document::new();
+        let html  = doc.create_element(QualName::html("html"));
+        let body  = doc.create_element(QualName::html("body"));
+        let form  = doc.create_element(QualName::html("form"));
+        let input = doc.create_element(QualName::html("input"));
+        fn set_attr(doc: &mut Document, nid: lumen_dom::NodeId, name: &str, val: &str) {
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(nid).data {
+                attrs.push(lumen_dom::Attribute { name: QualName::html(name), value: val.into() });
+            }
+        }
+        set_attr(&mut doc, form,  "id",   "f");
+        set_attr(&mut doc, input, "id",   "inp");
+        set_attr(&mut doc, input, "type", "text");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, form);
+        doc.append_child(form, input);
+        Arc::new(Mutex::new(doc))
+    }
+
+    #[test]
+    fn validity_state_class_exists() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "typeof ValidityState === 'function'"));
+    }
+
+    #[test]
+    fn input_has_validity_property() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "var inp = document.getElementById('inp'); inp.validity instanceof ValidityState"));
+    }
+
+    #[test]
+    fn validity_valid_by_default() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.valid === true"));
+    }
+
+    #[test]
+    fn validity_value_missing_required_empty() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("document.getElementById('inp').setAttribute('required', '')").unwrap();
+        assert!(bool_eval(&rt,
+            "var v = document.getElementById('inp').validity; \
+             v.valueMissing === true && v.valid === false"));
+    }
+
+    #[test]
+    fn validity_value_missing_clears_when_filled() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('required', ''); inp.value = 'hello'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.valueMissing === false"));
+    }
+
+    #[test]
+    fn validity_type_mismatch_email() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('type', 'email'); inp.value = 'notanemail'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.typeMismatch === true"));
+    }
+
+    #[test]
+    fn validity_type_mismatch_email_valid() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('type', 'email'); inp.value = 'user@example.com'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.typeMismatch === false && \
+             document.getElementById('inp').validity.valid === true"));
+    }
+
+    #[test]
+    fn validity_type_mismatch_url() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('type', 'url'); inp.value = 'not-a-url'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.typeMismatch === true"));
+    }
+
+    #[test]
+    fn validity_pattern_mismatch() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('pattern', '[0-9]+'); inp.value = 'abc'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.patternMismatch === true"));
+    }
+
+    #[test]
+    fn validity_pattern_match_ok() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('pattern', '[0-9]+'); inp.value = '42'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.patternMismatch === false"));
+    }
+
+    #[test]
+    fn validity_too_long() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('maxlength', '3'); inp.value = 'hello'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.tooLong === true"));
+    }
+
+    #[test]
+    fn validity_too_short() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('minlength', '5'); inp.value = 'hi'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.tooShort === true"));
+    }
+
+    #[test]
+    fn validity_range_underflow() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('type', 'number'); inp.setAttribute('min', '10'); inp.value = '5'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.rangeUnderflow === true"));
+    }
+
+    #[test]
+    fn validity_range_overflow() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('type', 'number'); inp.setAttribute('max', '10'); inp.value = '20'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.rangeOverflow === true"));
+    }
+
+    #[test]
+    fn validity_step_mismatch() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setAttribute('type', 'number'); inp.setAttribute('step', '5'); inp.value = '7'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.stepMismatch === true"));
+    }
+
+    #[test]
+    fn set_custom_validity_sets_custom_error() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("document.getElementById('inp').setCustomValidity('bad input')").unwrap();
+        assert!(bool_eval(&rt,
+            "var v = document.getElementById('inp').validity; \
+             v.customError === true && v.valid === false"));
+    }
+
+    #[test]
+    fn set_custom_validity_empty_clears_error() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("var inp = document.getElementById('inp'); inp.setCustomValidity('err'); inp.setCustomValidity('')").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validity.customError === false"));
+    }
+
+    #[test]
+    fn will_validate_input_true() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').willValidate === true"));
+    }
+
+    #[test]
+    fn will_validate_hidden_false() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("document.getElementById('inp').setAttribute('type', 'hidden')").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').willValidate === false"));
+    }
+
+    #[test]
+    fn check_validity_valid_returns_true() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').checkValidity() === true"));
+    }
+
+    #[test]
+    fn check_validity_fires_invalid_event() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval(
+            "var inp = document.getElementById('inp'); \
+             inp.setAttribute('required', ''); \
+             var fired = false; \
+             inp.addEventListener('invalid', function() { fired = true; });"
+        ).unwrap();
+        rt.eval("document.getElementById('inp').checkValidity()").unwrap();
+        assert!(bool_eval(&rt, "fired === true"));
+    }
+
+    #[test]
+    fn report_validity_delegates_to_check_validity() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("document.getElementById('inp').setAttribute('required', '')").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').reportValidity() === false"));
+    }
+
+    #[test]
+    fn form_elements_collection() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "var form = document.getElementById('f'); \
+             form.elements.length >= 1"));
+    }
+
+    #[test]
+    fn form_no_validate_attr() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("document.getElementById('f').noValidate = true").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('f').hasAttribute('novalidate')"));
+    }
+
+    #[test]
+    fn validation_message_custom() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("document.getElementById('inp').setCustomValidity('Must be a number')").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validationMessage === 'Must be a number'"));
+    }
+
+    #[test]
+    fn validation_message_value_missing() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("document.getElementById('inp').setAttribute('required', '')").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').validationMessage.length > 0"));
+    }
+
+    #[test]
+    fn input_value_get_set() {
+        let rt = runtime_with_dom(make_form_doc());
+        rt.eval("document.getElementById('inp').value = 'hello world'").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').value === 'hello world'"));
+    }
+
+    #[test]
+    fn input_type_reflected() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "document.getElementById('inp').type === 'text'"));
+    }
+
+    // ── requestIdleCallback / cancelIdleCallback tests ─────────────────────────
+
+    #[test]
+    fn request_idle_callback_exists() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "typeof requestIdleCallback === 'function' && typeof window.requestIdleCallback === 'function'"));
+    }
+
+    #[test]
+    fn cancel_idle_callback_exists() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "typeof cancelIdleCallback === 'function'"));
+    }
+
+    #[test]
+    fn request_idle_callback_returns_numeric_id() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "typeof requestIdleCallback(function(){}) === 'number'"));
+    }
+
+    #[test]
+    fn cancel_idle_callback_does_not_throw() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("cancelIdleCallback(999)").unwrap();
+    }
+
+    #[test]
+    fn request_idle_callback_bad_arg_throws() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var threw = false; \
+             try { requestIdleCallback('notafn'); } catch(e) { threw = e instanceof TypeError; } \
+             threw"));
     }
 }
