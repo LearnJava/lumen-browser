@@ -1373,6 +1373,20 @@ fn install_primitives(
         }
     }
 
+    // ── Microtask drain ─────────────────────────────────────────────────────
+    // Drains the QuickJS pending-job queue (Promise microtasks) synchronously.
+    // Used in unit tests to flush .then() callbacks without an event loop.
+    // Re-entrant-safe: QuickJS JS_ExecutePendingJob is designed for this.
+    reg!("_lumen_drain_microtasks", |ctx: Ctx<'_>| {
+        let mut guard = 0i32;
+        while ctx.execute_pending_job() {
+            guard += 1;
+            if guard >= 100_000 {
+                break;
+            }
+        }
+    });
+
     // ── Web Crypto API ──────────────────────────────────────────────────────
     {
         // Returns `n` cryptographically-random bytes as a Vec<u8> (JS Array of
@@ -3176,6 +3190,368 @@ AbortController.prototype.abort = function(reason) {
     }
 };
 
+// ── WHATWG Streams (https://streams.spec.whatwg.org/) §3-5 ───────────────────
+// ReadableStream, WritableStream, TransformStream — synchronous-friendly model.
+// For Lumen's synchronous fetch, all chunks are enqueued at construction time.
+// Pull model: start() and pull() are called once; async pull callbacks are not
+// re-invoked (sufficient for response.body / Blob.stream() use cases in Phase 2).
+
+// ── ReadableStream §3 ────────────────────────────────────────────────────────
+function ReadableStreamDefaultController(stream) {
+    this._stream = stream;
+    this._queue = [];
+    this._closeRequested = false;
+    this.desiredSize = 1;
+}
+ReadableStreamDefaultController.prototype.enqueue = function(chunk) {
+    var stream = this._stream;
+    if (!stream || stream._rs_state !== 'readable') return;
+    if (stream._rs_reader && stream._rs_reader._readRequests.length > 0) {
+        var req = stream._rs_reader._readRequests.shift();
+        req({ value: chunk, done: false }, undefined);
+    } else {
+        this._queue.push(chunk);
+    }
+};
+ReadableStreamDefaultController.prototype.close = function() {
+    var stream = this._stream;
+    if (!stream || this._closeRequested || stream._rs_state !== 'readable') return;
+    this._closeRequested = true;
+    if (this._queue.length === 0) _rs_do_close(stream);
+};
+ReadableStreamDefaultController.prototype.error = function(e) {
+    var stream = this._stream;
+    if (!stream || stream._rs_state !== 'readable') return;
+    stream._rs_state = 'errored';
+    stream._rs_error = e;
+    if (stream._rs_reader) {
+        var reqs = stream._rs_reader._readRequests;
+        stream._rs_reader._readRequests = [];
+        for (var i = 0; i < reqs.length; i++) reqs[i](undefined, e);
+    }
+};
+
+function _rs_do_close(stream) {
+    stream._rs_state = 'closed';
+    if (stream._rs_reader) {
+        var reqs = stream._rs_reader._readRequests;
+        stream._rs_reader._readRequests = [];
+        for (var i = 0; i < reqs.length; i++) reqs[i]({ value: undefined, done: true }, undefined);
+        if (stream._rs_reader._closedResolve) stream._rs_reader._closedResolve();
+    }
+}
+
+function ReadableStream(source, strategy) {
+    source = source || {};
+    this._rs_state = 'readable';
+    this._rs_error = undefined;
+    this._rs_reader = null;
+    this._rs_cancel_fn = typeof source.cancel === 'function' ? source.cancel : null;
+    this._rs_ctrl = new ReadableStreamDefaultController(this);
+    if (typeof source.start === 'function') {
+        try { source.start(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
+    }
+    // Simplified pull: call once after start if queue empty and stream still readable.
+    if (typeof source.pull === 'function' && this._rs_state === 'readable'
+            && this._rs_ctrl._queue.length === 0 && !this._rs_ctrl._closeRequested) {
+        try { source.pull(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
+    }
+}
+Object.defineProperty(ReadableStream.prototype, 'locked', {
+    get: function() { return this._rs_reader !== null; }
+});
+ReadableStream.prototype.getReader = function() {
+    if (this._rs_reader !== null) throw new TypeError('ReadableStream is already locked');
+    var reader = new ReadableStreamDefaultReader(this);
+    this._rs_reader = reader;
+    return reader;
+};
+ReadableStream.prototype.cancel = function(reason) {
+    if (this._rs_reader) return Promise.reject(new TypeError('ReadableStream is locked'));
+    return this._rs_do_cancel(reason);
+};
+ReadableStream.prototype._rs_do_cancel = function(reason) {
+    if (this._rs_state === 'closed') return Promise.resolve();
+    if (this._rs_state === 'errored') return Promise.reject(this._rs_error);
+    _rs_do_close(this);
+    if (this._rs_cancel_fn) { try { this._rs_cancel_fn(reason); } catch(e) {} }
+    return Promise.resolve();
+};
+ReadableStream.prototype.tee = function() {
+    var chunks = this._rs_ctrl._queue.slice();
+    var alreadyClosed = this._rs_state !== 'readable' || this._rs_ctrl._closeRequested;
+    var self = this;
+    function makeClone(arr, closed) {
+        return new ReadableStream({
+            start: function(c) {
+                for (var i = 0; i < arr.length; i++) c.enqueue(arr[i]);
+                if (closed) c.close();
+            }
+        });
+    }
+    _rs_do_close(self);
+    return [makeClone(chunks, alreadyClosed), makeClone(chunks, alreadyClosed)];
+};
+ReadableStream.prototype.pipeTo = function(dest, options) {
+    var reader = this.getReader();
+    var writer = dest.getWriter();
+    function pump() {
+        return reader.read().then(function(result) {
+            if (result.done) {
+                reader.releaseLock();
+                return writer.close();
+            }
+            return writer.write(result.value).then(pump);
+        });
+    }
+    return pump().catch(function(e) { reader.cancel(e); writer.abort(e); return Promise.reject(e); });
+};
+ReadableStream.prototype.pipeThrough = function(transform, options) {
+    this.pipeTo(transform.writable, options);
+    return transform.readable;
+};
+ReadableStream.from = function(iterable) {
+    var arr = Array.isArray(iterable) ? iterable : (iterable instanceof Uint8Array ? [iterable] : []);
+    return new ReadableStream({
+        start: function(c) {
+            for (var i = 0; i < arr.length; i++) c.enqueue(arr[i]);
+            c.close();
+        }
+    });
+};
+
+// ── ReadableStreamDefaultReader §3.7 ─────────────────────────────────────────
+function ReadableStreamDefaultReader(stream) {
+    this._stream = stream;
+    this._readRequests = [];
+    var self = this;
+    this.closed = new Promise(function(res, rej) {
+        self._closedResolve = res;
+        self._closedReject = rej;
+    });
+    if (stream._rs_state === 'closed') this._closedResolve();
+    else if (stream._rs_state === 'errored') this._closedReject(stream._rs_error);
+}
+ReadableStreamDefaultReader.prototype.read = function() {
+    var stream = this._stream;
+    if (!stream) return Promise.reject(new TypeError('reader not attached to a stream'));
+    if (stream._rs_state === 'errored') return Promise.reject(stream._rs_error);
+    var ctrl = stream._rs_ctrl;
+    if (ctrl._queue.length > 0) {
+        var chunk = ctrl._queue.shift();
+        if (ctrl._closeRequested && ctrl._queue.length === 0) _rs_do_close(stream);
+        return Promise.resolve({ value: chunk, done: false });
+    }
+    if (stream._rs_state === 'closed') return Promise.resolve({ value: undefined, done: true });
+    var self = this;
+    return new Promise(function(resolve, reject) {
+        self._readRequests.push(function(result, err) {
+            if (err !== undefined) reject(err); else resolve(result);
+        });
+    });
+};
+ReadableStreamDefaultReader.prototype.cancel = function(reason) {
+    var stream = this._stream;
+    if (!stream) return Promise.reject(new TypeError('reader not attached'));
+    return stream._rs_do_cancel(reason);
+};
+ReadableStreamDefaultReader.prototype.releaseLock = function() {
+    if (!this._stream) return;
+    if (this._readRequests.length > 0) throw new TypeError('pending read requests');
+    this._stream._rs_reader = null;
+    this._stream = null;
+    if (this._closedReject) this._closedReject(new TypeError('reader released'));
+};
+
+// ── WritableStream §4 ────────────────────────────────────────────────────────
+function WritableStreamDefaultController(stream, sink) {
+    this._stream = stream;
+    this._sink = sink;
+}
+WritableStreamDefaultController.prototype.error = function(e) {
+    var stream = this._stream;
+    if (!stream || (stream._ws_state !== 'writable' && stream._ws_state !== 'closing')) return;
+    stream._ws_state = 'errored';
+    stream._ws_error = e;
+};
+
+function WritableStream(sink, strategy) {
+    sink = sink || {};
+    this._ws_state = 'writable';
+    this._ws_error = undefined;
+    this._ws_writer = null;
+    this._ws_ctrl = new WritableStreamDefaultController(this, sink);
+    if (typeof sink.start === 'function') {
+        try { sink.start(this._ws_ctrl); } catch(e) { this._ws_ctrl.error(e); }
+    }
+}
+Object.defineProperty(WritableStream.prototype, 'locked', {
+    get: function() { return this._ws_writer !== null; }
+});
+WritableStream.prototype.getWriter = function() {
+    if (this._ws_writer !== null) throw new TypeError('WritableStream is already locked');
+    var writer = new WritableStreamDefaultWriter(this);
+    this._ws_writer = writer;
+    return writer;
+};
+WritableStream.prototype.abort = function(reason) {
+    if (this._ws_writer) return Promise.reject(new TypeError('WritableStream is locked'));
+    this._ws_state = 'errored'; this._ws_error = reason;
+    return Promise.resolve();
+};
+WritableStream.prototype.close = function() {
+    if (this._ws_writer) return Promise.reject(new TypeError('WritableStream is locked'));
+    return this._ws_do_close();
+};
+WritableStream.prototype._ws_do_close = function() {
+    var stream = this;
+    if (stream._ws_state !== 'writable') return Promise.resolve();
+    stream._ws_state = 'closing';
+    var sink = stream._ws_ctrl._sink;
+    var p = Promise.resolve();
+    if (typeof sink.close === 'function') {
+        try { p = Promise.resolve(sink.close(stream._ws_ctrl)); } catch(e) { p = Promise.reject(e); }
+    }
+    return p.then(function() { stream._ws_state = 'closed'; });
+};
+
+// ── WritableStreamDefaultWriter §4.6 ─────────────────────────────────────────
+function WritableStreamDefaultWriter(stream) {
+    this._stream = stream;
+    var self = this;
+    this.ready = Promise.resolve();
+    this.closed = new Promise(function(res, rej) {
+        self._closedResolve = res;
+        self._closedReject = rej;
+    });
+}
+Object.defineProperty(WritableStreamDefaultWriter.prototype, 'desiredSize', {
+    get: function() {
+        var s = this._stream;
+        if (!s || s._ws_state === 'errored') return null;
+        if (s._ws_state === 'closed' || s._ws_state === 'closing') return 0;
+        return 1;
+    }
+});
+WritableStreamDefaultWriter.prototype.write = function(chunk) {
+    var stream = this._stream;
+    if (!stream || stream._ws_state !== 'writable') return Promise.reject(new TypeError('stream not writable'));
+    var sink = stream._ws_ctrl._sink;
+    if (typeof sink.write === 'function') {
+        try { return Promise.resolve(sink.write(chunk, stream._ws_ctrl)); } catch(e) { return Promise.reject(e); }
+    }
+    return Promise.resolve();
+};
+WritableStreamDefaultWriter.prototype.close = function() {
+    var stream = this._stream;
+    if (!stream) return Promise.reject(new TypeError('writer not attached'));
+    var p = stream._ws_do_close();
+    this._stream = null;
+    stream._ws_writer = null;
+    var self = this;
+    return p.then(function() { if (self._closedResolve) self._closedResolve(); });
+};
+WritableStreamDefaultWriter.prototype.abort = function(reason) {
+    var stream = this._stream;
+    if (!stream) return Promise.resolve();
+    this._stream = null;
+    stream._ws_writer = null;
+    return stream.abort(reason);
+};
+WritableStreamDefaultWriter.prototype.releaseLock = function() {
+    if (!this._stream) return;
+    this._stream._ws_writer = null;
+    this._stream = null;
+};
+
+// ── TransformStream §5 ───────────────────────────────────────────────────────
+function TransformStreamDefaultController(readableCtrl) {
+    this._readableCtrl = readableCtrl;
+}
+TransformStreamDefaultController.prototype.enqueue = function(chunk) {
+    this._readableCtrl.enqueue(chunk);
+};
+TransformStreamDefaultController.prototype.terminate = function() {
+    this._readableCtrl.close();
+};
+TransformStreamDefaultController.prototype.error = function(e) {
+    this._readableCtrl.error(e);
+};
+
+function TransformStream(transformer, writableStrategy, readableStrategy) {
+    transformer = transformer || {};
+    var tc;
+    var self = this;
+    this.readable = new ReadableStream({
+        start: function(ctrl) {
+            tc = new TransformStreamDefaultController(ctrl);
+            if (typeof transformer.start === 'function') {
+                try { transformer.start(tc); } catch(e) { ctrl.error(e); }
+            }
+        }
+    });
+    this.writable = new WritableStream({
+        write: function(chunk) {
+            if (typeof transformer.transform === 'function') {
+                try { return Promise.resolve(transformer.transform(chunk, tc)); } catch(e) { return Promise.reject(e); }
+            }
+            tc.enqueue(chunk);
+            return Promise.resolve();
+        },
+        close: function() {
+            if (typeof transformer.flush === 'function') {
+                try { return Promise.resolve(transformer.flush(tc)); } catch(e) { return Promise.reject(e); }
+            }
+            tc.terminate();
+            return Promise.resolve();
+        }
+    });
+}
+
+// ── TextDecoderStream / TextEncoderStream (Encoding Standard §5.1) ───────────
+function TextDecoderStream(label, options) {
+    var dec = new TextDecoder(label, options);
+    TransformStream.call(this, {
+        transform: function(chunk, c) {
+            var str = dec.decode(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk), { stream: true });
+            if (str.length > 0) c.enqueue(str);
+        },
+        flush: function(c) {
+            var str = dec.decode();
+            if (str.length > 0) c.enqueue(str);
+        }
+    });
+    this.encoding = dec.encoding;
+    this.fatal = dec.fatal;
+    this.ignoreBOM = dec.ignoreBOM;
+}
+TextDecoderStream.prototype = Object.create(TransformStream.prototype);
+TextDecoderStream.prototype.constructor = TextDecoderStream;
+
+function TextEncoderStream() {
+    var enc = new TextEncoder();
+    TransformStream.call(this, {
+        transform: function(chunk, c) {
+            c.enqueue(enc.encode(String(chunk)));
+        }
+    });
+    this.encoding = 'utf-8';
+}
+TextEncoderStream.prototype = Object.create(TransformStream.prototype);
+TextEncoderStream.prototype.constructor = TextEncoderStream;
+
+// ── ByteLengthQueuingStrategy / CountQueuingStrategy §6 ──────────────────────
+function ByteLengthQueuingStrategy(init) {
+    this.highWaterMark = (init && typeof init.highWaterMark === 'number') ? init.highWaterMark : 1;
+}
+ByteLengthQueuingStrategy.prototype.size = function(chunk) {
+    return (chunk && chunk.byteLength) ? chunk.byteLength : 0;
+};
+function CountQueuingStrategy(init) {
+    this.highWaterMark = (init && typeof init.highWaterMark === 'number') ? init.highWaterMark : 1;
+}
+CountQueuingStrategy.prototype.size = function() { return 1; };
+
 // Headers (Fetch Standard §2.2)
 function Headers(init) {
     this._map = [];
@@ -3225,27 +3601,43 @@ function Response(body, init) {
     this.redirected = false;
     this.type = 'default';
     this.url = '';
+    this.bodyUsed = false;
     this._body = body;
+    // Expose body as ReadableStream (Fetch Standard §2.2 + WHATWG Streams §3).
+    // For Lumen's sync fetch, the entire response is already buffered; the stream
+    // delivers it as a single Uint8Array chunk and immediately closes.
+    var bodyBytes = (body instanceof Uint8Array) ? body
+                  : (body == null ? new Uint8Array(0) : new TextEncoder().encode(String(body)));
+    this.body = new ReadableStream({
+        start: function(c) { if (bodyBytes.length > 0) c.enqueue(bodyBytes); c.close(); }
+    });
 }
+Response.prototype._consumeBody = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    this.bodyUsed = true;
+    return Promise.resolve(this._body);
+};
 Response.prototype.text = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    this.bodyUsed = true;
     var b = this._body;
-    if (b instanceof Uint8Array) {
-        var s = '';
-        for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
-        return Promise.resolve(s);
-    }
+    if (b instanceof Uint8Array) return Promise.resolve(new TextDecoder().decode(b));
     return Promise.resolve(b == null ? '' : String(b));
 };
 Response.prototype.json = function() {
     return this.text().then(function(t) { return JSON.parse(t); });
 };
 Response.prototype.arrayBuffer = function() {
+    if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    this.bodyUsed = true;
     var b = this._body;
-    if (b instanceof Uint8Array) return Promise.resolve(b.buffer);
+    if (b instanceof Uint8Array) return Promise.resolve(b.buffer.slice(0));
     return Promise.resolve(new Uint8Array(0).buffer);
 };
 Response.prototype.blob = function() {
-    return this.arrayBuffer().then(function(ab) { return ab; });
+    return this.arrayBuffer().then(function(ab) {
+        return new Blob([new Uint8Array(ab)]);
+    });
 };
 Response.prototype.clone = function() {
     var r = new Response(this._body, {
@@ -4019,6 +4411,15 @@ var window = {
     Headers: Headers,
     AbortController: AbortController,
     AbortSignal: AbortSignal,
+    ReadableStream: ReadableStream,
+    WritableStream: WritableStream,
+    TransformStream: TransformStream,
+    ReadableStreamDefaultReader: ReadableStreamDefaultReader,
+    WritableStreamDefaultWriter: WritableStreamDefaultWriter,
+    TextDecoderStream: TextDecoderStream,
+    TextEncoderStream: TextEncoderStream,
+    ByteLengthQueuingStrategy: ByteLengthQueuingStrategy,
+    CountQueuingStrategy: CountQueuingStrategy,
     FormData: FormData,
     TextEncoder: TextEncoder,
     TextDecoder: TextDecoder,
@@ -4379,7 +4780,10 @@ Blob.prototype.arrayBuffer = function() {
     return Promise.resolve(this._bytes.buffer.slice(0));
 };
 Blob.prototype.stream = function() {
-    throw new TypeError('Blob.stream() requires ReadableStream (Phase 3+)');
+    var bytes = this._bytes;
+    return new ReadableStream({
+        start: function(c) { c.enqueue(bytes); c.close(); }
+    });
 };
 
 // WHATWG File API §7 — File extends Blob
@@ -10709,6 +11113,362 @@ mod tests {
              typeof window.DragEvent === 'function' && \
              typeof window.ClipboardEvent === 'function' && \
              typeof window.CompositionEvent === 'function'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ─── WHATWG Streams API tests ─────────────────────────────────────────────
+
+    #[test]
+    fn readable_stream_constructor_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.ReadableStream === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn writable_stream_constructor_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.WritableStream === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn transform_stream_constructor_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.TransformStream === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_locked_initially_false() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var rs = new ReadableStream(); rs.locked === false"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_get_reader_locks_stream() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var rs = new ReadableStream({ start: function(c) { c.close(); } }); \
+             var reader = rs.getReader(); \
+             rs.locked === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_read_delivers_chunk_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var done = false; \
+             var rs = new ReadableStream({ \
+               start: function(c) { c.enqueue('hello'); c.close(); } \
+             }); \
+             var reader = rs.getReader(); \
+             reader.read().then(function(r) { done = (r.value === 'hello' && r.done === false); }); \
+             _lumen_drain_microtasks(); \
+             done"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_read_done_after_close() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var got = []; \
+             var rs = new ReadableStream({ \
+               start: function(c) { c.enqueue(1); c.enqueue(2); c.close(); } \
+             }); \
+             var reader = rs.getReader(); \
+             reader.read().then(function(r) { got.push(r.value); }); \
+             reader.read().then(function(r) { got.push(r.value); }); \
+             reader.read().then(function(r) { got.push(r.done ? 'done' : 'nodone'); }); \
+             _lumen_drain_microtasks(); \
+             got.length === 3 && got[0] === 1 && got[1] === 2 && got[2] === 'done'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_release_lock_unlocks() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var rs = new ReadableStream({ start: function(c) { c.close(); } }); \
+             var reader = rs.getReader(); \
+             reader.releaseLock(); \
+             rs.locked === false"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_tee_produces_two_streams() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var rs = new ReadableStream({ \
+               start: function(c) { c.enqueue(42); c.close(); } \
+             }); \
+             var pair = rs.tee(); \
+             pair.length === 2 && pair[0] instanceof ReadableStream && pair[1] instanceof ReadableStream"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_tee_both_clones_have_data() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var rs = new ReadableStream({ \
+               start: function(c) { c.enqueue(99); c.close(); } \
+             }); \
+             var pair = rs.tee(); \
+             var v1, v2; \
+             pair[0].getReader().read().then(function(r) { v1 = r.value; }); \
+             pair[1].getReader().read().then(function(r) { v2 = r.value; }); \
+             _lumen_drain_microtasks(); \
+             v1 === 99 && v2 === 99"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn writable_stream_get_writer_and_write() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var written = []; \
+             var ws = new WritableStream({ \
+               write: function(chunk) { written.push(chunk); } \
+             }); \
+             var writer = ws.getWriter(); \
+             writer.write('a'); writer.write('b'); \
+             written.length === 2 && written[0] === 'a' && written[1] === 'b'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn writable_stream_locked_when_writer_held() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var ws = new WritableStream(); \
+             var w = ws.getWriter(); \
+             ws.locked === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn writable_stream_close_resolves() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var closed = false; \
+             var ws = new WritableStream({ close: function() { closed = true; } }); \
+             var w = ws.getWriter(); \
+             w.close().then(function() {}); \
+             closed"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn transform_stream_has_readable_and_writable() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var ts = new TransformStream(); \
+             ts.readable instanceof ReadableStream && ts.writable instanceof WritableStream"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn transform_stream_passthrough() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var received = []; \
+             var ts = new TransformStream(); \
+             var writer = ts.writable.getWriter(); \
+             var reader = ts.readable.getReader(); \
+             writer.write('x'); \
+             reader.read().then(function(r) { received.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             received.length === 1 && received[0] === 'x'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn transform_stream_custom_transformer() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var out = []; \
+             var ts = new TransformStream({ \
+               transform: function(chunk, ctrl) { ctrl.enqueue(chunk * 2); } \
+             }); \
+             var writer = ts.writable.getWriter(); \
+             var reader = ts.readable.getReader(); \
+             writer.write(5); \
+             reader.read().then(function(r) { out.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             out.length === 1 && out[0] === 10"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pipe_to_writable_stream() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var collected = []; \
+             var rs = new ReadableStream({ \
+               start: function(c) { c.enqueue('a'); c.enqueue('b'); c.close(); } \
+             }); \
+             var ws = new WritableStream({ write: function(ch) { collected.push(ch); } }); \
+             var done = false; \
+             rs.pipeTo(ws).then(function() { done = true; }); \
+             _lumen_drain_microtasks(); \
+             done && collected.length === 2 && collected[0] === 'a' && collected[1] === 'b'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pipe_through_transform_stream() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var out = []; \
+             var rs = new ReadableStream({ \
+               start: function(c) { c.enqueue(3); c.close(); } \
+             }); \
+             var ts = new TransformStream({ \
+               transform: function(chunk, ctrl) { ctrl.enqueue(chunk + 10); } \
+             }); \
+             var dest = rs.pipeThrough(ts); \
+             dest.getReader().read().then(function(r) { out.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             out.length === 1 && out[0] === 13"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn blob_stream_returns_readable_stream() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "new Blob(['hello']).stream() instanceof ReadableStream"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn blob_stream_delivers_bytes() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var got = null; \
+             var blob = new Blob(['hi']); \
+             var reader = blob.stream().getReader(); \
+             reader.read().then(function(r) { got = r.value instanceof Uint8Array ? r.value.length : -1; }); \
+             _lumen_drain_microtasks(); \
+             got === 2"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_is_readable_stream() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "new Response('hello').body instanceof ReadableStream"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_used_starts_false() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "new Response('data').bodyUsed === false"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_used_after_text() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var resp = new Response('x'); \
+             resp.text().then(function() {}); \
+             resp.bodyUsed === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_decodes_utf8() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var out = []; \
+             var tds = new TextDecoderStream(); \
+             var writer = tds.writable.getWriter(); \
+             var reader = tds.readable.getReader(); \
+             writer.write(new Uint8Array([72, 101, 108, 108, 111])); \
+             reader.read().then(function(r) { out.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             out.length === 1 && out[0] === 'Hello'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_encoder_stream_encodes_string() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var out = []; \
+             var tes = new TextEncoderStream(); \
+             var writer = tes.writable.getWriter(); \
+             var reader = tes.readable.getReader(); \
+             writer.write('Hi'); \
+             reader.read().then(function(r) { out.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             out.length === 1 && out[0] instanceof Uint8Array && out[0][0] === 72"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn byte_length_queuing_strategy() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var s = new ByteLengthQueuingStrategy({ highWaterMark: 16 }); \
+             s.highWaterMark === 16 && s.size(new Uint8Array(4)) === 4"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn count_queuing_strategy() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var s = new CountQueuingStrategy({ highWaterMark: 10 }); \
+             s.highWaterMark === 10 && s.size('anything') === 1"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn readable_stream_from_array() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var done = false; \
+             var rs = ReadableStream.from([10, 20, 30]); \
+             var reader = rs.getReader(); \
+             reader.read().then(function(r) { done = r.value === 10 && !r.done; }); \
+             _lumen_drain_microtasks(); \
+             done"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
