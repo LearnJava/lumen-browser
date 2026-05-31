@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(никто ничего не зарезервировал)_
+8A.6(б-16) расширение PAGES: добавить страницы 20/23/49/50 в snapshot_cpu.rs  branch: p3-8a6-cpu-extend-pages
+Next step: добавить страницы в PAGES, сгенерировать PNG-эталоны  crates/driver/tests/snapshot_cpu.rs:72
 
 ## Next
 
