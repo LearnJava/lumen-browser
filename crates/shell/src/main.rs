@@ -28,6 +28,7 @@ mod input;
 mod links;
 mod momentum_anim;
 mod runtime;
+mod scroll;
 mod scroll_anim;
 mod scrollbar;
 mod tab_lifecycle;
@@ -275,6 +276,7 @@ fn run_window_mode(
         hyp_provider: KnuthLiangHyphenation::new(),
         animated_gifs: HashMap::new(),
         gif_last_frame: HashMap::new(),
+        image_cache: lumen_image::ImageDecodeCache::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -2571,6 +2573,14 @@ struct Lumen {
     /// re-uploads when `frame_index_at(elapsed_ms)` returns the same frame as the
     /// previous tick. Cleared together with `animated_gifs` on navigation.
     gif_last_frame: HashMap<String, usize>,
+    /// CPU-side decoded image cache (ADR-008 §10E.4 scroll-discard).
+    ///
+    /// Stores one `ImageHandle` per image URL so far-away images can be evicted
+    /// from RAM on scroll without discarding the GPU texture in the renderer.
+    /// Cleared and repopulated on every page load; entries are dropped by
+    /// `try_discard_offscreen_images` once an image leaves the
+    /// `gate_image_requests` zone (viewport ± 2 screens).
+    image_cache: lumen_image::ImageDecodeCache,
 }
 
 impl Lumen {
@@ -2674,6 +2684,7 @@ impl Lumen {
                             if let Err(e) = r.register_image(url.clone(), &first) {
                                 eprintln!("Lazy GIF: не зарегистрирована {url}: {e}");
                             }
+                            self.image_cache.insert(lumen_image::ImageKey::new(&url), first);
                         } else {
                             self.pending_images.push((url.clone(), first));
                         }
@@ -2694,6 +2705,7 @@ impl Lumen {
                                 if let Err(e) = r.register_image(url.clone(), &img) {
                                     eprintln!("Lazy: не зарегистрирована {url}: {e}");
                                 }
+                                self.image_cache.insert(lumen_image::ImageKey::new(&url), img);
                             } else {
                                 self.pending_images.push((url, img));
                             }
@@ -2725,6 +2737,7 @@ impl Lumen {
                 if let Err(e) = r.register_image(url.clone(), &image) {
                     eprintln!("Lazy: не зарегистрирована {url}: {e}");
                 }
+                self.image_cache.insert(lumen_image::ImageKey::new(&url), image);
             } else {
                 self.pending_images.push((url, image));
             }
@@ -2849,6 +2862,8 @@ impl Lumen {
                 self.scroll_anim = None;
                 self.momentum_anim = None;
                 self.touchpad_vel = (0.0, 0.0);
+                // Reset CPU image cache for the reloaded page (10E.4 scroll-discard).
+                self.image_cache.clear();
                 if let Some(r) = self.renderer.as_mut() {
                     // Старая GPU-cache картинок относится к предыдущей странице
                     // (даже если src совпадает, content мог измениться). Чистим
@@ -2858,6 +2873,7 @@ impl Lumen {
                         if let Err(err) = r.register_image(src.clone(), image) {
                             eprintln!("Картинка {src} не зарегистрирована: {err}");
                         }
+                        self.image_cache.insert(lumen_image::ImageKey::new(src), image.clone());
                     }
                 } else {
                     // Renderer ещё не создан — обычно невозможно (reload идёт
@@ -3072,6 +3088,8 @@ impl Lumen {
             self.animated_gifs.insert(url, gif);
         }
 
+        // Reset CPU image cache for the new page (10E.4 scroll-discard).
+        self.image_cache.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.set_font_provider(Some(page.font_registry.clone()));
             r.clear_images();
@@ -3079,6 +3097,7 @@ impl Lumen {
                 if let Err(err) = r.register_image(src.clone(), image) {
                     eprintln!("Картинка {src} не зарегистрирована: {err}");
                 }
+                self.image_cache.insert(lumen_image::ImageKey::new(src), image.clone());
             }
         } else {
             self.pending_images = page.images;
@@ -3136,6 +3155,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             if let Err(err) = renderer.register_image(src.clone(), &image) {
                 eprintln!("Картинка {src} не зарегистрирована: {err}");
             }
+            self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
         }
 
         self.window = Some(window);
@@ -3665,6 +3685,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.advance_momentum(timestamp_ms) {
                     self.request_redraw();
                 }
+                // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
+                self.try_discard_offscreen_images();
 
                 // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
                 // Both schedulers are ticked once per frame and merged into a single
@@ -4564,6 +4586,25 @@ impl Lumen {
         } else {
             true
         }
+    }
+
+    /// Drop CPU-decoded images that have scrolled outside the gate zone (ADR-008 §10E.4).
+    ///
+    /// Called once per rendered frame (in `RedrawRequested`) after scroll advancement.
+    /// No-op when the cache is empty or the layout tree or renderer is unavailable.
+    fn try_discard_offscreen_images(&mut self) {
+        let (Some(root), Some(renderer)) = (self.layout_box.as_ref(), self.renderer.as_ref()) else {
+            return;
+        };
+        let vp_size = renderer.viewport_size();
+        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        scroll::decode_gating::discard_offscreen_images(
+            &mut self.image_cache,
+            root,
+            viewport,
+            self.scroll_x,
+            self.scroll_y,
+        );
     }
 
     /// Пересчитать желаемый `CursorIcon` по текущей позиции курсора и
