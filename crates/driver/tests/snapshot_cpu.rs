@@ -69,6 +69,19 @@ use std::path::{Path, PathBuf};
 /// (text-free) GPU headless output. `55-text-rendering` exercises the `DrawText`
 /// primitive (bundled Inter glyphs); it is a snapshot-only page, not registered
 /// in `run.py`, because glyph anti-aliasing always diverges from Edge.
+/// Layout correctness pages added in б-17: `37-float-clear` (float:left/right +
+/// clear:both), `44-media-queries` (@media screen/print/min-width/orientation),
+/// `28-css-containment` (contain:size/paint/layout/strict), `29-container-queries`
+/// (@container min-width), `35-grid-named-areas` (CSS Grid named areas),
+/// `25-table-layout` (display:table/row/cell), `21-border-style` (dashed/dotted/
+/// double — cpu_raster renders all styles as solid quads, producing a stable
+/// geometry snapshot independent of per-style rendering), `33-multi-column`
+/// (column-count/column-rule), `31-clip-path` (inset/circle/ellipse clipped via
+/// `PushClipRect`), `19-object-fit` (grey image placeholders + repeating gradient
+/// backgrounds), `32-list-markers` (disc/circle/square/decimal ::marker geometry),
+/// `48-line-clamp` (-webkit-line-clamp: transparent text, coloured box geometry
+/// captures clamp heights), `27-direction-rtl` (LTR/RTL bar alignment via
+/// `DrawLinearGradient`).
 const PAGES: &[&str] = &[
     "00-calibration",
     "01-sanity",
@@ -108,6 +121,20 @@ const PAGES: &[&str] = &[
     "23-pseudo-elements",
     "49-background-blend-mode",
     "50-css-variables",
+    // Layout correctness pages (pure geometry, all primitives already in cpu_raster)
+    "37-float-clear",
+    "44-media-queries",
+    "28-css-containment",
+    "29-container-queries",
+    "35-grid-named-areas",
+    "25-table-layout",
+    "21-border-style",
+    "33-multi-column",
+    "31-clip-path",
+    "19-object-fit",
+    "32-list-markers",
+    "48-line-clamp",
+    "27-direction-rtl",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
