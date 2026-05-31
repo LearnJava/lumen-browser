@@ -395,7 +395,7 @@ TEST-21: FAIL 19.07%   border-style      ← BUG-027 + BUG-029 (dotted=square)
 **Выводы:**
 - outline работает (BUG-019 закрыт визуально, TEST-16 fails из-за BUG-027)
 - dashed / double рамки работают корректно
-- BUG-023 (opacity) — **регрессия**: было FIXED 2026-05-19 (коммит `356ba0d`), снова OPEN
+- BUG-023 (opacity) — была регрессия 2026-05-19; **FIXED 2026-05-26** (premultiplied alpha в composite shader)
 
 ---
 
