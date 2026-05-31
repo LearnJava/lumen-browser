@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет активных задач)_
+**GIF animation shell wiring** — branch: `p2-gif-animation-shell`
+Next step: add `animated_gifs`/`gif_last_frame` fields to `Lumen`, update `fetch_and_decode_images`, add tick in `RedrawRequested` — `shell/src/main.rs`
 
 ---
 

@@ -267,6 +267,8 @@ fn run_window_mode(
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
         next_history_id: 1,
         hyp_provider: KnuthLiangHyphenation::new(),
+        animated_gifs: HashMap::new(),
+        gif_last_frame: HashMap::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -922,6 +924,11 @@ struct LoadedPage {
     /// что попадает в `DisplayCommand::DrawImage.src`), чтобы render-side
     /// мог сделать lookup без отдельной нормализации URL.
     images: Vec<(String, lumen_image::Image)>,
+    /// Multi-frame GIF animations decoded at load time. Keyed by the same src URL
+    /// as `DrawImage.src`. Frame 0 of each entry is already in `images` so the
+    /// renderer has a valid texture on first paint; subsequent frames are uploaded
+    /// on each `RedrawRequested` tick via `Lumen::animated_gifs`.
+    animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
     /// `(node_id_u32, url)` pairs for `<img loading="lazy">` — registered with JS
     /// after page load via `_lumen_init_lazy_images` for proximity-based loading.
     #[allow(dead_code)] // read only inside #[cfg(feature = "quickjs")] blocks
@@ -942,6 +949,7 @@ impl LoadedPage {
             display_list: DisplayList::new(),
             title: None,
             images: Vec::new(),
+            animated_gifs: Vec::new(),
             lazy_pairs: Vec::new(),
             layout_box: lumen_layout::LayoutBox {
                 node: NodeId::from_index(0),
@@ -1215,8 +1223,10 @@ fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// intrinsic dimensions из декодированного изображения (HTML5 §10 mapped
 /// attributes). Author CSS затем перекроет при необходимости.
 ///
-/// Возвращает `(images, lazy_pairs)`:
-/// - `images` — декодированные картинки для немедленной регистрации в renderer-е;
+/// Возвращает `(images, animated_gifs, lazy_pairs)`:
+/// - `images` — декодированные картинки для немедленной регистрации в renderer-е
+///   (включает frame 0 каждого анимированного GIF);
+/// - `animated_gifs` — многокадровые GIF-анимации для тиканья в `RedrawRequested`;
 /// - `lazy_pairs` — `(node_id_u32, url)` для `<img loading="lazy">`, которые
 ///   не загружаются сейчас и будут зарегистрированы через `_lumen_init_lazy_images`.
 #[allow(clippy::type_complexity)]
@@ -1225,10 +1235,11 @@ fn fetch_and_decode_images(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     viewport: lumen_core::geom::Size,
-) -> (Vec<(String, lumen_image::Image)>, Vec<(u32, String)>) {
+) -> (Vec<(String, lumen_image::Image)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
     let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
+    let mut anim_gifs: Vec<(String, lumen_image::AnimatedGif)> = Vec::new();
     let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
     for req in requests {
         if req.is_lazy {
@@ -1243,6 +1254,45 @@ fn fetch_and_decode_images(
                 continue;
             }
         };
+
+        // Animated GIF detection: decode all frames; store for animation if >1 frame.
+        if lumen_image::is_gif(&bytes) {
+            match lumen_image::decode_gif_animated(&bytes) {
+                Ok(gif) if gif.frames.len() > 1 => {
+                    let first = gif.frames[0].image.clone();
+                    if !req.has_explicit_width && !req.has_explicit_height {
+                        apply_intrinsic_size(doc, req.node_id, first.width, first.height);
+                    }
+                    eprintln!(
+                        "Загружена GIF-анимация: {} ({}×{}, {} кадров)",
+                        req.url, gif.width, gif.height, gif.frames.len()
+                    );
+                    out.push((req.url.clone(), first));
+                    anim_gifs.push((req.url, gif));
+                    continue;
+                }
+                Ok(gif) => {
+                    // Single-frame GIF: treat as static image.
+                    if let Some(frame) = gif.frames.into_iter().next() {
+                        let img = frame.image;
+                        if !req.has_explicit_width && !req.has_explicit_height {
+                            apply_intrinsic_size(doc, req.node_id, img.width, img.height);
+                        }
+                        eprintln!(
+                            "Загружена картинка (GIF, 1 кадр): {} ({}×{})",
+                            req.url, img.width, img.height
+                        );
+                        out.push((req.url, img));
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("Не декодируется GIF {}: {e}", req.url);
+                    continue;
+                }
+            }
+        }
+
         let image = match lumen_image::decode(&bytes) {
             Ok(i) => i,
             Err(e) => {
@@ -1261,7 +1311,7 @@ fn fetch_and_decode_images(
         );
         out.push((req.url, image));
     }
-    (out, lazy_pairs)
+    (out, anim_gifs, lazy_pairs)
 }
 
 /// Encode `s` as a JS string literal (double-quoted, with escaping).
@@ -1339,6 +1389,8 @@ struct ParsedPage {
     rule_count: usize,
     /// Декодированные изображения, найденные при обходе DOM. См. [`LoadedPage::images`].
     images: Vec<(String, lumen_image::Image)>,
+    /// Multi-frame GIF animations found in the DOM. See [`LoadedPage::animated_gifs`].
+    animated_gifs: Vec<(String, lumen_image::AnimatedGif)>,
     /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements — skipped by
     /// the eager fetch pass; registered with JS `_lumen_init_lazy_images` after load.
     lazy_pairs: Vec<(u32, String)>,
@@ -1462,7 +1514,7 @@ fn parse_and_layout(
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
-    let (images, lazy_pairs) = {
+    let (images, animated_gifs, lazy_pairs) = {
         let mut d = doc_arc.lock().unwrap();
         fetch_and_decode_images(&mut d, base, sink, viewport)
     };
@@ -1522,6 +1574,7 @@ fn parse_and_layout(
         title,
         rule_count,
         images,
+        animated_gifs,
         lazy_pairs,
         preload_hints,
         html_source: source,
@@ -1799,6 +1852,7 @@ fn render_bytes(
             display_list,
             title: parsed.title,
             images: parsed.images,
+            animated_gifs: parsed.animated_gifs,
             lazy_pairs: parsed.lazy_pairs,
             layout_box,
             font_registry: parsed.font_registry,
@@ -2315,6 +2369,14 @@ struct Lumen {
     /// Knuth–Liang hyphenation provider — реализует CSS `hyphens: auto`.
     /// Lazy-loads per-locale dictionaries on first use; cached for subsequent layouts.
     hyp_provider: KnuthLiangHyphenation,
+    /// Multi-frame GIF animations keyed by the same src URL used in `DrawImage`.
+    /// Populated at image-load time; cleared on page navigation.
+    /// Single-frame GIFs are not stored here — handled as regular static images.
+    animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
+    /// Last rendered frame index per animated GIF URL. Avoids redundant GPU texture
+    /// re-uploads when `frame_index_at(elapsed_ms)` returns the same frame as the
+    /// previous tick. Cleared together with `animated_gifs` on navigation.
+    gif_last_frame: HashMap<String, usize>,
 }
 
 impl Lumen {
@@ -2399,6 +2461,58 @@ impl Lumen {
                     continue;
                 }
             };
+
+            // Animated GIF detection for lazy-loaded images.
+            if lumen_image::is_gif(&bytes) {
+                match lumen_image::decode_gif_animated(&bytes) {
+                    Ok(gif) if gif.frames.len() > 1 => {
+                        let first = gif.frames[0].image.clone();
+                        if let Some(src) = self.layout_source.as_ref() {
+                            let mut doc = src.document.lock().unwrap();
+                            let node_id = NodeId::from_index(nid as usize);
+                            apply_intrinsic_size(&mut doc, node_id, first.width, first.height);
+                        }
+                        eprintln!(
+                            "Lazy GIF-анимация: {} ({}×{}, {} кадров)",
+                            url, gif.width, gif.height, gif.frames.len()
+                        );
+                        if let Some(r) = self.renderer.as_mut() {
+                            if let Err(e) = r.register_image(url.clone(), &first) {
+                                eprintln!("Lazy GIF: не зарегистрирована {url}: {e}");
+                            }
+                        } else {
+                            self.pending_images.push((url.clone(), first));
+                        }
+                        self.gif_last_frame.remove(&url);
+                        self.animated_gifs.insert(url, gif);
+                        continue;
+                    }
+                    Ok(gif) => {
+                        if let Some(frame) = gif.frames.into_iter().next() {
+                            let img = frame.image;
+                            if let Some(src) = self.layout_source.as_ref() {
+                                let mut doc = src.document.lock().unwrap();
+                                let node_id = NodeId::from_index(nid as usize);
+                                apply_intrinsic_size(&mut doc, node_id, img.width, img.height);
+                            }
+                            eprintln!("Lazy загружена (GIF, 1 кадр): {url} ({}×{})", img.width, img.height);
+                            if let Some(r) = self.renderer.as_mut() {
+                                if let Err(e) = r.register_image(url.clone(), &img) {
+                                    eprintln!("Lazy: не зарегистрирована {url}: {e}");
+                                }
+                            } else {
+                                self.pending_images.push((url, img));
+                            }
+                        }
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("Lazy: не декодируется GIF {url}: {e}");
+                        continue;
+                    }
+                }
+            }
+
             let image = match lumen_image::decode(&bytes) {
                 Ok(i) => i,
                 Err(e) => {
@@ -2624,6 +2738,7 @@ impl Lumen {
             display_list: rendered.display_list,
             title: rendered.title,
             images: rendered.images,
+            animated_gifs: Vec::new(), // lumen-driver path has no animated GIF support yet
             lazy_pairs: Vec::new(), // Phase 4c: TODO integrate lazy loading
             layout_box: rendered.layout_box,
             font_registry: rendered.font_registry,
@@ -2755,6 +2870,14 @@ impl Lumen {
             let _ = self.history_fts.index(self.next_history_id, url, title, "");
             self.next_history_id += 1;
         }
+        // Clear GIF animation state from previous page.
+        self.animated_gifs.clear();
+        self.gif_last_frame.clear();
+        // Populate animated GIFs from new page; reset frame tracking.
+        for (url, gif) in page.animated_gifs {
+            self.animated_gifs.insert(url, gif);
+        }
+
         if let Some(r) = self.renderer.as_mut() {
             r.set_font_provider(Some(page.font_registry.clone()));
             r.clear_images();
@@ -3363,6 +3486,54 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.request_redraw();
                     }
                     self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
+                }
+
+                // Step 2.5: GIF animation — update GPU textures for frames that changed.
+                // Uses the same `epoch` as rAF timestamps so GIF timing is consistent
+                // with CSS animations and JS. Runs before rAF so JS can read correct img.
+                if !self.animated_gifs.is_empty() {
+                    let elapsed_ms = self.epoch.elapsed().as_millis() as u64;
+
+                    // Collect (url, frame_idx, frame_image) for frames that changed.
+                    let updates: Vec<(String, usize, lumen_image::Image)> = {
+                        let gifs = &self.animated_gifs;
+                        let last = &self.gif_last_frame;
+                        gifs.iter()
+                            .filter_map(|(url, gif)| {
+                                let idx = gif.frame_index_at(elapsed_ms);
+                                if last.get(url).copied().unwrap_or(usize::MAX) != idx {
+                                    Some((url.clone(), idx, gif.frames[idx].image.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    };
+
+                    for (url, idx, image) in updates {
+                        if let Some(r) = self.renderer.as_mut()
+                            && let Err(e) = r.register_image(url.clone(), &image)
+                        {
+                            eprintln!("GIF кадр {url}[{idx}]: не зарегистрирован: {e}");
+                        }
+                        self.gif_last_frame.insert(url, idx);
+                    }
+
+                    // Request next redraw if any GIF still has more frames to show.
+                    let gif_animating = {
+                        let gifs = &self.animated_gifs;
+                        gifs.values().any(|gif| match gif.loop_count {
+                            lumen_image::GifLoopCount::Infinite => gif.frames.len() > 1,
+                            lumen_image::GifLoopCount::Finite(n) => {
+                                let total_ms: u64 =
+                                    gif.frames.iter().map(lumen_image::AnimatedFrame::delay_ms).sum();
+                                elapsed_ms < total_ms.saturating_mul(u64::from(n))
+                            }
+                        })
+                    };
+                    if gif_animating {
+                        self.request_redraw();
+                    }
                 }
 
                 // Step 3: rAF callbacks + microtask checkpoint.
