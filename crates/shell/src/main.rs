@@ -617,6 +617,13 @@ trait PersistentJs {
     /// `prefers-color-scheme` toggle.
     #[allow(dead_code)]
     fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool);
+    /// Poll all live `WebSocket` instances and deliver queued events to JS.
+    ///
+    /// Must be called on every event-loop step so that `onopen`/`onmessage`/
+    /// `onclose`/`onerror` handlers fire promptly. Calls `_lumen_pump_websockets()`
+    /// which drains `_lumen_ws_poll()` for every open handle.
+    #[allow(dead_code)]
+    fn pump_websockets(&self);
 }
 
 #[cfg(feature = "quickjs")]
@@ -703,6 +710,9 @@ impl PersistentJs for QuickPersistentJs {
         self.eval_js(&format!(
             "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},false);"
         ));
+    }
+    fn pump_websockets(&self) {
+        self.eval_js("if(typeof _lumen_pump_websockets==='function')_lumen_pump_websockets();");
     }
 }
 
@@ -2913,8 +2923,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // JS timers: drain expired setTimeout/setInterval callbacks, then read
         // the next wakeup deadline to schedule ControlFlow::WaitUntil so that
         // winit wakes up exactly when the next timer fires (not only on OS events).
+        // WebSocket pump runs here too so onopen/onmessage/onclose fire promptly.
         if let Some(js) = &self.js_ctx {
             js.tick_timers();
+            js.pump_websockets();
             if let Some(nav) = js.take_navigate_request() {
                 self.pending_js_navigate = Some(nav);
             }
