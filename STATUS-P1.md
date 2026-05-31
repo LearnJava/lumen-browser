@@ -6,8 +6,7 @@
 
 ## In progress
 
-**Tab lifecycle state machine (10A)** branch: p1-tab-lifecycle-10a
-Next step: merge to main, task complete.
+_(нет)_
 
 ---
 
@@ -49,6 +48,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-tab-lifecycle-10a** ✅ 2026-06-01 — Tab lifecycle state machine (10A): `TabState` (Active/BackgroundRecent/BackgroundOld/Hibernated/Closed), `TierTimeouts` (0ms/5min/30min), `TabLifecycleManager` — open/activate/close, `tick_idle(pressure)` каждую секунду, LRU-эвикция `lru_evict()` при превышении max_background_tabs, pinned-защита. Модуль `shell/src/tab_lifecycle/` (state.rs + manager.rs). 20 тестов.
 - **p1-behavioral-mimicry** ✅ 2026-06-01 — Behavioral mimicry (9E): `InputMode::HumanLike`, `HumanLikeSender` в `shell/src/input/humanlike.rs`. Bézier-кривые мышиного пути (кубик, 2 рандомных контрольных точки ±30% длины, N waypoints). Gaussian межнажатная задержка (Box-Muller, mean/sigma). Pre-click dwell. `InputCommand::MouseMove` + `dispatch_mouse_move()` в main.rs. Xorshift-64 PRNG без зависимостей. 29 новых тестов, 314 итого lumen-shell.
 - **p1-native-input-injection** ✅ 2026-05-31 — Native input injection (8C): `InputCommand` (Click/TypeText/Scroll) через `mpsc`-канал, дрейнируется в `about_to_wait`. `handle_click_at()` вынесен из winit `MouseInput` handler — reusable для инжекций и OS-кликов. `inject_char()` фаерит `keydown`+`input`+`keyup` через `_lumen_dispatch_key_event` (isTrusted=true). `escape_js_string_char()` для безопасной вставки символов в JS-строки. `focused_node: Option<NodeId>` — трекинг фокуса для TypeText. 8 unit-тестов в `input.rs`. `crates/shell/src/input.rs`, `crates/shell/src/main.rs`.
 - **p1-http-fingerprint** ✅ 2026-05-31 — HTTP fingerprint Chrome-matching (9C): подключил `build_request_headers()`, `H2Settings::for_profile()`, `ClientHintsProfile` к реальным HTTP-запросам. `fingerprint_profile` проброшен через весь стек: `HttpClient` → `fetch_with_redirect` → `fetch_single` → `do_request`/`h2_do_request` → `write_request`. `H2Conn::connect_with_profile()` — новый метод для SETTINGS Chrome-matching. 31 интеграционный тест. `crates/network/src/lib.rs`, `crates/network/src/h2/conn.rs`.
