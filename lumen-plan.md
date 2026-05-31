@@ -305,11 +305,11 @@
 | 8A.5 | ✅ Software rasterizer для тестов (`tiny-skia` opt-in под `cfg(test)`) | `paint/src/cpu_raster.rs` | детерминизм пикселей Windows/macOS/Linux CI — 2026-05-27 |
 | 8A.6 | 🟡 Миграция `graphic_tests/`: structural-assert Rust-тесты + `graphic_tests/snapshots/*.png` эталоны | `driver/tests/graphic_*.rs` + `graphic_tests/snapshots/` | в процессе, P3; cpu_raster покрывает 33 страницы (б-1..б-14) вкл. mix-blend-mode, filter (blur+color), элементный filter+backdrop-filter (страница 30), mask-image (страница 26) |
 | 8A.7 | ⬜ Шелл переписать как первого клиента trait-а (winit/wgpu → один из транспортов) | `shell/src/main.rs` | — |
-| 8B | ⬜ **`[P3]` `lumen-mcp-server` крейт** (Phase 1) | AI-агенты (Claude/GPT/Browser Use) без обёрток | `crates/mcp/` |
-| 8B.1 | ⬜ JSON-RPC over stdio + UNIX/TCP socket transport | `mcp/src/transport.rs` | — |
-| 8B.2 | ⬜ Resources: `screenshot`, `a11y_tree`, `layout`, `console`, `network` | `mcp/src/resources/` | — |
-| 8B.3 | ⬜ Tools: `click`, `type`, `scroll`, `navigate`, `wait`, `eval`, `query` | `mcp/src/tools/` | — |
-| 8B.4 | ⬜ `lumen --mcp` / `--mcp-port N` CLI flags | `shell/src/cli.rs` | — |
+| 8B | ✅ **`[P1]` `lumen-mcp` крейт** (Phase 1) | AI-агенты (Claude/GPT/Browser Use) без обёрток | `crates/mcp/` |
+| 8B.1 | ✅ JSON-RPC over stdio + TCP socket transport | `mcp/src/transport.rs` | P1 done 2026-05-31: StdioTransport + TcpTransport + VecTransport (tests) |
+| 8B.2 | ✅ Resources: `screenshot`, `a11y_tree`, `layout`, `console`, `network` | `mcp/src/server.rs` | P1 done 2026-05-31 |
+| 8B.3 | ✅ Tools: `click`, `type`, `scroll`, `navigate`, `wait`, `eval`, `query` | `mcp/src/server.rs` | P1 done 2026-05-31 |
+| 8B.4 | ✅ `lumen --mcp` / `--mcp-port N` CLI flags | `shell/src/main.rs` | P1 done 2026-05-31: extract_mcp_mode + run_mcp_mode |
 | 8C | ⬜ **`[P3+shell]` Native input injection** (Phase 1) | Не-distinguishable от пользователя input, для AI-агентов и тестов | `shell/src/input/native.rs` |
 | 8C.1 | ⬜ Mouse/keyboard events идут в event loop тем же путём, что winit-события от ОС | `shell/src/main.rs` | НЕ через JS `dispatchEvent` |
 | 8C.2 | ✅ `event.isTrusted = true` для native-injected events | `dom/src/lib.rs` | 2026-05-28 |

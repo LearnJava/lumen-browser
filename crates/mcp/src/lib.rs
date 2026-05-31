@@ -29,4 +29,4 @@ pub mod transport;
 
 pub use protocol::{McpMessage, McpRequest, McpResponse, McpResource, McpTool};
 pub use server::McpServer;
-pub use transport::{StdioTransport, Transport};
+pub use transport::{StdioTransport, TcpTransport, Transport};
