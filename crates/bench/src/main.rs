@@ -1,9 +1,9 @@
-//! Baseline-замеры pipeline-фаз на samples/page.html.
+//! Baseline-замеры pipeline-фаз на samples/page.html и samples/heavy.html.
 //!
-//! Цели плана (cold start < 300 мс, RAM < 100 МБ на пустую вкладку) до сих
-//! пор были лозунгами — без точки отсчёта невозможно отследить регрессии при
-//! росте функциональности (Phase 1+ добавит шрифты, картинки, JS — каждая
-//! фаза должна остаться в своём бюджете).
+//! Два бенчмарка:
+//!   page  — samples/page.html (базовая страница, ~50 DOM-узлов)
+//!   heavy — samples/heavy.html (Habr-style: 85 статей, таблицы, floats,
+//!            mix-blend-mode trending section, grey image placeholders)
 //!
 //! Один бинарь, без criterion: запускаем pipeline `decode → parse html →
 //! parse css → layout → paint::build_display_list` нужное число итераций,
@@ -29,6 +29,7 @@ use lumen_dom::{Document, NodeData, NodeId};
 
 const PAGE_HTML: &[u8] = include_bytes!("../../../samples/page.html");
 const PAGE_CSS: &str = include_str!("../../../samples/page.css");
+const HEAVY_HTML: &[u8] = include_bytes!("../../../samples/heavy.html");
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
 const DEFAULT_ITERS: usize = 100;
@@ -50,29 +51,38 @@ fn main() {
     let font = lumen_font::Font::parse(INTER_FONT).expect("Inter Regular parses");
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer builds");
 
-    // Один прогон до warm-up для проверки структуры: убеждаемся, что
-    // pipeline действительно отрабатывает на ожидаемом объёме данных.
-    // Если page.html / page.css пустые — это диагностируем сразу, до часовых
-    // циклов измерений.
-    let probe = run_pipeline(&measurer);
-    println!("Lumen baseline bench");
+    println!("Lumen baseline bench  warmup={WARMUP_ITERS}  measured={iters}");
+    println!();
+
+    run_bench("page ", PAGE_HTML, PAGE_CSS, iters, &measurer);
+    println!();
+    run_bench("heavy", HEAVY_HTML, "", iters, &measurer);
+}
+
+/// Run a full bench cycle for one page and print results.
+fn run_bench(
+    label: &str,
+    html: &[u8],
+    external_css: &str,
+    iters: usize,
+    measurer: &lumen_paint::FontMeasurer<'_>,
+) {
+    let probe = run_pipeline(html, external_css, measurer);
     println!(
-        "  page: {} bytes html + {} bytes css → {} DOM nodes, {} CSS rules, {} paint cmds",
-        PAGE_HTML.len(),
-        PAGE_CSS.len(),
+        "=== {label} ===  {} bytes html → {} DOM nodes, {} CSS rules, {} paint cmds",
+        html.len(),
         probe.dom_nodes,
         probe.css_rules,
         probe.paint_cmds
     );
-    println!("  warmup: {WARMUP_ITERS} iters, measured: {iters} iters\n");
 
     for _ in 0..WARMUP_ITERS {
-        black_box(run_pipeline(&measurer));
+        black_box(run_pipeline(html, external_css, measurer));
     }
 
     let mut samples = Samples::with_capacity(iters);
     for _ in 0..iters {
-        samples.push(run_pipeline(&measurer));
+        samples.push(run_pipeline(html, external_css, measurer));
     }
 
     print_phase("decode    ", &mut samples.decode);
@@ -158,13 +168,17 @@ fn get_rss_bytes() -> u64 {
     }
 }
 
-fn run_pipeline(measurer: &lumen_paint::FontMeasurer<'_>) -> PipelineResult {
+fn run_pipeline(
+    html: &[u8],
+    external_css: &str,
+    measurer: &lumen_paint::FontMeasurer<'_>,
+) -> PipelineResult {
     let total_start = Instant::now();
     let rss_start = get_rss_bytes();
 
     let t = Instant::now();
-    let encoding = lumen_encoding::detect(PAGE_HTML, None);
-    let source = lumen_encoding::decode(encoding, PAGE_HTML);
+    let encoding = lumen_encoding::detect(html, None);
+    let source = lumen_encoding::decode(encoding, html);
     let decode = t.elapsed();
 
     let t = Instant::now();
@@ -176,7 +190,7 @@ fn run_pipeline(measurer: &lumen_paint::FontMeasurer<'_>) -> PipelineResult {
     // stylesheet-ов (что в реальном shell стоит сетевого/файлового I/O).
     let t = Instant::now();
     let mut css = extract_style_blocks(&doc);
-    css.push_str(PAGE_CSS);
+    css.push_str(external_css);
     let sheet = lumen_css_parser::parse(&css);
     let parse_css = t.elapsed();
 
