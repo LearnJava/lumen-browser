@@ -6,8 +6,7 @@
 
 ## In progress
 
-Real WebSocket implementation — shell event loop pump + binaryType ArrayBuffer support  branch: p1-websocket-shell
-Next step: add `pump_websockets()` to `JsRuntime` trait and call in event loop  `crates/shell/src/main.rs:530`
+_(нет)_
 
 ---
 
@@ -27,6 +26,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-websocket-shell** ✅ 2026-05-31 — Real WebSocket shell integration: `PersistentJs::pump_websockets()` добавлен в trait + вызов в `about_to_wait` рядом с `tick_timers()` — так `onopen`/`onmessage`/`onclose`/`onerror` фаерятся немедленно. JS: бинарная доставка hex→Uint8Array/ArrayBuffer по `ws.binaryType`; добавлены `bufferedAmount=0` и `extensions=''` в конструктор. +6 тестов, итого lumen-js: 576.
 - **p1-shadow-dom-js** ✅ 2026-05-31 — Shadow DOM JS bindings: `HTMLTemplateElement.content` (DocumentFragment wrapper, `cloneNode`), `document.createDocumentFragment()`, `element.cloneNode(deep)`, `element.insertBefore(newNode, ref)`, `<slot>` element (`assignedNodes()`, `assignedElements()`, `slotchange` event dispatch via `_lumen_fire_slotchange`). lumen-dom: `Document::insert_before`, `Document::deep_clone`. lumen-js Rust: `_lumen_clone_subtree`, `_lumen_create_fragment`, `_lumen_get_template_content`, `_lumen_is_document_fragment`, `_lumen_insert_before`, `_lumen_get_shadow_root_host`. 9 новых тестов, итого lumen-js: 570.
 - **p1-clickable-nodes** ✅ 2026-05-31 — CSS Writing Modes L3 §3: `writing-mode: vertical-rl/lr` layout stub. Новый модуль `lumen-layout/src/vertical.rs`: `lay_out_vertical_block` — axis-swap раскладка (CSS `height` → inline-size, `width` → block-size). `vertical-rl`: дети стекаются справа налево; `vertical-lr`: слева направо. `shift_subtree_x(child, dx)` рекурсивно смещает поддерево. Диспетч из `lay_out()` в `box_tree.rs` по `style.writing_mode`. P4 handoff: CSS parsing уже готово в `style.rs`. 8 unit-тестов, 2100 тестов lumen-layout.
 - **p1-antidetect-layer1** ✅ 2026-05-31 — 9A Layer 1: surface API без automation-маркеров (ADR-007). Новый модуль `lumen-js/src/surface_api.rs`: `install_surface_api_protection` — seals automation-globals (webdriver остаётся absent, __playwright/__selenium_*/__webdriver_*/_phantom/domAutomation заморожены как non-configurable undefined через `Object.defineProperty`); добавляет стандартные browser-совместимые свойства `navigator` (`appName="Netscape"`, `vendor="Google Inc."`, `product="Gecko"`, `productSub`, `cookieEnabled`, `doNotTrack`, `plugins=[]`, `mimeTypes=[]`). 11 unit-тестов в `surface_api.rs`. 19 runtime-тестов в `crates/js/tests/no_automation_markers.rs` (новый integration test файл): проверяют отсутствие маркеров Selenium/CDP/Playwright/WebDriver/PhantomJS при полной DOM-инициализации, корректность `isTrusted`, наличие стандартных nav-свойств. Итого lumen-js: 580 тестов (+30).
