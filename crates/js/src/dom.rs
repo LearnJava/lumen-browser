@@ -3197,6 +3197,67 @@ var navigator = {
         try { return _lumen_send_beacon(url, body, ct); } catch(e) { return false; }
     },
 };
+
+// ── Clipboard API (W3C Clipboard API §4) ─────────────────────────────────────
+// navigator.clipboard.readText()  → Promise<string>
+// navigator.clipboard.writeText(text) → Promise<void>
+// navigator.clipboard.read()  → Promise<ClipboardItems> stub (empty array)
+// navigator.clipboard.write() → Promise<void> stub
+//
+// readText/writeText delegate to native bindings (_lumen_clipboard_read /
+// _lumen_clipboard_write) when the shell wires them.  Until then readText
+// returns '' and writeText silently succeeds.
+navigator.clipboard = {
+    readText: function() {
+        return new Promise(function(resolve, reject) {
+            try {
+                var text = (typeof _lumen_clipboard_read === 'function')
+                    ? _lumen_clipboard_read() : '';
+                resolve(typeof text === 'string' ? text : '');
+            } catch(e) { reject(e); }
+        });
+    },
+    writeText: function(text) {
+        return new Promise(function(resolve, reject) {
+            try {
+                if (typeof _lumen_clipboard_write === 'function') {
+                    _lumen_clipboard_write(String(text == null ? '' : text));
+                }
+                resolve(undefined);
+            } catch(e) { reject(e); }
+        });
+    },
+    read:  function() { return Promise.resolve([]); },
+    write: function() { return Promise.resolve(undefined); },
+};
+
+// ── Permissions API (W3C Permissions §5) ─────────────────────────────────────
+// navigator.permissions.query({ name }) → Promise<PermissionStatus>
+//
+// Lumen is a single-user desktop app.  Sensors and AV hardware that do not
+// exist in headless mode are 'denied'; everything else is 'granted'.  When P3
+// adds per-site permission UI the state values can be updated at runtime.
+function PermissionStatus(name, state) {
+    this.name     = name;
+    this.state    = state;
+    this.onchange = null;
+}
+var _perm_denied = [
+    'microphone', 'camera', 'midi', 'speaker-selection',
+    'ambient-light-sensor', 'accelerometer', 'gyroscope', 'magnetometer',
+    'display-capture', 'screen-wake-lock', 'nfc',
+];
+navigator.permissions = {
+    query: function(descriptor) {
+        if (!descriptor || typeof descriptor.name !== 'string') {
+            return Promise.reject(new TypeError('permissions.query: descriptor must have a name'));
+        }
+        var name  = descriptor.name;
+        var state = _perm_denied.indexOf(name) >= 0 ? 'denied' : 'granted';
+        return Promise.resolve(new PermissionStatus(name, state));
+    },
+};
+
 // ── Timer queue (HTML LS §8.6 «timers») ──────────────────────────────────────
 // Timers are stored as a JS-side array; Rust drains them each event loop tick
 // via _lumen_tick_timers() called from about_to_wait. When a new timer is
@@ -5378,6 +5439,110 @@ function cancelIdleCallback(id) {
     delete _idle_cbs[id | 0];
 }
 
+// ── MessageChannel / MessagePort (WHATWG HTML §8.3.4-§8.3.5) ─────────────────
+// MessageChannel() creates two entangled MessagePort objects (port1 / port2).
+// Messages posted on one port are delivered asynchronously (queueMicrotask) to
+// the other.  Setting port.onmessage auto-starts the port (spec §8.3.5 step 4).
+
+function MessagePort() {
+    this._other          = null;
+    this._started        = false;
+    this._closed         = false;
+    this._queue          = [];
+    this._listeners      = [];
+    this._onmessage      = null;
+    this.onmessageerror  = null;
+}
+
+// start() — activate queued message delivery (HTML §8.3.5 «start» algorithm).
+MessagePort.prototype.start = function() {
+    if (this._started || this._closed) return;
+    this._started = true;
+    var self = this;
+    queueMicrotask(function() { self._drain(); });
+};
+
+// close() — detach the port; further delivery and sends are no-ops.
+MessagePort.prototype.close = function() {
+    this._closed  = true;
+    this._other   = null;
+    this._queue   = [];
+};
+
+// postMessage(data) — clone data and enqueue delivery to the entangled port.
+MessagePort.prototype.postMessage = function(message) {
+    if (this._closed || !this._other || this._other._closed) return;
+    var other = this._other;
+    var clone = structuredClone(message);
+    queueMicrotask(function() {
+        if (other._closed) return;
+        var evt = { type: 'message', data: clone, target: other,
+                    currentTarget: other, bubbles: false, cancelable: false };
+        if (other._started) {
+            other._deliver(evt);
+        } else {
+            other._queue.push(evt);
+        }
+    });
+};
+
+// Internal: deliver evt to onmessage + 'message' addEventListener listeners.
+MessagePort.prototype._deliver = function(evt) {
+    if (typeof this._onmessage === 'function') {
+        try { this._onmessage.call(this, evt); } catch(e) {}
+    }
+    for (var i = 0; i < this._listeners.length; i++) {
+        try { this._listeners[i].call(this, evt); } catch(e) {}
+    }
+};
+
+// Internal: drain queued messages after start().
+MessagePort.prototype._drain = function() {
+    var q = this._queue.splice(0);
+    for (var i = 0; i < q.length; i++) this._deliver(q[i]);
+};
+
+// addEventListener — supports 'message' and 'messageerror'; auto-starts on 'message'.
+MessagePort.prototype.addEventListener = function(type, fn) {
+    if (typeof fn !== 'function') return;
+    if (type !== 'message' && type !== 'messageerror') return;
+    if (this._listeners.indexOf(fn) < 0) this._listeners.push(fn);
+    if (type === 'message') this.start();
+};
+
+// removeEventListener — removes a previously registered listener.
+MessagePort.prototype.removeEventListener = function(type, fn) {
+    var idx = this._listeners.indexOf(fn);
+    if (idx >= 0) this._listeners.splice(idx, 1);
+};
+
+// dispatchEvent stub — required by some frameworks.
+MessagePort.prototype.dispatchEvent = function(evt) {
+    this._deliver(evt);
+    return true;
+};
+
+// onmessage getter/setter — setting to a Function auto-starts delivery.
+Object.defineProperty(MessagePort.prototype, 'onmessage', {
+    get: function() { return this._onmessage || null; },
+    set: function(fn) {
+        this._onmessage = (typeof fn === 'function') ? fn : null;
+        if (this._onmessage !== null) this.start();
+    },
+    configurable: true,
+    enumerable:   true,
+});
+
+// MessageChannel — creates two entangled ports.
+function MessageChannel() {
+    var p1 = new MessagePort();
+    var p2 = new MessagePort();
+    p1._other = p2;
+    p2._other = p1;
+    this.port1 = p1;
+    this.port2 = p2;
+}
+
 // Expose new globals on window object (defined after window literal because
 // `var performance` is not hoisted with its value, only its name).
 window.URL                   = URL;
@@ -5433,6 +5598,13 @@ window.File                  = File;
 window.FileReader            = FileReader;
 window.btoa                  = btoa;
 window.atob                  = atob;
+window.MessageChannel        = MessageChannel;
+window.MessagePort           = MessagePort;
+window.PermissionStatus      = PermissionStatus;
+// W3C Secure Contexts §3.1: local-file and localhost are considered secure.
+window.isSecureContext       = true;
+// COOP/COEP cross-origin isolation is not yet implemented in Lumen.
+window.crossOriginIsolated   = false;
 
 // ── Lazy image loading (HTML LS §2.6.6.9) ──────────────────────────────────
 // Maps nid (u32 as string key) → url for images deferred by loading=\"lazy\".
@@ -12587,5 +12759,210 @@ mod tests {
             "var threw = false; \
              try { requestIdleCallback('notafn'); } catch(e) { threw = e instanceof TypeError; } \
              threw"));
+    }
+
+    // ── MessageChannel / MessagePort tests ────────────────────────────────────
+
+    #[test]
+    fn message_channel_creates_two_ports() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); \
+             ch.port1 instanceof MessagePort && ch.port2 instanceof MessagePort"));
+    }
+
+    #[test]
+    fn message_channel_ports_are_distinct() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); ch.port1 !== ch.port2"));
+    }
+
+    #[test]
+    fn message_port_post_delivers_via_onmessage() {
+        let rt = runtime_with_dom(make_doc());
+        // onmessage auto-starts port1; postMessage on port2 delivers to port1.
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); \
+             var received = null; \
+             ch.port1.onmessage = function(e) { received = e.data; }; \
+             ch.port2.postMessage('hello'); \
+             _lumen_drain_microtasks(); \
+             received === 'hello'"));
+    }
+
+    #[test]
+    fn message_port_post_delivers_object() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); \
+             var got = null; \
+             ch.port1.onmessage = function(e) { got = e.data; }; \
+             ch.port2.postMessage({ x: 42 }); \
+             _lumen_drain_microtasks(); \
+             got !== null && got.x === 42"));
+    }
+
+    #[test]
+    fn message_port_structured_clone_is_deep_copy() {
+        let rt = runtime_with_dom(make_doc());
+        // Mutations to the original after postMessage should not affect received copy.
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); \
+             var got = null; \
+             ch.port1.onmessage = function(e) { got = e.data; }; \
+             var orig = { v: 1 }; \
+             ch.port2.postMessage(orig); \
+             orig.v = 99; \
+             _lumen_drain_microtasks(); \
+             got !== null && got.v === 1"));
+    }
+
+    #[test]
+    fn message_port_start_drains_queue() {
+        let rt = runtime_with_dom(make_doc());
+        // Post before onmessage is set → message queued; start() drains it.
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); \
+             var got = null; \
+             ch.port2.postMessage('queued'); \
+             ch.port1.onmessage = function(e) { got = e.data; }; \
+             _lumen_drain_microtasks(); \
+             got === 'queued'"));
+    }
+
+    #[test]
+    fn message_port_add_event_listener_delivers() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); \
+             var got = null; \
+             ch.port1.addEventListener('message', function(e) { got = e.data; }); \
+             ch.port2.postMessage('evt'); \
+             _lumen_drain_microtasks(); \
+             got === 'evt'"));
+    }
+
+    #[test]
+    fn message_port_close_stops_delivery() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); \
+             var count = 0; \
+             ch.port1.onmessage = function() { count++; }; \
+             ch.port2.postMessage('a'); \
+             ch.port1.close(); \
+             ch.port2.postMessage('b'); \
+             _lumen_drain_microtasks(); \
+             count === 0"));
+    }
+
+    #[test]
+    fn message_port_remove_event_listener_stops_delivery() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var ch = new MessageChannel(); \
+             var count = 0; \
+             var fn = function() { count++; }; \
+             ch.port1.addEventListener('message', fn); \
+             ch.port1.removeEventListener('message', fn); \
+             ch.port2.postMessage('x'); \
+             _lumen_drain_microtasks(); \
+             count === 0"));
+    }
+
+    #[test]
+    fn message_channel_window_export() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "window.MessageChannel === MessageChannel"));
+    }
+
+    // ── navigator.clipboard tests ──────────────────────────────────────────────
+
+    #[test]
+    fn navigator_clipboard_exists() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "typeof navigator.clipboard === 'object' && navigator.clipboard !== null"));
+    }
+
+    #[test]
+    fn navigator_clipboard_read_text_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "typeof navigator.clipboard.readText === 'function' && \
+             typeof navigator.clipboard.readText().then === 'function'"));
+    }
+
+    #[test]
+    fn navigator_clipboard_write_text_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "typeof navigator.clipboard.writeText === 'function' && \
+             typeof navigator.clipboard.writeText('hi').then === 'function'"));
+    }
+
+    #[test]
+    fn navigator_clipboard_stub_read_resolves_string() {
+        let rt = runtime_with_dom(make_doc());
+        // Without native binding, readText resolves to empty string.
+        assert!(bool_eval(&rt,
+            "var ok = false; \
+             navigator.clipboard.readText().then(function(v) { ok = typeof v === 'string'; }); \
+             _lumen_drain_microtasks(); \
+             ok"));
+    }
+
+    // ── navigator.permissions tests ───────────────────────────────────────────
+
+    #[test]
+    fn navigator_permissions_query_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "typeof navigator.permissions === 'object' && \
+             typeof navigator.permissions.query === 'function'"));
+    }
+
+    #[test]
+    fn navigator_permissions_clipboard_granted() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var state = null; \
+             navigator.permissions.query({ name: 'clipboard-read' }).then(function(ps) { state = ps.state; }); \
+             _lumen_drain_microtasks(); \
+             state === 'granted'"));
+    }
+
+    #[test]
+    fn navigator_permissions_camera_denied() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var state = null; \
+             navigator.permissions.query({ name: 'camera' }).then(function(ps) { state = ps.state; }); \
+             _lumen_drain_microtasks(); \
+             state === 'denied'"));
+    }
+
+    #[test]
+    fn navigator_permissions_bad_descriptor_rejects() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var rejected = false; \
+             navigator.permissions.query(null).catch(function(e) { rejected = true; }); \
+             _lumen_drain_microtasks(); \
+             rejected"));
+    }
+
+    // ── isSecureContext / crossOriginIsolated tests ────────────────────────────
+
+    #[test]
+    fn is_secure_context_is_true() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "window.isSecureContext === true"));
+    }
+
+    #[test]
+    fn cross_origin_isolated_is_false() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "window.crossOriginIsolated === false"));
     }
 }
