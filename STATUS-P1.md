@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-mcp-shell-integration** — MCP server shell integration (8B.4): `--mcp`/`--mcp-port N` CLI flags + sync transport + TCP transport + unit tests.
+- Next step: make `McpServer::run()` sync, add TCP transport, tests, shell integration.
+- Files: `crates/mcp/src/server.rs`, `crates/mcp/src/transport.rs`, `crates/shell/src/main.rs`
 
 ---
 
