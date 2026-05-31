@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Behavioral mimicry (9E)**  branch: `p1-behavioral-mimicry`
+Next step: cargo clippy + tests → commit  `crates/shell/src/input/humanlike.rs`
 
 ---
 
