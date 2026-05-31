@@ -103,6 +103,7 @@ const PAGES: &[&str] = &[
     "52-text-shadow-blur",
     "30-css-filter",
     "26-mask-image",
+    "46-individual-transforms",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).

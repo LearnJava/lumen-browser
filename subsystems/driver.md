@@ -32,9 +32,9 @@ headless pipeline without winit/wgpu/ffmpeg.
 - `navigate()` clears `net_log` and `con_log` — callers must read logs before next navigate.
 
 - `screenshot_cpu_rgba/png` (feature `cpu-render`): renders through the deterministic tiny-skia CPU path for cross-OS pixel-identical snapshots.
-- `driver/tests/snapshot_cpu.rs` (feature `cpu-render`): pixel-compares 32 geometry pages against committed references in `graphic_tests/snapshots/cpu/`.
+- `driver/tests/snapshot_cpu.rs` (feature `cpu-render`): pixel-compares 34 geometry pages against committed references in `graphic_tests/snapshots/cpu/`.
 - `driver/tests/test_00..49.rs`: 50 structural-assert integration tests.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 32 pages.
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 34 pages.

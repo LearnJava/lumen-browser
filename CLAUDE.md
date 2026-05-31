@@ -367,7 +367,7 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 33 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 34 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
@@ -398,7 +398,11 @@ translate/rotate/scale/skew/matrix2d. The `Mat4` carried by the command is colum
 (`x'=a·x+c·y+e`, `y'=b·x+d·y+f`) and already bakes in `T(pivot)·M·T(-pivot)` from `transform-origin`,
 so resampling a page-space layer through it lands exactly where the GPU vertex transform would.
 Opacity and transform share one layer stack via `LayerComposite`; nested groups composite back in
-turn so a child transform `B` under a parent `A` yields `A·B`; page `22-transform`), and
+turn so a child transform `B` under a parent `A` yields `A·B`; pages `22-transform` and
+`46-individual-transforms` — the latter exercises the CSS Transforms L2 individual `translate`/
+`rotate`/`scale` properties, which `forward_box_transform` composes in spec order
+translate→rotate→scale→`transform` into the same `Mat4` that emits `PushTransform`, so they reuse the
+identical CPU layer path), and
 `mix-blend-mode` (`PushBlendMode`/`PopBlendMode`, emitted for `mix-blend-mode != normal`; the
 element renders into a transparent full-size layer on the same `LayerComposite` stack, then
 `PopBlendMode` composites it onto the backdrop below with the CSS blend formula via
