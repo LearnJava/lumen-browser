@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(никто ничего не зарезервировал)_
+8A.6(б-17) расширение PAGES snapshot_cpu 38 → N  branch: p3-8a6-cpu-more-pages
+Next step: добавить страницы 37/27/44/28/29/35 и другие FillRect-only страницы в PAGES
 
 ## Next
 
