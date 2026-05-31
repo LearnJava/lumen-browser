@@ -2139,6 +2139,7 @@ function _lumen_make_element(nid) {
     if (nid === null || nid === undefined) return null;
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
+    var _returnValue = '';
     var _obj = {
         __nid__: nid,
         get tagName()        { return _lumen_get_tag_name(nid); },
@@ -2163,6 +2164,49 @@ function _lumen_make_element(nid) {
         },
         removeAttribute: function(n)    { _lumen_remove_attr(nid, String(n)); },
         hasAttribute:    function(n)    { return _lumen_get_attr(nid, String(n)) !== undefined; },
+        // DOM LS §4.9.3: toggleAttribute(qualifiedName, force?)
+        toggleAttribute: function(n, force) {
+            var attrName = String(n);
+            var has = _lumen_get_attr(nid, attrName) !== undefined;
+            if (force === undefined) {
+                if (has) { _lumen_remove_attr(nid, attrName); return false; }
+                _lumen_set_attr(nid, attrName, ''); return true;
+            }
+            if (force) {
+                if (!has) _lumen_set_attr(nid, attrName, '');
+                return true;
+            }
+            if (has) _lumen_remove_attr(nid, attrName);
+            return false;
+        },
+        // Reflected `open` boolean attribute — shared by <details> (HTML5 §4.11.1)
+        // and <dialog> (HTML5 §4.11.7).
+        get open() { return _lumen_get_attr(nid, 'open') !== undefined; },
+        set open(v) {
+            if (v) { _lumen_set_attr(nid, 'open', ''); }
+            else { _lumen_remove_attr(nid, 'open'); }
+        },
+        // HTMLDialogElement API (HTML5 §4.11.7)
+        get returnValue() { return _returnValue; },
+        set returnValue(v) { _returnValue = String(v); },
+        show: function() {
+            _lumen_set_attr(nid, 'open', '');
+        },
+        showModal: function() {
+            _lumen_set_attr(nid, 'open', '');
+            if (_lumen_modal_dialog_nids.indexOf(nid) < 0) {
+                _lumen_modal_dialog_nids.push(nid);
+            }
+        },
+        close: function(rv) {
+            if (_lumen_get_attr(nid, 'open') === undefined) return;
+            if (rv !== undefined) _returnValue = String(rv);
+            _lumen_remove_attr(nid, 'open');
+            var idx = _lumen_modal_dialog_nids.indexOf(nid);
+            if (idx >= 0) _lumen_modal_dialog_nids.splice(idx, 1);
+            var closeEvt = new Event('close', { bubbles: false, cancelable: false });
+            _lumen_dispatch(nid, closeEvt);
+        },
         appendChild:     function(c) {
             if (c && c.__nid__ !== undefined) {
                 _lumen_append_child(nid, c.__nid__);
@@ -6245,6 +6289,58 @@ function _lumen_apply_visibility(hidden) {
 
 window._lumen_apply_ready_state = _lumen_apply_ready_state;
 window._lumen_apply_visibility  = _lumen_apply_visibility;
+
+// ── <dialog> modal stack (HTML5 §4.11.7) ─────────────────────────────────────
+// Tracks nids of dialogs opened via showModal(), in open order.
+// Maintained by _lumen_make_element's showModal/close methods (see below).
+var _lumen_modal_dialog_nids = [];
+
+// ── <details>/<summary> toggle (HTML5 §4.11.1) ───────────────────────────────
+// A click anywhere within a <summary> element toggles the `open` attribute on
+// its parent <details> and fires a `toggle` event on <details>.
+document.addEventListener('click', function(evt) {
+    var el = evt.target;
+    while (el && el.__nid__ !== undefined) {
+        var tag = _lumen_get_tag_name(el.__nid__).toLowerCase();
+        if (tag === 'summary') {
+            var pid = _lumen_u2n(_lumen_get_parent(el.__nid__));
+            if (pid !== null && _lumen_get_tag_name(pid).toLowerCase() === 'details') {
+                var wasOpen = _lumen_get_attr(pid, 'open') !== undefined;
+                var oldState = wasOpen ? 'open' : 'closed';
+                if (wasOpen) { _lumen_remove_attr(pid, 'open'); }
+                else         { _lumen_set_attr(pid, 'open', ''); }
+                var newState = wasOpen ? 'closed' : 'open';
+                var toggleEvt = new Event('toggle', { bubbles: false, cancelable: false });
+                toggleEvt.oldState = oldState;
+                toggleEvt.newState = newState;
+                _lumen_dispatch(pid, toggleEvt);
+            }
+            return;
+        }
+        el = el.parentElement;
+    }
+});
+
+// ── <dialog> Escape key handler (HTML5 §4.11.7) ──────────────────────────────
+// Pressing Escape closes the topmost modal dialog: fires `cancel` (cancelable);
+// if not prevented, removes `open` and fires `close`.
+document.addEventListener('keydown', function(evt) {
+    if (evt.key !== 'Escape') return;
+    while (_lumen_modal_dialog_nids.length > 0 &&
+           _lumen_get_attr(_lumen_modal_dialog_nids[_lumen_modal_dialog_nids.length - 1], 'open') === undefined) {
+        _lumen_modal_dialog_nids.pop();
+    }
+    if (_lumen_modal_dialog_nids.length === 0) return;
+    var lastNid = _lumen_modal_dialog_nids[_lumen_modal_dialog_nids.length - 1];
+    var cancelEvt = new Event('cancel', { bubbles: false, cancelable: true });
+    var notPrevented = _lumen_dispatch(lastNid, cancelEvt);
+    if (notPrevented) {
+        _lumen_remove_attr(lastNid, 'open');
+        _lumen_modal_dialog_nids.pop();
+        var closeEvt = new Event('close', { bubbles: false, cancelable: false });
+        _lumen_dispatch(lastNid, closeEvt);
+    }
+});
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -11471,5 +11567,212 @@ mod tests {
              done"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── <details>/<summary> + <dialog> tests ─────────────────────────────────
+
+    /// Build a doc with <details id="d"><summary id="s">Sum</summary><p>Body</p></details>
+    /// and <dialog id="dlg">Hello</dialog>.
+    fn make_details_doc() -> Arc<Mutex<Document>> {
+        let mut doc = Document::new();
+        let html    = doc.create_element(QualName::html("html"));
+        let body    = doc.create_element(QualName::html("body"));
+        let details = doc.create_element(QualName::html("details"));
+        let summary = doc.create_element(QualName::html("summary"));
+        let p       = doc.create_element(QualName::html("p"));
+        let dialog  = doc.create_element(QualName::html("dialog"));
+        fn set_id(doc: &mut Document, nid: lumen_dom::NodeId, id: &str) {
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(nid).data {
+                attrs.push(lumen_dom::Attribute { name: QualName::html("id"), value: id.into() });
+            }
+        }
+        set_id(&mut doc, details, "d");
+        set_id(&mut doc, summary, "s");
+        set_id(&mut doc, dialog,  "dlg");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, details);
+        doc.append_child(details, summary);
+        doc.append_child(details, p);
+        doc.append_child(body, dialog);
+        Arc::new(Mutex::new(doc))
+    }
+
+    #[test]
+    fn toggle_attribute_add() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var el = document.getElementById('main'); \
+             el.toggleAttribute('hidden') === true && el.hasAttribute('hidden')"));
+    }
+
+    #[test]
+    fn toggle_attribute_remove() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var el = document.getElementById('main'); \
+             el.setAttribute('hidden', ''); \
+             el.toggleAttribute('hidden') === false && !el.hasAttribute('hidden')"));
+    }
+
+    #[test]
+    fn toggle_attribute_force_true() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var el = document.getElementById('main'); \
+             el.toggleAttribute('hidden', true) === true && el.hasAttribute('hidden')"));
+    }
+
+    #[test]
+    fn toggle_attribute_force_false() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "var el = document.getElementById('main'); \
+             el.setAttribute('hidden', ''); \
+             el.toggleAttribute('hidden', false) === false && !el.hasAttribute('hidden')"));
+    }
+
+    #[test]
+    fn details_open_property_getter() {
+        let rt = runtime_with_dom(make_details_doc());
+        // No `open` attr by default → open === false
+        assert!(bool_eval(&rt,
+            "document.getElementById('d').open === false"));
+    }
+
+    #[test]
+    fn details_open_property_setter() {
+        let rt = runtime_with_dom(make_details_doc());
+        assert!(bool_eval(&rt,
+            "var d = document.getElementById('d'); \
+             d.open = true; \
+             d.hasAttribute('open') && d.open === true"));
+    }
+
+    #[test]
+    fn details_summary_click_opens() {
+        let rt = runtime_with_dom(make_details_doc());
+        // Simulate click on summary via _lumen_dispatch_bubble
+        let nid_js = rt.eval(
+            "document.getElementById('s').__nid__"
+        ).unwrap();
+        let nid = match nid_js { lumen_core::JsValue::Number(n) => n as i32, _ => panic!() };
+        rt.eval(&format!(
+            "_lumen_dispatch_bubble({}, 'click')", nid
+        )).unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('d').hasAttribute('open')"));
+    }
+
+    #[test]
+    fn details_summary_click_closes() {
+        let rt = runtime_with_dom(make_details_doc());
+        // First open via JS
+        rt.eval("document.getElementById('d').setAttribute('open', '')").unwrap();
+        let nid_js = rt.eval("document.getElementById('s').__nid__").unwrap();
+        let nid = match nid_js { lumen_core::JsValue::Number(n) => n as i32, _ => panic!() };
+        rt.eval(&format!("_lumen_dispatch_bubble({}, 'click')", nid)).unwrap();
+        assert!(bool_eval(&rt,
+            "!document.getElementById('d').hasAttribute('open')"));
+    }
+
+    #[test]
+    fn details_toggle_event_fired() {
+        let rt = runtime_with_dom(make_details_doc());
+        rt.eval(
+            "var gotToggle = false; \
+             document.getElementById('d').addEventListener('toggle', function(e) { \
+                 gotToggle = e.newState === 'open'; \
+             });"
+        ).unwrap();
+        let nid_js = rt.eval("document.getElementById('s').__nid__").unwrap();
+        let nid = match nid_js { lumen_core::JsValue::Number(n) => n as i32, _ => panic!() };
+        rt.eval(&format!("_lumen_dispatch_bubble({}, 'click')", nid)).unwrap();
+        assert!(bool_eval(&rt, "gotToggle"));
+    }
+
+    #[test]
+    fn dialog_show_sets_open() {
+        let rt = runtime_with_dom(make_details_doc());
+        assert!(bool_eval(&rt,
+            "var dlg = document.getElementById('dlg'); \
+             dlg.show(); \
+             dlg.hasAttribute('open') && dlg.open === true"));
+    }
+
+    #[test]
+    fn dialog_show_modal_sets_open() {
+        let rt = runtime_with_dom(make_details_doc());
+        assert!(bool_eval(&rt,
+            "var dlg = document.getElementById('dlg'); \
+             dlg.showModal(); \
+             dlg.hasAttribute('open') && dlg.open === true"));
+    }
+
+    #[test]
+    fn dialog_close_removes_open() {
+        let rt = runtime_with_dom(make_details_doc());
+        assert!(bool_eval(&rt,
+            "var dlg = document.getElementById('dlg'); \
+             dlg.show(); \
+             dlg.close(); \
+             !dlg.hasAttribute('open')"));
+    }
+
+    #[test]
+    fn dialog_close_fires_close_event() {
+        let rt = runtime_with_dom(make_details_doc());
+        assert!(bool_eval(&rt,
+            "var dlg = document.getElementById('dlg'); \
+             var got = false; \
+             dlg.addEventListener('close', function() { got = true; }); \
+             dlg.show(); \
+             dlg.close(); \
+             got"));
+    }
+
+    #[test]
+    fn dialog_return_value() {
+        let rt = runtime_with_dom(make_details_doc());
+        assert!(bool_eval(&rt,
+            "var dlg = document.getElementById('dlg'); \
+             dlg.show(); \
+             dlg.close('ok'); \
+             dlg.returnValue === 'ok'"));
+    }
+
+    #[test]
+    fn dialog_escape_key_closes_modal() {
+        let rt = runtime_with_dom(make_details_doc());
+        rt.eval("document.getElementById('dlg').showModal()").unwrap();
+        // Fire keydown Escape on the root — document listener should close dialog
+        let root_nid = rt.eval("_lumen_root_nid").unwrap();
+        let nid = match root_nid { lumen_core::JsValue::Number(n) => n as i32, _ => panic!() };
+        rt.eval(&format!(
+            "_lumen_dispatch_key_event({}, 'keydown', 'Escape', 'Escape', 27, 0, 0, false, false)",
+            nid
+        )).unwrap();
+        assert!(bool_eval(&rt,
+            "!document.getElementById('dlg').hasAttribute('open')"));
+    }
+
+    #[test]
+    fn dialog_escape_cancel_preventable() {
+        let rt = runtime_with_dom(make_details_doc());
+        rt.eval(
+            "document.getElementById('dlg').showModal(); \
+             document.getElementById('dlg').addEventListener('cancel', function(e) { \
+                 e.preventDefault(); \
+             });"
+        ).unwrap();
+        let root_nid = rt.eval("_lumen_root_nid").unwrap();
+        let nid = match root_nid { lumen_core::JsValue::Number(n) => n as i32, _ => panic!() };
+        rt.eval(&format!(
+            "_lumen_dispatch_key_event({}, 'keydown', 'Escape', 'Escape', 27, 0, 0, false, false)",
+            nid
+        )).unwrap();
+        // cancel was prevented, so dialog stays open
+        assert!(bool_eval(&rt,
+            "document.getElementById('dlg').hasAttribute('open')"));
     }
 }

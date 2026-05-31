@@ -6,6 +6,8 @@
 
 ## In progress
 
+_(нет)_
+
 ---
 
 ## Next
@@ -19,6 +21,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-details-dialog** ✅ 2026-05-31 — HTML `<details>/<summary>` toggle + `<dialog>` element (HTML5 §4.11.1 + §4.11.7). `apply_ua_dialog_display` в `layout/src/style.rs:7275` — UA `display:none` для `<dialog>` без атрибута `open`. Сокрытие дочерних элементов `<details>` (кроме первого `<summary>`) через `build_box` в `box_tree.rs`. JS-шим: `open` getter/setter, `show()`/`showModal()`/`close(rv)`, `returnValue`, `_lumen_modal_dialog_nids` стек; click на `<summary>` → toggle `open` + событие `toggle`; Escape → событие `cancel` (cancelable) + `close`. 16 тестов (12 JS + 4 layout).
 - **p1-text-wrap-balance** ✅ 2026-05-31 — CSS Text L4 §6.4.2: `text-wrap: balance/pretty` алгоритмы в `lumen-layout/src/box_tree.rs`. `balance_wrap`: binary-search по wrap_width в [widest_word, container_width] — находит минимальную ширину с тем же числом строк что у greedy, выравнивает длины строк. `pretty_wrap`: widow prevention — находит последнее слово предпоследней строки (в т.ч. из merged InlineFrag), вычисляет trial_w, перепрогоняет wrap; принимает если последняя строка получила ≥2 слова. `stable` ≡ `auto` для статического layout. Wiring в `box_tree.rs:2562` через `s.text_wrap_style`. 9 unit-тестов. P4: CSS parsing+ComputedStyle уже готово.
 - **p1-scroll-driven-animations** ✅ 2026-05-31 — CSS Scroll-Driven Animations L1 algorithm stub в `lumen-layout/src/scroll_timeline.rs`: `ScrollTimeline`/`ViewTimeline`/`NamedScrollTimeline`/`NamedViewTimeline`/`ScrollAxis`/`Viewport`; `resolve_scroll_progress` (прогресс скролла [0,1], Block/Inline/X/Y, root/элемент) + `resolve_view_progress` («cover» range, прогресс видимости элемента [0,1]); `collect_named_scroll/view_timelines()` — стабы для P4 CSS wiring (`animation-timeline`, `scroll-timeline-name`, `view-timeline-name`). 15 unit-тестов. P4 handoff: STATUS-P4.md "Needs wiring".
 - **p1-streams-api** ✅ 2026-05-31 — WHATWG Streams Standard в `lumen-js` (чистый JS-шим): `ReadableStream`/`ReadableStreamDefaultController`/`ReadableStreamDefaultReader` (enqueue/close/error/read/cancel/tee/pipeTo/pipeThrough/from); `WritableStream`/`WritableStreamDefaultController`/`WritableStreamDefaultWriter`; `TransformStream`/`TransformStreamDefaultController` (passthrough + custom transform); `TextDecoderStream`/`TextEncoderStream` (поверх TextDecoder/TextEncoder); `ByteLengthQueuingStrategy`/`CountQueuingStrategy`. `Response.body` → ReadableStream, `Response.bodyUsed`. `Blob.prototype.stream()` → ReadableStream. Новый native binding `_lumen_drain_microtasks` (`ctx.execute_pending_job()` loop) для синхронного дренажа QuickJS microtask queue в unit-тестах. 22 тестов, итого lumen-js: 468.
