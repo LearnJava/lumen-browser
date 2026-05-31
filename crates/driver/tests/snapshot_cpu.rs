@@ -104,6 +104,10 @@ const PAGES: &[&str] = &[
     "30-css-filter",
     "26-mask-image",
     "46-individual-transforms",
+    "20-quirks-bgcolor",
+    "23-pseudo-elements",
+    "49-background-blend-mode",
+    "50-css-variables",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
