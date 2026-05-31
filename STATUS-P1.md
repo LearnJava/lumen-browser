@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p1-tls-fingerprint** — TLS fingerprint Chrome-matching (9B): `tls/fingerprint.rs` (JA4 support, Chrome 130 full snapshot), `build_client_config` с CryptoProvider, `TlsProfile` wiring в `HttpClient`.
+Next step: создать `crates/network/src/tls/fingerprint.rs`
 
 ---
 
