@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-form-validation** — branch: `p1-form-validation`
+Form Constraint Validation API (HTML LS §4.10.21): ValidityState + checkValidity/reportValidity/setCustomValidity + requestIdleCallback/cancelIdleCallback
+Next step: implement JS shim in `crates/js/src/dom.rs`
 
 ---
 
