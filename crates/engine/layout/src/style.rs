@@ -4504,6 +4504,8 @@ pub fn compute_style(
     // UA stylesheet: form controls — display, intrinsic dimensions, border.
     // HTML5 §15.5. Author CSS поверх перекроет.
     apply_ua_form_controls(doc, node, &mut style);
+    // UA stylesheet: <dialog> without `open` → display:none. HTML5 §15.3.9.
+    apply_ua_dialog_display(doc, node, &mut style);
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -7266,6 +7268,15 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
     style.border_right_color = gray;
     style.border_bottom_color = gray;
     style.border_left_color = gray;
+}
+
+/// UA stylesheet: `<dialog>` without the `open` attribute → `display: none`.
+/// HTML5 §15.3.9: "dialog:not([open]) { display: none; }"
+fn apply_ua_dialog_display(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
+    if name.local.as_str() == "dialog" && doc.get(node).get_attr("open").is_none() {
+        style.display = Display::None;
+    }
 }
 
 /// Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
@@ -22185,5 +22196,38 @@ mod tests {
         // Spread syntax: new layer from old preserves blend_mode.
         let new_layer = BackgroundLayer { image: BackgroundImage::None, ..cloned };
         assert_eq!(new_layer.blend_mode, MixBlendMode::Overlay);
+    }
+
+    // ── <dialog> UA display:none rule (HTML5 §15.3.9) ──────────────────────────
+
+    #[test]
+    fn dialog_without_open_is_display_none() {
+        let doc = lumen_html_parser::parse("<dialog>Hello</dialog>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::None);
+    }
+
+    #[test]
+    fn dialog_with_open_is_visible() {
+        let doc = lumen_html_parser::parse("<dialog open>Hello</dialog>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0));
+        assert_ne!(style.display, Display::None);
+    }
+
+    #[test]
+    fn dialog_author_can_override_ua_display() {
+        let doc = lumen_html_parser::parse("<dialog>Hello</dialog>");
+        let sheet = lumen_css_parser::parse("dialog { display: block; }");
+        let root = ComputedStyle::root();
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0));
+        // Author CSS overrides the UA display:none.
+        assert_ne!(style.display, Display::None);
     }
 }
