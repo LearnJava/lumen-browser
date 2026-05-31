@@ -220,6 +220,7 @@ fn run_window_mode(
         }
     };
     let load_proxy = event_loop.create_proxy();
+    let (input_tx, input_rx) = input::channel();
     let mut app = Lumen {
         display_list: Vec::new(),
         title: None,
@@ -277,6 +278,9 @@ fn run_window_mode(
         animated_gifs: HashMap::new(),
         gif_last_frame: HashMap::new(),
         image_cache: lumen_image::ImageDecodeCache::new(),
+        input_rx,
+        input_tx,
+        focused_node: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -2581,6 +2585,18 @@ struct Lumen {
     /// `try_discard_offscreen_images` once an image leaves the
     /// `gate_image_requests` zone (viewport ± 2 screens).
     image_cache: lumen_image::ImageDecodeCache,
+    /// Receiver side of the input injection channel (ADR-007 §8C).
+    ///
+    /// Drained each `about_to_wait`; commands are processed through the same
+    /// hit-test / JS-dispatch path as real OS events.
+    input_rx: input::InputReceiver,
+    /// Sender side of the input injection channel — cloned for external callers.
+    #[allow(dead_code)]
+    input_tx: input::InputSender,
+    /// The DOM node that received the last click (used as target for TypeText injection).
+    ///
+    /// `None` until the first click is processed.  Updated by `handle_click_at`.
+    focused_node: Option<lumen_dom::NodeId>,
 }
 
 impl Lumen {
@@ -3269,6 +3285,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // ── Native input injection (ADR-007 §8C) ─────────────────────────────
+        // Drain injected commands and route through the same dispatch path as
+        // real OS events so events have isTrusted=true.
+        let injected: Vec<input::InputCommand> = self.input_rx.drain();
+        for cmd in injected {
+            match cmd {
+                input::InputCommand::Click { x, y } => {
+                    self.handle_click_at(x, y);
+                }
+                input::InputCommand::TypeText { text } => {
+                    let chars: Vec<char> = text.chars().collect();
+                    for ch in chars {
+                        self.inject_char(ch);
+                    }
+                }
+                input::InputCommand::Scroll { x, y } => {
+                    self.scroll_x = clamp_scroll(x, (self.content_width - self.viewport_width_css()).max(0.0));
+                    self.scroll_y = clamp_scroll(y, (self.content_height - self.viewport_height_css()).max(0.0));
+                    if let Some(w) = self.window.as_ref() {
+                        w.request_redraw();
+                    }
+                }
+            }
+        }
+
         // Пост-дренажный check: reload, запланированный через queue_task
         // (UserInteraction source), исполняется после microtask checkpoint.
         // `take` атомарно сбрасывает флаг, чтобы reload вызвался только раз.
@@ -3408,173 +3449,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             self.scroll_by_smooth(page_step(vh));
                         }
                         scrollbar::TrackClick::None => {
-                            // Dismiss validation tooltip on any non-scrollbar click.
-                            self.validation_tooltip = None;
-                            let scroll_y = self.scroll_y;
-
-                            // ── Color picker swatch hit ──────────────────────
-                            // Check if click lands on an open color picker swatch.
-                            // Compute swatch result inside a scoped borrow, then act.
-                            let picker_swatch_result: Option<(NodeId, [u8; 3])> = {
-                                let picker_node = self.color_picker_node;
-                                picker_node.and_then(|pn| {
-                                    let anchor = forms::find_box_rect(
-                                        self.layout_box.as_ref()?,
-                                        pn,
-                                    )?;
-                                    let color = forms::hit_color_swatch(
-                                        anchor, scroll_y, x_css, y_css,
-                                    )?;
-                                    Some((pn, color))
-                                })
-                            };
-                            if let Some((pn, color)) = picker_swatch_result {
-                                self.color_picker_node = None;
-                                let css_color = forms::swatch_to_css_color(color);
-                                if let Some(src) = self.layout_source.as_mut() {
-                                    forms::set_value(&mut src.document.lock().unwrap(), pn, &css_color);
-                                }
-                                self.form_state.entry(pn).or_default().value = css_color;
-                                self.relayout();
-                                return;
-                            }
-                            // Any click outside the picker closes it.
-                            self.color_picker_node = None;
-
-                            // ── Form control + link click ────────────────────
-                            // Single hit test shared by form dispatch and link navigation.
-                            let page_x = x_css + self.scroll_x;
-                            let page_y = y_css + self.scroll_y;
-                            let hit_result = self.layout_box.as_ref().and_then(|lb| {
-                                hit_test(Point::new(page_x, page_y), lb)
-                            });
-                            // Dispatch JS click event (bubbles from hit node to document).
-                            // Passes viewport coordinates and modifier key state so
-                            // handlers can read event.clientX/clientY/ctrlKey/etc.
-                            if let (Some(result), Some(ctx)) =
-                                (hit_result.as_ref(), self.js_ctx.as_ref())
-                            {
-                                let mod_flags: u8 =
-                                    (self.modifiers.control_key() as u8)
-                                    | ((self.modifiers.shift_key()  as u8) << 1)
-                                    | ((self.modifiers.alt_key()    as u8) << 2)
-                                    | ((self.modifiers.super_key()  as u8) << 3);
-                                let script = format!(
-                                    "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {})",
-                                    result.node.index(),
-                                    x_css as i32,
-                                    y_css as i32,
-                                    mod_flags,
-                                );
-                                ctx.eval_js(&script);
-                                if let Some(nav) = ctx.take_navigate_request() {
-                                    self.pending_js_navigate = Some(nav);
-                                }
-                            }
-                            let form_action: forms::FormClickAction =
-                                if let (Some(result), Some(src)) =
-                                    (hit_result.as_ref(), self.layout_source.as_ref())
-                                {
-                                    forms::classify_click(&src.document.lock().unwrap(), result.node)
-                                } else {
-                                    forms::FormClickAction::Nothing
-                                };
-                            match form_action {
-                                forms::FormClickAction::ToggleCheckbox(id) => {
-                                    if let Some(src) = self.layout_source.as_mut() {
-                                        forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
-                                    }
-                                    self.relayout();
-                                }
-                                forms::FormClickAction::ToggleRadio {
-                                    clicked,
-                                    _group_name: _,
-                                } => {
-                                    if let Some(src) = self.layout_source.as_mut() {
-                                        forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
-                                    }
-                                    self.relayout();
-                                }
-                                forms::FormClickAction::OpenColorPicker(id) => {
-                                    self.color_picker_node = Some(id);
-                                    if let Some(w) = self.window.as_ref() {
-                                        w.request_redraw();
-                                    }
-                                }
-                                forms::FormClickAction::SubmitForm(submit_node) => {
-                                    // Phase 3: HTML5 form submission algorithm integration.
-                                    // Execute submit_form() which performs constraint validation.
-                                    if let Some(src) = self.layout_source.as_ref() {
-                                        let doc = src.document.lock().unwrap();
-                                        if let Some(submit_event) = forms::build_form_submit_event(&doc, submit_node) {
-                                            match submit_event {
-                                                lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
-                                                    // Form passed validation — collect fields and submit.
-                                                    let body = forms::encode_form_fields(&fields);
-                                                    use lumen_core::event::{Event, TabId};
-                                                    self.event_sink.emit(&Event::FormSubmit {
-                                                        tab_id: TabId(0),
-                                                        action: action.clone(),
-                                                        method: method.clone(),
-                                                        body: body.clone(),
-                                                    });
-                                                    match method.as_str() {
-                                                        "get" => {
-                                                            // HTML LS §form-submission step 23: navigate
-                                                            // to action + query-string.
-                                                            let get_url = forms::make_get_url(&action, &body);
-                                                            let resolved = self.source.resolve_href(&get_url);
-                                                            drop(doc);
-                                                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
-                                                        }
-                                                        _ => {
-                                                            // POST: emit event; real network send is P3 task.
-                                                            eprintln!("[forms] POST {} body={}", action, body);
-                                                        }
-                                                    }
-                                                }
-                                                lumen_dom::FormSubmitEvent::Invalid { invalid_controls } => {
-                                                    // Form contains invalid controls — show first error.
-                                                    if let Some(&first_invalid) = invalid_controls.first() {
-                                                        if let Some(lb) = self.layout_box.as_ref()
-                                                            && let Some((rect, msg)) = forms::find_control_rect_and_error(lb, &doc, first_invalid)
-                                                        {
-                                                            self.validation_tooltip = Some((rect, msg));
-                                                            if let Some(w) = self.window.as_ref() {
-                                                                w.request_redraw();
-                                                            }
-                                                        }
-                                                        eprintln!(
-                                                            "forms: submit blocked — {} control(s) failed constraint validation",
-                                                            invalid_controls.len()
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                forms::FormClickAction::Nothing => {
-                                    // ── Link click ───────────────────────────
-                                    // No form control was activated — check if
-                                    // the clicked node is inside an <a href>.
-                                    let href = hit_result.as_ref().and_then(|r| {
-                                        self.layout_source
-                                            .as_ref()
-                                            .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.node))
-                                    });
-                                    if let Some(href) = href {
-                                        if let Some(frag) = links::fragment_only(&href) {
-                                            // Same-page fragment navigation.
-                                            self.navigate_fragment(frag.to_owned());
-                                        } else if links::is_navigable_href(&href) {
-                                            let resolved = self.source.resolve_href(&href);
-                                            let target = PageSource::from_arg(Some(&resolved));
-                                            self.navigate_to(target);
-                                        }
-                                    }
-                                }
-                            }
+                            self.handle_click_at(x_css, y_css);
                         }
                     }
                 } else {
@@ -3917,6 +3792,211 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 }
 
 impl Lumen {
+    /// Return a cloneable [`InputSender`] for injecting synthetic input events.
+    ///
+    /// Callers on any thread can use the sender to enqueue [`InputCommand`]s;
+    /// they are drained and dispatched in `about_to_wait`.
+    #[allow(dead_code)]
+    pub fn input_sender(&self) -> input::InputSender {
+        self.input_tx.clone()
+    }
+
+    /// Handle a left-button click at CSS-pixel viewport coordinates `(x_css, y_css)`.
+    ///
+    /// Used by both the winit `MouseInput::Pressed` handler and the injected
+    /// [`InputCommand::Click`] path so both share identical dispatch logic.
+    fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
+        // Dismiss validation tooltip on any non-scrollbar click.
+        self.validation_tooltip = None;
+        let scroll_y = self.scroll_y;
+
+        // ── Color picker swatch hit ──────────────────────
+        // Check if click lands on an open color picker swatch.
+        // Compute swatch result inside a scoped borrow, then act.
+        let picker_swatch_result: Option<(NodeId, [u8; 3])> = {
+            let picker_node = self.color_picker_node;
+            picker_node.and_then(|pn| {
+                let anchor = forms::find_box_rect(
+                    self.layout_box.as_ref()?,
+                    pn,
+                )?;
+                let color = forms::hit_color_swatch(
+                    anchor, scroll_y, x_css, y_css,
+                )?;
+                Some((pn, color))
+            })
+        };
+        if let Some((pn, color)) = picker_swatch_result {
+            self.color_picker_node = None;
+            let css_color = forms::swatch_to_css_color(color);
+            if let Some(src) = self.layout_source.as_mut() {
+                forms::set_value(&mut src.document.lock().unwrap(), pn, &css_color);
+            }
+            self.form_state.entry(pn).or_default().value = css_color;
+            self.relayout();
+            return;
+        }
+        // Any click outside the picker closes it.
+        self.color_picker_node = None;
+
+        // ── Form control + link click ────────────────────
+        // Single hit test shared by form dispatch and link navigation.
+        let page_x = x_css + self.scroll_x;
+        let page_y = y_css + self.scroll_y;
+        let hit_result = self.layout_box.as_ref().and_then(|lb| {
+            hit_test(Point::new(page_x, page_y), lb)
+        });
+        // Track focused node for TypeText injection.
+        self.focused_node = hit_result.as_ref().map(|r| r.node);
+        // Dispatch JS click event (bubbles from hit node to document).
+        // Passes viewport coordinates and modifier key state so
+        // handlers can read event.clientX/clientY/ctrlKey/etc.
+        if let (Some(result), Some(ctx)) =
+            (hit_result.as_ref(), self.js_ctx.as_ref())
+        {
+            let mod_flags: u8 =
+                (self.modifiers.control_key() as u8)
+                | ((self.modifiers.shift_key()  as u8) << 1)
+                | ((self.modifiers.alt_key()    as u8) << 2)
+                | ((self.modifiers.super_key()  as u8) << 3);
+            let script = format!(
+                "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {})",
+                result.node.index(),
+                x_css as i32,
+                y_css as i32,
+                mod_flags,
+            );
+            ctx.eval_js(&script);
+            if let Some(nav) = ctx.take_navigate_request() {
+                self.pending_js_navigate = Some(nav);
+            }
+        }
+        let form_action: forms::FormClickAction =
+            if let (Some(result), Some(src)) =
+                (hit_result.as_ref(), self.layout_source.as_ref())
+            {
+                forms::classify_click(&src.document.lock().unwrap(), result.node)
+            } else {
+                forms::FormClickAction::Nothing
+            };
+        match form_action {
+            forms::FormClickAction::ToggleCheckbox(id) => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
+                }
+                self.relayout();
+            }
+            forms::FormClickAction::ToggleRadio {
+                clicked,
+                _group_name: _,
+            } => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
+                }
+                self.relayout();
+            }
+            forms::FormClickAction::OpenColorPicker(id) => {
+                self.color_picker_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::SubmitForm(submit_node) => {
+                // Phase 3: HTML5 form submission algorithm integration.
+                // Execute submit_form() which performs constraint validation.
+                if let Some(src) = self.layout_source.as_ref() {
+                    let doc = src.document.lock().unwrap();
+                    if let Some(submit_event) = forms::build_form_submit_event(&doc, submit_node) {
+                        match submit_event {
+                            lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
+                                // Form passed validation — collect fields and submit.
+                                let body = forms::encode_form_fields(&fields);
+                                use lumen_core::event::{Event, TabId};
+                                self.event_sink.emit(&Event::FormSubmit {
+                                    tab_id: TabId(0),
+                                    action: action.clone(),
+                                    method: method.clone(),
+                                    body: body.clone(),
+                                });
+                                match method.as_str() {
+                                    "get" => {
+                                        // HTML LS §form-submission step 23: navigate
+                                        // to action + query-string.
+                                        let get_url = forms::make_get_url(&action, &body);
+                                        let resolved = self.source.resolve_href(&get_url);
+                                        drop(doc);
+                                        self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                                    }
+                                    _ => {
+                                        // POST: emit event; real network send is P3 task.
+                                        eprintln!("[forms] POST {} body={}", action, body);
+                                    }
+                                }
+                            }
+                            lumen_dom::FormSubmitEvent::Invalid { invalid_controls } => {
+                                // Form contains invalid controls — show first error.
+                                if let Some(&first_invalid) = invalid_controls.first() {
+                                    if let Some(lb) = self.layout_box.as_ref()
+                                        && let Some((rect, msg)) = forms::find_control_rect_and_error(lb, &doc, first_invalid)
+                                    {
+                                        self.validation_tooltip = Some((rect, msg));
+                                        if let Some(w) = self.window.as_ref() {
+                                            w.request_redraw();
+                                        }
+                                    }
+                                    eprintln!(
+                                        "forms: submit blocked — {} control(s) failed constraint validation",
+                                        invalid_controls.len()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            forms::FormClickAction::Nothing => {
+                // ── Link click ───────────────────────────
+                // No form control was activated — check if
+                // the clicked node is inside an <a href>.
+                let href = hit_result.as_ref().and_then(|r| {
+                    self.layout_source
+                        .as_ref()
+                        .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.node))
+                });
+                if let Some(href) = href {
+                    if let Some(frag) = links::fragment_only(&href) {
+                        // Same-page fragment navigation.
+                        self.navigate_fragment(frag.to_owned());
+                    } else if links::is_navigable_href(&href) {
+                        let resolved = self.source.resolve_href(&href);
+                        let target = PageSource::from_arg(Some(&resolved));
+                        self.navigate_to(target);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Inject a typed character into the focused element (TypeText injection path).
+    ///
+    /// Fires `keydown` → `input` → `keyup` JS events via `_lumen_dispatch_key_event`
+    /// on the last-focused node so events have `isTrusted=true`.
+    fn inject_char(&mut self, ch: char) {
+        let Some(ctx) = self.js_ctx.as_ref() else { return };
+        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
+        let key = escape_js_string_char(ch);
+        for event_type in &["keydown", "input", "keyup"] {
+            let script = format!(
+                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                node_id, event_type, key, key,
+            );
+            ctx.eval_js(&script);
+        }
+        if let Some(nav) = ctx.take_navigate_request() {
+            self.pending_js_navigate = Some(nav);
+        }
+    }
+
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
         if key_event.state != ElementState::Pressed {
             return;
@@ -4911,6 +4991,24 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
         }
     }
     max_x
+}
+
+/// Escape a single character for safe embedding in a JS string literal.
+///
+/// Converts `ch` to an ASCII or `\uXXXX` escape so the character can be
+/// used in `"..."` JS string arguments passed via `eval_js`.
+fn escape_js_string_char(ch: char) -> String {
+    match ch {
+        '"' => r#"\""#.to_owned(),
+        '\\' => r"\\".to_owned(),
+        '\n' => r"\n".to_owned(),
+        '\r' => r"\r".to_owned(),
+        '\t' => r"\t".to_owned(),
+        c if (c as u32) < 0x20 || (c as u32) > 0x7E => {
+            format!("\\u{:04X}", c as u32)
+        }
+        c => c.to_string(),
+    }
 }
 
 #[cfg(test)]
