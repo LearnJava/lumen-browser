@@ -39,3 +39,5 @@ winit.workspace = true
 
 # Exception #6 из §5: regex — find-in-page с regex; стандарт де-факто в Rust.
 regex.workspace = true
+# Exception #8 из §5: pdf-writer — PDF-сериализация для --print-to-pdf.
+pdf-writer.workspace = true

@@ -77,6 +77,10 @@ flate2 = "1"
 # Trait-anchor: `lumen-core::ext::HyphenationProvider`. Graduation: permanent когда
 # перенос слов станет стандартной частью pipeline (§5, Phase 2-3).
 hyphenation = { version = "0.8", features = ["embed_all"] }
+# Exception #8 (§5): pdf-writer — zero-copy PDF serialisation for --print-to-pdf.
+# Permanent-tier: content encoding (PDF), no suitable alternative in Rust ecosystem.
+# Provisional until print pipeline stabilises, then promoted to permanent.
+pdf-writer = "0.12"
 
 [profile.dev]
 opt-level = 1

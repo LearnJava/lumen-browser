@@ -31,7 +31,7 @@ pub use compositor::{
 };
 pub use display_list::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_with_anim,
-    build_display_list_with_anim,
+    build_display_list_with_anim, build_print_display_list, split_at_page_breaks,
     serialize_display_list, BlendMode, CornerRadii, DisplayCommand, DisplayList,
 };
 pub use fingerprint::GpuFingerprint;

@@ -7,6 +7,7 @@
 //! - `lumen --dump-source <path-or-url>` — печать декодированного HTML в stdout.
 //! - `lumen --dump-layout <path-or-url>` — печать layout-дерева в stdout.
 //! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
+//! - `lumen --print-to-pdf <out.pdf> <path-or-url>` — сохранить страницу как PDF (A4).
 //! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
 //! - `lumen --mcp [url]` — MCP-сервер (stdio) для AI-агентов (Claude, Browser Use…).
 //! - `lumen --mcp-port <N> [url]` — MCP-сервер на TCP порту N (отладка через netcat).
@@ -159,8 +160,12 @@ fn main() -> ExitCode {
         }
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
+    let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
-    let cli = if let Some(mcp) = mcp_mode {
+    let cli = if let Some(output) = pdf_output {
+        let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
+        CliMode::PrintToPdf { source, output }
+    } else if let Some(mcp) = mcp_mode {
         CliMode::Mcp(mcp)
     } else {
         match parse_cli(&rest_args) {
@@ -191,6 +196,7 @@ fn main() -> ExitCode {
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
         CliMode::OpenWindow(source) => run_window_mode(source, event_sink, initial_scroll, no_scrollbar),
+        CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
     }
 }
@@ -287,6 +293,154 @@ fn run_dump_mode(source: &PageSource, kind: DumpKind, event_sink: Arc<dyn EventS
     }
 }
 
+/// Запустить `--print-to-pdf`: layout → paginate → render → PDF → файл.
+fn run_print_to_pdf(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+) -> ExitCode {
+    match do_print_to_pdf(source, output, event_sink) {
+        Ok(page_count) => {
+            eprintln!("PDF сохранён: {} ({page_count} стр.)", output.display());
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("Ошибка --print-to-pdf {}: {err}", source.describe());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// A4 @ 96 DPI: 210 mm × 297 mm → 794 × 1123 px.
+const PDF_PAGE_W: u32 = 794;
+const PDF_PAGE_H: u32 = 1123;
+
+fn do_print_to_pdf(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+) -> Result<usize, Box<dyn Error>> {
+    use lumen_layout::{paginate, PaginationContext};
+    use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
+
+    let raw = source.load_bytes(event_sink.clone())?;
+    let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
+    let parsed = parse_and_layout(
+        &raw.bytes,
+        raw.content_type,
+        &raw.base,
+        &event_sink,
+        vp,
+        &mut std::collections::HashSet::new(),
+        None,
+        None,
+        &NullHyphenationProvider,
+    )?;
+
+    let ctx = PaginationContext {
+        page_width: PDF_PAGE_W as f32,
+        page_height: PDF_PAGE_H as f32,
+        margin_top: 48.0,
+        margin_bottom: 48.0,
+        margin_left: 48.0,
+        margin_right: 48.0,
+    };
+    let pages = paginate(&parsed.layout, &ctx);
+    let cmds = build_print_display_list(&pages);
+    let split_pages = split_at_page_breaks(cmds);
+
+    let images = Renderer::render_print_pages(
+        INTER_FONT.to_vec(),
+        &split_pages,
+        PDF_PAGE_W,
+        PDF_PAGE_H,
+    )?;
+
+    let page_count = images.len();
+    let pdf_bytes = encode_images_as_pdf(&images, PDF_PAGE_W, PDF_PAGE_H);
+    std::fs::write(output, &pdf_bytes)?;
+    Ok(page_count)
+}
+
+/// Кодирует набор растровых изображений в PDF-файл (по одному на страницу).
+///
+/// Размер страницы задаётся `page_w × page_h` в PDF-единицах (1 unit = 1 px @ 96 DPI).
+/// Изображения встраиваются как DeviceRGB XObject без сжатия.
+fn encode_images_as_pdf(images: &[lumen_image::Image], page_w: u32, page_h: u32) -> Vec<u8> {
+    use pdf_writer::{Content, Name, Pdf, Rect, Ref};
+
+    if images.is_empty() {
+        return Pdf::new().finish();
+    }
+
+    let n = images.len() as i32;
+    let mut pdf = Pdf::new();
+
+    // Распределяем PDF-объект IDs:
+    //   1            = catalog
+    //   2            = page tree
+    //   3 .. 3+n-1   = страницы
+    //   3+n .. 3+2n-1 = потоки содержимого
+    //   3+2n .. 3+3n-1 = image XObjects
+    let catalog_id = Ref::new(1);
+    let page_tree_id = Ref::new(2);
+    let page_ids: Vec<Ref> = (0..n).map(|i| Ref::new(3 + i)).collect();
+    let content_ids: Vec<Ref> = (0..n).map(|i| Ref::new(3 + n + i)).collect();
+    let image_ids: Vec<Ref> = (0..n).map(|i| Ref::new(3 + 2 * n + i)).collect();
+
+    pdf.catalog(catalog_id).pages(page_tree_id);
+    pdf.pages(page_tree_id)
+        .kids(page_ids.iter().copied())
+        .count(n);
+
+    let media = Rect::new(0.0, 0.0, page_w as f32, page_h as f32);
+
+    for (i, image) in images.iter().enumerate() {
+        let idx = i as i32;
+        let img_name = format!("Im{idx}");
+        let img_w = image.width;
+        let img_h = image.height;
+
+        // Страница
+        {
+            let mut page = pdf.page(page_ids[i]);
+            page.media_box(media);
+            page.parent(page_tree_id);
+            page.contents(content_ids[i]);
+            page.resources()
+                .x_objects()
+                .pair(Name(img_name.as_bytes()), image_ids[i]);
+        }
+
+        // Поток содержимого: cm-матрица + Do оператор.
+        // Матрица [w 0 0 -h 0 h] размещает изображение на всю страницу
+        // и переворачивает по Y (PDF: начало координат внизу слева).
+        let content_bytes = {
+            let mut c = Content::new();
+            c.save_state();
+            c.transform([img_w as f32, 0.0, 0.0, -(img_h as f32), 0.0, img_h as f32]);
+            c.x_object(Name(img_name.as_bytes()));
+            c.restore_state();
+            c.finish()
+        };
+        pdf.stream(content_ids[i], &content_bytes);
+
+        // Image XObject: DeviceRGB без альфа-канала
+        let rgba = image.to_rgba8();
+        let rgb: Vec<u8> = rgba
+            .chunks_exact(4)
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect();
+        let mut xobj = pdf.image_xobject(image_ids[i], &rgb);
+        xobj.width(img_w as i32);
+        xobj.height(img_h as i32);
+        xobj.color_space().device_rgb();
+        xobj.bits_per_component(8);
+    }
+
+    pdf.finish()
+}
+
 fn run_dump(
     source: &PageSource,
     kind: DumpKind,
@@ -319,15 +473,43 @@ fn run_dump(
 
 fn print_usage() {
     eprintln!("Использование:");
-    eprintln!("  lumen                                    — пустое окно");
-    eprintln!("  lumen <path-or-url>                      — открыть страницу в окне");
-    eprintln!("  lumen --dump-source <path-or-url>        — декодированный HTML в stdout");
-    eprintln!("  lumen --dump-layout <path-or-url>        — layout-дерево в stdout");
-    eprintln!("  lumen --dump-display-list <path-or-url>  — display list в stdout");
-    eprintln!("  [--devtools-port <N>]                    — DevTools WS сервер (любой режим)");
-    eprintln!("  --import-session <file.lsession>         — восстановить сессию из файла");
-    eprintln!("  --mcp [url]                              — MCP-сервер (stdio) для AI-агентов");
-    eprintln!("  --mcp-port <N> [url]                     — MCP-сервер (TCP) на порту N");
+    eprintln!("  lumen                                           — пустое окно");
+    eprintln!("  lumen <path-or-url>                             — открыть страницу в окне");
+    eprintln!("  lumen --dump-source <path-or-url>               — декодированный HTML в stdout");
+    eprintln!("  lumen --dump-layout <path-or-url>               — layout-дерево в stdout");
+    eprintln!("  lumen --dump-display-list <path-or-url>         — display list в stdout");
+    eprintln!("  lumen --print-to-pdf <out.pdf> <path-or-url>   — сохранить страницу как PDF");
+    eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
+    eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
+    eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
+    eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
+}
+
+/// Извлечь `--print-to-pdf <output.pdf>` из аргументов.
+///
+/// Возвращает `(Some(output_path), остальные_аргументы)` или `(None, все_аргументы)`.
+fn extract_print_to_pdf(args: &[String]) -> (Option<std::path::PathBuf>, Vec<String>) {
+    let mut i = 0;
+    let mut output: Option<std::path::PathBuf> = None;
+    let mut rest = Vec::new();
+
+    while i < args.len() {
+        if args[i] == "--print-to-pdf" && output.is_none() {
+            i += 1;
+            if let Some(path) = args.get(i) {
+                output = Some(std::path::PathBuf::from(path));
+            }
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+
+    if output.is_some() {
+        (output, rest)
+    } else {
+        (None, args.to_vec())
+    }
 }
 
 /// Извлечь `--mcp` / `--mcp-port N` из аргументов.
@@ -850,6 +1032,8 @@ enum CliMode {
     OpenWindow(PageSource),
     /// Headless: pipeline прогоняется до нужной фазы, результат идёт в stdout.
     Dump { source: PageSource, kind: DumpKind },
+    /// Headless: страница рендерится постранично и сохраняется как PDF.
+    PrintToPdf { source: PageSource, output: std::path::PathBuf },
     /// Headless: MCP-сервер для AI-агентов (Claude, Browser Use…).
     Mcp(McpMode),
 }
@@ -5293,6 +5477,61 @@ mod tests {
     fn parse_cli_too_many_args_errors() {
         let err = parse_cli(&args(&["--dump-layout", "a.html", "b.html"])).unwrap_err();
         assert!(err.contains("много"), "got: {err}");
+    }
+
+    // ── extract_print_to_pdf ─────────────────────────────────────────────────
+
+    #[test]
+    fn extract_print_to_pdf_basic() {
+        let (output, rest) = extract_print_to_pdf(&args(&["--print-to-pdf", "out.pdf", "page.html"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("out.pdf")));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_print_to_pdf_no_flag() {
+        let (output, rest) = extract_print_to_pdf(&args(&["page.html"]));
+        assert!(output.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_print_to_pdf_with_url_source() {
+        let (output, rest) = extract_print_to_pdf(&args(&["--print-to-pdf", "result.pdf", "https://example.com"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("result.pdf")));
+        assert_eq!(rest, args(&["https://example.com"]));
+    }
+
+    #[test]
+    fn extract_print_to_pdf_combined_with_other_flags() {
+        // --print-to-pdf coexists with other pre-extracted flags.
+        let (output, rest) = extract_print_to_pdf(&args(&["--print-to-pdf", "a.pdf", "b.html"]));
+        assert!(output.is_some());
+        assert_eq!(rest, args(&["b.html"]));
+    }
+
+    #[test]
+    fn encode_images_as_pdf_empty() {
+        let pdf = encode_images_as_pdf(&[], 100, 100);
+        // Non-empty: at minimum the %PDF header.
+        assert!(pdf.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn encode_images_as_pdf_single_page() {
+        let img = lumen_image::Image {
+            width: 2,
+            height: 2,
+            format: lumen_image::PixelFormat::Rgba8,
+            data: vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255],
+            icc_profile: None,
+        };
+        let pdf = encode_images_as_pdf(&[img], 2, 2);
+        assert!(pdf.starts_with(b"%PDF-"));
+        // PDF objects contain binary + ASCII text — search raw bytes for key strings.
+        let contains = |needle: &[u8]| pdf.windows(needle.len()).any(|w| w == needle);
+        assert!(contains(b"/Page") || contains(b"/MediaBox"),
+            "expected /Page or /MediaBox in PDF output (len={})", pdf.len());
     }
 
     // ── Scroll-state helpers ─────────────────────────────────────────────────
