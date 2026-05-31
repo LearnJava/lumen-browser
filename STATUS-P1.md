@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**HTTP fingerprint Chrome-matching (9C)**  branch: p1-http-fingerprint
+Next step: Wire `fingerprint_profile` through `fetch_with_redirect` → `fetch_single` → `write_request`; use `build_request_headers()` for Chrome-matching HTTP/1.1 headers; add `connect_with_profile()` to `H2Conn`. `crates/network/src/lib.rs:944`
 
 ---
 
@@ -17,9 +18,35 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
 | 1 | **HTTP fingerprint Chrome-matching (9C)** — HTTP/1.1 header order + casing; HTTP/2 SETTINGS frame values + stream priority; `Accept-Language: en-US,en;q=0.9`; Client Hints opt-out. See `lumen-plan.md §9C` | `lumen-network` | M | none |
-| 3 | **Native input injection (8C)** — mouse/keyboard events go through the same winit event-loop path as real OS events (NOT via JS `dispatchEvent`). `InjectMouseEvent`/`InjectKeyEvent` in `shell/src/input/native.rs`; wire to `Lumen::handle_event` dispatch | `lumen-shell` | M | none |
-| 4 | **Behavioral mimicry (9E)** — opt-in `InputMode::HumanLike`: Bézier-curve mouse paths between coordinates, Gaussian inter-keystroke timing, pre-click dwell time. `shell/src/input/humanlike.rs`. Requires 8C native injection | `lumen-shell` | M | 8C (native input) |
-| 5 | **Tab lifecycle state machine (10A)** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + transition triggers (idle timeout + memory pressure + LRU). Per-user timeouts (5 min / 30 min / pinned). `shell/src/tab_lifecycle/state.rs`. Requires `MemoryPressureSource` (✅ in `lumen-core`) | `lumen-shell` | L | none |
+| 2 | **Native input injection (8C)** — mouse/keyboard events go through the same winit event-loop path as real OS events (NOT via JS `dispatchEvent`). `InjectMouseEvent`/`InjectKeyEvent` в `shell/src/input/native.rs`; wire to `Lumen::handle_event` dispatch | `lumen-shell` | M | none |
+| 3 | **Behavioral mimicry (9E)** — opt-in `InputMode::HumanLike`: Bézier-curve mouse paths between coordinates, Gaussian inter-keystroke timing, pre-click dwell time. `shell/src/input/humanlike.rs`. Requires #2 native injection | `lumen-shell` | M | #2 |
+| 4 | **Tab lifecycle state machine (10A)** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + transition triggers (idle timeout + memory pressure + LRU). Per-user timeouts (5 min / 30 min / pinned). `shell/src/tab_lifecycle/state.rs` | `lumen-shell` | L | none |
+| 5 | **Download manager** — `DownloadManager` в `shell/src/download/manager.rs`: `start_download(url, dest)` → HTTP stream → progress channel → file write. Commands: `StartDownload`, `CancelDownload`, `OpenDownload`. `DownloadBar` floating Panel (bottom). See `lumen-plan.md §7D.1` | `lumen-shell`, `lumen-network` | M | none |
+| 6 | **Service Worker API stub** — `ServiceWorkerContainer.register(url)` → `ServiceWorkerRegistration`; `install`/`activate`/`fetch` events; registration persisted in `lumen-storage`; `navigator.serviceWorker` в `lumen-js`. See `lumen-plan.md §8E` | `lumen-js`, `lumen-storage` | L | none |
+| 7 | **Web Worker** — `new Worker(script_url)`: separate `QuickJsRuntime` on `std::thread`; `postMessage`/`onmessage`/`terminate`; message passing via `mpsc`. `lumen-js/src/worker.rs`. See `lumen-plan.md §8E` | `lumen-js` | L | none |
+| 8 | **Cache API** — `caches.open(name)`, `CacheStorage`, `Cache.put/match/delete/keys/add/addAll`; backed by `lumen-storage` blob store. `lumen-js/src/cache_api.rs`. See `lumen-plan.md §8E` | `lumen-js`, `lumen-storage` | M | none |
+| 9 | **Geolocation API stub** — `navigator.geolocation.getCurrentPosition/watchPosition/clearWatch`; returns `PERMISSION_DENIED` by default; opt-in fake coords via `FingerprintProfile`. `lumen-js/src/geolocation.rs` | `lumen-js` | S | none |
+| 10 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #4 |
+| 11 | **Vim keybindings** — `InputMode::Vim` в `shell/src/input/vim.rs`: normal/insert state machine; `j/k` scroll, `gg/G` top/bottom, `f/t` char jump, `/` find, `yy` copy. Emits `Command::Scroll` / `Command::Find`. See `lumen-plan.md §7B.1` | `lumen-shell` | M | none |
+| 12 | **Mouse gesture recognizer** — `shell/src/input/gesture.rs`: track right-button drag → classify L/R/U/D/LD/RD → emit `Command::Navigate(Back/Forward)`, `Command::Tab(Close)`, `Command::NewTab`. Configurable gesture→command map. See `lumen-plan.md §7B.3` | `lumen-shell` | S | none |
+| 13 | **Custom omnibox aliases** — `shell/src/omnibox/aliases.rs`: `!g <q>` → Google, `!gh <q>` → GitHub, `@notes <text>` → `Command::CreateNote`, `@read-later <url>` → `Command::SaveReadLater`; configurable via `settings` table. See `lumen-plan.md §7B.4` | `lumen-shell` | S | none |
+| 14 | **`<audio>` element stub** — `<audio>` as 0×0 replaced block (with `controls` attr: 40px bar); JS: `play()→Promise`, `pause()`, `src`/`currentTime`/`duration`/`volume`/`muted`; `canplay`/`loadedmetadata` fire immediately. `lumen-js/src/audio_element.rs` | `lumen-js`, `lumen-layout` | S | none |
+| 15 | **Web Notifications API** — `new Notification(title, opts)`, `Notification.requestPermission()`; shell delivers via `OsNotification` surface (winit + OS API). `lumen-js/src/notifications.rs` + `shell/src/platform/notification.rs` | `lumen-js`, `lumen-shell` | M | none |
+| 16 | **DOM GC shell integration** — idle-tick в shell event loop: `document.dead_node_ids()` → release QuickJS class instances via `_lumen_gc_collect(nids)`. `shell/src/gc_tick.rs`. Requires `p1-dom-gc-hooks` ✅ | `lumen-shell` | S | none |
+| 17 | **JS scroll requests drain** — в `about_to_wait`: `runtime.take_scroll_requests()` → `shell::set_scroll_position(nid, x, y)` → re-layout + redraw. `shell/src/event_loop.rs`. Requires `p1-clickable-iterator` ✅ | `lumen-shell` | S | none |
+| 18 | **Memory pressure poll loop** — shell создаёт платформенный `MemoryPressureSource`, polling каждые 5s; на Medium+ → `CacheRegistry::broadcast_pressure(level)`. `shell/src/memory_poll.rs`. Requires `MemoryPressureSource` ✅ + `CacheRegistry` ✅ | `lumen-shell` | S | none |
+| 19 | **Tab auto-archive (10E.5)** — на `TabState::Hibernated`: `Document::to_bytes()`, drop `PersistentJs`, store bytes в tab slot; restore на switch через `Document::from_bytes()` + new `PersistentJs`. `shell/src/tab_lifecycle/hibernate.rs`. See `lumen-plan.md §10E.5` | `lumen-shell` | M | #4 |
+| 20 | **Deterministic render mode (8F)** — `--deterministic` CLI флаг: freeze `Date.now()` в t=0, seed `Math.random` из URL hash, suppress RAF jitter, fixed viewport 1280×800. `shell/src/deterministic.rs`. See `lumen-plan.md §8F` | `lumen-shell`, `lumen-js` | M | none |
+| 21 | **Per-context isolation (8E)** — `LumenSession::with_origin_isolation(origin)`: separate JS heap, cookie jar, `LocalStorage`/`IdbStore` per origin-group. `lumen-driver/src/isolation.rs`. See `lumen-plan.md §8E` | `lumen-driver`, `lumen-storage` | L | none |
+| 22 | **CSS @font-face network fetch** — P4 парсит `@font-face src: url(...)`; P1 fetches: `shell/src/font_loader.rs` загружает URL через `HttpClient`, передаёт bytes в `lumen-font::FontDb::insert`, trigger relayout. See `lumen-plan.md §6.8` | `lumen-shell`, `lumen-font`, `lumen-network` | M | none |
+| 23 | **WebRTC mDNS-only stub (9D.5)** — `RTCPeerConnection` + `createOffer/setLocalDescription` stubs; `onicecandidate` fires single mDNS candidate (no IP leak). `lumen-js/src/webrtc_stub.rs`. See `lumen-plan.md §9D.5` | `lumen-js` | S | none |
+| 24 | **CI bench gate (9G.3)** — `bench/src/ci_gate.rs`: load `heavy_page`, 3× warm layout, assert mean < 200ms + peak RSS < 512MB; `lumen-bench --ci` exits 1 on failure. See `lumen-plan.md §9G.3` | `lumen-bench` | S | none |
+| 25 | **`window.open()` popup handling** — `window.open(url, target, features)` → `Command::OpenPopup { url, width, height }`; shell spawns secondary winit window с new `Lumen` instance; `window.opener` через shared `Arc<AppState>`. `shell/src/popup.rs` | `lumen-shell`, `lumen-js` | M | none |
+| 26 | **DevTools JS console (7E.5)** — `ConsolePanel: Panel` в `shell/src/devtools/console_panel.rs`; captures `console.log/warn/error` из `QuickJsRuntime::console_log_buffer`; scrollable `DrawText` list; `F12` toggle. See `lumen-plan.md §7E.5` | `lumen-shell` | M | none |
+| 27 | **Broadcast Channel API** — `new BroadcastChannel(name)`, `postMessage`, `onmessage`; same-origin channels share messages через global `HashMap<String, Vec<Sender>>`; `close()`. `lumen-js/src/broadcast_channel.rs` | `lumen-js` | S | none |
+| 28 | **`navigator.clipboard` shell binding** — shell регистрирует `_lumen_clipboard_read/_write` → platform clipboard (Windows: `GetClipboardData/SetClipboardData`; cross-platform: `arboard` crate). `shell/src/platform/clipboard.rs`. Completes `navigator.clipboard` ✅ | `lumen-shell` | S | none |
+| 29 | **SharedWorker stub** — `new SharedWorker(url)`: single shared `QuickJsRuntime` per name+origin; `port.postMessage/onmessage`; `connect` event on registration. `lumen-js/src/shared_worker.rs` | `lumen-js` | M | #7 |
+| 30 | **`<canvas>` WebGL context wiring** — `canvas.getContext('webgl')` proxy → `lumen-paint` GPU pipeline; `createBuffer/bindBuffer/bufferData`, `createShader/compileShader/createProgram/drawArrays`. `lumen-js/src/webgl_canvas.rs` + `lumen-paint/src/webgl.rs`. See `lumen-plan.md §7F` | `lumen-js`, `lumen-paint` | L | none |
 
 ---
 
