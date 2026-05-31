@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(nothing in progress)_
+**`samples/heavy.html` benchmark page (10M)**  branch: p2-heavy-bench
+Next step: расширить heavy.html до 80+ статей + добавить heavy_page bench target в bench/src/main.rs
 
 ---
 
