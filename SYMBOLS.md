@@ -1312,7 +1312,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/text_iter.rs:17` **struct** `TextFragment` — A visible text fragment with its absolute screen rectangle
 `crates/engine/layout/src/text_iter.rs:37` **fn** `collect_visible_text` — Walk the layout tree and collect all visible text fragments with screen coordinates
 
-## lumen-mcp  (17 symbols)
+## lumen-mcp  (24 symbols)
 
 `crates/mcp/src/protocol.rs:8` **struct** `McpResource` — MCP resource describing a read-only data snapshot
 `crates/mcp/src/protocol.rs:21` **struct** `McpTool` — MCP tool describing a callable action
@@ -1328,9 +1328,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/protocol.rs:137` **fn** `to_json` — Сериализовать MCP сообщение в JSON
 `crates/mcp/src/server.rs:15` **struct** `McpServer` — MCP сервер для Lumen браузера
 `crates/mcp/src/server.rs:24` **fn** `new` — Создать новый MCP сервер
-`crates/mcp/src/transport.rs:9` **trait** `Transport` — Абстракция транспорта для MCP сообщений
-`crates/mcp/src/transport.rs:21` **struct** `StdioTransport` — Stdio-транспорт (stdin/stdout)
-`crates/mcp/src/transport.rs:28` **fn** `new` — Создать новый stdio-транспорт
+`crates/mcp/src/server.rs:29` **fn** `run` — Основной цикл сервера: читать запросы и писать ответы
+`crates/mcp/src/transport.rs:10` **trait** `Transport` — Абстракция транспорта для MCP сообщений
+`crates/mcp/src/transport.rs:22` **struct** `StdioTransport` — Stdio-транспорт (stdin/stdout)
+`crates/mcp/src/transport.rs:29` **fn** `new` — Создать новый stdio-транспорт
+`crates/mcp/src/transport.rs:69` **struct** `TcpTransport` — TCP-транспорт для `--mcp-port N` режима
+`crates/mcp/src/transport.rs:76` **fn** `from_stream` — Создать транспорт поверх уже принятого `TcpStream`
+`crates/mcp/src/transport.rs:113` **struct** `VecTransport` — In-memory транспорт для unit-тестов
+`crates/mcp/src/transport.rs:122` **fn** `new` — Создать пустой транспорт
+`crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
+`crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
 ## lumen-network  (205 symbols)
 
@@ -2220,4 +2227,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2158 symbols in 19 crates*
+*Total: 2165 symbols in 19 crates*

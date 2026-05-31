@@ -8,6 +8,8 @@
 //! - `lumen --dump-layout <path-or-url>` — печать layout-дерева в stdout.
 //! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
 //! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
+//! - `lumen --mcp [url]` — MCP-сервер (stdio) для AI-агентов (Claude, Browser Use…).
+//! - `lumen --mcp-port <N> [url]` — MCP-сервер на TCP порту N (отладка через netcat).
 //!
 //! Dump-режимы не создают окна и не инициализируют wgpu — pipeline прогоняется
 //! до нужной фазы, результат сериализуется и пишется в stdout. Полезно для CI
@@ -157,12 +159,17 @@ fn main() -> ExitCode {
         }
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
-    let cli = match parse_cli(&rest_args) {
-        Ok(m) => m,
-        Err(err) => {
-            eprintln!("Ошибка аргументов: {err}");
-            print_usage();
-            return ExitCode::FAILURE;
+    let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
+    let cli = if let Some(mcp) = mcp_mode {
+        CliMode::Mcp(mcp)
+    } else {
+        match parse_cli(&rest_args) {
+            Ok(m) => m,
+            Err(err) => {
+                eprintln!("Ошибка аргументов: {err}");
+                print_usage();
+                return ExitCode::FAILURE;
+            }
         }
     };
 
@@ -184,6 +191,7 @@ fn main() -> ExitCode {
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
         CliMode::OpenWindow(source) => run_window_mode(source, event_sink, initial_scroll, no_scrollbar),
+        CliMode::Mcp(mcp) => run_mcp_mode(mcp),
     }
 }
 
@@ -316,6 +324,96 @@ fn print_usage() {
     eprintln!("  lumen --dump-display-list <path-or-url>  — display list в stdout");
     eprintln!("  [--devtools-port <N>]                    — DevTools WS сервер (любой режим)");
     eprintln!("  --import-session <file.lsession>         — восстановить сессию из файла");
+    eprintln!("  --mcp [url]                              — MCP-сервер (stdio) для AI-агентов");
+    eprintln!("  --mcp-port <N> [url]                     — MCP-сервер (TCP) на порту N");
+}
+
+/// Извлечь `--mcp` / `--mcp-port N` из аргументов.
+///
+/// Возвращает `(Some(McpMode), остальные_аргументы)` или `(None, все_аргументы)`.
+fn extract_mcp_mode(args: &[String]) -> (Option<McpMode>, Vec<String>) {
+    let mut port: Option<u16> = None;
+    let mut url: Option<String> = None;
+    let mut mcp_found = false;
+    let mut rest = Vec::new();
+    let mut i = 0;
+
+    while i < args.len() {
+        if args[i] == "--mcp" {
+            mcp_found = true;
+        } else if args[i] == "--mcp-port" {
+            mcp_found = true;
+            i += 1;
+            if let Some(p) = args.get(i).and_then(|s| s.parse::<u16>().ok()) {
+                port = Some(p);
+            }
+        } else if mcp_found && !args[i].starts_with("--") && url.is_none() {
+            url = Some(args[i].clone());
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+
+    if mcp_found {
+        (Some(McpMode { url, port }), rest)
+    } else {
+        (None, args.to_vec())
+    }
+}
+
+/// Запустить MCP-сервер в headless-режиме.
+///
+/// Создаёт `InProcessSession`, опционально загружает URL, затем запускает
+/// `McpServer` поверх stdio или TCP-транспорта. Блокирует до отключения клиента.
+fn run_mcp_mode(mcp: McpMode) -> ExitCode {
+    use lumen_driver::{BrowserSession, InProcessSession};
+    use lumen_mcp::{McpServer, StdioTransport, TcpTransport};
+    use std::net::TcpListener;
+
+    let mut session = InProcessSession::new();
+    if let Some(ref url) = mcp.url
+        && let Err(e) = session.navigate(url)
+    {
+        eprintln!("MCP: ошибка загрузки {url}: {e}");
+    }
+
+    if let Some(port) = mcp.port {
+        let listener = match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("MCP: не удалось открыть порт {port}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        eprintln!("MCP listening on 127.0.0.1:{port}");
+        match listener.accept() {
+            Ok((stream, addr)) => {
+                eprintln!("MCP connection from {addr}");
+                match TcpTransport::from_stream(stream) {
+                    Ok(transport) => {
+                        let mut server = McpServer::new(session, transport);
+                        let _ = server.run();
+                    }
+                    Err(e) => {
+                        eprintln!("MCP: ошибка транспорта: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("MCP: ошибка accept: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        eprintln!("MCP server ready (stdio)");
+        let transport = StdioTransport::new();
+        let mut server = McpServer::new(session, transport);
+        let _ = server.run();
+    }
+
+    ExitCode::SUCCESS
 }
 
 /// Результат разбора `--import-session`: (source, (scroll_x, scroll_y)).
@@ -740,6 +838,17 @@ enum CliMode {
     OpenWindow(PageSource),
     /// Headless: pipeline прогоняется до нужной фазы, результат идёт в stdout.
     Dump { source: PageSource, kind: DumpKind },
+    /// Headless: MCP-сервер для AI-агентов (Claude, Browser Use…).
+    Mcp(McpMode),
+}
+
+/// Параметры MCP-режима.
+#[derive(Debug, Clone)]
+struct McpMode {
+    /// Начальный URL (если указан).
+    url: Option<String>,
+    /// TCP-порт для `--mcp-port N`. None → stdio.
+    port: Option<u16>,
 }
 
 /// Что именно печатать в dump-режиме.

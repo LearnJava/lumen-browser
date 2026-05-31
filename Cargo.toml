@@ -36,6 +36,7 @@ lumen-devtools = { path = "crates/devtools" }
 lumen-js = { path = "crates/js" }
 lumen-network = { path = "crates/network" }
 lumen-driver = { path = "crates/driver" }
+lumen-mcp = { path = "crates/mcp" }
 lumen-storage = { path = "crates/storage" }
 lumen-knowledge = { path = "crates/knowledge" }
 lumen-html-parser = { path = "crates/engine/html-parser" }

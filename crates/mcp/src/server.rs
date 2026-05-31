@@ -26,13 +26,13 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     }
 
     /// Основной цикл сервера: читать запросы и писать ответы.
-    pub async fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self) -> Result<()> {
         loop {
             let msg = self.transport.read_message()?;
 
             match msg {
                 McpMessage::Request(req) => {
-                    let response = self.handle_request(&req).await;
+                    let response = self.handle_request(&req);
                     self.transport.write_message(&McpMessage::Response(response))?;
                 }
                 McpMessage::Error(e) => {
@@ -47,7 +47,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     }
 
     /// Обработать один MCP запрос.
-    async fn handle_request(&mut self, req: &McpRequest) -> McpResponse {
+    fn handle_request(&mut self, req: &McpRequest) -> McpResponse {
         let id = req.id.clone().unwrap_or(json!(null));
 
         match req.method.as_str() {
@@ -495,4 +495,288 @@ fn base64_encode(data: &[u8]) -> String {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::VecTransport;
+
+    /// Минимальная заглушка BrowserSession для тестов MCP сервера.
+    struct MockSession;
+
+    impl lumen_driver::BrowserSession for MockSession {
+        fn screenshot(&self) -> lumen_core::error::Result<Vec<u8>> {
+            Ok(b"PNG".to_vec())
+        }
+
+        fn a11y_tree(&self) -> lumen_core::error::Result<lumen_driver::A11yNode> {
+            Ok(lumen_driver::A11yNode {
+                node_id: 1,
+                role: "document".to_string(),
+                name: String::new(),
+                description: String::new(),
+                placeholder: String::new(),
+                state: lumen_driver::A11yState::default(),
+                children: vec![],
+            })
+        }
+
+        fn query_a11y(&self, _q: &lumen_driver::AxQuery) -> lumen_core::error::Result<Option<lumen_driver::A11yNode>> {
+            Ok(None)
+        }
+
+        fn query_a11y_all(&self, _q: &lumen_driver::AxQuery) -> lumen_core::error::Result<Vec<lumen_driver::A11yNode>> {
+            Ok(vec![])
+        }
+
+        fn layout_snapshot(&self) -> lumen_core::error::Result<Vec<lumen_driver::BoxModel>> {
+            Ok(vec![])
+        }
+
+        fn computed_style(&self, _sel: &str) -> lumen_core::error::Result<Option<lumen_driver::ComputedProperties>> {
+            Ok(None)
+        }
+
+        fn network_log(&self) -> lumen_core::error::Result<Vec<lumen_driver::NetworkEntry>> {
+            Ok(vec![])
+        }
+
+        fn console_log(&self) -> lumen_core::error::Result<Vec<lumen_driver::ConsoleEntry>> {
+            Ok(vec![])
+        }
+
+        fn computed_style_snapshot(&self, _sel: &str) -> lumen_core::error::Result<Option<lumen_driver::ComputedStyleSnapshot>> {
+            Ok(None)
+        }
+
+        fn current_url(&self) -> &str {
+            "about:blank"
+        }
+
+        fn navigate(&mut self, _url: &str) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn click(&mut self, _t: &lumen_driver::Target) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn type_text(&mut self, _t: &lumen_driver::Target, _text: &str) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn scroll(&mut self, _t: &lumen_driver::Target, _d: lumen_driver::ScrollDelta) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn wait(&mut self, _c: lumen_driver::WaitCondition, _ms: u64) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn eval(&self, _js: &str) -> lumen_core::error::Result<String> {
+            Ok("null".to_string())
+        }
+
+        fn query(&self, _sel: &str) -> lumen_core::error::Result<Vec<lumen_driver::NodeRef>> {
+            Ok(vec![])
+        }
+
+        fn layout_box_by_selector(&self, _sel: &str) -> lumen_core::error::Result<Option<lumen_driver::BoxModel>> {
+            Ok(None)
+        }
+
+        fn all_layout_boxes_by_selector(&self, _sel: &str) -> lumen_core::error::Result<Vec<lumen_driver::BoxModel>> {
+            Ok(vec![])
+        }
+
+        fn fingerprint_profile(&self) -> lumen_driver::FingerprintProfile {
+            lumen_driver::FingerprintProfile::Standard
+        }
+
+        fn set_fingerprint_profile(&mut self, _p: lumen_driver::FingerprintProfile) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn user_agent(&self) -> String {
+            "Lumen/0.1".to_string()
+        }
+
+        fn set_user_agent(&mut self, _ua: &str) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_request(method: &str, params: serde_json::Value) -> String {
+        serde_json::to_string(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params
+        }))
+        .unwrap()
+    }
+
+    fn run_one(server: &mut McpServer<MockSession, VecTransport>, req_json: &str) -> McpResponse {
+        server.transport.push_incoming(req_json);
+        let msg = server.transport.read_message().unwrap();
+        match msg {
+            McpMessage::Request(req) => server.handle_request(&req),
+            _ => panic!("expected Request"),
+        }
+    }
+
+    #[test]
+    fn initialize_returns_capabilities() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("initialize", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["protocolVersion"], "2024-11-05");
+        assert!(result["capabilities"].is_object());
+    }
+
+    #[test]
+    fn resources_list_returns_five_resources() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("resources/list", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let resources = resp.result.unwrap()["resources"].as_array().cloned().unwrap_or_default();
+        assert_eq!(resources.len(), 5);
+        let uris: Vec<_> = resources.iter().map(|r| r["uri"].as_str().unwrap_or("")).collect();
+        assert!(uris.contains(&"resource://screenshot"));
+        assert!(uris.contains(&"resource://a11y_tree"));
+        assert!(uris.contains(&"resource://layout"));
+        assert!(uris.contains(&"resource://console"));
+        assert!(uris.contains(&"resource://network"));
+    }
+
+    #[test]
+    fn tools_list_returns_seven_tools() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("tools/list", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
+        assert_eq!(tools.len(), 7);
+        let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
+        assert!(names.contains(&"navigate"));
+        assert!(names.contains(&"click"));
+        assert!(names.contains(&"type"));
+        assert!(names.contains(&"scroll"));
+        assert!(names.contains(&"wait"));
+        assert!(names.contains(&"eval"));
+        assert!(names.contains(&"query"));
+    }
+
+    #[test]
+    fn resources_read_screenshot_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "resources/read",
+            serde_json::json!({ "uri": "resource://screenshot" }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let contents = &resp.result.unwrap()["contents"];
+        assert_eq!(contents[0]["type"], "image");
+        // "UE5H" is base64("PNG")
+        assert_eq!(contents[0]["data"], "UE5H");
+    }
+
+    #[test]
+    fn resources_read_a11y_tree_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "resources/read",
+            serde_json::json!({ "uri": "resource://a11y_tree" }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let text = resp.result.unwrap()["contents"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.contains("document"));
+    }
+
+    #[test]
+    fn resources_read_unknown_uri_errors() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "resources/read",
+            serde_json::json!({ "uri": "resource://nonexistent" }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32602);
+    }
+
+    #[test]
+    fn tool_navigate_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "navigate", "arguments": { "url": "https://example.com" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["success"], true);
+    }
+
+    #[test]
+    fn tool_navigate_missing_url_errors() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "navigate", "arguments": {} }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn tool_eval_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "eval", "arguments": { "code": "1+1" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["success"], true);
+    }
+
+    #[test]
+    fn tool_query_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "query", "arguments": { "selector": "div" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let nodes = resp.result.unwrap()["nodes"].as_array().cloned().unwrap_or_default();
+        assert!(nodes.is_empty()); // MockSession returns []
+    }
+
+    #[test]
+    fn unknown_method_returns_method_not_found() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("foobarbaz", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    #[test]
+    fn unknown_tool_returns_error() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "nonexistent_tool", "arguments": {} }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32601);
+    }
 }
