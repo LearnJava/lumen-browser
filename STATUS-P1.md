@@ -6,8 +6,7 @@
 
 ## In progress
 
-Scroll-Driven Animations algorithm stub (CSS Scroll Animations L1)  branch: p1-scroll-driven-animations
-Next step: реализовать scroll_timeline.rs в lumen-layout/src/
+_(нет)_
 
 ---
 
@@ -22,6 +21,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-scroll-driven-animations** ✅ 2026-05-31 — CSS Scroll-Driven Animations L1 algorithm stub в `lumen-layout/src/scroll_timeline.rs`: `ScrollTimeline`/`ViewTimeline`/`NamedScrollTimeline`/`NamedViewTimeline`/`ScrollAxis`/`Viewport`; `resolve_scroll_progress` (прогресс скролла [0,1], Block/Inline/X/Y, root/элемент) + `resolve_view_progress` («cover» range, прогресс видимости элемента [0,1]); `collect_named_scroll/view_timelines()` — стабы для P4 CSS wiring (`animation-timeline`, `scroll-timeline-name`, `view-timeline-name`). 15 unit-тестов. P4 handoff: STATUS-P4.md "Needs wiring".
 - **p1-streams-api** ✅ 2026-05-31 — WHATWG Streams Standard в `lumen-js` (чистый JS-шим): `ReadableStream`/`ReadableStreamDefaultController`/`ReadableStreamDefaultReader` (enqueue/close/error/read/cancel/tee/pipeTo/pipeThrough/from); `WritableStream`/`WritableStreamDefaultController`/`WritableStreamDefaultWriter`; `TransformStream`/`TransformStreamDefaultController` (passthrough + custom transform); `TextDecoderStream`/`TextEncoderStream` (поверх TextDecoder/TextEncoder); `ByteLengthQueuingStrategy`/`CountQueuingStrategy`. `Response.body` → ReadableStream, `Response.bodyUsed`. `Blob.prototype.stream()` → ReadableStream. Новый native binding `_lumen_drain_microtasks` (`ctx.execute_pending_job()` loop) для синхронного дренажа QuickJS microtask queue в unit-тестах. 22 тестов, итого lumen-js: 468.
 - **p1-event-classes** ✅ 2026-05-31 — DOM Event class hierarchy (WHATWG UI Events): UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, WheelEvent, PointerEvent, DragEvent, ClipboardEvent, CompositionEvent, AnimationEvent, TransitionEvent, StorageEvent, PopStateEvent, HashChangeEvent, ErrorEvent, SubmitEvent, PageTransitionEvent, BeforeUnloadEvent (21 classes). Prototype-chain inheritance. Dispatch helpers: `_lumen_dispatch_rich`, `_lumen_dispatch_mouse_event`, `_lumen_dispatch_key_event`. Shell click now creates proper MouseEvent with coordinates + modifier bitmask. 24 тестов, итого lumen-js: 440.
 - **p1-page-visibility-beacon** ✅ 2026-05-31 — Page Visibility API (W3C Level 2): `document.visibilityState`/`document.hidden` always `"visible"` (single-window); `visibilitychange` event via `_lumen_apply_visibility`. `document.readyState` (HTML LS §8.2.3): `"loading"→"interactive"→"complete"`, `readystatechange`+`DOMContentLoaded`+`window.load` at each transition; shell calls `notify_dom_content_loaded()`/`notify_window_loaded()` at correct lifecycle points. `navigator.sendBeacon(url, data)` — `_lumen_send_beacon` native binding (POST via `JsFetchProvider`). `window.addEventListener('load'/'DOMContentLoaded'/'visibilitychange')` + `window.onload`. Fixed `document.dispatchEvent` (was no-op). 12 новых тестов (416 итого lumen-js).
