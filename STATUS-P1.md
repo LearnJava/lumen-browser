@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Tab lifecycle state machine (10A)** branch: p1-tab-lifecycle-10a
+Next step: merge to main, task complete.
 
 ---
 
