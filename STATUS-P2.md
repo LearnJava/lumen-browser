@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(nothing in progress)_
+**WebGL `getParameter(UNMASKED_*)` fingerprint (9D.2)**  branch: p2-webgl-getparam
+Next step: JS-шим перехвата `canvas.getContext('webgl')` + `getParameter(UNMASKED_VENDOR/RENDERER_WEBGL)` в `crates/js/src/webgl_bindings.rs`
 
 ---
 
