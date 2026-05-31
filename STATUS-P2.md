@@ -6,8 +6,7 @@
 
 ## In progress
 
-**Scroll-discard (10E.4)**  branch: `p2-scroll-discard`
-Next step: `shell/src/scroll/decode_gating.rs` + wire `image_cache` into `Lumen`
+_(нет активных задач)_
 
 ---
 
@@ -52,6 +51,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-scroll-discard** ✅ 2026-05-31 — 10E.4: `discard_offscreen_images` в `shell/src/scroll/decode_gating.rs`; `ImageDecodeCache::remove`; `Lumen.image_cache` заполняется на каждой загрузке/reload/lazy; вызывается в `RedrawRequested` step 1. 7 тестов decode_gating + 32 тестов lumen-image = 291 всего lumen-shell.
 - **p2-print-to-pdf** ✅ 2026-05-31 — `--print-to-pdf out.pdf page.html` headless режим в shell. `CliMode::PrintToPdf` + `extract_print_to_pdf()` + `do_print_to_pdf()`: layout → `paginate` (A4 794×1123 px, margin 48 px) → `build_print_display_list` → `split_at_page_breaks` → `Renderer::render_print_pages` → `encode_images_as_pdf`. PDF кодирование: DeviceRGB XObject, cm-матрица `[w 0 0 -h 0 h]` (Y-flip), по одной странице на рендер-изображение. `pdf-writer = "0.12"` добавлен в workspace как permanent-tier dep. `build_print_display_list` + `split_at_page_breaks` экспортированы из `lumen-paint`. 7 новых unit-тестов, 284 итого lumen-shell.
 - **p2-gif-animation-shell** ✅ 2026-05-31 — GIF-анимация wired в shell. `fetch_and_decode_images` детектирует multi-frame GIF через `is_gif + decode_gif_animated`; frame 0 регистрируется как GPU-текстура, `AnimatedGif` хранится в `Lumen.animated_gifs`. `RedrawRequested` (Step 2.5): `frame_index_at(elapsed_ms)` → при смене кадра — `register_image` overwrite; если GIF ещё анимируется — `request_redraw()`. Lazy-loaded GIF аналогично. Finite-loop GIF останавливается на последнем кадре автоматически (`AnimatedGif::frame_index_at` clamp-логика).
 - **p2-cross-fade-gpu** ✅ 2026-05-30 — `DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress }` + GPU two-texture blend pipeline. `CROSS_FADE_SHADER_SRC`: WGSL шейдер с двумя `texture_2d<f32>` + `CrossFadeParams { progress }` uniform — `mix(textureSample(tex_a), textureSample(tex_b), clamp(progress, 0, 1))`. `CrossFadeVertex { pos[2], uv[2] }`, `cross_fade_bgl` (4 bindings: tex_a, tex_b, sampler, uniform), `cross_fade_pipeline` с ALPHA_BLENDING. Обработчик в `render_frame`: ищет обе текстуры по URL-ключу, per-quad uniform-буфер, 6 вершин quad. 4 unit-теста. P4 handoff: `cross-fade()` CSS image function → вызывает `DrawCrossFade` через `emit_background_image`.
