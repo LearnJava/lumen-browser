@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(никто ничего не зарезервировал)_
+**8A.6(б-20) расширение PAGES snapshot_cpu 56 → 57** branch: p3-8a6-more-pages-b20
+Next step: добавить "54-svg-path-stroke" в PAGES, сгенерировать снапшот  crates/driver/tests/snapshot_cpu.rs:160
 
 ## Next
 
