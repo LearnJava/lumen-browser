@@ -4,7 +4,7 @@
 //! across Windows/macOS/Linux.
 
 use lumen_image::Image;
-use lumen_layout::{Color, GradientStop, Length};
+use lumen_layout::{Color, FilterFn, GradientStop, Length};
 use crate::{DisplayCommand, CornerRadii};
 use lumen_core::geom::Rect;
 
@@ -41,6 +41,13 @@ enum LayerComposite {
     /// then blends each layer pixel against the accumulated backdrop on the
     /// layer below — exactly the element-vs-backdrop blend CSS specifies.
     Blend(tiny_skia::BlendMode),
+    /// CSS Filter Effects L1 §4 — `filter` chain (`PushFilter`/`PopFilter`,
+    /// emitted for box-shadow blur, text-shadow blur and the element `filter`
+    /// property). The subtree renders into a transparent full-size layer; on
+    /// close the chain is applied pixel-wise to the layer (Gaussian blur +
+    /// colour-matrix filters, left to right) and the filtered layer is
+    /// composited onto the backdrop below with plain `SourceOver`.
+    Filter(Vec<FilterFn>),
 }
 
 /// Rasterize display commands to an image using tiny-skia (CPU only, deterministic).
@@ -226,14 +233,28 @@ pub(crate) fn rasterize_cpu(
                 layers.push(layer);
                 layer_ops.push(LayerComposite::Blend(map_blend_mode(*mode)));
             }
-            // Close the current off-screen group (opacity, transform or blend)
+            // CSS Filter Effects L1 §4 — `filter` chain. Emitted by `walk` to
+            // wrap box-shadow / text-shadow blur (`PushFilter { Blur(σ) }` around
+            // the shadow FillRect / DrawText) and by the stacking-aware builder
+            // for the element's own `filter` property. Like the other group
+            // effects, the wrapped draws accumulate into a transparent full-size
+            // layer; the matching `PopFilter` applies the chain to that layer and
+            // composites it down.
+            DisplayCommand::PushFilter { filters } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create filter layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::Filter(filters.clone()));
+            }
+            // Close the current off-screen group (opacity, transform, blend or filter)
             // and composite it onto the layer below per its recorded op. The
             // pops share the logic because the emitter guarantees balanced,
             // properly nested Push/Pop, so the top op always matches the
             // closing command.
             DisplayCommand::PopOpacity
             | DisplayCommand::PopTransform
-            | DisplayCommand::PopBlendMode => {
+            | DisplayCommand::PopBlendMode
+            | DisplayCommand::PopFilter => {
                 if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
                     && let Some(dst) = layers.last_mut()
                 {
@@ -290,7 +311,244 @@ fn close_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, op: &LayerC
         LayerComposite::Opacity(a) => composite_layer(dst, src, *a),
         LayerComposite::Transform(t) => composite_transform_layer(dst, src, *t),
         LayerComposite::Blend(mode) => composite_blend_layer(dst, src, *mode),
+        LayerComposite::Filter(filters) => composite_filter_layer(dst, src, filters),
     }
+}
+
+/// Apply the CSS `filter` chain `filters` to off-screen layer `src`, then
+/// composite the filtered result onto `dst` with plain `SourceOver`.
+///
+/// Used by `PopFilter`: the wrapped subtree (a box-shadow / text-shadow rect or
+/// the element's own painted content) was drawn into `src`, a full-size,
+/// initially-transparent pixmap. The chain is applied left to right (CSS Filter
+/// Effects L1 §4.1) — Gaussian blur reuses the SVG three-box-blur approximation
+/// (`gaussian_blur`, integer-only so it is cross-OS bit-identical), the
+/// colour-matrix filters mirror the GPU `apply_filter_fn` shader. The filtered
+/// layer then blends over the backdrop accumulated in `dst`.
+fn composite_filter_layer(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    filters: &[FilterFn],
+) {
+    let mut cur = src.clone();
+    for f in filters {
+        match f {
+            FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma),
+            other => apply_color_filter(&mut cur, other),
+        }
+    }
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(0, 0, cur.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Gaussian blur of a premultiplied-RGBA pixmap via the SVG Filter Effects
+/// three-box-blur approximation (CSS Filter Effects L1 §4.4 / SVG 1.1 §15.17).
+///
+/// `sigma` is the standard deviation in pixels. A box blur of radius `r` (window
+/// `2r+1`) has variance `((2r+1)²−1)/12`; three successive box blurs add
+/// variance, so matching `σ²` gives `r = round((√(4σ²+1) − 1) / 2)`. Three
+/// separable passes per axis converge to a Gaussian. Only integer accumulation
+/// and IEEE-754 add/sub/div are used (no `exp`/`erf`), so the output is
+/// bit-identical across Windows/macOS/Linux — required by the exact-match
+/// snapshot gate (same constraint the conic-gradient `atan2` approximation
+/// solved). Edges replicate the border sample (clamp index), mirroring the GPU
+/// blur shader's clamp-to-edge sampler.
+fn gaussian_blur(src: &tiny_skia::Pixmap, sigma: f32) -> tiny_skia::Pixmap {
+    let w = src.width() as usize;
+    let h = src.height() as usize;
+    let radius = (((4.0 * sigma * sigma + 1.0).sqrt() - 1.0) / 2.0).round() as i32;
+    if radius <= 0 || w == 0 || h == 0 {
+        return src.clone();
+    }
+    // Premultiplied RGBA8 → f32 working buffer (4 channels interleaved).
+    let mut buf: Vec<f32> = src.data().iter().map(|&b| f32::from(b)).collect();
+    let mut tmp = vec![0.0f32; buf.len()];
+    for _ in 0..3 {
+        box_blur_h(&buf, &mut tmp, w, h, radius);
+        box_blur_v(&tmp, &mut buf, w, h, radius);
+    }
+    let mut out = tiny_skia::Pixmap::new(src.width(), src.height())
+        .expect("filter layer dims are valid");
+    for (dst_b, &v) in out.data_mut().iter_mut().zip(buf.iter()) {
+        *dst_b = v.round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+/// One horizontal box-blur pass with replicate-edge sampling.
+///
+/// Sliding-window running sum (O(width) per row, radius-independent): the window
+/// `[x−r, x+r]` averages `2r+1` clamped samples. The accumulator is updated by
+/// adding the entering sample and subtracting the leaving one in a fixed order,
+/// so the f32 result is deterministic across platforms.
+fn box_blur_h(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: i32) {
+    let win = (2 * r + 1) as f32;
+    let last = (w - 1) as i32;
+    for y in 0..h {
+        let row = y * w * 4;
+        for ch in 0..4 {
+            let mut acc = 0.0f32;
+            for i in -r..=r {
+                let idx = i.clamp(0, last) as usize;
+                acc += src[row + idx * 4 + ch];
+            }
+            for x in 0..w {
+                dst[row + x * 4 + ch] = acc / win;
+                let out_idx = (x as i32 - r).clamp(0, last) as usize;
+                let in_idx = (x as i32 + r + 1).clamp(0, last) as usize;
+                acc += src[row + in_idx * 4 + ch] - src[row + out_idx * 4 + ch];
+            }
+        }
+    }
+}
+
+/// One vertical box-blur pass with replicate-edge sampling (column analogue of
+/// [`box_blur_h`]).
+fn box_blur_v(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: i32) {
+    let win = (2 * r + 1) as f32;
+    let last = (h - 1) as i32;
+    for x in 0..w {
+        for ch in 0..4 {
+            let mut acc = 0.0f32;
+            for i in -r..=r {
+                let idx = i.clamp(0, last) as usize;
+                acc += src[(idx * w + x) * 4 + ch];
+            }
+            for y in 0..h {
+                dst[(y * w + x) * 4 + ch] = acc / win;
+                let out_idx = (y as i32 - r).clamp(0, last) as usize;
+                let in_idx = (y as i32 + r + 1).clamp(0, last) as usize;
+                acc += src[(in_idx * w + x) * 4 + ch] - src[(out_idx * w + x) * 4 + ch];
+            }
+        }
+    }
+}
+
+/// Apply a single colour-matrix CSS filter to a premultiplied-RGBA pixmap,
+/// in place (CSS Filter Effects L1 §7). Mirrors the GPU `apply_filter_fn` shader
+/// exactly: each formula operates on **straight** (un-premultiplied) sRGB
+/// components in `[0,1]`, so pixels are un-premultiplied first and
+/// re-premultiplied after. `Blur` is handled separately and is a no-op here.
+fn apply_color_filter(pixmap: &mut tiny_skia::Pixmap, f: &FilterFn) {
+    for px in pixmap.pixels_mut() {
+        let a = f32::from(px.alpha());
+        let (mut r, mut g, mut b) = if a > 0.0 {
+            (
+                f32::from(px.red()) / a,
+                f32::from(px.green()) / a,
+                f32::from(px.blue()) / a,
+            )
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+        let mut a_unit = a / 255.0;
+        match f {
+            FilterFn::Blur(_) => {}
+            FilterFn::Brightness(amt) => {
+                r = (r * amt).clamp(0.0, 1.0);
+                g = (g * amt).clamp(0.0, 1.0);
+                b = (b * amt).clamp(0.0, 1.0);
+            }
+            FilterFn::Contrast(amt) => {
+                r = ((r - 0.5) * amt + 0.5).clamp(0.0, 1.0);
+                g = ((g - 0.5) * amt + 0.5).clamp(0.0, 1.0);
+                b = ((b - 0.5) * amt + 0.5).clamp(0.0, 1.0);
+            }
+            FilterFn::Grayscale(amt) => {
+                let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                r = mix(r, lum, *amt);
+                g = mix(g, lum, *amt);
+                b = mix(b, lum, *amt);
+            }
+            FilterFn::HueRotate(rad) => {
+                let (c, s) = (cos_approx(*rad), sin_approx(*rad));
+                let nr = r * (0.213 + 0.787 * c - 0.213 * s)
+                    + g * (0.715 - 0.715 * c - 0.715 * s)
+                    + b * (0.072 - 0.072 * c + 0.928 * s);
+                let ng = r * (0.213 - 0.213 * c + 0.143 * s)
+                    + g * (0.715 + 0.285 * c + 0.140 * s)
+                    + b * (0.072 - 0.072 * c - 0.283 * s);
+                let nb = r * (0.213 - 0.213 * c - 0.787 * s)
+                    + g * (0.715 - 0.715 * c + 0.715 * s)
+                    + b * (0.072 + 0.928 * c + 0.072 * s);
+                r = nr.clamp(0.0, 1.0);
+                g = ng.clamp(0.0, 1.0);
+                b = nb.clamp(0.0, 1.0);
+            }
+            FilterFn::Invert(amt) => {
+                r = mix(r, 1.0 - r, *amt);
+                g = mix(g, 1.0 - g, *amt);
+                b = mix(b, 1.0 - b, *amt);
+            }
+            FilterFn::Opacity(amt) => {
+                a_unit = (a_unit * amt).clamp(0.0, 1.0);
+            }
+            FilterFn::Saturate(amt) => {
+                let nr = r * (0.213 + 0.787 * amt)
+                    + g * (0.715 - 0.715 * amt)
+                    + b * (0.072 - 0.072 * amt);
+                let ng = r * (0.213 - 0.213 * amt)
+                    + g * (0.715 + 0.285 * amt)
+                    + b * (0.072 - 0.072 * amt);
+                let nb = r * (0.213 - 0.213 * amt)
+                    + g * (0.715 - 0.715 * amt)
+                    + b * (0.072 + 0.928 * amt);
+                r = nr.clamp(0.0, 1.0);
+                g = ng.clamp(0.0, 1.0);
+                b = nb.clamp(0.0, 1.0);
+            }
+            FilterFn::Sepia(amt) => {
+                let sr = (0.393 * r + 0.769 * g + 0.189 * b).clamp(0.0, 1.0);
+                let sg = (0.349 * r + 0.686 * g + 0.168 * b).clamp(0.0, 1.0);
+                let sb = (0.272 * r + 0.534 * g + 0.131 * b).clamp(0.0, 1.0);
+                r = mix(r, sr, *amt);
+                g = mix(g, sg, *amt);
+                b = mix(b, sb, *amt);
+            }
+        }
+        let na = (a_unit * 255.0).round().clamp(0.0, 255.0);
+        let to_u8 = |c: f32| (c * na).round().clamp(0.0, 255.0) as u8;
+        *px = tiny_skia::PremultipliedColorU8::from_rgba(
+            to_u8(r),
+            to_u8(g),
+            to_u8(b),
+            na as u8,
+        )
+        .expect("premultiplied components ≤ alpha by construction");
+    }
+}
+
+/// Linear interpolation `x·(1−a) + y·a` (GPU `mix`).
+fn mix(x: f32, y: f32, a: f32) -> f32 {
+    x * (1.0 - a) + y * a
+}
+
+/// Deterministic, libm-free cosine for `hue-rotate`. Reuses the cross-OS
+/// bit-identity requirement that ruled out `f32::cos` (platform libm differs in
+/// the last ULP); a minimax polynomial on the range-reduced argument keeps the
+/// snapshot gate reproducible. Range reduction is exact (`+`/`−`/`*` only).
+fn cos_approx(rad: f32) -> f32 {
+    sin_approx(rad + std::f32::consts::FRAC_PI_2)
+}
+
+/// Deterministic, libm-free sine (see [`cos_approx`]). Range-reduces to
+/// `[−π, π]` then evaluates a 7th-order minimax polynomial (odd terms), using
+/// only IEEE-754 `+`/`−`/`*`, so the result is identical on every platform.
+fn sin_approx(rad: f32) -> f32 {
+    use std::f32::consts::PI;
+    // Range-reduce to [-PI, PI] with integer-multiple subtraction.
+    let two_pi = 2.0 * PI;
+    let k = (rad / two_pi + 0.5).floor();
+    let x = rad - k * two_pi;
+    // Minimax 7th-order odd polynomial for sin on [-PI, PI].
+    let x2 = x * x;
+    x * (1.0
+        + x2 * (-1.666_665_7e-1
+            + x2 * (8.332_161e-3 + x2 * (-1.951_529_6e-4 + x2 * 2.600_24e-6))))
 }
 
 /// Composite an off-screen `mix-blend-mode` layer `src` onto `dst` with `mode`.
@@ -1753,5 +2011,72 @@ mod tests {
         let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
         // |red − white| = (0,255,255) cyan.
         assert_eq!(px(&img, 10, 10), (0, 255, 255, 255), "difference of red over white = cyan");
+    }
+
+    /// `filter: blur` spreads ink past the source rect edge. A black square
+    /// inside a `PushFilter { Blur }` group leaks non-white pixels into the
+    /// neighbouring band that the unblurred fill never touched, and softens the
+    /// rect's own interior corner toward grey.
+    #[test]
+    fn filter_blur_spreads_ink() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)] },
+            DisplayCommand::FillRect { rect: rect(20.0, 20.0, 24.0, 24.0), color: black },
+            DisplayCommand::PopFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // Just outside the original right edge (x=44): unblurred would be pure
+        // white; blur leaks darkness here.
+        let (r, _, _, _) = px(&img, 46, 32);
+        assert!(r < 250, "blur leaks ink past the rect edge (r={r})");
+        // Far from the rect stays white.
+        assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "far corner stays white");
+    }
+
+    /// `filter: blur(0)` (radius rounds to 0) is an identity: the fill composites
+    /// exactly as if no filter were present.
+    #[test]
+    fn filter_blur_zero_is_identity() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(0.0)] },
+            DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
+            DisplayCommand::PopFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "blur(0) leaves the fill intact");
+        assert_eq!(px(&img, 50, 50), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// `filter: grayscale(1)` collapses a saturated colour to its luminance.
+    /// Pure red (1,0,0) → luma 0.2126 → ~54 on all three channels.
+    #[test]
+    fn filter_grayscale_full() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Grayscale(1.0)] },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: red },
+            DisplayCommand::PopFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let (r, g, b, a) = px(&img, 10, 10);
+        assert_eq!(a, 255);
+        assert_eq!(r, g, "grayscale equalises channels");
+        assert_eq!(g, b, "grayscale equalises channels");
+        assert!((50..=58).contains(&r), "red luma ≈ 54 (got {r})");
+    }
+
+    /// `filter: invert(1)` flips each channel. Black (0,0,0) → white (255,255,255).
+    #[test]
+    fn filter_invert_full() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Invert(1.0)] },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: black },
+            DisplayCommand::PopFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "invert(black) = white");
     }
 }

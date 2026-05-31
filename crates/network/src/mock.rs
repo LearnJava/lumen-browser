@@ -7,6 +7,7 @@
 //! # Пример
 //! ```rust,no_run
 //! use lumen_network::MockTransport;
+//! use lumen_core::ext::NetworkTransport;
 //! use lumen_core::url::Url;
 //!
 //! let mut transport = MockTransport::new();

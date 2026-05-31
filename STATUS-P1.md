@@ -6,8 +6,12 @@
 
 ## In progress
 
+<<<<<<< HEAD
 WHATWG Streams API  branch: p1-streams-api
 Next step: implement ReadableStream/WritableStream/TransformStream in WEB_API_SHIM  crates/js/src/dom.rs:4074
+=======
+_(нет)_
+>>>>>>> main
 
 ---
 
@@ -22,6 +26,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-event-classes** ✅ 2026-05-31 — DOM Event class hierarchy (WHATWG UI Events): UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, WheelEvent, PointerEvent, DragEvent, ClipboardEvent, CompositionEvent, AnimationEvent, TransitionEvent, StorageEvent, PopStateEvent, HashChangeEvent, ErrorEvent, SubmitEvent, PageTransitionEvent, BeforeUnloadEvent (21 classes). Prototype-chain inheritance. Dispatch helpers: `_lumen_dispatch_rich`, `_lumen_dispatch_mouse_event`, `_lumen_dispatch_key_event`. Shell click now creates proper MouseEvent with coordinates + modifier bitmask. 24 тестов, итого lumen-js: 440.
 - **p1-page-visibility-beacon** ✅ 2026-05-31 — Page Visibility API (W3C Level 2): `document.visibilityState`/`document.hidden` always `"visible"` (single-window); `visibilitychange` event via `_lumen_apply_visibility`. `document.readyState` (HTML LS §8.2.3): `"loading"→"interactive"→"complete"`, `readystatechange`+`DOMContentLoaded`+`window.load` at each transition; shell calls `notify_dom_content_loaded()`/`notify_window_loaded()` at correct lifecycle points. `navigator.sendBeacon(url, data)` — `_lumen_send_beacon` native binding (POST via `JsFetchProvider`). `window.addEventListener('load'/'DOMContentLoaded'/'visibilitychange')` + `window.onload`. Fixed `document.dispatchEvent` (was no-op). 12 новых тестов (416 итого lumen-js).
 - **p1-blob-file-api** ✅ 2026-05-31 — WHATWG File API (Tier 1): `btoa`/`atob` (RFC 4648 §4, char-code validation, no raw LineTerminators in regex); `Blob` (size/type, `slice()`, `text()→Promise`, `arrayBuffer()→Promise`); `File extends Blob` (name, lastModified, lastModifiedDate); `FileReader` (EMPTY/LOADING/DONE states, `readAsText`/`readAsArrayBuffer`/`readAsBinaryString`/`readAsDataURL`, `abort()`, dispatches `loadstart`/`progress`/`load`/`loadend`/`error`/`abort` events); `URL.createObjectURL`/`revokeObjectURL` with in-memory object-URL store. `window.Blob/File/FileReader/btoa/atob` exported. 22 new tests (404 итого lumen-js).
 - **p1-blocklist-engine** ✅ 2026-05-31 — Block list engine (7C.1): `EasyListFilter` в `network/src/filter/easylist.rs` (EasyList/Adblock Plus network-фильтры: `||domain^`, path-prefix, `@@` exceptions, `$`-options strip, substring/exact-prefix); `HostsFilter` в `filter/hosts.rs` (hosts-file формат: `0.0.0.0 host`, `127.0.0.1 host`, bare-hostname, pi-hole-стиль); `CompositeFilter` (цепочка `RequestFilter`). Экспортировано из `lumen-network`: `EasyListFilter`, `HostsFilter`, `CompositeFilter`. 26 тестов. P3 handoff: wire `CompositeFilter` в shell через `HttpClient::with_filter(Arc::new(...))` + UI Shields (7C.4).
