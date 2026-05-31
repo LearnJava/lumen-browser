@@ -2981,12 +2981,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 hit_test(Point::new(page_x, page_y), lb)
                             });
                             // Dispatch JS click event (bubbles from hit node to document).
+                            // Passes viewport coordinates and modifier key state so
+                            // handlers can read event.clientX/clientY/ctrlKey/etc.
                             if let (Some(result), Some(ctx)) =
                                 (hit_result.as_ref(), self.js_ctx.as_ref())
                             {
+                                let mod_flags: u8 =
+                                    (self.modifiers.control_key() as u8)
+                                    | ((self.modifiers.shift_key()  as u8) << 1)
+                                    | ((self.modifiers.alt_key()    as u8) << 2)
+                                    | ((self.modifiers.super_key()  as u8) << 3);
                                 let script = format!(
-                                    "_lumen_dispatch_bubble({}, 'click')",
-                                    result.node.index()
+                                    "_lumen_dispatch_mouse_event({}, 'click', {}, {}, 0, 1, {})",
+                                    result.node.index(),
+                                    x_css as i32,
+                                    y_css as i32,
+                                    mod_flags,
                                 );
                                 ctx.eval_js(&script);
                                 if let Some(nav) = ctx.take_navigate_request() {
@@ -3841,9 +3851,13 @@ impl Lumen {
     /// hint-режимом для активации элемента без участия мыши.
     fn activate_node(&mut self, node_id: NodeId) {
         // JS click dispatch (bubbling от узла до document).
+        // Hint-mode activations have no real mouse coordinates, so x/y are 0.
         #[cfg(feature = "quickjs")]
         if let Some(ctx) = self.js_ctx.as_ref() {
-            let script = format!("_lumen_dispatch_bubble({}, 'click')", node_id.index());
+            let script = format!(
+                "_lumen_dispatch_mouse_event({}, 'click', 0, 0, 0, 1, 0)",
+                node_id.index()
+            );
             ctx.eval_js(&script);
             if let Some(nav) = ctx.take_navigate_request() {
                 self.pending_js_navigate = Some(nav);
