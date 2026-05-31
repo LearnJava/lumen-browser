@@ -510,6 +510,15 @@ trait PersistentJs {
     /// Call after all subresources (images, fonts) are decoded and registered.
     #[allow(dead_code)]
     fn notify_window_loaded(&self);
+    /// Notify all registered `MediaQueryList` instances that the viewport or
+    /// user preferences changed (CSS Media Queries L4 §4.2). Each MQL whose
+    /// `matches` flipped fires a `change` event on its listeners.
+    ///
+    /// Must be called after `update_viewport_size` so JS reads consistent
+    /// dimensions. Shell calls it after every `relayout_page` and any
+    /// `prefers-color-scheme` toggle.
+    #[allow(dead_code)]
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool);
 }
 
 #[cfg(feature = "quickjs")]
@@ -589,6 +598,13 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn notify_window_loaded(&self) {
         self.rt.notify_window_loaded();
+    }
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool) {
+        let dark = if prefers_dark { "true" } else { "false" };
+        // prefers_reduced_motion: shell doesn't yet expose this preference, hard-coded false.
+        self.eval_js(&format!(
+            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},false);"
+        ));
     }
 }
 
@@ -2234,6 +2250,10 @@ impl Lumen {
             js.update_computed_styles(collect_computed_styles(lb_ref));
             js.update_viewport_size(viewport.width, viewport.height);
             js.deliver_layout_observers();
+            // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
+            // viewport. Shell doesn't yet honour OS-level prefers-color-scheme,
+            // so dark = false until that preference is exposed.
+            js.deliver_media_query_changes(viewport.width, viewport.height, false);
             // After fresh rects are in JS: fire lazy-load proximity check.
             // Images that entered the viewport+margin are queued by JS via
             // _lumen_request_lazy_image_load; we drain and fetch them here.
