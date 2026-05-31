@@ -2,6 +2,7 @@ pub mod audio_bindings;
 pub mod battery_bindings;
 pub mod dom;
 pub mod navigator_bindings;
+pub mod surface_api;
 pub mod webgl_bindings;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
@@ -168,6 +169,11 @@ impl QuickJsRuntime {
             // Install navigator/screen/timezone normalization (ADR-007 Layer 4, 9D.6) — after DOM.
             if let Err(e) = navigator_bindings::install_navigator_bindings(&ctx) {
                 eprintln!("Navigator bindings init failed: {}", e);
+            }
+
+            // Install Layer 1 surface API protection (ADR-007 Layer 1, 9A) — after navigator.
+            if let Err(e) = surface_api::install_surface_api_protection(&ctx) {
+                eprintln!("Surface API protection init failed: {}", e);
             }
 
             Ok(())

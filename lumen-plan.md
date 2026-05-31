@@ -331,10 +331,10 @@
 | 8H.3 | ⬜ **Ship BiDi gaps** (см. ADR-006): response body, locale/timezone/offline, per-context UA, viewport-before-popup, preload per-context, download lifecycle, cookie change events, per-origin clear | `bidi/src/extensions.rs` | gap-mapping в `subsystems/lumen-bidi-server.md` |
 | 8H.4 | ⬜ `lumen --bidi-port N` CLI flag | `shell/src/cli.rs` | — |
 | 8I | ⬜ **`[P3]` `lumen-cdp-shim` крейт** (Phase 3+, **opt-in, по реальному запросу**) | Legacy Puppeteer-совместимость | `crates/cdp-shim/` |
-| 9 | ⬜ **`[P3]` Anti-detection privacy stack** (§9.5, [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md)) | Privacy by default; устойчивость к Cloudflare/DataDome/Akamai false-positive | `lumen-network`, `lumen-js`, `lumen-shell`, `lumen-paint` (минимально), `lumen-canvas` |
-| 9A | ⬜ **`[P3]` Layer 1: surface API без automation-маркеров** (Phase 1, **из коробки от ADR-006**) | navigator.webdriver отсутствует; нет chrome.runtime/cdc_*/__playwright/etc.; event.isTrusted=true для native input | `lumen-js` bindings audit |
-| 9A.1 | ⬜ Audit JS bindings на отсутствие automation hooks (taint-test для каждого) | `js/tests/no_automation_markers.rs` | — |
-| 9A.2 | ⬜ Negative tests: `assert!(!window.has("webdriver"))` etc. в integration-тестах | `driver/tests/surface_api.rs` | — |
+| 9 | 🟡 **`[P1]` Anti-detection privacy stack** (§9.5, [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md)) | Privacy by default; устойчивость к Cloudflare/DataDome/Akamai false-positive. 9A ✅ Layer 1 (P1 2026-05-31); 9B-9C ⬜ TLS/HTTP fingerprint | `lumen-network`, `lumen-js`, `lumen-shell`, `lumen-paint` (минимально), `lumen-canvas` |
+| 9A | ✅ **`[P1]` Layer 1: surface API без automation-маркеров** (Phase 1) | navigator.webdriver отсутствует; нет chrome.runtime/cdc_*/__playwright/etc.; event.isTrusted=true для native input; nav.appName/vendor/product/plugins/mimeTypes совместимы с Chrome | `lumen-js/src/surface_api.rs` P1 done 2026-05-31 |
+| 9A.1 | ✅ Audit JS bindings + `install_surface_api_protection` (hardening shim) | `js/src/surface_api.rs` (11 unit) + `js/tests/no_automation_markers.rs` (19 runtime) | — |
+| 9A.2 | ✅ Negative tests: `webdriver` absent, no automation globals, isTrusted, standard browser props | `js/tests/no_automation_markers.rs` (19 тестов); source audit — `driver/tests/antidetect_surface_api.rs` (7 тестов) | — |
 | 9B | ⬜ **`[P3]` Layer 2: TLS fingerprint Chrome-matching** (Phase 1) | JA3/JA4 как у current stable Chrome; per-profile override | `lumen-network` rustls config |
 | 9B.1 | ⬜ Cipher suite ordering matching Chrome | `network/src/tls/fingerprint.rs` | — |
 | 9B.2 | ⬜ Extension list + supported groups matching Chrome | `network/src/tls/fingerprint.rs` | — |
