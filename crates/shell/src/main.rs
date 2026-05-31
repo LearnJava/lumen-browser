@@ -32,6 +32,7 @@ mod scroll;
 mod scroll_anim;
 mod scrollbar;
 mod tab_lifecycle;
+mod tabs;
 
 use std::cell::Cell;
 use std::error::Error;
@@ -281,6 +282,8 @@ fn run_window_mode(
         input_rx,
         input_tx,
         focused_node: None,
+        tab_strip: tabs::strip::TabStrip::new(),
+        bg_tabs: HashMap::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -1199,6 +1202,12 @@ enum KeyCommand {
     ScrollLineLeft,
     /// Открыть hint-режим: показать kbd-бейджи на всех кликабельных элементах (F).
     HintModeOpen,
+    /// Открыть новую вкладку (Ctrl+T).
+    NewTab,
+    /// Закрыть текущую вкладку или выйти, если вкладка последняя (Ctrl+W).
+    CloseTab,
+    /// Переключиться на следующую вкладку циклически (Ctrl+Tab).
+    NextTab,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1227,7 +1236,9 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::F5 if no_mods => Some(KeyCommand::Reload),
         KeyCode::KeyR if ctrl_only => Some(KeyCommand::Reload),
         KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
-        KeyCode::KeyW if ctrl_only => Some(KeyCommand::Exit),
+        KeyCode::KeyW if ctrl_only => Some(KeyCommand::CloseTab),
+        KeyCode::KeyT if ctrl_only => Some(KeyCommand::NewTab),
+        KeyCode::Tab if ctrl_only => Some(KeyCommand::NextTab),
         KeyCode::KeyF if ctrl_only => Some(KeyCommand::FindOpen),
         KeyCode::KeyF if no_mods => Some(KeyCommand::HintModeOpen),
         KeyCode::KeyL if ctrl_only => Some(KeyCommand::OpenAddressBar),
@@ -1620,6 +1631,51 @@ struct LayoutSource {
     /// to restore the page without a network round-trip.
     #[allow(dead_code)]
     html_source: Option<String>,
+}
+
+/// Frozen state of a background tab — moved in/out of `Lumen` on tab switch.
+///
+/// All per-page fields from `Lumen` live here while the tab is not active.
+/// The active tab's state always lives directly in the `Lumen` struct fields.
+struct PageSnapshot {
+    display_list: DisplayList,
+    title: Option<String>,
+    pending_images: Vec<(String, lumen_image::Image)>,
+    source: PageSource,
+    runtime: runtime::EventLoop,
+    animation_scheduler: animation_scheduler::AnimationScheduler,
+    transition_scheduler: TransitionScheduler,
+    prev_styles: HashMap<NodeId, ComputedStyle>,
+    anim_frame: Option<lumen_layout::AnimationFrame>,
+    layout_box: Option<lumen_layout::LayoutBox>,
+    find: find::FindState,
+    address_bar: address_bar::AddressBarState,
+    hint: hints::HintState,
+    scroll_y: f32,
+    scroll_x: f32,
+    content_height: f32,
+    content_width: f32,
+    layout_source: Option<LayoutSource>,
+    pending_reload: Rc<Cell<bool>>,
+    pending_js_navigate: Option<JsNavigateRequest>,
+    stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
+    stream_last_paint: std::time::Instant,
+    preload_dispatched: std::collections::HashSet<String>,
+    ime_composing: Option<String>,
+    bfcache: BfCache,
+    nav_back: Vec<NavEntry>,
+    nav_fwd: Vec<NavEntry>,
+    form_state: forms::FormState,
+    validation_tooltip: Option<(Rect, String)>,
+    color_picker_node: Option<NodeId>,
+    ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
+    idb_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
+    js_ctx: Option<Box<dyn PersistentJs>>,
+    first_paint_delivered: bool,
+    first_contentful_paint_delivered: bool,
+    animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
+    gif_last_frame: HashMap<String, usize>,
+    image_cache: lumen_image::ImageDecodeCache,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2597,6 +2653,15 @@ struct Lumen {
     ///
     /// `None` until the first click is processed.  Updated by `handle_click_at`.
     focused_node: Option<lumen_dom::NodeId>,
+    /// Tab strip state: open tabs (title, id) and active index.
+    ///
+    /// The ACTIVE tab's page state lives directly in the `Lumen` fields.
+    /// Background tabs have their page state in `bg_tabs` keyed by `TabEntry::id`.
+    tab_strip: tabs::strip::TabStrip,
+    /// Frozen page state for each background tab, keyed by `TabEntry::id`.
+    ///
+    /// `None` entry means the tab was opened but never loaded (blank new tab).
+    bg_tabs: HashMap<usize, PageSnapshot>,
 }
 
 impl Lumen {
@@ -2862,6 +2927,9 @@ impl Lumen {
                     js.update_viewport_size(viewport.width, viewport.height);
                 }
                 self.title = page.title;
+                if let Some(t) = &self.title {
+                    self.tab_strip.set_active_title(t.as_str());
+                }
                 self.anim_frame = None;
                 // Display list другой → старые match-rect-ы невалидны.
                 // Closing полностью сбрасывает query/active — пользователю
@@ -3072,6 +3140,9 @@ impl Lumen {
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
         self.title = page.title.clone();
+        if let Some(t) = &self.title {
+            self.tab_strip.set_active_title(t.as_str());
+        }
         self.anim_frame = None;
         self.find.close();
         self.address_bar.close();
@@ -3428,6 +3499,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+
+                    // Tab bar occupies y = 0..TAB_BAR_HEIGHT — dispatch first.
+                    if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                        let win_w = self.viewport_width_css();
+                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, win_w) {
+                            tabs::strip::TabHit::Tab(idx) => self.switch_tab(idx),
+                            tabs::strip::TabHit::Close(idx) => {
+                                self.close_tab(idx, event_loop);
+                            }
+                            tabs::strip::TabHit::Empty => {}
+                        }
+                        return;
+                    }
+
                     let vh = self.viewport_height_css();
                     match scrollbar::classify_track_click(
                         x_css,
@@ -3778,13 +3863,30 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut hint_cmds);
                 }
 
+                // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
+                // Rendered last → always on top of all other overlays.
+                {
+                    let win_w = self.viewport_width_css();
+                    let mut tab_cmds =
+                        tabs::strip::build_tab_bar(&self.tab_strip, win_w);
+                    overlay_buf.append(&mut tab_cmds);
+                }
+
                 if let Some(r) = self.renderer.as_mut() {
                     // Priority: animated DL > find-highlighted DL > base DL.
-                    let page: &[lumen_paint::DisplayCommand] = anim_dl
+                    let base: &[lumen_paint::DisplayCommand] = anim_dl
                         .as_deref()
                         .or(page_buf.as_deref())
                         .unwrap_or(&self.display_list);
-                    if let Err(err) = r.render(page, &overlay_buf, scroll_y, scroll_x) {
+                    // Wrap page content in a PushTransform / PopTransform so all
+                    // page content is shifted down by TAB_BAR_HEIGHT (36 px) and
+                    // does not overlap the tab strip rendered in overlay_buf.
+                    let mut shifted: lumen_paint::DisplayList =
+                        Vec::with_capacity(base.len() + 2);
+                    shifted.push(tabs::strip::tab_page_push_transform());
+                    shifted.extend_from_slice(base);
+                    shifted.push(lumen_paint::DisplayCommand::PopTransform);
+                    if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
                         eprintln!("Ошибка рендера: {err:?}");
                     }
                 }
@@ -4136,6 +4238,15 @@ impl Lumen {
             }
             KeyCommand::ScrollHome => self.start_smooth_scroll(0.0),
             KeyCommand::ScrollEnd => self.start_smooth_scroll(f32::INFINITY),
+            KeyCommand::NewTab => self.open_new_tab(),
+            KeyCommand::CloseTab => {
+                let idx = self.tab_strip.active;
+                self.close_tab(idx, event_loop);
+            }
+            KeyCommand::NextTab => {
+                let next = (self.tab_strip.active + 1) % self.tab_strip.len();
+                self.switch_tab(next);
+            }
         }
     }
 
@@ -4566,14 +4677,15 @@ impl Lumen {
     /// Текущая логическая (CSS px) высота viewport-а. Если окно ещё не создано —
     /// fallback на layout-viewport 720 px, который у нас hardcoded в pipeline.
     fn viewport_height_css(&self) -> f32 {
-        match (self.window.as_ref(), self.renderer.as_ref()) {
+        let total = match (self.window.as_ref(), self.renderer.as_ref()) {
             (Some(w), Some(r)) => {
                 let phys = w.inner_size().height as f32;
                 let dpr = (r.scale_factor() as f32).max(1e-6);
                 phys / dpr
             }
             _ => 720.0,
-        }
+        };
+        (total - tabs::strip::TAB_BAR_HEIGHT).max(0.0)
     }
 
     /// CSS px ширина viewport-а — нужна scrollbar-overlay-у для размещения
@@ -4821,6 +4933,221 @@ impl Lumen {
         };
         let json = session_export::to_json(&file);
         let _ = std::fs::write("last_session.lsession", json.as_bytes());
+    }
+
+    // ── Tab management ────────────────────────────────────────────────────────
+
+    /// Move all per-page fields from `self` into a `PageSnapshot`.
+    ///
+    /// Called before switching to a different tab so the current page state can
+    /// be frozen while the new tab becomes active.
+    fn save_page_snapshot(&mut self) -> PageSnapshot {
+        PageSnapshot {
+            display_list: std::mem::take(&mut self.display_list),
+            title: self.title.take(),
+            pending_images: std::mem::take(&mut self.pending_images),
+            source: self.source.clone(),
+            runtime: std::mem::take(&mut self.runtime),
+            animation_scheduler: std::mem::replace(
+                &mut self.animation_scheduler,
+                animation_scheduler::AnimationScheduler::new(),
+            ),
+            transition_scheduler: std::mem::take(&mut self.transition_scheduler),
+            prev_styles: std::mem::take(&mut self.prev_styles),
+            anim_frame: self.anim_frame.take(),
+            layout_box: self.layout_box.take(),
+            find: std::mem::take(&mut self.find),
+            address_bar: std::mem::take(&mut self.address_bar),
+            hint: std::mem::take(&mut self.hint),
+            scroll_y: self.scroll_y,
+            scroll_x: self.scroll_x,
+            content_height: self.content_height,
+            content_width: self.content_width,
+            layout_source: self.layout_source.take(),
+            pending_reload: std::mem::replace(
+                &mut self.pending_reload,
+                Rc::new(Cell::new(false)),
+            ),
+            pending_js_navigate: self.pending_js_navigate.take(),
+            stream_builder: self.stream_builder.take(),
+            stream_last_paint: self.stream_last_paint,
+            preload_dispatched: std::mem::take(&mut self.preload_dispatched),
+            ime_composing: self.ime_composing.take(),
+            bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
+            nav_back: std::mem::take(&mut self.nav_back),
+            nav_fwd: std::mem::take(&mut self.nav_fwd),
+            form_state: std::mem::take(&mut self.form_state),
+            validation_tooltip: self.validation_tooltip.take(),
+            color_picker_node: self.color_picker_node.take(),
+            ls_storage: std::mem::take(&mut self.ls_storage),
+            idb_backend: std::mem::replace(
+                &mut self.idb_backend,
+                Arc::new(std::sync::Mutex::new(
+                    lumen_storage::store::InMemoryStorage::new(),
+                )),
+            ),
+            js_ctx: self.js_ctx.take(),
+            first_paint_delivered: self.first_paint_delivered,
+            first_contentful_paint_delivered: self.first_contentful_paint_delivered,
+            animated_gifs: std::mem::take(&mut self.animated_gifs),
+            gif_last_frame: std::mem::take(&mut self.gif_last_frame),
+            image_cache: std::mem::replace(
+                &mut self.image_cache,
+                lumen_image::ImageDecodeCache::new(),
+            ),
+        }
+    }
+
+    /// Restore per-page fields from a `PageSnapshot` into `self`.
+    ///
+    /// Called after a tab switch to make a previously-frozen tab active again.
+    fn restore_page_snapshot(&mut self, snap: PageSnapshot) {
+        self.display_list = snap.display_list;
+        self.title = snap.title;
+        self.pending_images = snap.pending_images;
+        self.source = snap.source;
+        self.runtime = snap.runtime;
+        self.animation_scheduler = snap.animation_scheduler;
+        self.transition_scheduler = snap.transition_scheduler;
+        self.prev_styles = snap.prev_styles;
+        self.anim_frame = snap.anim_frame;
+        self.layout_box = snap.layout_box;
+        self.find = snap.find;
+        self.address_bar = snap.address_bar;
+        self.hint = snap.hint;
+        self.scroll_y = snap.scroll_y;
+        self.scroll_x = snap.scroll_x;
+        self.content_height = snap.content_height;
+        self.content_width = snap.content_width;
+        self.layout_source = snap.layout_source;
+        self.pending_reload = snap.pending_reload;
+        self.pending_js_navigate = snap.pending_js_navigate;
+        self.stream_builder = snap.stream_builder;
+        self.stream_last_paint = snap.stream_last_paint;
+        self.preload_dispatched = snap.preload_dispatched;
+        self.ime_composing = snap.ime_composing;
+        self.bfcache = snap.bfcache;
+        self.nav_back = snap.nav_back;
+        self.nav_fwd = snap.nav_fwd;
+        self.form_state = snap.form_state;
+        self.validation_tooltip = snap.validation_tooltip;
+        self.color_picker_node = snap.color_picker_node;
+        self.ls_storage = snap.ls_storage;
+        self.idb_backend = snap.idb_backend;
+        self.js_ctx = snap.js_ctx;
+        self.first_paint_delivered = snap.first_paint_delivered;
+        self.first_contentful_paint_delivered = snap.first_contentful_paint_delivered;
+        self.animated_gifs = snap.animated_gifs;
+        self.gif_last_frame = snap.gif_last_frame;
+        self.image_cache = snap.image_cache;
+    }
+
+    /// Reset all per-page fields to blank-tab defaults.
+    ///
+    /// Called after `save_page_snapshot()` to prepare `self` for a fresh tab
+    /// before loading a URL or showing an empty page.
+    fn reset_to_blank_tab(&mut self) {
+        self.display_list = Vec::new();
+        self.title = None;
+        self.pending_images = Vec::new();
+        self.source = PageSource::Empty;
+        self.runtime = runtime::EventLoop::new();
+        self.animation_scheduler = animation_scheduler::AnimationScheduler::new();
+        self.transition_scheduler = TransitionScheduler::new();
+        self.prev_styles = HashMap::new();
+        self.anim_frame = None;
+        self.layout_box = None;
+        self.find = find::FindState::default();
+        self.address_bar = address_bar::AddressBarState::default();
+        self.hint = hints::HintState::default();
+        self.scroll_y = 0.0;
+        self.scroll_x = 0.0;
+        self.content_height = 0.0;
+        self.content_width = 0.0;
+        self.layout_source = None;
+        self.pending_reload = Rc::new(Cell::new(false));
+        self.pending_js_navigate = None;
+        self.stream_builder = None;
+        self.stream_last_paint = std::time::Instant::now();
+        self.preload_dispatched = std::collections::HashSet::new();
+        self.ime_composing = None;
+        self.bfcache = BfCache::new(16);
+        self.nav_back = Vec::new();
+        self.nav_fwd = Vec::new();
+        self.form_state = HashMap::new();
+        self.validation_tooltip = None;
+        self.color_picker_node = None;
+        self.ls_storage = HashMap::new();
+        self.idb_backend = Arc::new(std::sync::Mutex::new(
+            lumen_storage::store::InMemoryStorage::new(),
+        ));
+        self.js_ctx = None;
+        self.first_paint_delivered = false;
+        self.first_contentful_paint_delivered = false;
+        self.animated_gifs = HashMap::new();
+        self.gif_last_frame = HashMap::new();
+        self.image_cache = lumen_image::ImageDecodeCache::new();
+        // Cancel in-flight scroll animations.
+        self.scroll_anim = None;
+        self.momentum_anim = None;
+        self.scroll_drag = None;
+    }
+
+    /// Open a new blank tab.
+    fn open_new_tab(&mut self) {
+        let new_idx = self.tab_strip.push_blank();
+        // Save current page into bg_tabs under the old active tab's id.
+        let old_id = self.tab_strip.tabs[self.tab_strip.active].id;
+        let snap = self.save_page_snapshot();
+        self.bg_tabs.insert(old_id, snap);
+        self.tab_strip.active = new_idx;
+        self.reset_to_blank_tab();
+        self.request_redraw();
+    }
+
+    /// Close the tab at `idx`. If it was the last tab, exits the app instead.
+    fn close_tab(&mut self, idx: usize, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if self.tab_strip.len() == 1 {
+            // Last tab — exit.
+            event_loop.exit();
+            return;
+        }
+        let closing_id = self.tab_strip.tabs[idx].id;
+        if idx == self.tab_strip.active {
+            // Closing the active tab: save nothing (it will be dropped),
+            // restore the tab that will become active after removal.
+            let new_active = self.tab_strip.remove(idx);
+            let new_id = self.tab_strip.tabs[new_active].id;
+            // Drop the current active page.
+            self.reset_to_blank_tab();
+            if let Some(snap) = self.bg_tabs.remove(&new_id) {
+                self.restore_page_snapshot(snap);
+            }
+        } else {
+            // Closing a background tab: just drop its snapshot.
+            self.bg_tabs.remove(&closing_id);
+            self.tab_strip.remove(idx);
+        }
+        self.request_redraw();
+    }
+
+    /// Switch to tab at `idx`. No-op if already active.
+    fn switch_tab(&mut self, idx: usize) {
+        if idx == self.tab_strip.active || idx >= self.tab_strip.len() {
+            return;
+        }
+        // Save current active tab.
+        let old_id = self.tab_strip.tabs[self.tab_strip.active].id;
+        let snap = self.save_page_snapshot();
+        self.bg_tabs.insert(old_id, snap);
+        // Restore new active tab.
+        self.tab_strip.active = idx;
+        let new_id = self.tab_strip.tabs[idx].id;
+        self.reset_to_blank_tab();
+        if let Some(snap) = self.bg_tabs.remove(&new_id) {
+            self.restore_page_snapshot(snap);
+        }
+        self.request_redraw();
     }
 }
 
@@ -5425,10 +5752,10 @@ mod tests {
     }
 
     #[test]
-    fn keybinding_ctrl_w_exit() {
+    fn keybinding_ctrl_w_close_tab() {
         assert_eq!(
             keybinding_for(KeyCode::KeyW, ModifiersState::CONTROL),
-            Some(KeyCommand::Exit),
+            Some(KeyCommand::CloseTab),
         );
     }
 
