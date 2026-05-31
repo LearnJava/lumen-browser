@@ -60,7 +60,10 @@ pub use filter::{EasyListFilter, HostsFilter, CompositeFilter};
 pub use http_cache::HttpCache;
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
-pub use tls::{TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT};
+pub use tls::{
+    TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
+    ChromeJa3Snapshot, JA4ChromeSnapshot, http_to_tls_profile,
+};
 pub use cors::{
     CorsError, CorsRequest, CredentialsMode, DEFAULT_PREFLIGHT_MAX_AGE_SECONDS,
     MAX_SAFELISTED_HEADER_VALUE_LEN, PreflightCache, PreflightResult, build_preflight_headers,
@@ -543,6 +546,7 @@ fn connect(
     port: u16,
     is_tls: bool,
     resolver: &dyn DnsResolver,
+    tls_profile: tls::TlsProfile,
 ) -> Result<Connection> {
     let addrs = resolver.resolve(host, port)?;
     if addrs.is_empty() {
@@ -575,7 +579,7 @@ fn connect(
     let server_name = ServerName::try_from(host.to_owned())
         .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
 
-    let mut conn = ClientConnection::new(default_tls_config(), server_name)
+    let mut conn = ClientConnection::new(tls_config_for_profile(tls_profile), server_name)
         .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
 
     // Завершаем handshake до отправки данных — иначе ALPN protocol неизвестен,
@@ -590,12 +594,6 @@ fn connect(
     Ok(c)
 }
 
-/// TLS-конфиг для HTTPS-соединений. Кэшируется глобально, чтобы не
-/// перепарсивать webpki-roots на каждый connect. Использует Standard profile
-/// (соответствует текущему Chrome).
-fn default_tls_config() -> Arc<rustls::ClientConfig> {
-    tls_config_for_profile(tls::TlsProfile::Standard)
-}
 
 /// Получить TLS конфиг для указанного профиля. Конфиги кэшируются
 /// отдельно для каждого профиля.
@@ -666,6 +664,7 @@ fn fetch_single(
     pool: &ConnectionPool,
     h2_pool: Option<&H2Pool>,
     resolver: &dyn DnsResolver,
+    tls_profile: tls::TlsProfile,
     host: &str,
     port: u16,
     is_tls: bool,
@@ -732,7 +731,7 @@ fn fetch_single(
     }
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
-    let conn = connect(host, port, is_tls, resolver)?;
+    let conn = connect(host, port, is_tls, resolver, tls_profile)?;
 
     // HTTP/2: establish fresh H2Conn, use it, then store back in h2_pool.
     if conn.is_h2 {
@@ -948,6 +947,7 @@ fn fetch_with_redirect(
     pool: &ConnectionPool,
     h2_pool: Option<&H2Pool>,
     resolver: &dyn DnsResolver,
+    tls_profile: tls::TlsProfile,
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
     hsts_store: Option<&dyn HstsEnforcement>,
@@ -1076,6 +1076,7 @@ fn fetch_with_redirect(
                 pool,
                 h2_pool,
                 resolver,
+                tls_profile,
                 &host_ascii,
                 port,
                 is_tls,
@@ -1172,6 +1173,7 @@ fn fetch_with_redirect(
             pool,
             h2_pool,
             resolver,
+            tls_profile,
             &host_ascii,
             port,
             is_tls,
@@ -1267,6 +1269,7 @@ fn fetch_with_redirect(
                     pool,
                     h2_pool,
                     resolver,
+                    tls_profile,
                     sink,
                     filter,
                     hsts_store,
@@ -1361,6 +1364,9 @@ pub struct HttpClient {
     /// HTTP fingerprinting profile (Standard/Strict/Tor) — determines header order and casing
     /// matching Chrome to avoid detection (ADR-007 Layer 3). Default is Standard.
     fingerprint_profile: HttpProfile,
+    /// TLS fingerprinting profile — cipher suite order, kx_groups, ALPN, protocol versions.
+    /// Derived from `fingerprint_profile` by default; can be overridden with `with_tls_profile`.
+    tls_profile: tls::TlsProfile,
 }
 
 impl HttpClient {
@@ -1382,6 +1388,7 @@ impl HttpClient {
             cookie_jar: None,
             top_level_site: None,
             fingerprint_profile: HttpProfile::Chrome,
+            tls_profile: tls::TlsProfile::Standard,
         }
     }
 
@@ -1621,12 +1628,31 @@ impl HttpClient {
     #[must_use]
     pub fn with_fingerprint_profile(mut self, profile: HttpProfile) -> Self {
         self.fingerprint_profile = profile;
+        // Derive TLS profile from HTTP profile unless already explicitly overridden.
+        self.tls_profile = tls::http_to_tls_profile(profile);
         self
     }
 
     /// Получить текущий HTTP fingerprinting profile.
     pub fn fingerprint_profile(&self) -> HttpProfile {
         self.fingerprint_profile
+    }
+
+    /// Override the TLS fingerprint profile independently of the HTTP profile.
+    ///
+    /// Normally `TlsProfile` is derived from `HttpProfile`
+    /// (`Strict` → `TlsProfile::Strict`, `TorBrowser` → `TlsProfile::Tor`,
+    /// others → `TlsProfile::Standard`). Use this when you need fine-grained
+    /// control — e.g., Chrome HTTP headers but TLS 1.3-only cipher suites.
+    #[must_use]
+    pub fn with_tls_profile(mut self, profile: tls::TlsProfile) -> Self {
+        self.tls_profile = profile;
+        self
+    }
+
+    /// Получить текущий TLS fingerprinting profile.
+    pub fn tls_profile(&self) -> tls::TlsProfile {
+        self.tls_profile
     }
 
     /// CORS-enabled fetch для cross-origin subresource (Fetch §3-§4).
@@ -1683,6 +1709,7 @@ impl HttpClient {
             &self.pool,
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
+            self.tls_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -1717,6 +1744,7 @@ impl HttpClient {
             &self.pool,
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
+            self.tls_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -1785,6 +1813,7 @@ impl HttpClient {
             &self.pool,
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
+            self.tls_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -1871,6 +1900,7 @@ impl HttpClient {
                     &self.pool,
                     self.h2_pool.as_deref(),
                     self.resolver.as_ref(),
+                    self.tls_profile,
                     self.sink.as_deref(),
                     self.filter.as_deref(),
                     self.hsts.as_deref(),
@@ -1902,6 +1932,7 @@ impl HttpClient {
             &self.pool,
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
+            self.tls_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -1958,6 +1989,7 @@ impl NetworkTransport for HttpClient {
                     &self.pool,
                     self.h2_pool.as_deref(),
                     self.resolver.as_ref(),
+                    self.tls_profile,
                     self.sink.as_deref(),
                     self.filter.as_deref(),
                     self.hsts.as_deref(),
@@ -1989,6 +2021,7 @@ impl NetworkTransport for HttpClient {
             &self.pool,
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
+            self.tls_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -2060,6 +2093,7 @@ impl JsFetchProvider for HttpClient {
             &self.pool,
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
+            self.tls_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -2112,12 +2146,12 @@ impl JsFetchProvider for HttpClient {
         let mut conn = if let Some(pooled) = self.pool.acquire(&key) {
             pooled
         } else {
-            connect(&host_ascii, port, is_tls, self.resolver.as_ref())?
+            connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile)?
         };
 
         // HTTP/2 connections don't support the body path yet — fall back to H1.
         if conn.is_h2 {
-            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref())?;
+            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile)?;
             conn = fresh;
         }
 
@@ -2328,10 +2362,10 @@ mod tests {
     // ── ALPN (5A.1) ──────────────────────────────────────────────────────────
 
     #[test]
-    fn default_tls_config_advertises_h2_then_http11() {
+    fn standard_tls_config_advertises_h2_then_http11() {
         // Server должен выбрать h2 (если умеет); fallback — http/1.1.
         // Порядок ALPN-protocols в ClientHello — клиентское предпочтение.
-        let cfg = default_tls_config();
+        let cfg = tls_config_for_profile(tls::TlsProfile::Standard);
         assert_eq!(
             cfg.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()],
@@ -2339,11 +2373,11 @@ mod tests {
     }
 
     #[test]
-    fn default_tls_config_is_cached() {
+    fn tls_config_for_profile_is_cached() {
         // Та же Arc должна возвращаться при повторных вызовах — иначе webpki-roots
         // парсится на каждый connect (порядка сотни сертификатов).
-        let a = default_tls_config();
-        let b = default_tls_config();
+        let a = tls_config_for_profile(tls::TlsProfile::Standard);
+        let b = tls_config_for_profile(tls::TlsProfile::Standard);
         assert!(Arc::ptr_eq(&a, &b));
     }
 
