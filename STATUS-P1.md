@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Shadow DOM JS bindings** — branch: `p1-shadow-dom-js`
+Next step: deep_clone в Document + native bindings + JS: template.content, cloneNode, slot slotchange — `crates/engine/dom/src/lib.rs`, `crates/js/src/dom.rs`
 
 ---
 
