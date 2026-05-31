@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Download manager (7D.1)**  branch: `p1-download-manager`
+Next step: create `shell/src/download.rs` — `DownloadManager`, `build_download_bar`
 
 ---
 
