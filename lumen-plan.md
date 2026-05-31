@@ -313,10 +313,10 @@
 | 8C | ⬜ **`[P3+shell]` Native input injection** (Phase 1) | Не-distinguishable от пользователя input, для AI-агентов и тестов | `shell/src/input/native.rs` |
 | 8C.1 | ⬜ Mouse/keyboard events идут в event loop тем же путём, что winit-события от ОС | `shell/src/main.rs` | НЕ через JS `dispatchEvent` |
 | 8C.2 | ✅ `event.isTrusted = true` для native-injected events | `dom/src/lib.rs` | 2026-05-28 |
-| 8D | ⬜ **`[P3]` Auto-wait inside engine** (Phase 1) | Anti-flake, замена SDK retry-loops | `driver/src/wait.rs` |
-| 8D.1 | ⬜ `wait_for(Cond::Visible)` — visibility + layout stability tick | layout-аware | — |
-| 8D.2 | ⬜ `wait_for(Cond::NetworkIdle)` — слушает `NetworkTransport` events | network-аware | — |
-| 8D.3 | ⬜ `wait_for(Cond::JsIdle)` — event loop microtask queue empty | shell runtime-аware | — |
+| 8D | ✅ **`[P1]` Auto-wait inside engine** (Phase 1) | Anti-flake, замена SDK retry-loops | `driver/src/session.rs` | P1 done 2026-05-31 |
+| 8D.1 | ✅ `wait_for(Cond::Visible)` — border_box.width/height > 0; display:none → no layout box → false | layout-аware | P1 done 2026-05-31 |
+| 8D.2 | ✅ `wait_for(Cond::NetworkIdle)` — active_network_requests counter; saturating_sub after HTTP fetch | network-аware | P1 done 2026-05-31 |
+| 8D.3 | ✅ `wait_for(Cond::JsIdle)` — pending_js_microtasks counter; set_pending_js_tasks() for shell hook | shell runtime-аware | P1 done 2026-05-31 |
 | 8E | ⬜ **`[P3]` Per-context isolation by default** (Phase 1) | Cookies/storage/cache/viewport/UA/fingerprint per session | `driver/src/context.rs` |
 | 8F | ⬜ **`[P3]` Deterministic mode** (Phase 1) | Repeatable tests, опирается на §9.5 anti-fp инфраструктуру | `driver/src/determinism.rs` |
 | 8F.1 | ⬜ `set_clock(ClockMode::Frozen / Real / Monotonic)` | shell timers + Performance.now bridge | — |
