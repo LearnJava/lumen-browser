@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Service Worker API stub (§8E)  branch: p1-service-worker-api
+Next step: add SwBackend trait to lumen_core::ext  crates/core/src/ext.rs:1518
 
 ---
 
