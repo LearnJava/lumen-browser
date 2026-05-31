@@ -6,8 +6,7 @@
 
 ## In progress
 
-**p1-tls-fingerprint** — TLS fingerprint Chrome-matching (9B): `tls/fingerprint.rs` (JA4 support, Chrome 130 full snapshot), `build_client_config` с CryptoProvider, `TlsProfile` wiring в `HttpClient`.
-Next step: создать `crates/network/src/tls/fingerprint.rs`
+_(нет)_
 
 ---
 
@@ -17,8 +16,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | **TLS fingerprint Chrome-matching (9B)** — cipher suite order, extension list, supported groups, ALPN order matching current stable Chrome; JA3/JA4 snapshot test. Per-profile TLS config (`Standard`/`Strict`) in `lumen-network/src/tls/fingerprint.rs`. See `lumen-plan.md §9B` | `lumen-network` | L | none |
-| 2 | **HTTP fingerprint Chrome-matching (9C)** — HTTP/1.1 header order + casing; HTTP/2 SETTINGS frame values + stream priority; `Accept-Language: en-US,en;q=0.9`; Client Hints opt-out. See `lumen-plan.md §9C` | `lumen-network` | M | 9B (TLS) for ALPN |
+| 1 | **HTTP fingerprint Chrome-matching (9C)** — HTTP/1.1 header order + casing; HTTP/2 SETTINGS frame values + stream priority; `Accept-Language: en-US,en;q=0.9`; Client Hints opt-out. See `lumen-plan.md §9C` | `lumen-network` | M | none |
 | 3 | **Native input injection (8C)** — mouse/keyboard events go through the same winit event-loop path as real OS events (NOT via JS `dispatchEvent`). `InjectMouseEvent`/`InjectKeyEvent` in `shell/src/input/native.rs`; wire to `Lumen::handle_event` dispatch | `lumen-shell` | M | none |
 | 4 | **Behavioral mimicry (9E)** — opt-in `InputMode::HumanLike`: Bézier-curve mouse paths between coordinates, Gaussian inter-keystroke timing, pre-click dwell time. `shell/src/input/humanlike.rs`. Requires 8C native injection | `lumen-shell` | M | 8C (native input) |
 | 5 | **Tab lifecycle state machine (10A)** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + transition triggers (idle timeout + memory pressure + LRU). Per-user timeouts (5 min / 30 min / pinned). `shell/src/tab_lifecycle/state.rs`. Requires `MemoryPressureSource` (✅ in `lumen-core`) | `lumen-shell` | L | none |
@@ -27,6 +25,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-tls-fingerprint** ✅ 2026-05-31 — TLS fingerprint Chrome-matching (9B): `tls.rs` → `tls/mod.rs` + `tls/fingerprint.rs`. `TlsProfile` enum (Standard/Strict/Tor), `build_client_config()` с CryptoProvider (aws_lc_rs), Chrome 130 AEAD cipher order + kx_groups X25519→secp256r1→secp384r1. `TlsHandshakeInfo`: `ja3_raw_string()` + `ja4_raw_string()`. `CHROME_130_JA3_SNAPSHOT` (15 cipher suites, 16 extensions, 3 named groups) + `CHROME_130_JA4_SNAPSHOT` (sorted ciphers/exts, cipher/ext counts). `HttpClient.tls_profile` field + `with_tls_profile()` getter/builder. 25 интеграционных тестов (lumen-network/tests/tls_integration.rs) + 13 unit-тестов в fingerprint.rs.
 - **p1-websocket-shell** ✅ 2026-05-31 — Real WebSocket shell integration: `PersistentJs::pump_websockets()` добавлен в trait + вызов в `about_to_wait` рядом с `tick_timers()` — так `onopen`/`onmessage`/`onclose`/`onerror` фаерятся немедленно. JS: бинарная доставка hex→Uint8Array/ArrayBuffer по `ws.binaryType`; добавлены `bufferedAmount=0` и `extensions=''` в конструктор. +6 тестов, итого lumen-js: 576.
 - **p1-shadow-dom-js** ✅ 2026-05-31 — Shadow DOM JS bindings: `HTMLTemplateElement.content` (DocumentFragment wrapper, `cloneNode`), `document.createDocumentFragment()`, `element.cloneNode(deep)`, `element.insertBefore(newNode, ref)`, `<slot>` element (`assignedNodes()`, `assignedElements()`, `slotchange` event dispatch via `_lumen_fire_slotchange`). lumen-dom: `Document::insert_before`, `Document::deep_clone`. lumen-js Rust: `_lumen_clone_subtree`, `_lumen_create_fragment`, `_lumen_get_template_content`, `_lumen_is_document_fragment`, `_lumen_insert_before`, `_lumen_get_shadow_root_host`. 9 новых тестов, итого lumen-js: 570.
 - **p1-clickable-nodes** ✅ 2026-05-31 — CSS Writing Modes L3 §3: `writing-mode: vertical-rl/lr` layout stub. Новый модуль `lumen-layout/src/vertical.rs`: `lay_out_vertical_block` — axis-swap раскладка (CSS `height` → inline-size, `width` → block-size). `vertical-rl`: дети стекаются справа налево; `vertical-lr`: слева направо. `shift_subtree_x(child, dx)` рекурсивно смещает поддерево. Диспетч из `lay_out()` в `box_tree.rs` по `style.writing_mode`. P4 handoff: CSS parsing уже готово в `style.rs`. 8 unit-тестов, 2100 тестов lumen-layout.
