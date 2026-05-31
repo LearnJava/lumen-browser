@@ -2351,6 +2351,26 @@ impl FloatContext {
     }
 }
 
+/// Crate-internal shim so `vertical.rs` can recursively invoke the main
+/// `lay_out` for children inside a vertical writing-mode container.
+///
+/// Same parameters and semantics as the private `lay_out`. Exists only
+/// because Rust modules cannot reach a sibling module's private functions.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lay_out_for_vertical(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) {
+    lay_out(b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp);
+}
+
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
 #[allow(clippy::too_many_arguments)]
@@ -2376,6 +2396,28 @@ fn lay_out(
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
     if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. }) {
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
+        return;
+    }
+
+    // CSS Writing Modes L3 §3: vertical writing modes swap the block/inline axes.
+    // Vertical block stacking is handled by the `vertical` module. InlineRun,
+    // FormControl, etc. inside a vertical context fall through to horizontal
+    // layout as a Phase 0 stub (text appears sideways but positions are valid).
+    // CSS: writing-mode — Phase 2: vertical inline text flow + sideways glyphs.
+    if !matches!(b.style.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot)
+    {
+        crate::vertical::lay_out_vertical_block(
+            b,
+            start_x,
+            start_y,
+            available_width,
+            available_height,
+            measurer,
+            viewport,
+            pcb,
+            hp,
+        );
         return;
     }
 
