@@ -1087,12 +1087,20 @@ fn rasterize_draw_border(
     let [top_c, right_c, bottom_c, left_c] = colors;
 
     // Simple solid border drawing (dashed/dotted skipped for now).
+    //
+    // Border edges are axis-aligned solid quads (the GPU renderer paints them
+    // without per-edge AA), so `anti_alias: false` is both visually correct and
+    // necessary: tiny-skia's AA `fill_rect` fast-path (`hairline_aa::fill_dot8`)
+    // hits a `debug_assert!(false)` for thin, sub-pixel-positioned rects whose
+    // fixed-point inner span rounds to zero width — which crashes the
+    // debug-assertions-on test profile (BUG-052). The non-AA path pixel-snaps
+    // and never enters that code.
 
     // Top border.
     if *top_w > 0.0 {
         let paint = Paint {
             shader: tiny_skia::Shader::SolidColor(color_to_skia(*top_c)),
-            anti_alias: true,
+            anti_alias: false,
             force_hq_pipeline: false,
             blend_mode: tiny_skia::BlendMode::SourceOver,
         };
@@ -1105,7 +1113,7 @@ fn rasterize_draw_border(
     if *right_w > 0.0 {
         let paint = Paint {
             shader: tiny_skia::Shader::SolidColor(color_to_skia(*right_c)),
-            anti_alias: true,
+            anti_alias: false,
             force_hq_pipeline: false,
             blend_mode: tiny_skia::BlendMode::SourceOver,
         };
@@ -1123,7 +1131,7 @@ fn rasterize_draw_border(
     if *bottom_w > 0.0 {
         let paint = Paint {
             shader: tiny_skia::Shader::SolidColor(color_to_skia(*bottom_c)),
-            anti_alias: true,
+            anti_alias: false,
             force_hq_pipeline: false,
             blend_mode: tiny_skia::BlendMode::SourceOver,
         };
@@ -1141,7 +1149,7 @@ fn rasterize_draw_border(
     if *left_w > 0.0 {
         let paint = Paint {
             shader: tiny_skia::Shader::SolidColor(color_to_skia(*left_c)),
-            anti_alias: true,
+            anti_alias: false,
             force_hq_pipeline: false,
             blend_mode: tiny_skia::BlendMode::SourceOver,
         };
@@ -2437,6 +2445,28 @@ mod tests {
         // Corner: mask transparent → faded to white.
         let (kr, kg, kb, _) = px(&img, 1, 1);
         assert!(kr > 200 && kg > 200 && kb > 200, "corner fades to white, got ({kr},{kg},{kb})");
+    }
+
+    /// BUG-052: thin border with sub-pixel position must not panic.
+    ///
+    /// `anti_alias: true` on tiny-skia `fill_rect` trips a `debug_assert!(false)`
+    /// in `hairline_aa::fill_dot8` when the fixed-point inner span rounds to zero
+    /// (which happens for thin rects at sub-pixel offsets). `anti_alias: false`
+    /// avoids the AA path — axis-aligned solid border quads don't need AA (the
+    /// GPU renderer draws them without per-edge AA anyway).
+    #[test]
+    fn draw_border_thin_subpixel_no_panic() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(10.3, 10.7, 50.0, 50.0),
+            widths: [0.5, 0.5, 0.5, 0.5],
+            colors: [red; 4],
+            styles: [lumen_layout::BorderStyle::Solid; 4],
+            radii: CornerRadii::default(),
+        }];
+        // Pre-fix this would panic via debug_assert! in tiny-skia hairline_aa::fill_dot8.
+        let img = rasterize_cpu(128, 128, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 64, 64), (255, 255, 255, 255), "interior stays white");
     }
 
     /// `mask-image: url(...)` has no decoded source on the deterministic CPU path,
