@@ -6,1251 +6,355 @@
   <title>Habr Heavy — Benchmark Test Page</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f5f5f5;
-      color: #222;
-    }
-    header {
-      background: white;
-      border-bottom: 1px solid #ddd;
-      padding: 12px 20px;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .header-content {
-      max-width: 1200px;
-      margin: 0 auto;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .logo {
-      font-size: 24px;
-      font-weight: bold;
-      color: #ff6b6b;
-    }
-    .search-bar {
-      flex: 1;
-      margin: 0 20px;
-      padding: 8px 12px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      background: white;
-    }
-    .nav-link {
-      padding: 8px 16px;
-      margin-left: 8px;
-      text-decoration: none;
-      color: #666;
-      font-size: 14px;
-    }
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      display: grid;
-      grid-template-columns: 1fr 280px;
-      gap: 20px;
-      padding: 20px;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #222; }
+    header { background: white; border-bottom: 1px solid #ddd; padding: 12px 20px; position: sticky; top: 0; z-index: 100; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .header-content { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; }
+    .logo { font-size: 24px; font-weight: bold; color: #ff6b6b; }
+    .search-bar { flex: 1; margin: 0 20px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; background: white; }
+    .nav-link { padding: 8px 16px; margin-left: 8px; text-decoration: none; color: #666; font-size: 14px; }
+    .container { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 1fr 280px; gap: 20px; padding: 20px; }
     .feed { display: flex; flex-direction: column; gap: 16px; }
-    .sidebar {
-      position: sticky;
-      top: 70px;
-      height: fit-content;
-    }
-    .widget {
-      background: white;
-      border-radius: 8px;
-      padding: 16px;
-      margin-bottom: 16px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .widget-title {
-      font-size: 16px;
-      font-weight: bold;
-      margin-bottom: 12px;
-      color: #222;
-    }
-    .post {
-      background: white;
-      border-radius: 8px;
-      overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-      transition: box-shadow 0.2s;
-    }
-    .post:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-    .post-header {
-      padding: 12px 16px;
-      border-bottom: 1px solid #f0f0f0;
-      display: flex;
-      gap: 12px;
-      align-items: center;
-    }
-    .avatar {
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      flex-shrink: 0;
-    }
-    .post-author {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
+    .sidebar { position: sticky; top: 70px; height: fit-content; }
+    .widget { background: white; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .widget-title { font-size: 16px; font-weight: bold; margin-bottom: 12px; color: #222; }
+    .post { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .post-header { padding: 12px 16px; border-bottom: 1px solid #f0f0f0; display: flex; gap: 12px; align-items: center; }
+    .avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); flex-shrink: 0; }
+    .post-author { display: flex; flex-direction: column; gap: 2px; }
     .author-name { font-size: 14px; font-weight: bold; color: #222; }
     .post-time { font-size: 12px; color: #999; }
-    .post-cover {
-      width: 100%;
-      height: 240px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    .post-content {
-      padding: 16px;
-    }
-    .post-title {
-      font-size: 18px;
-      font-weight: bold;
-      margin-bottom: 8px;
-      color: #222;
-      line-height: 1.4;
-    }
-    .post-preview {
-      font-size: 14px;
-      color: #666;
-      margin-bottom: 12px;
-      line-height: 1.5;
-      max-height: 60px;
-      overflow: hidden;
-      display: -webkit-box;
-      -webkit-line-clamp: 3;
-      -webkit-box-orient: vertical;
-    }
-    .post-meta {
-      display: flex;
-      gap: 16px;
-      font-size: 12px;
-      color: #999;
-      margin-bottom: 12px;
-    }
-    .meta-item {
-      display: flex;
-      gap: 4px;
-      align-items: center;
-    }
-    .post-tags {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-    .tag {
-      display: inline-block;
-      padding: 4px 8px;
-      background: #f0f0f0;
-      border-radius: 4px;
-      font-size: 12px;
-      color: #666;
-      text-decoration: none;
-    }
-    .tag:hover { background: #e0e0e0; }
-    .comments-section {
-      border-top: 1px solid #f0f0f0;
-      padding-top: 12px;
-    }
-    .comment {
-      margin-bottom: 12px;
-      padding: 12px;
-      background: #f9f9f9;
-      border-radius: 4px;
-      border-left: 2px solid #667eea;
-    }
-    .comment-author {
-      font-weight: bold;
-      font-size: 12px;
-      color: #222;
-      margin-bottom: 4px;
-    }
-    .comment-text {
-      font-size: 12px;
-      color: #666;
-      line-height: 1.4;
-    }
-    .sidebar-item {
-      padding: 12px;
-      background: #f9f9f9;
-      border-radius: 4px;
-      margin-bottom: 8px;
-      font-size: 12px;
-      color: #666;
-    }
-    .sidebar-item strong {
-      display: block;
-      color: #222;
-      margin-bottom: 4px;
-    }
+    .post-cover { width: 100%; height: 200px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .post-content { padding: 16px; }
+    .post-title { font-size: 18px; font-weight: bold; margin-bottom: 8px; color: #222; line-height: 1.4; }
+    .post-preview { font-size: 14px; color: #666; margin-bottom: 12px; line-height: 1.5; }
+    .post-meta { display: flex; gap: 16px; font-size: 12px; color: #999; margin-bottom: 12px; }
+    .meta-item { display: flex; gap: 4px; align-items: center; }
+    .post-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .tag { display: inline-block; padding: 4px 8px; background: #f0f0f0; border-radius: 4px; font-size: 12px; color: #666; text-decoration: none; }
+    .comments-section { border-top: 1px solid #f0f0f0; padding-top: 12px; }
+    .comment { margin-bottom: 12px; padding: 12px; background: #f9f9f9; border-radius: 4px; border-left: 2px solid #667eea; }
+    .comment-author { font-weight: bold; font-size: 12px; color: #222; margin-bottom: 4px; }
+    .comment-text { font-size: 12px; color: #666; line-height: 1.4; }
+    .sidebar-item { padding: 12px; background: #f9f9f9; border-radius: 4px; margin-bottom: 8px; font-size: 12px; color: #666; }
+    .sidebar-item strong { display: block; color: #222; margin-bottom: 4px; }
+    /* mix-blend-mode trending section */
+    .trending { background: linear-gradient(135deg, #667eea, #764ba2); padding: 20px; border-radius: 8px; margin-bottom: 16px; }
+    .trending-title { color: white; font-weight: bold; font-size: 16px; margin-bottom: 12px; }
+    .blend-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    .blend-card { background: white; mix-blend-mode: multiply; padding: 10px; border-radius: 4px; font-size: 12px; font-weight: bold; color: #333; text-align: center; }
+    .blend-card span { display: block; font-weight: normal; color: #666; font-size: 11px; margin-top: 4px; }
+    /* grey image placeholders */
+    .post-images { display: flex; gap: 8px; margin-bottom: 12px; overflow: hidden; }
+    .post-thumb { width: 150px; height: 90px; background: #ccc; border-radius: 4px; flex-shrink: 0; }
+    .post-thumb-sm { width: 100px; height: 60px; background: #bbb; border-radius: 4px; flex-shrink: 0; }
+    /* float avatar */
+    .float-avatar { float: left; width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg, #f093fb, #f5576c); margin: 0 14px 8px 0; }
+    .clearfix::after { content: ""; display: table; clear: both; }
+    /* data table */
+    .data-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; }
+    .data-table th { background: #f0f5ff; padding: 8px 10px; text-align: left; border: 1px solid #dde; font-weight: bold; color: #444; }
+    .data-table td { padding: 7px 10px; border: 1px solid #dde; color: #555; }
+    .data-table tr:nth-child(even) td { background: #f8f9ff; }
+    /* long article body */
+    .post-body { font-size: 14px; color: #444; line-height: 1.7; margin-bottom: 12px; }
+    .post-body p { margin-bottom: 10px; }
+    /* ad banner placeholder */
+    .ad-banner { width: 100%; height: 90px; background: linear-gradient(90deg, #e0e7ff, #fce4ec); border-radius: 6px; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #aaa; }
   </style>
 </head>
 <body>
-  <!-- Header -->
   <header>
     <div class="header-content">
       <div class="logo">Habr</div>
-      <input type="text" class="search-bar" placeholder="Поиск..." />
+      <input type="text" class="search-bar" placeholder="Поиск по публикациям..." />
       <a href="#" class="nav-link">Новое</a>
       <a href="#" class="nav-link">Лучшее</a>
       <a href="#" class="nav-link">Мои публикации</a>
-      <a href="#" class="nav-link">Вход</a>
+      <a href="#" class="nav-link">Войти</a>
     </div>
   </header>
 
-  <!-- Main Content -->
+  <!-- trending mix-blend-mode section -->
+  <div style="max-width:1200px;margin:20px auto;padding:0 20px;">
+    <div class="trending">
+      <div class="trending-title">Горячие темы недели</div>
+      <div class="blend-grid">
+        <div class="blend-card">JavaScript<span>48 234 постов</span></div>
+        <div class="blend-card">Python<span>41 120 постов</span></div>
+        <div class="blend-card">Rust<span>14 876 постов</span></div>
+        <div class="blend-card">AI / ML<span>62 445 постов</span></div>
+        <div class="blend-card">DevOps<span>31 007 постов</span></div>
+      </div>
+    </div>
+  </div>
+
   <div class="container">
-    <!-- Feed -->
     <div class="feed">
-      <!-- Generate 40 posts -->
+
+      <!-- post 1 -->
       <div class="post">
         <div class="post-header">
           <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Иван Петров</div>
-            <div class="post-time">1 час назад</div>
-          </div>
+          <div class="post-author"><div class="author-name">Иван Петров</div><div class="post-time">1 час назад</div></div>
         </div>
         <div class="post-cover"></div>
         <div class="post-content">
           <div class="post-title">Оптимизация Web-приложений: практическое руководство</div>
-          <div class="post-preview">В этой статье мы разберемся с основными принципами оптимизации веб-приложений. Узнаем о лучших практиках для повышения производительности, улучшения SEO и обеспечения лучшего пользовательского опыта...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 5 минут чтения</div>
-            <div class="meta-item">👁 1234 просмотров</div>
-            <div class="meta-item">💬 23 комментария</div>
-            <div class="meta-item">⭐ 89 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Оптимизация</a>
-            <a href="#" class="tag">Web</a>
-            <a href="#" class="tag">Производительность</a>
-          </div>
+          <div class="post-preview">Разбираем основные принципы оптимизации веб-приложений. Каждый шаг подкреплён примерами кода и профилями Chrome DevTools.</div>
+          <div class="post-meta"><div class="meta-item">5 мин</div><div class="meta-item">1 234 просм.</div><div class="meta-item">23 комм.</div></div>
+          <div class="post-tags"><a href="#" class="tag">JavaScript</a><a href="#" class="tag">Оптимизация</a><a href="#" class="tag">Web</a></div>
           <div class="comments-section">
-            <div class="comment">
-              <div class="comment-author">Алексей Смирнов</div>
-              <div class="comment-text">Спасибо за подробное объяснение! Именно то, что я искал.</div>
-            </div>
-            <div class="comment">
-              <div class="comment-author">Мария Волкова</div>
-              <div class="comment-text">+1 к комментарию выше. Очень полезная информация для моего проекта.</div>
-            </div>
+            <div class="comment"><div class="comment-author">Алексей Смирнов</div><div class="comment-text">Именно то, что искал. Спасибо!</div></div>
+            <div class="comment"><div class="comment-author">Мария Волкова</div><div class="comment-text">+1. Очень полезно для нашего проекта.</div></div>
           </div>
         </div>
       </div>
 
-      <!-- Post 2 -->
+      <!-- post 2 -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Екатерина Новикова</div>
-            <div class="post-time">2 часа назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Микросервисная архитектура: избегаем распространённых ошибок</div>
-          <div class="post-preview">Когда команда решает переходить на микросервисы, часто совершаются одни и те же ошибки. Давайте разберёмся, какие это ошибки и как их избежать на практике...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 8 минут чтения</div>
-            <div class="meta-item">👁 2156 просмотров</div>
-            <div class="meta-item">💬 45 комментариев</div>
-            <div class="meta-item">⭐ 156 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Архитектура</a>
-            <a href="#" class="tag">Микросервисы</a>
-            <a href="#" class="tag">Backend</a>
-            <a href="#" class="tag">DevOps</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-author"><div class="author-name">Екатерина Новикова</div><div class="post-time">2 часа назад</div></div></div>
+        <div class="post-cover" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div>
+        <div class="post-content"><div class="post-title">Микросервисная архитектура: избегаем ошибок</div><div class="post-preview">Переход на микросервисы непрост. Разбираем типичные ловушки и как их обойти на практике.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">2 156 просм.</div><div class="meta-item">45 комм.</div></div><div class="post-tags"><a href="#" class="tag">Архитектура</a><a href="#" class="tag">Микросервисы</a><a href="#" class="tag">Backend</a></div></div>
       </div>
 
-      <!-- Post 3 -->
+      <!-- post 3 -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Сергей Кузнецов</div>
-            <div class="post-time">3 часа назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Kubernetes для начинающих: полное руководство</div>
-          <div class="post-preview">Kubernetes может показаться сложным для новичков, но на самом деле всё проще, чем кажется. В этой статье мы пройдём через все основные концепции...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 10 минут чтения</div>
-            <div class="meta-item">👁 3245 просмотров</div>
-            <div class="meta-item">💬 67 комментариев</div>
-            <div class="meta-item">⭐ 234 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Kubernetes</a>
-            <a href="#" class="tag">Docker</a>
-            <a href="#" class="tag">DevOps</a>
-            <a href="#" class="tag">Контейнеризация</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Сергей Кузнецов</div><div class="post-time">3 часа назад</div></div></div>
+        <div class="post-cover" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div>
+        <div class="post-content"><div class="post-title">Kubernetes для начинающих: полное руководство</div><div class="post-preview">Kubernetes пугает новичков, но всё проще. Разберём основные концепции step-by-step.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">3 245 просм.</div><div class="meta-item">67 комм.</div></div><div class="post-tags"><a href="#" class="tag">Kubernetes</a><a href="#" class="tag">Docker</a><a href="#" class="tag">DevOps</a></div></div>
       </div>
 
-      <!-- Post 4 -->
+      <!-- post 4 -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Наталья Морозова</div>
-            <div class="post-time">4 часа назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">React Hooks: глубокое погружение в state и effects</div>
-          <div class="post-preview">Hooks изменили способ, которым мы пишем React-компоненты. Давайте разберемся, как они работают под капотом и как их правильно использовать...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 7 минут чтения</div>
-            <div class="meta-item">👁 2890 просмотров</div>
-            <div class="meta-item">💬 56 комментариев</div>
-            <div class="meta-item">⭐ 189 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">React</a>
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Hooks</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-author"><div class="author-name">Наталья Морозова</div><div class="post-time">4 часа назад</div></div></div>
+        <div class="post-cover" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div>
+        <div class="post-content"><div class="post-title">React Hooks: глубокое погружение в state и effects</div><div class="post-preview">Hooks изменили способ написания React-компонентов. Разберёмся, как они работают под капотом.</div><div class="post-meta"><div class="meta-item">7 мин</div><div class="meta-item">2 890 просм.</div><div class="meta-item">56 комм.</div></div><div class="post-tags"><a href="#" class="tag">React</a><a href="#" class="tag">JavaScript</a><a href="#" class="tag">Hooks</a></div></div>
       </div>
 
-      <!-- Post 5 -->
+      <!-- post 5 — inline images -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Дмитрий Орлов</div>
-            <div class="post-time">5 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Python для анализа данных: NumPy и Pandas</div>
-          <div class="post-preview">NumPy и Pandas — это основные инструменты для работы с данными на Python. Узнаем, как с их помощью обрабатывать большие объёмы информации...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 9 минут чтения</div>
-            <div class="meta-item">👁 1567 просмотров</div>
-            <div class="meta-item">💬 34 комментария</div>
-            <div class="meta-item">⭐ 123 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Python</a>
-            <a href="#" class="tag">Data Science</a>
-            <a href="#" class="tag">NumPy</a>
-            <a href="#" class="tag">Pandas</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Дмитрий Орлов</div><div class="post-time">5 часов назад</div></div></div>
+        <div class="post-content"><div class="post-title">Python для анализа данных: NumPy и Pandas</div><div class="post-images"><div class="post-thumb"></div><div class="post-thumb" style="background:#b5b5b5;"></div><div class="post-thumb" style="background:#d0d0d0;"></div></div><div class="post-preview">NumPy и Pandas — основные инструменты для работы с данными. Обрабатываем большие объёмы информации эффективно.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">1 567 просм.</div><div class="meta-item">34 комм.</div></div><div class="post-tags"><a href="#" class="tag">Python</a><a href="#" class="tag">Data Science</a><a href="#" class="tag">NumPy</a></div></div>
       </div>
 
-      <!-- Post 6-10: Repeat with variations -->
+      <!-- post 6 -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Виктор Козлов</div>
-            <div class="post-time">6 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Безопасность веб-приложений: OWASP Top 10</div>
-          <div class="post-preview">Каждый разработчик должен понимать основные уязвимости в веб-приложениях. Разберем OWASP Top 10 и как защитить свой код...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 11 минут чтения</div>
-            <div class="meta-item">👁 4123 просмотров</div>
-            <div class="meta-item">💬 78 комментариев</div>
-            <div class="meta-item">⭐ 267 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Безопасность</a>
-            <a href="#" class="tag">OWASP</a>
-            <a href="#" class="tag">Backend</a>
-            <a href="#" class="tag">Web</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Виктор Козлов</div><div class="post-time">6 часов назад</div></div></div>
+        <div class="post-cover" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div>
+        <div class="post-content"><div class="post-title">Безопасность веб-приложений: OWASP Top 10</div><div class="post-preview">Каждый разработчик должен знать OWASP Top 10. Разберём уязвимости и методы защиты на реальных примерах.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">4 123 просм.</div><div class="meta-item">78 комм.</div></div><div class="post-tags"><a href="#" class="tag">Безопасность</a><a href="#" class="tag">OWASP</a><a href="#" class="tag">Web</a></div></div>
       </div>
 
+      <!-- post 7 -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Оксана Павлова</div>
-            <div class="post-time">7 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">GraphQL vs REST: сравнение подходов</div>
-          <div class="post-preview">GraphQL набирает популярность, но это не значит, что REST мертв. Разберемся с плюсами и минусами обоих подходов...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 8 минут чтения</div>
-            <div class="meta-item">👁 2345 просмотров</div>
-            <div class="meta-item">💬 42 комментария</div>
-            <div class="meta-item">⭐ 145 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">GraphQL</a>
-            <a href="#" class="tag">REST</a>
-            <a href="#" class="tag">API</a>
-            <a href="#" class="tag">Backend</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Оксана Павлова</div><div class="post-time">7 часов назад</div></div></div>
+        <div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div>
+        <div class="post-content"><div class="post-title">GraphQL vs REST: сравнение подходов</div><div class="post-preview">GraphQL набирает популярность, но REST не умер. Плюсы и минусы обоих подходов в 2026 году.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">2 345 просм.</div><div class="meta-item">42 комм.</div></div><div class="post-tags"><a href="#" class="tag">GraphQL</a><a href="#" class="tag">REST</a><a href="#" class="tag">API</a></div></div>
       </div>
 
+      <!-- post 8 — float avatar + long body -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Юрий Александров</div>
-            <div class="post-time">8 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Machine Learning с TensorFlow: первые шаги</div>
-          <div class="post-preview">TensorFlow — один из самых популярных фреймворков для машинного обучения. Начнем с базовых концепций и простых примеров...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 12 минут чтения</div>
-            <div class="meta-item">👁 1890 просмотров</div>
-            <div class="meta-item">💬 28 комментариев</div>
-            <div class="meta-item">⭐ 98 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Machine Learning</a>
-            <a href="#" class="tag">TensorFlow</a>
-            <a href="#" class="tag">AI</a>
-            <a href="#" class="tag">Python</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-author"><div class="author-name">Юрий Александров</div><div class="post-time">8 часов назад</div></div></div>
+        <div class="post-content clearfix"><div class="float-avatar"></div><div class="post-title">Machine Learning с TensorFlow: первые шаги</div><div class="post-body"><p>TensorFlow — один из самых популярных фреймворков для машинного обучения. Начнём с базовых концепций: тензоры, вычислительные графы, автодифференцирование. Затем перейдём к созданию первой нейросети для классификации изображений.</p><p>Научимся загружать датасеты, предобрабатывать данные, строить слои модели и оценивать качество на тестовой выборке.</p></div><div class="post-meta"><div class="meta-item">12 мин</div><div class="meta-item">1 890 просм.</div><div class="meta-item">28 комм.</div></div><div class="post-tags"><a href="#" class="tag">ML</a><a href="#" class="tag">TensorFlow</a><a href="#" class="tag">AI</a></div></div>
       </div>
 
+      <!-- post 9 -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Елена Федорова</div>
-            <div class="post-time">9 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #6dd5ed 0%, #2193b0 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Git и GitHub: продвинутые техники</div>
-          <div class="post-preview">Многие используют git только для коммитов и пушей. Давайте разберемся с продвинутыми техниками для лучшей организации работы...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 6 минут чтения</div>
-            <div class="meta-item">👁 3456 просмотров</div>
-            <div class="meta-item">💬 51 комментарий</div>
-            <div class="meta-item">⭐ 187 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Git</a>
-            <a href="#" class="tag">GitHub</a>
-            <a href="#" class="tag">DevOps</a>
-            <a href="#" class="tag">Инструменты</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#6dd5ed,#2193b0);"></div><div class="post-author"><div class="author-name">Елена Федорова</div><div class="post-time">9 часов назад</div></div></div>
+        <div class="post-cover" style="background:linear-gradient(135deg,#6dd5ed,#2193b0);"></div>
+        <div class="post-content"><div class="post-title">Git и GitHub: продвинутые техники</div><div class="post-preview">Многие используют git только для коммитов. Разберём rebase, cherry-pick, bisect, worktree.</div><div class="post-meta"><div class="meta-item">6 мин</div><div class="meta-item">3 456 просм.</div><div class="meta-item">51 комм.</div></div><div class="post-tags"><a href="#" class="tag">Git</a><a href="#" class="tag">GitHub</a><a href="#" class="tag">DevOps</a></div></div>
       </div>
 
+      <!-- post 10 — comparison table -->
       <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Павел Сидоров</div>
-            <div class="post-time">10 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #ff5f87 0%, #ff6b6b 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Тестирование: unit, интеграционные и E2E тесты</div>
-          <div class="post-preview">Хорошее тестирование — ключ к качественному коду. Разберемся с разными типами тестов и как их правильно писать...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 9 минут чтения</div>
-            <div class="meta-item">👁 2678 просмотров</div>
-            <div class="meta-item">💬 39 комментариев</div>
-            <div class="meta-item">⭐ 134 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Тестирование</a>
-            <a href="#" class="tag">Testing</a>
-            <a href="#" class="tag">QA</a>
-            <a href="#" class="tag">Best Practices</a>
-          </div>
-        </div>
+        <div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff5f87,#ff6b6b);"></div><div class="post-author"><div class="author-name">Павел Сидоров</div><div class="post-time">10 часов назад</div></div></div>
+        <div class="post-content"><div class="post-title">Сравнение баз данных: PostgreSQL, MySQL, SQLite</div><div class="post-preview">Какую базу данных выбрать для вашего проекта? Сравниваем по ключевым параметрам.</div>
+          <table class="data-table"><thead><tr><th>Параметр</th><th>PostgreSQL</th><th>MySQL</th><th>SQLite</th></tr></thead><tbody><tr><td>Лицензия</td><td>PostgreSQL</td><td>GPL / Commercial</td><td>Public Domain</td></tr><tr><td>ACID</td><td>Полная</td><td>Полная</td><td>Полная</td></tr><tr><td>JSON</td><td>Отличная</td><td>Хорошая</td><td>Базовая</td></tr><tr><td>Масштабирование</td><td>Высокое</td><td>Высокое</td><td>Низкое</td></tr><tr><td>Встраиваемая</td><td>Нет</td><td>Нет</td><td>Да</td></tr></tbody></table>
+          <div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">2 678 просм.</div><div class="meta-item">39 комм.</div></div><div class="post-tags"><a href="#" class="tag">SQL</a><a href="#" class="tag">PostgreSQL</a><a href="#" class="tag">Database</a></div></div>
       </div>
 
-      <!-- Posts 11-40: More content for realistic benchmark -->
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Анна Лебедева</div>
-            <div class="post-time">11 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Type System в TypeScript: от базика до про</div>
-          <div class="post-preview">TypeScript помогает писать безопаснее, но его система типов может быть сложной. Давайте разберёмся со всеми её возможностями...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 10 минут чтения</div>
-            <div class="meta-item">👁 2134 просмотров</div>
-            <div class="meta-item">💬 47 комментариев</div>
-            <div class="meta-item">⭐ 156 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">TypeScript</a>
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Types</a>
-          </div>
-        </div>
-      </div>
+      <!-- posts 11-20 -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Анна Лебедева</div><div class="post-time">11 часов назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-content"><div class="post-title">TypeScript: от базовых типов до advanced patterns</div><div class="post-preview">TypeScript помогает писать надёжный код. Разберём всё — от базовых до conditional и mapped types.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">2 134 просм.</div><div class="meta-item">47 комм.</div></div><div class="post-tags"><a href="#" class="tag">TypeScript</a><a href="#" class="tag">JavaScript</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Игорь Романов</div>
-            <div class="post-time">12 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Асинхронное программирование на JavaScript: Promises и Async/Await</div>
-          <div class="post-preview">Асинхронность — один из самых важных концептов в JavaScript. Разберем Promises, async/await и как их правильно использовать...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 8 минут чтения</div>
-            <div class="meta-item">👁 1956 просмотров</div>
-            <div class="meta-item">💬 33 комментария</div>
-            <div class="meta-item">⭐ 112 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Async</a>
-            <a href="#" class="tag">Promises</a>
-            <a href="#" class="tag">Frontend</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-author"><div class="author-name">Игорь Романов</div><div class="post-time">12 часов назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-content"><div class="post-title">Асинхронное программирование: Promises и Async/Await</div><div class="post-preview">Асинхронность — ключевой концепт JavaScript. Разберём Promises, async/await и обработку ошибок.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">1 956 просм.</div><div class="meta-item">33 комм.</div></div><div class="post-tags"><a href="#" class="tag">JavaScript</a><a href="#" class="tag">Async</a><a href="#" class="tag">Promises</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Мария Рыбакова</div>
-            <div class="post-time">13 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Redis: использование и оптимизация</div>
-          <div class="post-preview">Redis — отличный инструмент для кэширования. Научимся использовать его правильно и оптимизировать производительность...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 7 минут чтения</div>
-            <div class="meta-item">👁 2345 просмотров</div>
-            <div class="meta-item">💬 41 комментарий</div>
-            <div class="meta-item">⭐ 143 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Redis</a>
-            <a href="#" class="tag">Кэширование</a>
-            <a href="#" class="tag">Backend</a>
-            <a href="#" class="tag">Database</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Мария Рыбакова</div><div class="post-time">13 часов назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-content"><div class="post-title">Redis: использование и оптимизация кэширования</div><div class="post-preview">Redis — отличный инструмент для кэширования. Научимся использовать его правильно.</div><div class="post-meta"><div class="meta-item">7 мин</div><div class="meta-item">2 345 просм.</div><div class="meta-item">41 комм.</div></div><div class="post-tags"><a href="#" class="tag">Redis</a><a href="#" class="tag">Кэширование</a><a href="#" class="tag">Backend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Константин Соколов</div>
-            <div class="post-time">14 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Работа с API: REST, SOAP, WebSocket</div>
-          <div class="post-preview">Существует множество способов взаимодействия приложений. Разберемся со всеми основными протоколами и их особенностями...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 9 минут чтения</div>
-            <div class="meta-item">👁 2876 просмотров</div>
-            <div class="meta-item">💬 52 комментария</div>
-            <div class="meta-item">⭐ 178 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">API</a>
-            <a href="#" class="tag">REST</a>
-            <a href="#" class="tag">WebSocket</a>
-            <a href="#" class="tag">Backend</a>
-          </div>
-        </div>
-      </div>
+      <!-- post 13 — inline images -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-author"><div class="author-name">Константин Соколов</div><div class="post-time">14 часов назад</div></div></div><div class="post-content"><div class="post-title">Работа с изображениями в вебе: форматы и оптимизация</div><div class="post-images"><div class="post-thumb"></div><div class="post-thumb" style="background:#b0c4de;"></div><div class="post-thumb" style="background:#c8d8e8;"></div></div><div class="post-preview">JPEG, PNG, WebP, AVIF — что и когда использовать. Сжатие, lazy loading, responsive images.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">2 876 просм.</div><div class="meta-item">52 комм.</div></div><div class="post-tags"><a href="#" class="tag">Images</a><a href="#" class="tag">WebP</a><a href="#" class="tag">Performance</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Валерия Чернова</div>
-            <div class="post-time">15 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Docker: контейнеризация приложений</div>
-          <div class="post-preview">Docker упростил развертывание приложений. Разберемся, как использовать контейнеры правильно и получить максимум пользы...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 10 минут чтения</div>
-            <div class="meta-item">👁 3123 просмотров</div>
-            <div class="meta-item">💬 64 комментария</div>
-            <div class="meta-item">⭐ 212 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Docker</a>
-            <a href="#" class="tag">Контейнеризация</a>
-            <a href="#" class="tag">DevOps</a>
-            <a href="#" class="tag">Инфраструктура</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-author"><div class="author-name">Валерия Чернова</div><div class="post-time">15 часов назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-content"><div class="post-title">Docker: контейнеризация приложений в 2026</div><div class="post-preview">Docker упростил развёртывание. Как использовать контейнеры правильно и что появилось нового.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">3 123 просм.</div><div class="meta-item">64 комм.</div></div><div class="post-tags"><a href="#" class="tag">Docker</a><a href="#" class="tag">DevOps</a><a href="#" class="tag">Контейнеры</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Николай Волков</div>
-            <div class="post-time">16 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">WebAssembly: будущее веб-приложений</div>
-          <div class="post-preview">WebAssembly позволяет запускать код с близкой к машинной производительностью в браузере. Изучим, как его использовать...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 11 минут чтения</div>
-            <div class="meta-item">👁 1876 просмотров</div>
-            <div class="meta-item">💬 29 комментариев</div>
-            <div class="meta-item">⭐ 94 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">WebAssembly</a>
-            <a href="#" class="tag">WASM</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Performance</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Николай Волков</div><div class="post-time">16 часов назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-content"><div class="post-title">WebAssembly: будущее веб-приложений</div><div class="post-preview">WebAssembly позволяет запускать код с машинной производительностью в браузере. Примеры с Rust и C++.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">1 876 просм.</div><div class="meta-item">29 комм.</div></div><div class="post-tags"><a href="#" class="tag">WebAssembly</a><a href="#" class="tag">WASM</a><a href="#" class="tag">Rust</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Светлана Морозова</div>
-            <div class="post-time">17 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">SQL: от базика до оптимизации запросов</div>
-          <div class="post-preview">SQL по-прежнему королевский инструмент для работы с данными. Научимся писать эффективные запросы и оптимизировать производительность...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 12 минут чтения</div>
-            <div class="meta-item">👁 2645 просмотров</div>
-            <div class="meta-item">💬 57 комментариев</div>
-            <div class="meta-item">⭐ 201 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">SQL</a>
-            <a href="#" class="tag">Database</a>
-            <a href="#" class="tag">Backend</a>
-            <a href="#" class="tag">Optimization</a>
-          </div>
-        </div>
-      </div>
+      <!-- post 16 — float avatar + long body -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Светлана Морозова</div><div class="post-time">17 часов назад</div></div></div><div class="post-content clearfix"><div class="float-avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-title">SQL: от базовых запросов до оконных функций</div><div class="post-body"><p>SQL по-прежнему незаменим для работы с данными. В этой статье мы пройдём путь от простых SELECT до сложных аналитических запросов с оконными функциями, CTE и рекурсивными запросами.</p><p>Разберём оптимизацию запросов, анализ планов выполнения и индексирование для максимальной производительности.</p></div><div class="post-meta"><div class="meta-item">12 мин</div><div class="meta-item">2 645 просм.</div><div class="meta-item">57 комм.</div></div><div class="post-tags"><a href="#" class="tag">SQL</a><a href="#" class="tag">Database</a><a href="#" class="tag">Analytics</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Леонид Беляев</div>
-            <div class="post-time">18 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">CI/CD: автоматизация разработки</div>
-          <div class="post-preview">Непрерывная интеграция и доставка — стандарт современной разработки. Рассмотрим инструменты и лучшие практики...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 8 минут чтения</div>
-            <div class="meta-item">👁 2234 просмотров</div>
-            <div class="meta-item">💬 44 комментария</div>
-            <div class="meta-item">⭐ 159 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">CI/CD</a>
-            <a href="#" class="tag">DevOps</a>
-            <a href="#" class="tag">Автоматизация</a>
-            <a href="#" class="tag">GitHub Actions</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-author"><div class="author-name">Леонид Беляев</div><div class="post-time">18 часов назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-content"><div class="post-title">CI/CD: автоматизация разработки с GitHub Actions</div><div class="post-preview">Непрерывная интеграция — стандарт современной разработки. GitHub Actions, GitLab CI и CircleCI.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">2 234 просм.</div><div class="meta-item">44 комм.</div></div><div class="post-tags"><a href="#" class="tag">CI/CD</a><a href="#" class="tag">DevOps</a><a href="#" class="tag">GitHub Actions</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Галина Степанова</div>
-            <div class="post-time">19 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Vue.js: фреймворк для создания интерфейсов</div>
-          <div class="post-preview">Vue.js предоставляет простой и мощный способ для создания интерактивных пользовательских интерфейсов...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 9 минут чтения</div>
-            <div class="meta-item">👁 1976 просмотров</div>
-            <div class="meta-item">💬 38 комментариев</div>
-            <div class="meta-item">⭐ 128 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Vue.js</a>
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Framework</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Галина Степанова</div><div class="post-time">19 часов назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-content"><div class="post-title">Vue.js 3: Composition API и реактивность</div><div class="post-preview">Vue.js 3 принёс Composition API, улучшенную реактивность и лучшую TypeScript-совместимость.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">1 976 просм.</div><div class="meta-item">38 комм.</div></div><div class="post-tags"><a href="#" class="tag">Vue.js</a><a href="#" class="tag">JavaScript</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Тимур Сафин</div>
-            <div class="post-time">20 часов назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #ff5f87 0%, #ff6b6b 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Angular: мощный фреймворк для web-приложений</div>
-          <div class="post-preview">Angular — полнофункциональный фреймворк для создания сложных веб-приложений. Разберемся с его архитектурой и возможностями...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 13 минут чтения</div>
-            <div class="meta-item">👁 2567 просмотров</div>
-            <div class="meta-item">💬 61 комментарий</div>
-            <div class="meta-item">⭐ 195 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Angular</a>
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Framework</a>
-          </div>
-        </div>
-      </div>
+      <!-- post 20 — table -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff5f87,#ff6b6b);"></div><div class="post-author"><div class="author-name">Тимур Сафин</div><div class="post-time">20 часов назад</div></div></div><div class="post-content"><div class="post-title">Сравнение JS-фреймворков: React, Vue, Angular, Svelte</div><div class="post-preview">Какой фреймворк выбрать в 2026? Объективное сравнение по ключевым критериям.</div><table class="data-table"><thead><tr><th>Критерий</th><th>React</th><th>Vue</th><th>Angular</th><th>Svelte</th></tr></thead><tbody><tr><td>Bundle size</td><td>~42 KB</td><td>~33 KB</td><td>~180 KB</td><td>~1.7 KB</td></tr><tr><td>Обучение</td><td>Среднее</td><td>Низкое</td><td>Высокое</td><td>Низкое</td></tr><tr><td>Экосистема</td><td>Огромная</td><td>Большая</td><td>Большая</td><td>Растёт</td></tr><tr><td>TypeScript</td><td>Хорошо</td><td>Хорошо</td><td>Встроен</td><td>Хорошо</td></tr></tbody></table><div class="post-meta"><div class="meta-item">13 мин</div><div class="meta-item">2 567 просм.</div><div class="meta-item">61 комм.</div></div><div class="post-tags"><a href="#" class="tag">React</a><a href="#" class="tag">Vue</a><a href="#" class="tag">Angular</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Раиса Козлова</div>
-            <div class="post-time">21 часа назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Responsive Design: создание адаптивных сайтов</div>
-          <div class="post-preview">Современные пользователи переходят с разных устройств. Научимся делать сайты, которые красиво выглядят везде...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 7 минут чтения</div>
-            <div class="meta-item">👁 2876 просмотров</div>
-            <div class="meta-item">💬 48 комментариев</div>
-            <div class="meta-item">⭐ 167 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Responsive Design</a>
-            <a href="#" class="tag">CSS</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Mobile</a>
-          </div>
-        </div>
-      </div>
+      <!-- posts 21-40 -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Раиса Козлова</div><div class="post-time">21 час назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-content"><div class="post-title">Responsive Design: адаптивные сайты без боли</div><div class="post-preview">Flexbox, Grid, Container Queries — современный подход к адаптивной вёрстке.</div><div class="post-meta"><div class="meta-item">7 мин</div><div class="meta-item">2 876 просм.</div><div class="meta-item">48 комм.</div></div><div class="post-tags"><a href="#" class="tag">CSS</a><a href="#" class="tag">Responsive</a><a href="#" class="tag">Mobile</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Василий Архипов</div>
-            <div class="post-time">22 часа назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Node.js: JavaScript на сервере</div>
-          <div class="post-preview">Node.js позволяет использовать JavaScript для серверной разработки. Разберемся с основами и создадим первый сервер...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 10 минут чтения</div>
-            <div class="meta-item">👁 2345 просмотров</div>
-            <div class="meta-item">💬 53 комментария</div>
-            <div class="meta-item">⭐ 189 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Node.js</a>
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Backend</a>
-            <a href="#" class="tag">Server</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-author"><div class="author-name">Василий Архипов</div><div class="post-time">22 часа назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-content"><div class="post-title">Node.js: JavaScript на сервере — 2026 edition</div><div class="post-preview">Node.js зрелеет. Встроенный fetch, test runner, watch mode, ESM по умолчанию.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">2 345 просм.</div><div class="meta-item">53 комм.</div></div><div class="post-tags"><a href="#" class="tag">Node.js</a><a href="#" class="tag">JavaScript</a><a href="#" class="tag">Backend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Инна Власова</div>
-            <div class="post-time">23 часа назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #6dd5ed 0%, #2193b0 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Express.js: веб-фреймворк для Node.js</div>
-          <div class="post-preview">Express.js упрощает создание веб-приложений на Node.js. Научимся быстро создавать мощные API...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 8 минут чтения</div>
-            <div class="meta-item">👁 1876 просмотров</div>
-            <div class="meta-item">💬 35 комментариев</div>
-            <div class="meta-item">⭐ 116 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Express.js</a>
-            <a href="#" class="tag">Node.js</a>
-            <a href="#" class="tag">Backend</a>
-            <a href="#" class="tag">Web Framework</a>
-          </div>
-        </div>
-      </div>
+      <!-- post 23 — float + images -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#6dd5ed,#2193b0);"></div><div class="post-author"><div class="author-name">Инна Власова</div><div class="post-time">23 часа назад</div></div></div><div class="post-content clearfix"><div class="float-avatar" style="background:linear-gradient(135deg,#6dd5ed,#2193b0);"></div><div class="post-title">Архитектура современных SPA</div><div class="post-body"><p>SPA давно стали стандартом для сложных интерфейсов. Паттерны управления состоянием, роутинг, code splitting и оптимизация FCP.</p></div><div class="post-images"><div class="post-thumb-sm"></div><div class="post-thumb-sm" style="background:#b8c8d8;"></div><div class="post-thumb-sm" style="background:#c0d0e0;"></div></div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">1 876 просм.</div><div class="meta-item">35 комм.</div></div><div class="post-tags"><a href="#" class="tag">SPA</a><a href="#" class="tag">Architecture</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Максим Третьяков</div>
-            <div class="post-time">24 часа назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">MongoDB: NoSQL база данных</div>
-          <div class="post-preview">MongoDB предоставляет гибкий способ хранения данных. Разберемся с её особенностями и лучшими практиками...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 9 минут чтения</div>
-            <div class="meta-item">👁 2123 просмотров</div>
-            <div class="meta-item">💬 41 комментарий</div>
-            <div class="meta-item">⭐ 147 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">MongoDB</a>
-            <a href="#" class="tag">NoSQL</a>
-            <a href="#" class="tag">Database</a>
-            <a href="#" class="tag">Backend</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-author"><div class="author-name">Максим Третьяков</div><div class="post-time">1 день назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-content"><div class="post-title">MongoDB: NoSQL база данных для современных приложений</div><div class="post-preview">MongoDB предоставляет гибкий способ хранения документов. Агрегации, индексы, шардирование.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">2 123 просм.</div><div class="meta-item">41 комм.</div></div><div class="post-tags"><a href="#" class="tag">MongoDB</a><a href="#" class="tag">NoSQL</a><a href="#" class="tag">Database</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Полина Сергеева</div>
-            <div class="post-time">1 день назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Tailwind CSS: быстрое создание интерфейсов</div>
-          <div class="post-preview">Tailwind CSS меняет способ создания стилей. Узнаем, почему это так популярно и как его эффективно использовать...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 7 минут чтения</div>
-            <div class="meta-item">👁 3234 просмотров</div>
-            <div class="meta-item">💬 72 комментария</div>
-            <div class="meta-item">⭐ 234 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Tailwind CSS</a>
-            <a href="#" class="tag">CSS</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">UI Design</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Полина Сергеева</div><div class="post-time">1 день назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-content"><div class="post-title">Tailwind CSS: utility-first в production</div><div class="post-preview">Tailwind CSS меняет способ создания стилей. Почему это так популярно и как использовать эффективно.</div><div class="post-meta"><div class="meta-item">7 мин</div><div class="meta-item">3 234 просм.</div><div class="meta-item">72 комм.</div></div><div class="post-tags"><a href="#" class="tag">Tailwind</a><a href="#" class="tag">CSS</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Артём Петров</div>
-            <div class="post-time">1 день назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Web Performance: оптимизация скорости загрузки</div>
-          <div class="post-preview">Быстрые сайты повышают конверсию. Разберемся, как измерить и улучшить производительность веб-приложения...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 11 минут чтения</div>
-            <div class="meta-item">👁 2876 просмотров</div>
-            <div class="meta-item">💬 59 комментариев</div>
-            <div class="meta-item">⭐ 213 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Performance</a>
-            <a href="#" class="tag">Web</a>
-            <a href="#" class="tag">Optimization</a>
-            <a href="#" class="tag">Frontend</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Артём Петров</div><div class="post-time">1 день назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-content"><div class="post-title">Web Performance: оптимизация Core Web Vitals</div><div class="post-preview">CWV напрямую влияют на SEO и UX. LCP, FID, CLS — улучшаем на реальных проектах.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">2 876 просм.</div><div class="meta-item">59 комм.</div></div><div class="post-tags"><a href="#" class="tag">Performance</a><a href="#" class="tag">Web</a><a href="#" class="tag">SEO</a></div></div></div>
 
-      <!-- Posts 26-40 -->
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Юлия Иванова</div>
-            <div class="post-time">1 день назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Фронтенд тестирование: Jest и Vitest</div>
-          <div class="post-preview">Хорошее покрытие тестами — залог надёжного кода. Разберемся с популярными фреймворками для тестирования...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 8 минут чтения</div>
-            <div class="meta-item">👁 1745 просмотров</div>
-            <div class="meta-item">💬 32 комментария</div>
-            <div class="meta-item">⭐ 108 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Testing</a>
-            <a href="#" class="tag">Jest</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">JavaScript</a>
-          </div>
-        </div>
-      </div>
+      <!-- post 27 — table -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Юлия Иванова</div><div class="post-time">1 день назад</div></div></div><div class="post-content"><div class="post-title">Тестовые фреймворки для Frontend: сравнение</div><div class="post-preview">Jest, Vitest, Playwright, Cypress — что выбрать для вашего проекта?</div><table class="data-table"><thead><tr><th>Фреймворк</th><th>Тип</th><th>Скорость</th><th>Популярность</th></tr></thead><tbody><tr><td>Jest</td><td>Unit</td><td>Средняя</td><td>Очень высокая</td></tr><tr><td>Vitest</td><td>Unit</td><td>Высокая</td><td>Растёт</td></tr><tr><td>Playwright</td><td>E2E</td><td>Высокая</td><td>Высокая</td></tr><tr><td>Cypress</td><td>E2E</td><td>Средняя</td><td>Высокая</td></tr></tbody></table><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">1 745 просм.</div><div class="meta-item">32 комм.</div></div><div class="post-tags"><a href="#" class="tag">Testing</a><a href="#" class="tag">Jest</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Кирилл Морозов</div>
-            <div class="post-time">1 день назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Webpack: модульный bundler для веб-приложений</div>
-          <div class="post-preview">Webpack помогает организовать и оптимизировать код. Научимся его правильно конфигурировать...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 10 минут чтения</div>
-            <div class="meta-item">👁 1987 просмотров</div>
-            <div class="meta-item">💬 36 комментариев</div>
-            <div class="meta-item">⭐ 124 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Webpack</a>
-            <a href="#" class="tag">Build Tools</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">JavaScript</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Кирилл Морозов</div><div class="post-time">1 день назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-content"><div class="post-title">Webpack vs Vite: война бандлеров</div><div class="post-preview">Vite завоёвывает популярность. Что выбрать для нового проекта и стоит ли мигрировать?</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">1 987 просм.</div><div class="meta-item">36 комм.</div></div><div class="post-tags"><a href="#" class="tag">Webpack</a><a href="#" class="tag">Vite</a><a href="#" class="tag">Build</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Жанна Федорова</div>
-            <div class="post-time">1 день назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Sass/SCSS: мощный препроцессор CSS</div>
-          <div class="post-preview">Sass делает CSS более мощным и удобным. Разберемся с переменными, миксинами и другими возможностями...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 6 минут чтения</div>
-            <div class="meta-item">👁 2134 просмотров</div>
-            <div class="meta-item">💬 38 комментариев</div>
-            <div class="meta-item">⭐ 135 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Sass</a>
-            <a href="#" class="tag">CSS</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Preprocessor</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-author"><div class="author-name">Жанна Федорова</div><div class="post-time">1 день назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-content"><div class="post-title">Sass/SCSS в 2026: всё ещё актуально?</div><div class="post-preview">CSS Custom Properties стали мощнее. Когда всё ещё нужен Sass и как правильно организовать стили.</div><div class="post-meta"><div class="meta-item">6 мин</div><div class="meta-item">2 134 просм.</div><div class="meta-item">38 комм.</div></div><div class="post-tags"><a href="#" class="tag">Sass</a><a href="#" class="tag">CSS</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Борис Сафин</div>
-            <div class="post-time">1 день назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #6dd5ed 0%, #2193b0 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Next.js: фреймворк для React приложений</div>
-          <div class="post-preview">Next.js предоставляет отличный DX для создания React приложений. Узнаем о его мощных возможностях...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 9 минут чтения</div>
-            <div class="meta-item">👁 3456 просмотров</div>
-            <div class="meta-item">💬 67 комментариев</div>
-            <div class="meta-item">⭐ 245 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Next.js</a>
-            <a href="#" class="tag">React</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Framework</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#6dd5ed,#2193b0);"></div><div class="post-author"><div class="author-name">Борис Сафин</div><div class="post-time">1 день назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#6dd5ed,#2193b0);"></div><div class="post-content"><div class="post-title">Next.js 15: App Router и Server Components</div><div class="post-preview">Next.js 15 принёс стабильный App Router. Разберём, что это значит для разработки.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">3 456 просм.</div><div class="meta-item">67 комм.</div></div><div class="post-tags"><a href="#" class="tag">Next.js</a><a href="#" class="tag">React</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Дарья Смирнова</div>
-            <div class="post-time">2 дня назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Nuxt.js: фреймворк для Vue приложений</div>
-          <div class="post-preview">Nuxt.js упрощает разработку Vue приложений. Рассмотрим его особенности и преимущества...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 8 минут чтения</div>
-            <div class="meta-item">👁 1654 просмотров</div>
-            <div class="meta-item">💬 29 комментариев</div>
-            <div class="meta-item">⭐ 97 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Nuxt.js</a>
-            <a href="#" class="tag">Vue.js</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Framework</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-author"><div class="author-name">Дарья Смирнова</div><div class="post-time">2 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-content"><div class="post-title">Nuxt 4: Server-Side Rendering на Vue</div><div class="post-preview">Nuxt 4 упрощает разработку Vue-приложений с SSR. Новые возможности и migration guide.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">1 654 просм.</div><div class="meta-item">29 комм.</div></div><div class="post-tags"><a href="#" class="tag">Nuxt</a><a href="#" class="tag">Vue.js</a><a href="#" class="tag">SSR</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Эдуард Козлов</div>
-            <div class="post-time">2 дня назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Progressive Web Apps: приложения нового поколения</div>
-          <div class="post-preview">PWA позволяют веб-приложениям работать как нативные. Узнаем, что это такое и как их создавать...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 10 минут чтения</div>
-            <div class="meta-item">👁 2234 просмотров</div>
-            <div class="meta-item">💬 44 комментария</div>
-            <div class="meta-item">⭐ 167 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">PWA</a>
-            <a href="#" class="tag">Web Apps</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Mobile</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Эдуард Козлов</div><div class="post-time">2 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-content"><div class="post-title">Progressive Web Apps: офлайн и установка</div><div class="post-preview">PWA позволяют веб-приложениям работать как нативные. Service Workers, Manifest, Push Notifications.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">2 234 просм.</div><div class="meta-item">44 комм.</div></div><div class="post-tags"><a href="#" class="tag">PWA</a><a href="#" class="tag">Service Workers</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Тамара Лебедева</div>
-            <div class="post-time">2 дня назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Web Components: переиспользуемые компоненты</div>
-          <div class="post-preview">Web Components позволяют создавать полностью переиспользуемые компоненты. Разберемся с их использованием...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 7 минут чтения</div>
-            <div class="meta-item">👁 1876 просмотров</div>
-            <div class="meta-item">💬 33 комментария</div>
-            <div class="meta-item">⭐ 119 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Web Components</a>
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Components</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Тамара Лебедева</div><div class="post-time">2 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-content"><div class="post-title">Web Components: нативные компоненты без фреймворков</div><div class="post-preview">Shadow DOM, Custom Elements, HTML Templates — инкапсулированные компоненты средствами браузера.</div><div class="post-meta"><div class="meta-item">7 мин</div><div class="meta-item">1 876 просм.</div><div class="meta-item">33 комм.</div></div><div class="post-tags"><a href="#" class="tag">Web Components</a><a href="#" class="tag">Shadow DOM</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Роман Архипов</div>
-            <div class="post-time">2 дня назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Svelte: компилируемый фреймворк</div>
-          <div class="post-preview">Svelte предлагает революционный подход к созданию веб-интерфейсов. Узнаем, чем он отличается от других фреймворков...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 9 минут чтения</div>
-            <div class="meta-item">👁 1567 просмотров</div>
-            <div class="meta-item">💬 28 комментариев</div>
-            <div class="meta-item">⭐ 103 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Svelte</a>
-            <a href="#" class="tag">JavaScript</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Framework</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Роман Архипов</div><div class="post-time">2 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-content"><div class="post-title">Svelte и SvelteKit: компиляция вместо рантайма</div><div class="post-preview">Svelte предлагает революционный подход. Нет виртуального DOM — только эффективный скомпилированный код.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">1 567 просм.</div><div class="meta-item">28 комм.</div></div><div class="post-tags"><a href="#" class="tag">Svelte</a><a href="#" class="tag">SvelteKit</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Клара Белова</div>
-            <div class="post-time">2 дня назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">Astro: фреймворк для быстрых веб-сайтов</div>
-          <div class="post-preview">Astro позволяет создавать очень быстрые веб-сайты. Рассмотрим его особенности и преимущества...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 8 минут чтения</div>
-            <div class="meta-item">👁 1234 просмотров</div>
-            <div class="meta-item">💬 22 комментария</div>
-            <div class="meta-item">⭐ 81 избранный</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Astro</a>
-            <a href="#" class="tag">Frontend</a>
-            <a href="#" class="tag">Framework</a>
-            <a href="#" class="tag">Performance</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Клара Белова</div><div class="post-time">2 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-content"><div class="post-title">Astro: острова архитектуры для контентных сайтов</div><div class="post-preview">Astro Islands — смешиваем фреймворки, 0 JS по умолчанию. Отлично для блогов и документации.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">1 234 просм.</div><div class="meta-item">22 комм.</div></div><div class="post-tags"><a href="#" class="tag">Astro</a><a href="#" class="tag">Static Site</a><a href="#" class="tag">Frontend</a></div></div></div>
 
-      <div class="post">
-        <div class="post-header">
-          <div class="avatar"></div>
-          <div class="post-author">
-            <div class="author-name">Федор Иванов</div>
-            <div class="post-time">2 дня назад</div>
-          </div>
-        </div>
-        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
-        <div class="post-content">
-          <div class="post-title">GatsbyJS: статические сайты с React</div>
-          <div class="post-preview">Gatsby позволяет создавать быстрые статические сайты. Узнаем о его возможностях для создания блогов и документации...</div>
-          <div class="post-meta">
-            <div class="meta-item">📊 7 минут чтения</div>
-            <div class="meta-item">👁 987 просмотров</div>
-            <div class="meta-item">💬 18 комментариев</div>
-            <div class="meta-item">⭐ 64 избранных</div>
-          </div>
-          <div class="post-tags">
-            <a href="#" class="tag">Gatsby</a>
-            <a href="#" class="tag">React</a>
-            <a href="#" class="tag">Static Site</a>
-            <a href="#" class="tag">Frontend</a>
-          </div>
-        </div>
-      </div>
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-author"><div class="author-name">Федор Иванов</div><div class="post-time">2 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-content"><div class="post-title">Bun: JavaScript runtime нового поколения</div><div class="post-preview">Bun обещает быть быстрее Node.js. Встроенный bundler, test runner, package manager в одном инструменте.</div><div class="post-meta"><div class="meta-item">7 мин</div><div class="meta-item">2 134 просм.</div><div class="meta-item">41 комм.</div></div><div class="post-tags"><a href="#" class="tag">Bun</a><a href="#" class="tag">JavaScript</a><a href="#" class="tag">Runtime</a></div></div></div>
+
+      <!-- posts 41-85 -->
+
+      <!-- post 41 — inline images + long body -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-author"><div class="author-name">Алексей Воронов</div><div class="post-time">3 дня назад</div></div></div><div class="post-content"><div class="post-title">Rust для системного программирования: безопасность без GC</div><div class="post-images"><div class="post-thumb" style="background:#c5c8ce;"></div><div class="post-thumb" style="background:#b8bfc8;"></div><div class="post-thumb" style="background:#cdd2d9;"></div></div><div class="post-body"><p>Rust предлагает уникальную комбинацию: системный уровень без garbage collector и без dangling pointers. Ownership и borrow checker гарантируют memory safety на этапе компиляции.</p><p>Рассматриваем практические примеры: высокопроизводительные серверы, системные утилиты и WebAssembly-модули.</p></div><div class="post-meta"><div class="meta-item">15 мин</div><div class="meta-item">4 567 просм.</div><div class="meta-item">93 комм.</div></div><div class="post-tags"><a href="#" class="tag">Rust</a><a href="#" class="tag">Systems</a><a href="#" class="tag">Memory Safety</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-author"><div class="author-name">Надежда Орлова</div><div class="post-time">3 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-content"><div class="post-title">Go: простой язык для сложных задач</div><div class="post-preview">Go сочетает простоту синтаксиса с высокой производительностью. Горутины, каналы, встроенный toolchain.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">3 210 просм.</div><div class="meta-item">55 комм.</div></div><div class="post-tags"><a href="#" class="tag">Go</a><a href="#" class="tag">Concurrency</a><a href="#" class="tag">Backend</a></div></div></div>
+
+      <!-- post 43 — float avatar -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Степан Лазарев</div><div class="post-time">3 дня назад</div></div></div><div class="post-content clearfix"><div class="float-avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-title">Distributed Systems: CAP теорема на практике</div><div class="post-body"><p>Теорема CAP: распределённая система может гарантировать только два из трёх свойств — Consistency, Availability, Partition tolerance. Рассматриваем, как это проявляется в реальных системах.</p><p>Cassandra (AP), HBase (CP), Zookeeper (CP). Как выбирать между eventual consistency и strong consistency.</p></div><div class="post-meta"><div class="meta-item">14 мин</div><div class="meta-item">2 890 просм.</div><div class="meta-item">64 комм.</div></div><div class="post-tags"><a href="#" class="tag">Distributed</a><a href="#" class="tag">CAP</a><a href="#" class="tag">Architecture</a></div></div></div>
+
+      <!-- post 44 — table -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Ирина Белоусова</div><div class="post-time">3 дня назад</div></div></div><div class="post-content"><div class="post-title">Облачные платформы: AWS vs GCP vs Azure</div><div class="post-preview">Три гиганта облачного рынка. Сравниваем цены, возможности и экосистему.</div><table class="data-table"><thead><tr><th>Сервис</th><th>AWS</th><th>GCP</th><th>Azure</th></tr></thead><tbody><tr><td>Compute</td><td>EC2</td><td>GCE</td><td>Azure VM</td></tr><tr><td>Serverless</td><td>Lambda</td><td>Cloud Functions</td><td>Azure Functions</td></tr><tr><td>Object Storage</td><td>S3</td><td>GCS</td><td>Blob Storage</td></tr><tr><td>Managed K8s</td><td>EKS</td><td>GKE</td><td>AKS</td></tr><tr><td>Free tier</td><td>12 мес</td><td>Постоянный</td><td>12 мес</td></tr></tbody></table><div class="post-meta"><div class="meta-item">12 мин</div><div class="meta-item">5 123 просм.</div><div class="meta-item">87 комм.</div></div><div class="post-tags"><a href="#" class="tag">AWS</a><a href="#" class="tag">GCP</a><a href="#" class="tag">Azure</a><a href="#" class="tag">Cloud</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Олег Тимофеев</div><div class="post-time">3 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-content"><div class="post-title">gRPC: высокопроизводительные RPC в 2026</div><div class="post-preview">gRPC обеспечивает строгую типизацию и бинарный протокол. Сравниваем с REST и GraphQL для внутренних сервисов.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">1 987 просм.</div><div class="meta-item">36 комм.</div></div><div class="post-tags"><a href="#" class="tag">gRPC</a><a href="#" class="tag">Protobuf</a><a href="#" class="tag">API</a></div></div></div>
+
+      <!-- post 46 — inline images -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Татьяна Громова</div><div class="post-time">4 дня назад</div></div></div><div class="post-content"><div class="post-title">UX-дизайн для разработчиков: базовые принципы</div><div class="post-images"><div class="post-thumb" style="background:#d8c8c8;"></div><div class="post-thumb" style="background:#c8d8c8;"></div></div><div class="post-preview">Разработчик, понимающий UX, пишет код иначе. Gestalt, доступность, пользовательские паттерны.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">2 456 просм.</div><div class="meta-item">43 комм.</div></div><div class="post-tags"><a href="#" class="tag">UX</a><a href="#" class="tag">Design</a><a href="#" class="tag">Accessibility</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-author"><div class="author-name">Михаил Зайцев</div><div class="post-time">4 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-content"><div class="post-title">LLM в продакшне: практический опыт</div><div class="post-preview">Развёртывание больших языковых моделей требует особого подхода. RAG, fine-tuning, prompt engineering, latency.</div><div class="post-meta"><div class="meta-item">16 мин</div><div class="meta-item">7 234 просм.</div><div class="meta-item">134 комм.</div></div><div class="post-tags"><a href="#" class="tag">LLM</a><a href="#" class="tag">AI</a><a href="#" class="tag">Production</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-author"><div class="author-name">Антон Суворов</div><div class="post-time">4 дня назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-content"><div class="post-title">Observability: метрики, логи и трейсы</div><div class="post-preview">Три столпа observability: metrics (Prometheus), logs (Loki), traces (Jaeger). Как выстроить эффективный мониторинг.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">3 456 просм.</div><div class="meta-item">62 комм.</div></div><div class="post-tags"><a href="#" class="tag">Observability</a><a href="#" class="tag">Prometheus</a><a href="#" class="tag">Tracing</a></div></div></div>
+
+      <!-- post 49 — float + table -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff5f87,#ff6b6b);"></div><div class="post-author"><div class="author-name">Екатерина Громова</div><div class="post-time">4 дня назад</div></div></div><div class="post-content clearfix"><div class="float-avatar" style="background:linear-gradient(135deg,#ff5f87,#ff6b6b);"></div><div class="post-title">Message Queues: Kafka vs RabbitMQ vs NATS</div><div class="post-body"><p>Брокеры сообщений решают задачу асинхронного взаимодействия сервисов. Выбор неочевиден — каждый оптимизирован под разные сценарии нагрузки и гарантий доставки.</p></div><table class="data-table"><thead><tr><th>Параметр</th><th>Kafka</th><th>RabbitMQ</th><th>NATS</th></tr></thead><tbody><tr><td>Latency</td><td>Высокая</td><td>Низкая</td><td>Очень низкая</td></tr><tr><td>Throughput</td><td>Очень высокий</td><td>Высокий</td><td>Очень высокий</td></tr><tr><td>Persistence</td><td>Да</td><td>Опционально</td><td>JetStream</td></tr></tbody></table><div class="post-meta"><div class="meta-item">13 мин</div><div class="meta-item">3 120 просм.</div><div class="meta-item">71 комм.</div></div><div class="post-tags"><a href="#" class="tag">Kafka</a><a href="#" class="tag">RabbitMQ</a><a href="#" class="tag">Messaging</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-author"><div class="author-name">Светлана Кудрявцева</div><div class="post-time">5 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-content"><div class="post-title">Terraform: инфраструктура как код</div><div class="post-preview">Terraform позволяет управлять облачной инфраструктурой декларативно. Модули, state, workspaces.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">2 890 просм.</div><div class="meta-item">48 комм.</div></div><div class="post-tags"><a href="#" class="tag">Terraform</a><a href="#" class="tag">IaC</a><a href="#" class="tag">DevOps</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#6dd5ed,#2193b0);"></div><div class="post-author"><div class="author-name">Андрей Кузьмин</div><div class="post-time">5 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#6dd5ed,#2193b0);"></div><div class="post-content"><div class="post-title">PostgreSQL: продвинутые возможности для разработчиков</div><div class="post-preview">JSONB, полнотекстовый поиск, оконные функции, LISTEN/NOTIFY, расширения. PostgreSQL умеет многое.</div><div class="post-meta"><div class="meta-item">12 мин</div><div class="meta-item">3 456 просм.</div><div class="meta-item">67 комм.</div></div><div class="post-tags"><a href="#" class="tag">PostgreSQL</a><a href="#" class="tag">SQL</a><a href="#" class="tag">Database</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Лариса Новикова</div><div class="post-time">5 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-content"><div class="post-title">WebSockets: двусторонняя связь в реальном времени</div><div class="post-preview">WebSockets открывают возможности для чатов, live-dashboard и мультиплеерных игр в браузере.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">2 234 просм.</div><div class="meta-item">44 комм.</div></div><div class="post-tags"><a href="#" class="tag">WebSockets</a><a href="#" class="tag">Real-time</a><a href="#" class="tag">Backend</a></div></div></div>
+
+      <!-- post 53 — inline images -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Денис Харитонов</div><div class="post-time">5 дней назад</div></div></div><div class="post-content"><div class="post-title">Figma для разработчиков: inspect и Dev Mode</div><div class="post-images"><div class="post-thumb" style="background:#e0d8d0;"></div><div class="post-thumb" style="background:#d8e0d8;"></div><div class="post-thumb" style="background:#d0d8e0;"></div></div><div class="post-preview">Dev Mode упрощает передачу дизайна в разработку. Автогенерация CSS, токены и компонентные спецификации.</div><div class="post-meta"><div class="meta-item">7 мин</div><div class="meta-item">1 876 просм.</div><div class="meta-item">33 комм.</div></div><div class="post-tags"><a href="#" class="tag">Figma</a><a href="#" class="tag">Design</a><a href="#" class="tag">Frontend</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-author"><div class="author-name">Ксения Федотова</div><div class="post-time">5 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-content"><div class="post-title">Регулярные выражения: полный гид</div><div class="post-preview">Regex пугает новичков, но это один из самых мощных инструментов. Все конструкции с примерами.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">4 567 просм.</div><div class="meta-item">89 комм.</div></div><div class="post-tags"><a href="#" class="tag">Regex</a><a href="#" class="tag">Programming</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-author"><div class="author-name">Виталий Орлов</div><div class="post-time">5 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-content"><div class="post-title">Linux для разработчиков: инструменты и трюки</div><div class="post-preview">tmux, sed, awk, jq, fzf, ripgrep — инструменты, ускоряющие работу в терминале кратно.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">3 234 просм.</div><div class="meta-item">58 комм.</div></div><div class="post-tags"><a href="#" class="tag">Linux</a><a href="#" class="tag">CLI</a><a href="#" class="tag">Productivity</a></div></div></div>
+
+      <!-- post 56 — float avatar + long body -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Сергей Попов</div><div class="post-time">6 дней назад</div></div></div><div class="post-content clearfix"><div class="float-avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-title">Криптография для разработчиков</div><div class="post-body"><p>Понимание криптографии необходимо каждому backend-разработчику. Симметричное и асимметричное шифрование, хэш-функции, цифровые подписи — разбираем, когда и что применять.</p><p>Практические примеры: защита паролей (Argon2/bcrypt), JWT, TLS-рукопожатие, шифрование at-rest.</p></div><div class="post-meta"><div class="meta-item">13 мин</div><div class="meta-item">2 654 просм.</div><div class="meta-item">51 комм.</div></div><div class="post-tags"><a href="#" class="tag">Cryptography</a><a href="#" class="tag">Security</a><a href="#" class="tag">Backend</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-author"><div class="author-name">Алина Михайлова</div><div class="post-time">6 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-content"><div class="post-title">Зачем учить алгоритмы: практическая польза</div><div class="post-preview">Алгоритмы — не только для собеседований. BFS, DP, сортировки и графы в реальных задачах.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">3 876 просм.</div><div class="meta-item">73 комм.</div></div><div class="post-tags"><a href="#" class="tag">Algorithms</a><a href="#" class="tag">DSA</a><a href="#" class="tag">Interview</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Роман Козлов</div><div class="post-time">6 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-content"><div class="post-title">ClickHouse: аналитика на миллиардах строк</div><div class="post-preview">ClickHouse — колоночная СУБД для OLAP-запросов. Sub-second latency на петабайтах данных.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">2 345 просм.</div><div class="meta-item">46 комм.</div></div><div class="post-tags"><a href="#" class="tag">ClickHouse</a><a href="#" class="tag">OLAP</a><a href="#" class="tag">Analytics</a></div></div></div>
+
+      <!-- post 59 — table -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff5f87,#ff6b6b);"></div><div class="post-author"><div class="author-name">Никита Власов</div><div class="post-time">6 дней назад</div></div></div><div class="post-content"><div class="post-title">Языки программирования 2026: кто растёт, кто падает</div><div class="post-preview">TIOBE, RedMonk, Stack Overflow Survey — анализируем тренды.</div><table class="data-table"><thead><tr><th>Язык</th><th>2024</th><th>2026</th><th>Тренд</th></tr></thead><tbody><tr><td>Python</td><td>1</td><td>1</td><td>→</td></tr><tr><td>JavaScript</td><td>2</td><td>2</td><td>→</td></tr><tr><td>Rust</td><td>14</td><td>9</td><td>↑↑</td></tr><tr><td>Go</td><td>8</td><td>7</td><td>↑</td></tr><tr><td>TypeScript</td><td>4</td><td>3</td><td>↑</td></tr><tr><td>Java</td><td>3</td><td>5</td><td>↓</td></tr></tbody></table><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">6 789 просм.</div><div class="meta-item">142 комм.</div></div><div class="post-tags"><a href="#" class="tag">Programming</a><a href="#" class="tag">Trends</a><a href="#" class="tag">Languages</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Людмила Карпова</div><div class="post-time">7 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-content"><div class="post-title">Kotlin: современный Java без боли</div><div class="post-preview">Kotlin улучшает опыт разработки на JVM. Null safety, extension functions, coroutines, Multiplatform.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">1 987 просм.</div><div class="meta-item">38 комм.</div></div><div class="post-tags"><a href="#" class="tag">Kotlin</a><a href="#" class="tag">JVM</a><a href="#" class="tag">Android</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-author"><div class="author-name">Георгий Макаров</div><div class="post-time">7 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fccb90,#d57eeb);"></div><div class="post-content"><div class="post-title">Swift и SwiftUI: нативная разработка под iOS</div><div class="post-preview">SwiftUI декларативен и элегантен. Компоненты, State management и интеграция с UIKit.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">2 123 просм.</div><div class="meta-item">41 комм.</div></div><div class="post-tags"><a href="#" class="tag">Swift</a><a href="#" class="tag">SwiftUI</a><a href="#" class="tag">iOS</a></div></div></div>
+
+      <!-- post 62 — inline images -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-author"><div class="author-name">Вероника Ильина</div><div class="post-time">7 дней назад</div></div></div><div class="post-content"><div class="post-title">Архитектурные паттерны: MVC, MVP, MVVM, MVI</div><div class="post-images"><div class="post-thumb" style="background:#d8d0e0;"></div><div class="post-thumb" style="background:#e0d8d0;"></div></div><div class="post-preview">Выбор архитектурного паттерна влияет на качество кода. Разбираем каждый на практических примерах.</div><div class="post-meta"><div class="meta-item">12 мин</div><div class="meta-item">3 456 просм.</div><div class="meta-item">65 комм.</div></div><div class="post-tags"><a href="#" class="tag">Architecture</a><a href="#" class="tag">Patterns</a><a href="#" class="tag">Design</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Пётр Васильев</div><div class="post-time">8 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-content"><div class="post-title">Elasticsearch: полнотекстовый поиск в production</div><div class="post-preview">Elasticsearch — стандарт полнотекстового поиска. Mapping, analyzers, aggregations, relevance tuning.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">2 876 просм.</div><div class="meta-item">54 комм.</div></div><div class="post-tags"><a href="#" class="tag">Elasticsearch</a><a href="#" class="tag">Search</a><a href="#" class="tag">Backend</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Зинаида Соколова</div><div class="post-time">8 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-content"><div class="post-title">Event-Driven Architecture: реактивные системы</div><div class="post-preview">Event sourcing + CQRS — мощная комбинация для сложных доменов. Пример финтех-приложения.</div><div class="post-meta"><div class="meta-item">14 мин</div><div class="meta-item">2 234 просм.</div><div class="meta-item">49 комм.</div></div><div class="post-tags"><a href="#" class="tag">Event Sourcing</a><a href="#" class="tag">CQRS</a><a href="#" class="tag">Architecture</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Борис Крылов</div><div class="post-time">8 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-content"><div class="post-title">Профилирование и оптимизация Rust-приложений</div><div class="post-preview">perf, flamegraph, cargo-flamegraph — профилируем Rust. Hot paths и устранение лишних аллокаций.</div><div class="post-meta"><div class="meta-item">13 мин</div><div class="meta-item">1 678 просм.</div><div class="meta-item">34 комм.</div></div><div class="post-tags"><a href="#" class="tag">Rust</a><a href="#" class="tag">Performance</a><a href="#" class="tag">Profiling</a></div></div></div>
+
+      <!-- post 67 — float + long body -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-author"><div class="author-name">Тамара Волкова</div><div class="post-time">9 дней назад</div></div></div><div class="post-content clearfix"><div class="float-avatar" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-title">DDD: Domain-Driven Design на практике</div><div class="post-body"><p>Domain-Driven Design — методология для сложных систем. Ubiquitous Language, Bounded Contexts, Aggregates, Domain Events — не просто термины, а инструменты.</p><p>Рефакторинг реального е-коммерс проекта с переходом на DDD: выделение bounded contexts, антикоррупционные слои, event storming.</p></div><div class="post-meta"><div class="meta-item">16 мин</div><div class="meta-item">3 789 просм.</div><div class="meta-item">82 комм.</div></div><div class="post-tags"><a href="#" class="tag">DDD</a><a href="#" class="tag">Architecture</a><a href="#" class="tag">Design</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Илья Романенко</div><div class="post-time">9 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-content"><div class="post-title">WebRTC: peer-to-peer видео в браузере</div><div class="post-preview">WebRTC позволяет P2P-соединения без сервера. Сигнализация, STUN/TURN, ICE negotiation.</div><div class="post-meta"><div class="meta-item">12 мин</div><div class="meta-item">1 987 просм.</div><div class="meta-item">43 комм.</div></div><div class="post-tags"><a href="#" class="tag">WebRTC</a><a href="#" class="tag">Video</a><a href="#" class="tag">P2P</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-author"><div class="author-name">Арина Лисова</div><div class="post-time">9 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-content"><div class="post-title">IndexedDB: хранение данных в браузере</div><div class="post-preview">IndexedDB мощнее localStorage. API, транзакции и использование с Dexie.js.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">1 345 просм.</div><div class="meta-item">26 комм.</div></div><div class="post-tags"><a href="#" class="tag">IndexedDB</a><a href="#" class="tag">Storage</a><a href="#" class="tag">PWA</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-author"><div class="author-name">Евгений Жуков</div><div class="post-time">10 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-content"><div class="post-title">Тёмная тема: правильная реализация</div><div class="post-preview">prefers-color-scheme, CSS Custom Properties, автоматическая адаптация изображений.</div><div class="post-meta"><div class="meta-item">7 мин</div><div class="meta-item">2 678 просм.</div><div class="meta-item">57 комм.</div></div><div class="post-tags"><a href="#" class="tag">CSS</a><a href="#" class="tag">Dark Mode</a><a href="#" class="tag">UX</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Кирилл Медведев</div><div class="post-time">10 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-content"><div class="post-title">HTTP/3 и QUIC: новый стек транспортного уровня</div><div class="post-preview">HTTP/3 на базе QUIC заменяет TCP. Мультиплексирование без HOL blocking, 0-RTT соединения.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">2 456 просм.</div><div class="meta-item">47 комм.</div></div><div class="post-tags"><a href="#" class="tag">HTTP/3</a><a href="#" class="tag">QUIC</a><a href="#" class="tag">Network</a></div></div></div>
+
+      <!-- post 73 — inline images -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Маргарита Соболева</div><div class="post-time">10 дней назад</div></div></div><div class="post-content"><div class="post-title">Дизайн-системы: от tokens до компонентов</div><div class="post-images"><div class="post-thumb" style="background:#e8d8c0;"></div><div class="post-thumb" style="background:#d0e0d0;"></div><div class="post-thumb" style="background:#c8d0e8;"></div></div><div class="post-preview">Design tokens, Storybook, компонентная библиотека — как выстроить дизайн-систему, которой пользуются все.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">3 120 просм.</div><div class="meta-item">61 комм.</div></div><div class="post-tags"><a href="#" class="tag">Design System</a><a href="#" class="tag">Storybook</a><a href="#" class="tag">UI</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Захар Прокофьев</div><div class="post-time">11 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-content"><div class="post-title">Serverless: архитектура без серверов</div><div class="post-preview">Lambda, Cloud Functions, Durable Functions — serverless меняет экономику разработки.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">2 345 просм.</div><div class="meta-item">44 комм.</div></div><div class="post-tags"><a href="#" class="tag">Serverless</a><a href="#" class="tag">Lambda</a><a href="#" class="tag">Cloud</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-author"><div class="author-name">Олеся Громова</div><div class="post-time">11 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-content"><div class="post-title">SOLID принципы: теория и практика</div><div class="post-preview">SOLID — не просто аббревиатура. Каждый принцип с антипаттернами и способами исправления.</div><div class="post-meta"><div class="meta-item">12 мин</div><div class="meta-item">4 123 просм.</div><div class="meta-item">78 комм.</div></div><div class="post-tags"><a href="#" class="tag">SOLID</a><a href="#" class="tag">OOP</a><a href="#" class="tag">Refactoring</a></div></div></div>
+
+      <!-- post 76 — table -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-author"><div class="author-name">Валентин Орлов</div><div class="post-time">12 дней назад</div></div></div><div class="post-content"><div class="post-title">ORM vs raw SQL: что выбрать?</div><div class="post-preview">Prisma, TypeORM, Drizzle, raw SQL — каждый инструмент имеет своё место. Trade-offs.</div><table class="data-table"><thead><tr><th>Инструмент</th><th>Тип</th><th>Производительность</th><th>DX</th></tr></thead><tbody><tr><td>Raw SQL</td><td>—</td><td>Максимальная</td><td>Низкий</td></tr><tr><td>Prisma</td><td>ORM</td><td>Хорошая</td><td>Отличный</td></tr><tr><td>Drizzle</td><td>Query Builder</td><td>Отличная</td><td>Хороший</td></tr><tr><td>TypeORM</td><td>ORM</td><td>Средняя</td><td>Хороший</td></tr></tbody></table><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">2 890 просм.</div><div class="meta-item">63 комм.</div></div><div class="post-tags"><a href="#" class="tag">ORM</a><a href="#" class="tag">SQL</a><a href="#" class="tag">Database</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Нина Лесникова</div><div class="post-time">12 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-content"><div class="post-title">Мобильная разработка: React Native в 2026</div><div class="post-preview">React Native New Architecture — Fabric и JSI меняют производительность мобильных приложений.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">2 123 просм.</div><div class="meta-item">45 комм.</div></div><div class="post-tags"><a href="#" class="tag">React Native</a><a href="#" class="tag">Mobile</a><a href="#" class="tag">JavaScript</a></div></div></div>
+
+      <!-- post 78 — float + images -->
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-author"><div class="author-name">Тихон Фёдоров</div><div class="post-time">13 дней назад</div></div></div><div class="post-content clearfix"><div class="float-avatar" style="background:linear-gradient(135deg,#ff9a56,#ff6a88);"></div><div class="post-title">Gamedev в браузере: PixiJS и Three.js</div><div class="post-body"><p>Canvas 2D и WebGL открывают возможности для игр в браузере. PixiJS ускоряет 2D-рендеринг через WebGL, Three.js — полноценная 3D-сцена с материалами, светом и тенями.</p></div><div class="post-images"><div class="post-thumb-sm" style="background:#c8c0e8;"></div><div class="post-thumb-sm" style="background:#e8c0c8;"></div><div class="post-thumb-sm" style="background:#c0e8c8;"></div></div><div class="post-meta"><div class="meta-item">12 мин</div><div class="meta-item">1 890 просм.</div><div class="meta-item">37 комм.</div></div><div class="post-tags"><a href="#" class="tag">WebGL</a><a href="#" class="tag">Three.js</a><a href="#" class="tag">Gamedev</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-author"><div class="author-name">Виктория Ковалёва</div><div class="post-time">13 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#30cfd0,#330867);"></div><div class="post-content"><div class="post-title">Эффективная работа с AI-ассистентами</div><div class="post-preview">Prompt engineering для разработчиков: как использовать LLM как пару в программировании.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">5 678 просм.</div><div class="meta-item">112 комм.</div></div><div class="post-tags"><a href="#" class="tag">AI</a><a href="#" class="tag">Productivity</a><a href="#" class="tag">Tools</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-author"><div class="author-name">Серафим Дёмин</div><div class="post-time">13 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#fa709a,#fee140);"></div><div class="post-content"><div class="post-title">Микрофронтенды: масштабирование frontend-команд</div><div class="post-preview">Module Federation позволяет разным командам разрабатывать части одного приложения независимо.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">2 345 просм.</div><div class="meta-item">49 комм.</div></div><div class="post-tags"><a href="#" class="tag">Micro Frontend</a><a href="#" class="tag">Architecture</a><a href="#" class="tag">Webpack</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-author"><div class="author-name">Пелагея Романова</div><div class="post-time">14 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#a8edea,#fed6e3);"></div><div class="post-content"><div class="post-title">Accessibility (a11y): делаем веб доступным для всех</div><div class="post-preview">WCAG 2.2, ARIA, semantic HTML, keyboard navigation — доступность важна и для пользователей, и для SEO.</div><div class="post-meta"><div class="meta-item">10 мин</div><div class="meta-item">1 987 просм.</div><div class="meta-item">41 комм.</div></div><div class="post-tags"><a href="#" class="tag">a11y</a><a href="#" class="tag">WCAG</a><a href="#" class="tag">HTML</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-author"><div class="author-name">Диодор Скворцов</div><div class="post-time">14 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#f093fb,#f5576c);"></div><div class="post-content"><div class="post-title">Anime.js и GSAP: анимации мирового класса</div><div class="post-preview">CSS Animations хороши, но GSAP открывает новый уровень. Морфинг SVG, скролл-привязка, timeline.</div><div class="post-meta"><div class="meta-item">9 мин</div><div class="meta-item">2 789 просм.</div><div class="meta-item">54 комм.</div></div><div class="post-tags"><a href="#" class="tag">Animation</a><a href="#" class="tag">GSAP</a><a href="#" class="tag">Frontend</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-author"><div class="author-name">Харитон Зубков</div><div class="post-time">14 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#667eea,#764ba2);"></div><div class="post-content"><div class="post-title">GraphQL subscriptions и real-time данные</div><div class="post-preview">GraphQL subscriptions позволяют подписаться на изменения. WebSocket-транспорт, Apollo, hot reload.</div><div class="post-meta"><div class="meta-item">8 мин</div><div class="meta-item">1 789 просм.</div><div class="meta-item">36 комм.</div></div><div class="post-tags"><a href="#" class="tag">GraphQL</a><a href="#" class="tag">WebSocket</a><a href="#" class="tag">Real-time</a></div></div></div>
+
+      <div class="post"><div class="post-header"><div class="avatar" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-author"><div class="author-name">Авдотья Тимирязева</div><div class="post-time">15 дней назад</div></div></div><div class="post-cover" style="background:linear-gradient(135deg,#4facfe,#00f2fe);"></div><div class="post-content"><div class="post-title">Flutter: кросс-платформенная разработка на Dart</div><div class="post-preview">Flutter — одно приложение для iOS, Android, Web и Desktop. Widget tree, Riverpod, GoRouter.</div><div class="post-meta"><div class="meta-item">11 мин</div><div class="meta-item">2 567 просм.</div><div class="meta-item">52 комм.</div></div><div class="post-tags"><a href="#" class="tag">Flutter</a><a href="#" class="tag">Dart</a><a href="#" class="tag">Mobile</a></div></div></div>
+
     </div>
 
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="widget">
-        <div class="widget-title">Топ постов</div>
-        <div class="sidebar-item">
-          <strong>React Hooks Explained</strong>
-          <div>2345 просмотров</div>
-        </div>
-        <div class="sidebar-item">
-          <strong>Kubernetes для начинающих</strong>
-          <div>4123 просмотров</div>
-        </div>
-        <div class="sidebar-item">
-          <strong>GraphQL vs REST</strong>
-          <div>3456 просмотров</div>
-        </div>
+        <div class="widget-title">Топ статей</div>
+        <div class="sidebar-item"><strong>LLM в продакшне</strong><div>7 234 просм.</div></div>
+        <div class="sidebar-item"><strong>Языки 2026: тренды</strong><div>6 789 просм.</div></div>
+        <div class="sidebar-item"><strong>Kubernetes для начинающих</strong><div>4 123 просм.</div></div>
+        <div class="sidebar-item"><strong>Regex: полный гид</strong><div>4 567 просм.</div></div>
+        <div class="sidebar-item"><strong>Алгоритмы на практике</strong><div>3 876 просм.</div></div>
       </div>
-
       <div class="widget">
         <div class="widget-title">Популярные теги</div>
-        <div class="sidebar-item">
-          <a href="#" class="tag" style="display: block; margin: 0;">JavaScript</a>
-        </div>
-        <div class="sidebar-item">
-          <a href="#" class="tag" style="display: block; margin: 0;">React</a>
-        </div>
-        <div class="sidebar-item">
-          <a href="#" class="tag" style="display: block; margin: 0;">Backend</a>
-        </div>
-        <div class="sidebar-item">
-          <a href="#" class="tag" style="display: block; margin: 0;">DevOps</a>
-        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;"><a href="#" class="tag">JavaScript</a><a href="#" class="tag">Rust</a><a href="#" class="tag">Python</a><a href="#" class="tag">DevOps</a><a href="#" class="tag">AI/ML</a><a href="#" class="tag">React</a><a href="#" class="tag">Database</a><a href="#" class="tag">Architecture</a></div>
       </div>
-
-      <div class="widget">
-        <div class="widget-title">О проекте</div>
-        <div class="sidebar-item">
-          Habr Heavy — тестовая страница для бенчмарков производительности браузеров. Содержит реалистичное количество элементов и стилей.
-        </div>
-      </div>
-
       <div class="widget">
         <div class="widget-title">Объявления</div>
-        <div class="sidebar-item">
-          📢 <strong>Новое обновление</strong> — улучшена поддержка мобильных устройств
-        </div>
-        <div class="sidebar-item">
-          🚀 <strong>Запущена бета</strong> — попробуйте новые фичи
-        </div>
+        <div class="sidebar-item"><strong>Конференция HabrConf 2026</strong><div>15 июня, Москва</div></div>
+        <div class="sidebar-item"><strong>Хакатон «Браузер будущего»</strong><div>Призовой фонд 500к</div></div>
+      </div>
+      <div class="ad-banner">Реклама · 728×90</div>
+      <div class="widget">
+        <div class="widget-title">О Habr</div>
+        <div class="sidebar-item">Habr Heavy — тестовая страница для бенчмарков движка Lumen. 85 статей, таблицы, float-элементы, mix-blend-mode карточки, grey image placeholders.</div>
       </div>
     </aside>
   </div>
