@@ -213,6 +213,7 @@ impl Connection {
         authorization: Option<&str>,
         accept_encoding: Option<&str>,
         extra_headers: &str,
+        http_profile: HttpProfile,
     ) -> Result<()> {
         let range_value = range.and_then(|r| r.header_value());
         let range_header = match &range_value {
@@ -230,17 +231,16 @@ impl Connection {
             Some(value) => format!("Authorization: {value}\r\n"),
             None => String::new(),
         };
-        let accept_encoding_header = match accept_encoding {
-            Some(value) if !value.is_empty() => format!("Accept-Encoding: {value}\r\n"),
-            _ => String::new(),
-        };
         // `extra_headers` уже содержит свои CRLF после каждой строки (формат
         // pre-built). Используется CORS-путём для `Origin` / `Access-Control-*`
         // и для пользовательских author-headers. Caller гарантирует, что
         // среди них нет дублей `Host`/`Connection`/`Content-Length` и т.п.
-        let req = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{accept_encoding_header}{range_header}{if_range_header}{auth_header}{extra_headers}\r\n"
-        );
+        //
+        // Range/If-Range/Auth идут после fingerprint-заголовков (Chrome order).
+        let combined_extra = format!("{range_header}{if_range_header}{auth_header}{extra_headers}");
+        let accept_enc = accept_encoding.unwrap_or("");
+        let header_block = http::build_request_headers(host, accept_enc, &combined_extra, http_profile);
+        let req = format!("{method} {path} HTTP/1.1\r\n{header_block}");
         let stream = self.reader.get_mut();
         stream
             .write_all(req.as_bytes())
@@ -255,6 +255,7 @@ impl Connection {
     ///
     /// Adds `Content-Type` and `Content-Length` headers automatically.
     /// `extra_headers` may contain additional pre-formatted `Key: Value\r\n` lines.
+    #[allow(clippy::too_many_arguments)]
     fn write_request_with_body(
         &mut self,
         method: &str,
@@ -263,11 +264,15 @@ impl Connection {
         content_type: &str,
         body: &[u8],
         extra_headers: &str,
+        http_profile: HttpProfile,
     ) -> Result<()> {
-        let req = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra_headers}\r\n",
+        // Content-Type and Content-Length come after fingerprint headers (Chrome order).
+        let body_headers = format!(
+            "Content-Type: {content_type}\r\nContent-Length: {}\r\n{extra_headers}",
             body.len()
         );
+        let header_block = http::build_request_headers(host, "", &body_headers, http_profile);
+        let req = format!("{method} {path} HTTP/1.1\r\n{header_block}");
         let stream = self.reader.get_mut();
         stream
             .write_all(req.as_bytes())
@@ -665,6 +670,7 @@ fn fetch_single(
     h2_pool: Option<&H2Pool>,
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
+    http_profile: HttpProfile,
     host: &str,
     port: u16,
     is_tls: bool,
@@ -715,6 +721,7 @@ fn fetch_single(
             authorization,
             accept_encoding,
             extra_headers,
+            http_profile,
         ) {
             Ok((resp, conn)) => {
                 if !conn.closed {
@@ -736,7 +743,7 @@ fn fetch_single(
     // HTTP/2: establish fresh H2Conn, use it, then store back in h2_pool.
     if conn.is_h2 {
         let scheme = if is_tls { "https" } else { "http" };
-        return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls);
+        return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls, http_profile);
     }
 
     let (resp, conn) = do_request(
@@ -749,6 +756,7 @@ fn fetch_single(
         authorization,
         accept_encoding,
         extra_headers,
+        http_profile,
     )?;
     if !conn.closed {
         pool.release(key, conn);
@@ -769,10 +777,11 @@ fn h2_do_request(
     host: &str,
     port: u16,
     is_tls: bool,
+    http_profile: HttpProfile,
 ) -> Result<Response> {
     use h2::conn::H2Conn;
     let stream = conn.into_stream();
-    let mut h2 = H2Conn::connect(stream)?;
+    let mut h2 = H2Conn::connect_with_profile(stream, http_profile)?;
 
     let parsed_extra = parse_extra_headers_str(extra_headers);
     let extra_refs: Vec<(&[u8], &[u8])> = parsed_extra
@@ -838,6 +847,7 @@ fn do_request(
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
     extra_headers: &str,
+    http_profile: HttpProfile,
 ) -> Result<(Response, Connection)> {
     conn.write_request(
         method,
@@ -848,6 +858,7 @@ fn do_request(
         authorization,
         accept_encoding,
         extra_headers,
+        http_profile,
     )?;
     let resp = read_response(&mut conn)?;
     Ok((resp, conn))
@@ -948,6 +959,7 @@ fn fetch_with_redirect(
     h2_pool: Option<&H2Pool>,
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
+    http_profile: HttpProfile,
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
     hsts_store: Option<&dyn HstsEnforcement>,
@@ -1077,6 +1089,7 @@ fn fetch_with_redirect(
                 h2_pool,
                 resolver,
                 tls_profile,
+                http_profile,
                 &host_ascii,
                 port,
                 is_tls,
@@ -1174,6 +1187,7 @@ fn fetch_with_redirect(
             h2_pool,
             resolver,
             tls_profile,
+            http_profile,
             &host_ascii,
             port,
             is_tls,
@@ -1270,6 +1284,7 @@ fn fetch_with_redirect(
                     h2_pool,
                     resolver,
                     tls_profile,
+                    http_profile,
                     sink,
                     filter,
                     hsts_store,
@@ -1710,6 +1725,7 @@ impl HttpClient {
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.tls_profile,
+            self.fingerprint_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -1745,6 +1761,7 @@ impl HttpClient {
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.tls_profile,
+            self.fingerprint_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -1814,6 +1831,7 @@ impl HttpClient {
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.tls_profile,
+            self.fingerprint_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -1901,6 +1919,7 @@ impl HttpClient {
                     self.h2_pool.as_deref(),
                     self.resolver.as_ref(),
                     self.tls_profile,
+                    self.fingerprint_profile,
                     self.sink.as_deref(),
                     self.filter.as_deref(),
                     self.hsts.as_deref(),
@@ -1933,6 +1952,7 @@ impl HttpClient {
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.tls_profile,
+            self.fingerprint_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -1990,6 +2010,7 @@ impl NetworkTransport for HttpClient {
                     self.h2_pool.as_deref(),
                     self.resolver.as_ref(),
                     self.tls_profile,
+                    self.fingerprint_profile,
                     self.sink.as_deref(),
                     self.filter.as_deref(),
                     self.hsts.as_deref(),
@@ -2022,6 +2043,7 @@ impl NetworkTransport for HttpClient {
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.tls_profile,
+            self.fingerprint_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -2094,6 +2116,7 @@ impl JsFetchProvider for HttpClient {
             self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.tls_profile,
+            self.fingerprint_profile,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
@@ -2155,7 +2178,7 @@ impl JsFetchProvider for HttpClient {
             conn = fresh;
         }
 
-        conn.write_request_with_body(method, &host_ascii, &path_and_query, content_type, body, "")?;
+        conn.write_request_with_body(method, &host_ascii, &path_and_query, content_type, body, "", self.fingerprint_profile)?;
         let resp = read_response(&mut conn)?;
         if !conn.closed {
             self.pool.release(key, conn);
