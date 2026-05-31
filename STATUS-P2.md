@@ -6,8 +6,7 @@
 
 ## In progress
 
-**`<video>` element rendering** branch: p2-video-element
-Next step: BoxKind::Video in box_tree.rs, grey DrawImage placeholder in display_list.rs, JS stubs in video_bindings.rs
+_(нет активных задач)_
 
 ---
 
@@ -17,9 +16,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | **Scroll-discard (10E.4)** — после каждого scroll/layout: `gate_image_requests(root, viewport, scroll_x, scroll_y)` (✅); для узлов НЕ в HashSet И дальше 3 экранов от viewport — drop `ImageHandle` из decode cache. `shell/src/scroll/decode_gating.rs`. See `lumen-plan.md §10E.4` | `lumen-shell`, `lumen-image` | M | none |
-| 2 | **`<video>` element rendering** — `<video>` как replaced block (intrinsic size из `width`/`height` attrs или 300×150); paint emits grey `DrawImage` placeholder. `loadedmetadata`/`canplay` fires immediately. JS stubs: `play()→Promise`, `pause()`, `src`/`currentTime`/`duration`. `// CSS: object-fit` comment at emit site | `lumen-layout`, `lumen-js`, `lumen-paint` | L | none |
-| 3 | **Basic tab strip UI** — `TabStrip` в `lumen-shell`: N tab buttons (title + close ×) выше page viewport; `Ctrl+T` new blank, `Ctrl+W` close, `Ctrl+Tab` switch. Каждая вкладка — отдельный `PersistentJs` + layout tree. Shared `GlyphAtlas`/`ImageDecodeCache`/`LayerCache` через `Arc` (ADR-008). `shell/src/tabs/strip.rs` | `lumen-shell` | L | none |
+| 1 | **Basic tab strip UI** — `TabStrip` в `lumen-shell`: N tab buttons (title + close ×) выше page viewport; `Ctrl+T` new blank, `Ctrl+W` close, `Ctrl+Tab` switch. Каждая вкладка — отдельный `PersistentJs` + layout tree. Shared `GlyphAtlas`/`ImageDecodeCache`/`LayerCache` через `Arc` (ADR-008). `shell/src/tabs/strip.rs` | `lumen-shell` | L | none |
 | 4 | **WebGL `getParameter(UNMASKED_*)` fingerprint (9D.2)** — `getParameter(UNMASKED_VENDOR_WEBGL)` / `getParameter(UNMASKED_RENDERER_WEBGL)` возвращают normalized values из `GpuFingerprint` (✅ `paint/fingerprint.rs`, JS globals `_LUMEN_GPU_VENDOR`/`_LUMEN_GPU_RENDERER`). Wire в `js/src/webgl_bindings.rs`. Completes 9D.2 | `lumen-js` | S | none |
 | 5 | **`samples/heavy.html` benchmark page (10M)** — Habr-style: 80+ статей, nested blocks, inline images (grey placeholder), long text, tables, floats, mix-blend-mode cards. `heavy_page` bench target в `bench/src/main.rs`. See `lumen-plan.md §10M` | `lumen-bench`, `samples/` | S | none |
 | 6 | **Tab lifecycle UI indicators (10K)** — badge на tab button в `TabStrip`: Active → none, BackgroundOld → moon icon, Hibernated → disk icon. Читает `TabState` из `AppState`. `shell/src/tabs/strip.rs`. See `lumen-plan.md §10K` | `lumen-shell` | S | #3 |
@@ -52,6 +49,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-video-element** ✅ 2026-05-31 — `<video>` replaced block: `BoxKind::Video { src, poster }` в layout; UA default 300×150; `apply_image_presentational_hints` расширена на `<video>`; paint emit grey `DrawImage` placeholder (poster src приоритетнее video src); `// CSS: object-fit` comment; `video_bindings.rs` JS stubs: `play()→Promise`, `pause()`, `src/currentTime/duration/paused/readyState`; immediate `loadedmetadata+canplay` events. 7 layout + 4 paint + 8 JS тестов. Graphic test 55.
 - **p2-scroll-discard** ✅ 2026-05-31 — 10E.4: `discard_offscreen_images` в `shell/src/scroll/decode_gating.rs`; `ImageDecodeCache::remove`; `Lumen.image_cache` заполняется на каждой загрузке/reload/lazy; вызывается в `RedrawRequested` step 1. 7 тестов decode_gating + 32 тестов lumen-image = 291 всего lumen-shell.
 - **p2-print-to-pdf** ✅ 2026-05-31 — `--print-to-pdf out.pdf page.html` headless режим в shell. `CliMode::PrintToPdf` + `extract_print_to_pdf()` + `do_print_to_pdf()`: layout → `paginate` (A4 794×1123 px, margin 48 px) → `build_print_display_list` → `split_at_page_breaks` → `Renderer::render_print_pages` → `encode_images_as_pdf`. PDF кодирование: DeviceRGB XObject, cm-матрица `[w 0 0 -h 0 h]` (Y-flip), по одной странице на рендер-изображение. `pdf-writer = "0.12"` добавлен в workspace как permanent-tier dep. `build_print_display_list` + `split_at_page_breaks` экспортированы из `lumen-paint`. 7 новых unit-тестов, 284 итого lumen-shell.
 - **p2-gif-animation-shell** ✅ 2026-05-31 — GIF-анимация wired в shell. `fetch_and_decode_images` детектирует multi-frame GIF через `is_gif + decode_gif_animated`; frame 0 регистрируется как GPU-текстура, `AnimatedGif` хранится в `Lumen.animated_gifs`. `RedrawRequested` (Step 2.5): `frame_index_at(elapsed_ms)` → при смене кадра — `register_image` overwrite; если GIF ещё анимируется — `request_redraw()`. Lazy-loaded GIF аналогично. Finite-loop GIF останавливается на последнем кадре автоматически (`AnimatedGif::frame_index_at` clamp-логика).
