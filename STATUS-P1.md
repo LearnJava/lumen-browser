@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+**p1-event-classes** branch: `p1-event-classes`
+Next step: Add UIEvent/MouseEvent/KeyboardEvent/InputEvent/FocusEvent/WheelEvent/PointerEvent + secondary event classes to lumen-js/src/dom.rs; update shell click dispatch with coordinates.
 
 ---
 
