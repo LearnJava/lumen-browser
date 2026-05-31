@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Scroll-Driven Animations algorithm stub (CSS Scroll Animations L1)  branch: p1-scroll-driven-animations
+Next step: реализовать scroll_timeline.rs в lumen-layout/src/
 
 ---
 
