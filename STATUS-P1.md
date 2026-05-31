@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+- **window.matchMedia() + MediaQueryList** — branch `p1-match-media`.
+  Next step: add `_lumen_match_media` Rust binding в `crates/js/src/dom.rs` (install_primitives).
 
 ---
 
