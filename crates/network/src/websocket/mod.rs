@@ -78,7 +78,7 @@ impl WebSocket {
             }
         }
 
-        let conn = connect(&host, port, is_tls, resolver)?;
+        let conn = connect(&host, port, is_tls, resolver, crate::tls::TlsProfile::Standard)?;
         let mut stream = conn.into_stream();
 
         let key = upgrade::generate_key();
