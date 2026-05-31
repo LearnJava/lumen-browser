@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**writing-mode vertical layout stub** (CSS Writing Modes L3 §3)  branch: `p1-clickable-nodes`  
+Next step: commit + /lumen-task-finish  `crates/engine/layout/src/vertical.rs`
 
 ---
 

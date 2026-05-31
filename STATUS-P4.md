@@ -45,7 +45,7 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 | 12 | `cq*` container query units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`) | M | none |
 | 13 | `attr()` with type (CSS Values L4) | M | none |
 | 14 | `mask-image` CSS wiring | L | P2 GPU compositing pass |
-| 15 | `writing-mode: vertical-*` axis swap | L | layout engine |
+| 15 | `writing-mode: vertical-*` axis swap | L | ~~layout engine~~ **stub ready** (P1 2026-05-31, `vertical.rs`) |
 | 16 | `subgrid` track inheritance | XL | grid engine |
 
 ---
@@ -73,6 +73,16 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
   4. Non-px insets (`em`, `%`) currently yield `None` — wire resolved-px values from `lay_out_block()` context if full support is needed (optional for Phase 3).
 - **Entry point:** `lumen-layout/src/lib.rs` — `collect_sticky_boxes()` + `compute_sticky_offset()`
 - **CSS comment location:** `box_tree.rs` after `Position::Relative` block (end of `lay_out_block`)
+
+### `writing-mode: vertical-rl / vertical-lr` axis swap (P1 feature p1-clickable-nodes, 2026-05-31)
+- **Status:** `lay_out_vertical_block()` in `lumen-layout/src/vertical.rs`. Dispatched from `lay_out()` in `box_tree.rs` when `style.writing_mode` is `VerticalRl` or `VerticalLr`. `WritingMode` enum + field `writing_mode` already exists in `ComputedStyle` (style.rs). CSS parsing already wired.
+- **P4 task:**
+  1. No new CSS parsing or `ComputedStyle` changes needed — `writing_mode` field and `apply_declaration("writing-mode")` are already in `style.rs`.
+  2. The dispatch already reads `b.style.writing_mode` (box_tree.rs `lay_out()`) — no wiring needed there either.
+  3. **Optional extension:** `sideways-rl` / `sideways-lr` variants in `WritingMode` enum — parse them in `apply_declaration` and handle in `lay_out_vertical_block` (currently falls through to `VerticalRl`).
+  4. Inline text flow inside vertical containers (character rotation, vertical text metrics) — deferred to a future P1 inline-vertical task.
+- **Entry points:** `crates/engine/layout/src/vertical.rs:1` — `lay_out_vertical_block`; `crates/engine/layout/src/box_tree.rs` — dispatch at `lay_out()` writing-mode check (search `// CSS: writing-mode`).
+- **CSS comment location:** `box_tree.rs` at the writing-mode dispatch block.
 
 ### ::first-letter pseudo-element (P1 feature p1-css-first-line-letter)
 - **Status:** Structural markers ready in InlineRun

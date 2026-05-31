@@ -26,6 +26,7 @@ pub mod snapshot;
 pub mod stacking;
 pub mod style;
 pub mod text_iter;
+pub(crate) mod vertical;
 
 pub use counters::{format_counter, precompute_counters, CounterMap, CounterSnapshot};
 pub use image_gating::gate_image_requests;
