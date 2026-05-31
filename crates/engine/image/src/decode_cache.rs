@@ -193,6 +193,20 @@ impl ImageDecodeCache {
         }
     }
 
+    /// Remove a single cached entry by key.
+    ///
+    /// Returns `true` if the entry existed and was removed, `false` if absent.
+    /// Callers that still hold an `ImageHandle` for this key retain the pixel
+    /// data until that handle is dropped.
+    pub fn remove(&mut self, key: &ImageKey) -> bool {
+        if let Some(entry) = self.entries.remove(key) {
+            self.used_bytes = self.used_bytes.saturating_sub(entry.memory_bytes);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Evict all cached entries regardless of budget.
     pub fn clear(&mut self) {
         self.entries.clear();
