@@ -89,6 +89,14 @@ use std::path::{Path, PathBuf};
 /// PushScrollLayer geometry, inner content clipped via PushScrollLayer bounds;
 /// DrawScrollbar is not emitted in the headless pipeline so only box geometry is
 /// captured).
+/// Layout correctness pages added in б-19: `24-vertical-align` (vertical-align
+/// top/middle/bottom/baseline — coloured inline boxes at different baseline offsets,
+/// all primitives FillRect+DrawText already in cpu_raster), `53-background-origin`
+/// (background-origin border-box/padding-box/content-box — the
+/// `DrawBackgroundImage` commands are no-op on the CPU path since no image decoder
+/// is registered, mirroring the GPU renderer's skip for unregistered URLs; the
+/// coloured box geometry + DrawBorder + DrawText still captures the layout
+/// structure).
 const PAGES: &[&str] = &[
     "00-calibration",
     "01-sanity",
@@ -146,6 +154,9 @@ const PAGES: &[&str] = &[
     "34-forms",
     "45-multiple-backgrounds",
     "51-scrollbar-rendering",
+    // б-19: vertical-align inline boxes; background-origin layout geometry
+    "24-vertical-align",
+    "53-background-origin",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).

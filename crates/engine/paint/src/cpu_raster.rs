@@ -233,6 +233,11 @@ pub(crate) fn rasterize_cpu(
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_image_placeholder(layers.last_mut().expect("base layer"), rect, c)?;
             }
+            // CSS Backgrounds L3 §3.3 — background-image url(). The CPU path has
+            // no image decoder, so this is a no-op — mirrors the GPU renderer
+            // (`renderer.rs` line 4348: `let Some(gpu) = self.images.get(src) else { continue }`)
+            // which skips unregistered images silently.
+            DisplayCommand::DrawBackgroundImage { .. } => {}
             DisplayCommand::DrawText {
                 rect, text, font_size, color, tab_size, ..
             } => {
