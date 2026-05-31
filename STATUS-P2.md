@@ -6,8 +6,7 @@
 
 ## In progress
 
-`--print-to-pdf` CLI flag  branch: p2-print-to-pdf
-Next step: export build_print_display_list+split_at_page_breaks from lumen-paint, add pdf-writer dep, implement CliMode::PrintToPdf in shell/src/main.rs
+_(нет активных задач)_
 
 ---
 
@@ -16,8 +15,6 @@ Next step: export build_print_display_list+split_at_page_breaks from lumen-paint
 Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
 
 | # | Task | Crate(s) | Effort | Blocker |
-|---|------|----------|--------|---------|
-| 1 | **`--print-to-pdf` CLI flag** — `lumen --print-to-pdf out.pdf samples/page.html`: call `Renderer::render_print_pages()` (✅ in p2-print-pages-renderer), encode `Vec<Image>` as PDF pages via provisional `pdf-writer = "0.12"` crate. `shell/src/main.rs` headless path. Why dep: zero-copy `pdf-writer` is permanent-tier (content encoding, no suitable alternative) | `lumen-shell`, `lumen-paint` | M | none |
 | 3 | **Scroll-discard (10E.4)** — after each scroll/layout, call `gate_image_requests(root, viewport, scroll_x, scroll_y)` (✅); for image nodes NOT in the returned HashSet AND more than 3 screens from viewport, drop their `ImageHandle` from the decode cache. Wire in `shell/src/scroll/decode_gating.rs`. See `lumen-plan.md §10E.4` | `lumen-shell`, `lumen-image` | M | none |
 | 4 | **`<video>` element rendering** — `<video>` lays out as replaced block (intrinsic size from `width`/`height` attrs or 300×150 default); paint emits grey `DrawImage` placeholder (same as `<img>` without src). `loadedmetadata`/`canplay` events fire immediately (stub). JS stubs: `play()`/`pause()`/`load()` return resolved Promise; `src`/`currentSrc`/`readyState`/`paused`/`ended`/`currentTime`/`duration`. `// CSS: object-fit` comment at emit site | `lumen-layout`, `lumen-js`, `lumen-paint` | L | none |
 | 5 | **Basic tab strip UI** — add `TabStrip` to `lumen-shell`: winit renders N tab buttons (title text + close ×) above page viewport; `Ctrl+T` new blank tab, `Ctrl+W` close active, `Ctrl+Tab` switch. Each tab owns its own `PersistentJs` + layout tree. Tabs share `GlyphAtlas`/`ImageDecodeCache`/`LayerCache` via `Arc` (ADR-008). `shell/src/tabs/strip.rs` | `lumen-shell` | L | none |
@@ -28,6 +25,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-print-to-pdf** ✅ 2026-05-31 — `--print-to-pdf out.pdf page.html` headless режим в shell. `CliMode::PrintToPdf` + `extract_print_to_pdf()` + `do_print_to_pdf()`: layout → `paginate` (A4 794×1123 px, margin 48 px) → `build_print_display_list` → `split_at_page_breaks` → `Renderer::render_print_pages` → `encode_images_as_pdf`. PDF кодирование: DeviceRGB XObject, cm-матрица `[w 0 0 -h 0 h]` (Y-flip), по одной странице на рендер-изображение. `pdf-writer = "0.12"` добавлен в workspace как permanent-tier dep. `build_print_display_list` + `split_at_page_breaks` экспортированы из `lumen-paint`. 7 новых unit-тестов, 284 итого lumen-shell.
 - **p2-gif-animation-shell** ✅ 2026-05-31 — GIF-анимация wired в shell. `fetch_and_decode_images` детектирует multi-frame GIF через `is_gif + decode_gif_animated`; frame 0 регистрируется как GPU-текстура, `AnimatedGif` хранится в `Lumen.animated_gifs`. `RedrawRequested` (Step 2.5): `frame_index_at(elapsed_ms)` → при смене кадра — `register_image` overwrite; если GIF ещё анимируется — `request_redraw()`. Lazy-loaded GIF аналогично. Finite-loop GIF останавливается на последнем кадре автоматически (`AnimatedGif::frame_index_at` clamp-логика).
 - **p2-cross-fade-gpu** ✅ 2026-05-30 — `DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress }` + GPU two-texture blend pipeline. `CROSS_FADE_SHADER_SRC`: WGSL шейдер с двумя `texture_2d<f32>` + `CrossFadeParams { progress }` uniform — `mix(textureSample(tex_a), textureSample(tex_b), clamp(progress, 0, 1))`. `CrossFadeVertex { pos[2], uv[2] }`, `cross_fade_bgl` (4 bindings: tex_a, tex_b, sampler, uniform), `cross_fade_pipeline` с ALPHA_BLENDING. Обработчик в `render_frame`: ищет обе текстуры по URL-ключу, per-quad uniform-буфер, 6 вершин quad. 4 unit-теста. P4 handoff: `cross-fade()` CSS image function → вызывает `DrawCrossFade` через `emit_background_image`.
 - **p2-gif-animation** ✅ 2026-05-30 — Multi-frame GIF animation decoder в `lumen-image`. `AnimatedFrame { image: Image, delay_cs: u16 }` + `AnimatedGif { frames, width, height, loop_count }` + `decode_gif_animated(bytes) → Result<AnimatedGif, GifError>` (читает все кадры через `gif::ColorOutput::RGBA`). `AnimatedGif::frame_index_at(elapsed_ms)` — Infinite: `% total_ms`; Finite(n): зажимается после n повторений. `frame_at(elapsed_ms) → &AnimatedFrame`. `decode_gif()` делегирует к `decode_gif_animated`. P3 handoff: вызывать `gif.frame_at(elapsed_ms)` на каждом render-тике, передавать `&frame.image` в `DrawImage`. 22 новых unit-теста (121 итого lumen-image unit).
