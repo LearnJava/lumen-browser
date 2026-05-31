@@ -48,6 +48,54 @@ enum LayerComposite {
     /// colour-matrix filters, left to right) and the filtered layer is
     /// composited onto the backdrop below with plain `SourceOver`.
     Filter(Vec<FilterFn>),
+    /// CSS Masking L1 §4 — `mask-image` (`PushMask*`/`PopMask`). The element's
+    /// fully-composited subtree renders into a transparent full-size layer; on
+    /// close the mask is evaluated per-pixel (the gradient's alpha channel —
+    /// mask-mode: alpha, mirroring the GPU `MASK_COMPOSITE_SHADER` `c.a * m.a`)
+    /// and multiplied into the layer's alpha before it is composited down with
+    /// plain `SourceOver`.
+    Mask(MaskSpec),
+}
+
+/// How a `LayerComposite::Mask` group computes its per-pixel mask alpha.
+///
+/// Mirrors the GPU mask-composite path (`PushMaskImage` /
+/// `PushMaskLinearGradient` / `PushMaskRadialGradient` / `PushMaskConicGradient`
+/// → `PopMask`). The gradient variants carry the same parameters as the matching
+/// `DrawLinearGradient` / `DrawRadialGradient` / `DrawConicGradient`, so the mask
+/// is rasterised with the existing gradient routines and only its alpha channel
+/// is consumed. The mask is the gradient's *alpha* (CSS Masking L1 §6.2 default
+/// mask-mode for raster/gradient sources — the GPU shader applies `c.a * m.a`).
+enum MaskSpec {
+    /// No effective mask — the layer composites unchanged. Used for
+    /// `PushMaskImage` because the deterministic CPU path decodes no images, so
+    /// the mask source is unavailable; the GPU renderer likewise composites with
+    /// alpha = 1.0 when the mask image is not registered.
+    None,
+    /// `linear-gradient(...)` mask: alpha taken from the gradient at each pixel.
+    Linear {
+        rect: Rect,
+        angle_deg: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    },
+    /// `radial-gradient(...)` mask.
+    Radial {
+        rect: Rect,
+        center_x_pct: f32,
+        center_y_pct: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    },
+    /// `conic-gradient(...)` mask.
+    Conic {
+        rect: Rect,
+        center_x_pct: f32,
+        center_y_pct: f32,
+        from_angle_deg: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    },
 }
 
 /// Rasterize display commands to an image using tiny-skia (CPU only, deterministic).
@@ -246,15 +294,69 @@ pub(crate) fn rasterize_cpu(
                 layers.push(layer);
                 layer_ops.push(LayerComposite::Filter(filters.clone()));
             }
-            // Close the current off-screen group (opacity, transform, blend or filter)
-            // and composite it onto the layer below per its recorded op. The
-            // pops share the logic because the emitter guarantees balanced,
+            // CSS Masking L1 §4 — `mask-image`. Like `PushOpacity`, the element's
+            // fully-composited subtree renders into a transparent full-size layer;
+            // the matching `PopMask` evaluates the mask (the gradient's alpha) and
+            // multiplies it into the layer's alpha before compositing down. Image
+            // masks (`PushMaskImage`) have no decoded source on the CPU path, so
+            // they record `MaskSpec::None` (composite unchanged), mirroring the GPU
+            // fallback when the mask image is not registered.
+            DisplayCommand::PushMaskImage { .. } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create mask layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::Mask(MaskSpec::None));
+            }
+            DisplayCommand::PushMaskLinearGradient { rect, angle_deg, stops, repeating } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create mask layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::Mask(MaskSpec::Linear {
+                    rect: *rect,
+                    angle_deg: *angle_deg,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                }));
+            }
+            DisplayCommand::PushMaskRadialGradient {
+                rect, center_x_pct, center_y_pct, stops, repeating,
+            } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create mask layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::Mask(MaskSpec::Radial {
+                    rect: *rect,
+                    center_x_pct: *center_x_pct,
+                    center_y_pct: *center_y_pct,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                }));
+            }
+            DisplayCommand::PushMaskConicGradient {
+                rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating,
+            } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create mask layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::Mask(MaskSpec::Conic {
+                    rect: *rect,
+                    center_x_pct: *center_x_pct,
+                    center_y_pct: *center_y_pct,
+                    from_angle_deg: *from_angle_deg,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                }));
+            }
+            // Close the current off-screen group (opacity, transform, blend, filter
+            // or mask) and composite it onto the layer below per its recorded op.
+            // The pops share the logic because the emitter guarantees balanced,
             // properly nested Push/Pop, so the top op always matches the
             // closing command.
             DisplayCommand::PopOpacity
             | DisplayCommand::PopTransform
             | DisplayCommand::PopBlendMode
-            | DisplayCommand::PopFilter => {
+            | DisplayCommand::PopFilter
+            | DisplayCommand::PopMask => {
                 if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
                     && let Some(dst) = layers.last_mut()
                 {
@@ -325,6 +427,75 @@ fn close_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, op: &LayerC
         LayerComposite::Transform(t) => composite_transform_layer(dst, src, *t),
         LayerComposite::Blend(mode) => composite_blend_layer(dst, src, *mode),
         LayerComposite::Filter(filters) => composite_filter_layer(dst, src, filters),
+        LayerComposite::Mask(spec) => composite_mask_layer(dst, src, spec),
+    }
+}
+
+/// Apply a `mask-image` (`MaskSpec`) to the off-screen element layer `src`, then
+/// composite the masked result onto `dst` with plain `SourceOver`.
+///
+/// Used by `PopMask`: the element's fully-composited subtree (background, border,
+/// children) was drawn into `src`, a full-size, initially-transparent pixmap. The
+/// mask gradient is rasterised into a fresh pixmap with the existing gradient
+/// routines, and its *alpha* channel becomes the mask value (CSS Masking L1 §6.2
+/// default mask-mode — the GPU `MASK_COMPOSITE_SHADER` likewise applies `c.a *
+/// m.a`). Each `src` pixel (premultiplied RGBA) is multiplied by the mask alpha,
+/// which scales the premultiplied colour and the alpha together — exactly an
+/// alpha-only mask. Integer-only multiplication keeps the result cross-OS
+/// bit-identical, like the rest of the CPU path. `MaskSpec::None` (image masks,
+/// no decoded source) composites the layer unchanged.
+fn composite_mask_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, spec: &MaskSpec) {
+    let (w, h) = (src.width(), src.height());
+    let mut masked = src.clone();
+    if let Some(mask) = render_mask(spec, w, h) {
+        multiply_alpha_by_mask(&mut masked, &mask);
+    }
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(0, 0, masked.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Rasterise a `MaskSpec` gradient into a fresh transparent pixmap whose alpha
+/// channel is the per-pixel mask value. Returns `None` for `MaskSpec::None` (no
+/// effective mask) — the caller then composites the layer unchanged.
+fn render_mask(spec: &MaskSpec, width: u32, height: u32) -> Option<tiny_skia::Pixmap> {
+    let mut mask = tiny_skia::Pixmap::new(width, height)?;
+    match spec {
+        MaskSpec::None => return None,
+        MaskSpec::Linear { rect, angle_deg, stops, repeating } => {
+            rasterize_linear_gradient(&mut mask, rect, *angle_deg, stops, *repeating, None).ok()?;
+        }
+        MaskSpec::Radial { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            rasterize_radial_gradient(
+                &mut mask, rect, *center_x_pct, *center_y_pct, stops, *repeating, None,
+            ).ok()?;
+        }
+        MaskSpec::Conic { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
+            rasterize_conic_gradient(
+                &mut mask, rect, *center_x_pct, *center_y_pct, *from_angle_deg, stops, *repeating,
+                None,
+            ).ok()?;
+        }
+    }
+    Some(mask)
+}
+
+/// Multiply each pixel's premultiplied RGBA in `layer` by the corresponding mask
+/// alpha (0..=255) from `mask`. tiny-skia pixmaps store premultiplied RGBA, so
+/// scaling all four channels by the mask alpha yields the premultiplied form of
+/// the same colour with its alpha reduced — an alpha-only mask. Rounded integer
+/// division (`(v·m + 127) / 255`) keeps the result deterministic across OSes.
+fn multiply_alpha_by_mask(layer: &mut tiny_skia::Pixmap, mask: &tiny_skia::Pixmap) {
+    let mp = mask.data().to_vec();
+    let lp = layer.data_mut();
+    for (px, mpx) in lp.chunks_exact_mut(4).zip(mp.chunks_exact(4)) {
+        let m = u32::from(mpx[3]);
+        for ch in px.iter_mut() {
+            *ch = ((u32::from(*ch) * m + 127) / 255) as u8;
+        }
     }
 }
 
@@ -2204,5 +2375,90 @@ mod tests {
         // Far inside the white half stays light.
         let (rr, _, _, _) = px(&img, 62, 32);
         assert!(rr > 200, "right interior stays near white (r={rr})");
+    }
+
+    /// `mask-image: linear-gradient(to bottom, black, transparent)` fades the
+    /// element by the gradient's *alpha*. A blue box masked top→bottom stays
+    /// solid blue where the mask is opaque (top) and disappears toward the
+    /// background where the mask is transparent (bottom).
+    #[test]
+    fn mask_linear_alpha_gradient_fades_box() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let clear = Color { r: 0, g: 0, b: 0, a: 0 };
+        let cmds = vec![
+            DisplayCommand::PushMaskLinearGradient {
+                rect: rect(0.0, 0.0, 40.0, 40.0),
+                angle_deg: 180.0, // CSS "to bottom"
+                stops: vec![
+                    GradientStop { color: black, position: None },
+                    GradientStop { color: clear, position: None },
+                ],
+                repeating: false,
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: blue },
+            DisplayCommand::PopMask,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // Top: mask alpha ≈ 1 → solid blue.
+        let (tr, tg, tb, ta) = px(&img, 20, 1);
+        assert!(tr < 20 && tg < 20 && tb > 250 && ta == 255, "top stays blue, got ({tr},{tg},{tb},{ta})");
+        // Bottom: mask alpha ≈ 0 → faded to the white background.
+        let (br, bg, bb, _) = px(&img, 20, 38);
+        assert!(br > 200 && bg > 200 && bb > 200, "bottom fades to white, got ({br},{bg},{bb})");
+    }
+
+    /// `mask-image: radial-gradient(black, transparent)` reveals the element at
+    /// the centre (opaque mask) and hides it toward the corners (transparent
+    /// mask).
+    #[test]
+    fn mask_radial_reveals_center_hides_corner() {
+        let green = Color { r: 0, g: 200, b: 0, a: 255 };
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let clear = Color { r: 0, g: 0, b: 0, a: 0 };
+        let cmds = vec![
+            DisplayCommand::PushMaskRadialGradient {
+                rect: rect(0.0, 0.0, 40.0, 40.0),
+                center_x_pct: 0.5,
+                center_y_pct: 0.5,
+                stops: vec![
+                    GradientStop { color: black, position: None },
+                    GradientStop { color: clear, position: None },
+                ],
+                repeating: false,
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: green },
+            DisplayCommand::PopMask,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // Centre: mask opaque → green shows.
+        let (cr, cg, cb, ca) = px(&img, 20, 20);
+        assert!(cr < 10 && cg > 180 && cb < 10 && ca == 255, "centre shows green, got ({cr},{cg},{cb},{ca})");
+        // Corner: mask transparent → faded to white.
+        let (kr, kg, kb, _) = px(&img, 1, 1);
+        assert!(kr > 200 && kg > 200 && kb > 200, "corner fades to white, got ({kr},{kg},{kb})");
+    }
+
+    /// `mask-image: url(...)` has no decoded source on the deterministic CPU path,
+    /// so the mask is a no-op (alpha = 1.0 everywhere) — the element composites
+    /// unchanged, mirroring the GPU fallback for an unregistered mask image.
+    #[test]
+    fn mask_image_no_source_is_noop() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushMaskImage {
+                rect: rect(10.0, 10.0, 20.0, 20.0),
+                src: "missing.png".to_string(),
+                size: lumen_layout::BackgroundSize::Auto,
+                position: lumen_layout::ObjectPosition::background_initial(),
+                repeat: lumen_layout::BackgroundRepeat::NoRepeat,
+                image_rendering: lumen_layout::ImageRendering::Auto,
+            },
+            DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
+            DisplayCommand::PopMask,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "no mask source → element unchanged");
+        assert_eq!(px(&img, 50, 50), (255, 255, 255, 255), "exterior stays white");
     }
 }
