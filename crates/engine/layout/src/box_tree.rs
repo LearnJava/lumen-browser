@@ -40,6 +40,14 @@ fn is_image_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// HTML-имя `<video>` для распознавания media replaced-боксов в layout.
+fn is_video_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "video"
+    )
+}
+
 /// HTML-имя `<picture>` — обёртка над `<source>`-кандидатами и одним
 /// `<img>`-fallback-ом. Сам по себе пиктур ничего не рендерит, его
 /// единственная роль — переадресовать source-selection на inner `<img>`.
@@ -1041,6 +1049,18 @@ pub enum BoxKind {
         src: String,
         alt: String,
     },
+    /// Replaced element: HTML `<video>` element (HTML spec §14).
+    ///
+    /// Phase 0: rendered as a grey `DrawImage` placeholder (the video src is
+    /// not fetched or decoded). Intrinsic size comes from `width`/`height`
+    /// HTML attributes; UA default is 300×150 CSS px (HTML spec §14.1).
+    /// `poster` is the optional poster-image URL shown before playback starts.
+    Video {
+        /// Primary video source URL (`src` attribute).
+        src: String,
+        /// Poster image URL (`poster` attribute), may be empty.
+        poster: String,
+    },
     /// Replaced element: HTML form control (`<input>`, `<button>`, `<select>`,
     /// `<textarea>`). Phase 0: block-level replaced. Размеры берутся из
     /// `style.width`/`style.height` (UA defaults из `apply_ua_form_controls`).
@@ -1825,6 +1845,20 @@ fn build_box(
                     style.height = Some(Length::Px(h as f32));
                 }
                 BoxKind::Image { src: src.url, alt }
+            } else if is_video_element(doc, id) {
+                let node = doc.get(id);
+                let src = node.get_attr("src").unwrap_or("").to_string();
+                let poster = node.get_attr("poster").unwrap_or("").to_string();
+                // HTML spec §14.1: UA default intrinsic size is 300×150 CSS px.
+                // Explicit width/height attrs applied earlier as presentational hints;
+                // fill only if still unset.
+                if style.width.is_none() {
+                    style.width = Some(Length::Px(300.0));
+                }
+                if style.height.is_none() {
+                    style.height = Some(Length::Px(150.0));
+                }
+                BoxKind::Video { src, poster }
             } else if is_form_control_element(doc, id) {
                 let kind = {
                     let node = doc.get(id);
@@ -2440,7 +2474,7 @@ fn lay_out(
     // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
-    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::FormControl { .. });
+    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::FormControl { .. });
     b.rect.width = if is_replaced {
         0.0
     } else {
@@ -2653,7 +2687,7 @@ fn lay_out(
     let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
-        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::FormControl { .. } => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(

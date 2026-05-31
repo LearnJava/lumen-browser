@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 55 video placeholder</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+    .row { display: flex; gap: 16px; margin-bottom: 16px; align-items: flex-start; }
+    .label { color: #e2e8f0; font-size: 11px; margin-top: 4px; text-align: center; font-family: sans-serif; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- row 1: default UA size 300×150 -->
+    <div class="row">
+      <div>
+        <video src="nonexistent.mp4"></video>
+        <div class="label">300×150 (UA default)</div>
+      </div>
+      <div>
+        <video src="nonexistent.mp4" style="width:240px; height:135px;"></video>
+        <div class="label">240×135 (CSS)</div>
+      </div>
+      <div>
+        <video src="nonexistent.mp4" style="width:160px; height:90px;"></video>
+        <div class="label">160×90 (CSS)</div>
+      </div>
+    </div>
+
+    <!-- row 2: HTML attr dimensions -->
+    <div class="row">
+      <div>
+        <video src="nonexistent.mp4" width="320" height="180"></video>
+        <div class="label">320×180 (attr)</div>
+      </div>
+      <div>
+        <video src="nonexistent.mp4" width="200" height="120"
+               style="border: 3px solid #4299e1;"></video>
+        <div class="label">200×120 + border</div>
+      </div>
+      <div>
+        <video src="nonexistent.mp4" width="180" height="100"
+               style="border-radius: 8px; overflow: hidden;"></video>
+        <div class="label">180×100 + radius</div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

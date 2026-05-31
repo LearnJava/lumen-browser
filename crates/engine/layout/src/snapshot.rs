@@ -77,6 +77,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::InlineBlockRow => "InlineBlockRow",
         BoxKind::InlineSpace => "InlineSpace",
         BoxKind::Image { .. } => "Image",
+        BoxKind::Video { .. } => "Video",
         BoxKind::FormControl { .. } => "FormControl",
         BoxKind::Skip => "Skip",
         BoxKind::Marker { .. } => "Marker",
@@ -92,6 +93,9 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     );
     if let BoxKind::Image { src, alt } = &b.kind {
         let _ = write!(out, " src={src:?} alt={alt:?}");
+    }
+    if let BoxKind::Video { src, poster } = &b.kind {
+        let _ = write!(out, " src={src:?} poster={poster:?}");
     }
     if let BoxKind::SvgShape { shape, .. } = &b.kind {
         use crate::box_tree::SvgShapeKind;
