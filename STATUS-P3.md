@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(никто ничего не зарезервировал)_
+8A.6(б-19) расширение PAGES snapshot_cpu 54 → 56  branch: p3-8a6-more-pages-b19
+Next step: добавить DrawBackgroundImage no-op в cpu_raster.rs:232, добавить pages 24/53 в PAGES
 
 ## Next
 
