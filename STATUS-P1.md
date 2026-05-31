@@ -6,8 +6,7 @@
 
 ## In progress
 
-**HTTP fingerprint Chrome-matching (9C)**  branch: p1-http-fingerprint
-Next step: Wire `fingerprint_profile` through `fetch_with_redirect` → `fetch_single` → `write_request`; use `build_request_headers()` for Chrome-matching HTTP/1.1 headers; add `connect_with_profile()` to `H2Conn`. `crates/network/src/lib.rs:944`
+_(нет)_
 
 ---
 
@@ -52,6 +51,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-http-fingerprint** ✅ 2026-05-31 — HTTP fingerprint Chrome-matching (9C): подключил `build_request_headers()`, `H2Settings::for_profile()`, `ClientHintsProfile` к реальным HTTP-запросам. `fingerprint_profile` проброшен через весь стек: `HttpClient` → `fetch_with_redirect` → `fetch_single` → `do_request`/`h2_do_request` → `write_request`. `H2Conn::connect_with_profile()` — новый метод для SETTINGS Chrome-matching. 31 интеграционный тест. `crates/network/src/lib.rs`, `crates/network/src/h2/conn.rs`.
 - **p1-tls-fingerprint** ✅ 2026-05-31 — TLS fingerprint Chrome-matching (9B): `tls.rs` → `tls/mod.rs` + `tls/fingerprint.rs`. `TlsProfile` enum (Standard/Strict/Tor), `build_client_config()` с CryptoProvider (aws_lc_rs), Chrome 130 AEAD cipher order + kx_groups X25519→secp256r1→secp384r1. `TlsHandshakeInfo`: `ja3_raw_string()` + `ja4_raw_string()`. `CHROME_130_JA3_SNAPSHOT` (15 cipher suites, 16 extensions, 3 named groups) + `CHROME_130_JA4_SNAPSHOT` (sorted ciphers/exts, cipher/ext counts). `HttpClient.tls_profile` field + `with_tls_profile()` getter/builder. 25 интеграционных тестов (lumen-network/tests/tls_integration.rs) + 13 unit-тестов в fingerprint.rs.
 - **p1-websocket-shell** ✅ 2026-05-31 — Real WebSocket shell integration: `PersistentJs::pump_websockets()` добавлен в trait + вызов в `about_to_wait` рядом с `tick_timers()` — так `onopen`/`onmessage`/`onclose`/`onerror` фаерятся немедленно. JS: бинарная доставка hex→Uint8Array/ArrayBuffer по `ws.binaryType`; добавлены `bufferedAmount=0` и `extensions=''` в конструктор. +6 тестов, итого lumen-js: 576.
 - **p1-shadow-dom-js** ✅ 2026-05-31 — Shadow DOM JS bindings: `HTMLTemplateElement.content` (DocumentFragment wrapper, `cloneNode`), `document.createDocumentFragment()`, `element.cloneNode(deep)`, `element.insertBefore(newNode, ref)`, `<slot>` element (`assignedNodes()`, `assignedElements()`, `slotchange` event dispatch via `_lumen_fire_slotchange`). lumen-dom: `Document::insert_before`, `Document::deep_clone`. lumen-js Rust: `_lumen_clone_subtree`, `_lumen_create_fragment`, `_lumen_get_template_content`, `_lumen_is_document_fragment`, `_lumen_insert_before`, `_lumen_get_shadow_root_host`. 9 новых тестов, итого lumen-js: 570.
