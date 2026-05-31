@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(nothing in progress)_
+**Tab lifecycle UI indicators (10K)** — badge на tab button в `TabStrip`: Active → none, BackgroundOld → moon icon, Hibernated → disk icon.  branch: p2-tab-lifecycle-indicators
+Next step: добавить `tab_state: TabState` в `TabEntry` + badge-рендеринг в `build_tab_bar`  `crates/shell/src/tabs/strip.rs`
 
 ---
 
@@ -16,10 +17,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | **`samples/heavy.html` benchmark page (10M)** — Habr-style: 80+ статей, nested blocks, inline images (grey placeholder), long text, tables, floats, mix-blend-mode cards. `heavy_page` bench target в `bench/src/main.rs`. See `lumen-plan.md §10M` | `lumen-bench`, `samples/` | S | none |
-| 2 | **Tab lifecycle UI indicators (10K)** — badge на tab button в `TabStrip`: Active → none, BackgroundOld → moon icon, Hibernated → disk icon. Читает `TabState` из `AppState`. `shell/src/tabs/strip.rs`. See `lumen-plan.md §10K` | `lumen-shell` | S | none |
-| 3 | **Tab snapshot restore (10J)** — при switch на Hibernated tab: fetch bytes из SQLite `sessions`, `Document::from_bytes()`, init new `PersistentJs`, restore scroll. `shell/src/tab_lifecycle/restore.rs`. See `lumen-plan.md §10J` | `lumen-shell` | M | none |
-| 4 | **Multi-viewport split view (7A.4)** — `SplitViewSlot` в layout tree: два side-by-side `ContentViewport` slot'а; `Command::SplitView(left_tab, right_tab)` + `Command::CloseSplit`. `shell/src/panels/split_view.rs`. See `lumen-plan.md §7A.4` | `lumen-shell` | M | none |
+| 1 | **Tab snapshot restore (10J)** — при switch на Hibernated tab: fetch bytes из SQLite `sessions`, `Document::from_bytes()`, init new `PersistentJs`, restore scroll. `shell/src/tab_lifecycle/restore.rs`. See `lumen-plan.md §10J` | `lumen-shell` | M | none |
+| 2 | **Multi-viewport split view (7A.4)** — `SplitViewSlot` в layout tree: два side-by-side `ContentViewport` slot'а; `Command::SplitView(left_tab, right_tab)` + `Command::CloseSplit`. `shell/src/panels/split_view.rs`. See `lumen-plan.md §7A.4` | `lumen-shell` | M | none |
 | 5 | **Vertical tabs panel (7A.1)** — `VerticalTabPanel: Panel` в `shell/src/panels/vertical_tabs.rs`; `Surface::Docked` left slot; tab list с favicon + title + close; `Ctrl+B` toggle. See design V1. See `lumen-plan.md §7A.1` | `lumen-shell` | M | none |
 | 6 | **Tree-style tabs (7A.2)** — расширить `VerticalTabPanel`: `opener_id` на `TabEntry`; indent children 8px/level; collapse/expand subtree. `shell/src/panels/tree_tabs.rs`. See `lumen-plan.md §7A.2` | `lumen-shell` | M | #5 |
 | 7 | **Workspaces UI (7A.3)** — `WorkspacePanel: Panel` в `shell/src/panels/workspace_panel.rs`: switcher bar; `Command::SwitchWorkspace(id)` / `CreateWorkspace(name)` / `DeleteWorkspace(id)`; persisted в SQLite `workspaces`. See `lumen-plan.md §7A.3` | `lumen-shell`, `lumen-storage` | M | none |

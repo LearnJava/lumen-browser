@@ -9,7 +9,9 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight, Mat4};
-use lumen_paint::{DisplayCommand, DisplayList};
+use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
+
+use crate::tab_lifecycle::state::TabState;
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -25,6 +27,11 @@ const TAB_TEXT_DIM: Color = Color { r: 140, g: 140, b: 148, a: 255 };
 const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
 const DIVIDER: Color = Color { r: 45, g: 46, b: 52, a: 255 };
 
+/// Badge colour for BackgroundOld tier — amber moon indicator.
+const BADGE_OLD_COLOR: Color = Color { r: 255, g: 168, b: 0, a: 210 };
+/// Badge colour for Hibernated tier — grey disk indicator.
+const BADGE_HIBERNATE_COLOR: Color = Color { r: 110, g: 110, b: 120, a: 210 };
+
 const FONT_SZ: f32 = 12.0;
 /// Minimum tab button width in CSS px.
 const TAB_MIN_W: f32 = 80.0;
@@ -36,6 +43,8 @@ const TAB_PAD: f32 = 10.0;
 const CLOSE_SZ: f32 = 14.0;
 /// Gap between text area right edge and close-button left edge.
 const CLOSE_MARGIN: f32 = 4.0;
+/// Badge dot diameter in CSS px.
+const BADGE_SIZE: f32 = 5.0;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -45,6 +54,13 @@ pub struct TabEntry {
     pub id: usize,
     /// Display title shown in the tab button.
     pub title: String,
+    /// Current lifecycle tier for this tab.
+    ///
+    /// `Active` — foreground tab, no badge rendered.
+    /// `BackgroundOld` — amber badge (moon): JS heap off-loaded to disk.
+    /// `Hibernated` — grey badge (disk): DOM snapshot on disk, minimal RAM.
+    /// Other tiers — no badge rendered.
+    pub tab_state: TabState,
 }
 
 /// State of the tab strip (tab list + active index).
@@ -61,7 +77,11 @@ impl TabStrip {
     /// Create the initial tab strip with one blank tab.
     pub fn new() -> Self {
         Self {
-            tabs: vec![TabEntry { id: 0, title: "Новая вкладка".to_owned() }],
+            tabs: vec![TabEntry {
+                id: 0,
+                title: "Новая вкладка".to_owned(),
+                tab_state: TabState::Active,
+            }],
             active: 0,
             next_id: 1,
         }
@@ -76,7 +96,11 @@ impl TabStrip {
     pub fn push_blank(&mut self) -> usize {
         let id = self.next_id;
         self.next_id += 1;
-        self.tabs.push(TabEntry { id, title: "Новая вкладка".to_owned() });
+        self.tabs.push(TabEntry {
+            id,
+            title: "Новая вкладка".to_owned(),
+            tab_state: TabState::Active,
+        });
         self.tabs.len() - 1
     }
 
@@ -97,6 +121,16 @@ impl TabStrip {
     pub fn set_active_title(&mut self, title: impl Into<String>) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.title = title.into();
+        }
+    }
+
+    /// Update the lifecycle state of the tab at `idx`.
+    ///
+    /// Called by the shell on tab switch (`Active` ↔ `BackgroundRecent`) and by
+    /// the lifecycle manager on idle-timeout or memory-pressure transitions.
+    pub fn set_tab_state(&mut self, idx: usize, state: TabState) {
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.tab_state = state;
         }
     }
 }
@@ -151,9 +185,14 @@ pub fn hit_test(strip: &TabStrip, x: f32, y: f32, window_w: f32) -> TabHit {
 ///
 /// Appended to the overlay buffer each frame; rendered on top of page content
 /// at y = 0..`TAB_BAR_HEIGHT`.
+///
+/// Lifecycle badge rendering:
+/// - `TabState::BackgroundOld` → amber dot at top-right corner of the tab button.
+/// - `TabState::Hibernated`    → grey dot at top-right corner of the tab button.
+/// - All other states          → no badge rendered.
 pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
     let n = strip.tabs.len();
-    let mut out = DisplayList::with_capacity(4 + n * 5);
+    let mut out = DisplayList::with_capacity(4 + n * 6);
 
     // Background strip.
     out.push(DisplayCommand::FillRect {
@@ -185,6 +224,25 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(right - 1.0, 4.0, 1.0, TAB_BAR_HEIGHT - 8.0),
                 color: DIVIDER,
+            });
+        }
+
+        // Lifecycle badge — small coloured circle at top-right corner.
+        // BackgroundOld → amber (moon); Hibernated → grey (disk). Other states: no badge.
+        let badge_color = match tab.tab_state {
+            TabState::BackgroundOld => Some(BADGE_OLD_COLOR),
+            TabState::Hibernated => Some(BADGE_HIBERNATE_COLOR),
+            _ => None,
+        };
+        if let Some(color) = badge_color {
+            // Position: top-right of the tab, inset 3px from right edge and 4px from top.
+            let bx = right - BADGE_SIZE - 3.0;
+            let by = 4.0;
+            let r = BADGE_SIZE / 2.0;
+            out.push(DisplayCommand::FillRoundedRect {
+                rect: Rect::new(bx, by, BADGE_SIZE, BADGE_SIZE),
+                radii: CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r },
+                color,
             });
         }
 
@@ -248,11 +306,24 @@ mod tests {
     }
 
     #[test]
+    fn new_tab_starts_active() {
+        let s = TabStrip::new();
+        assert_eq!(s.tabs[0].tab_state, TabState::Active);
+    }
+
+    #[test]
     fn push_blank_increments_len() {
         let mut s = TabStrip::new();
         let idx = s.push_blank();
         assert_eq!(idx, 1);
         assert_eq!(s.len(), 2);
+    }
+
+    #[test]
+    fn push_blank_starts_active_state() {
+        let mut s = TabStrip::new();
+        s.push_blank();
+        assert_eq!(s.tabs[1].tab_state, TabState::Active);
     }
 
     #[test]
@@ -271,6 +342,21 @@ mod tests {
         let mut s = TabStrip::new();
         s.set_active_title("Rust Lang");
         assert_eq!(s.tabs[0].title, "Rust Lang");
+    }
+
+    #[test]
+    fn set_tab_state_updates_entry() {
+        let mut s = TabStrip::new();
+        s.push_blank();
+        s.set_tab_state(0, TabState::BackgroundOld);
+        assert_eq!(s.tabs[0].tab_state, TabState::BackgroundOld);
+        assert_eq!(s.tabs[1].tab_state, TabState::Active);
+    }
+
+    #[test]
+    fn set_tab_state_out_of_bounds_no_panic() {
+        let mut s = TabStrip::new();
+        s.set_tab_state(99, TabState::Hibernated); // must not panic
     }
 
     #[test]
@@ -309,6 +395,47 @@ mod tests {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         });
         assert!(has_title);
+    }
+
+    #[test]
+    fn build_tab_bar_no_badge_for_active() {
+        let s = TabStrip::new(); // single Active tab
+        let dl = build_tab_bar(&s, 1024.0);
+        // Active tab must not emit any FillRoundedRect (all tab bar rects are FillRect).
+        let has_rounded = dl.iter().any(|c| matches!(c, DisplayCommand::FillRoundedRect { .. }));
+        assert!(!has_rounded, "Active tab must not render a lifecycle badge");
+    }
+
+    #[test]
+    fn build_tab_bar_badge_for_background_old() {
+        let mut s = TabStrip::new();
+        s.push_blank();
+        s.set_tab_state(0, TabState::BackgroundOld);
+        let dl = build_tab_bar(&s, 1024.0);
+        // Amber badge: r=255, g=168
+        let has_amber = dl.iter().any(|c| match c {
+            DisplayCommand::FillRoundedRect { color, .. } => {
+                color.r == BADGE_OLD_COLOR.r && color.g == BADGE_OLD_COLOR.g
+            }
+            _ => false,
+        });
+        assert!(has_amber, "BackgroundOld tab must render amber badge");
+    }
+
+    #[test]
+    fn build_tab_bar_badge_for_hibernated() {
+        let mut s = TabStrip::new();
+        s.push_blank();
+        s.set_tab_state(0, TabState::Hibernated);
+        let dl = build_tab_bar(&s, 1024.0);
+        // Grey badge: r=110, g=110
+        let has_grey = dl.iter().any(|c| match c {
+            DisplayCommand::FillRoundedRect { color, .. } => {
+                color.r == BADGE_HIBERNATE_COLOR.r && color.g == BADGE_HIBERNATE_COLOR.g
+            }
+            _ => false,
+        });
+        assert!(has_grey, "Hibernated tab must render grey badge");
     }
 
     #[test]

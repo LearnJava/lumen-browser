@@ -862,7 +862,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/navigator_bindings.rs:31` **fn** `install_navigator_bindings` — Install navigator/screen/timezone normalization shim into the JS context
 `crates/js/src/surface_api.rs:29` **fn** `install_surface_api_protection` — Install Layer 1 surface API protection into the JS context
 `crates/js/src/video_bindings.rs:27` **fn** `install_video_bindings` — Install HTMLVideoElement stubs into the JS context
-`crates/js/src/webgl_bindings.rs:17` **fn** `install_webgl_bindings` — Install WebGL fingerprint bindings into the JS context
+`crates/js/src/webgl_bindings.rs:25` **fn** `install_webgl_bindings` — Install WebGL fingerprint shim into the JS context
 
 ## lumen-knowledge  (46 symbols)
 
@@ -1703,7 +1703,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (214 symbols)
+## lumen-shell  (215 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1908,17 +1908,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle/state.rs:136` **fn** `advance_tier` — Advance to the next tier. Returns `true` if a transition occurred
 `crates/shell/src/tab_lifecycle/state.rs:150` **fn** `should_transition_on_idle` — Returns `true` if the idle timeout for the current tier has elapsed
 `crates/shell/src/tab_lifecycle/state.rs:167` **fn** `suggested_pressure_state` — If memory pressure justifies an earlier-than-scheduled tier advance, returns
-`crates/shell/src/tabs/strip.rs:43` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:51` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:62` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:71` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:76` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:85` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:97` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:108` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:128` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:154` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
-`crates/shell/src/tabs/strip.rs:231` **fn** `tab_page_push_transform` — Build a `PushTransform` display command that shifts page content below the
+`crates/shell/src/tabs/strip.rs:52` **struct** `TabEntry` — Metadata for one browser tab
+`crates/shell/src/tabs/strip.rs:67` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:78` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:91` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:96` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:109` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:121` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:131` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:142` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:162` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:193` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:289` **fn** `tab_page_push_transform` — Build a `PushTransform` display command that shifts page content below the
 
 ## lumen-storage  (373 symbols)
 
@@ -2297,4 +2298,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2235 symbols in 19 crates*
+*Total: 2236 symbols in 19 crates*
