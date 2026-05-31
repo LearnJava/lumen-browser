@@ -62,6 +62,7 @@ BUG-046 | FIXED 2026-05-30 | layout          | 3 устаревших теста
 BUG-047 | FIXED 2026-05-30 | layout          | НЕ баг (мисдиагноз): line-clamp реально усекает контент — InlineRun внутри .box = 40/80/120/160 (1-4 строки). .box=160 у всех — корректный flex align-items:stretch, Edge рендерит так же (48-edge.png). Тест переписан на ground-truth, #[ignore] снят | crates/driver/tests/test_48.rs
 BUG-048 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант DrawScrollbar (p2-scrollbar-rendering merge) не обработан; скроллбар — UI, не контент → ветка continue (как BUG-044) | shell/src/main.rs:4219,4271
 BUG-049 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант PageBreak (p2 print-pages merge) не обработан; маркер пагинации печати, не контент, без rect → ветка continue (как BUG-048) | shell/src/main.rs:4219,4272
+BUG-050 | FIXED 2026-05-31 | network         | doctest mock.rs:16 не компилировался — fetch() is a trait method, но `use NetworkTransport` не импортирован в примере → добавлен импорт | crates/network/src/mock.rs:9
 ```
 
 ---
