@@ -6,8 +6,7 @@
 
 ## In progress
 
-**`samples/heavy.html` benchmark page (10M)**  branch: p2-heavy-bench
-Next step: расширить heavy.html до 80+ статей + добавить heavy_page bench target в bench/src/main.rs
+_(nothing in progress)_
 
 ---
 
@@ -48,6 +47,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-heavy-bench** ✅ 2026-06-01 — `samples/heavy.html` benchmark page (10M). Расширен с 40 до 85 статей Habr-style: mix-blend-mode trending section (5 карточек), 6 постов с HTML-таблицами (сравнения БД/фреймворков/облаков/языков), 6 постов с `float: left` аватаром + multi-paragraph body, 8 постов с grey placeholder images (`.post-thumb`), ad-banner placeholder. `bench/src/main.rs`: `HEAVY_HTML: &[u8]`, `run_pipeline(html, external_css, measurer)` параметризован, `run_bench()` — переиспользуемый цикл; main запускает оба бенчмарка подряд. Clippy clean.
 - **p2-webgl-getparam** ✅ 2026-06-01 — WebGL `getParameter(UNMASKED_*)` fingerprint stub (9D.2). IIFE-шим в `crates/js/src/webgl_bindings.rs` перехватывает `document.createElement('canvas')`: `canvas.getContext('webgl'/'webgl2'/'experimental-webgl')` возвращает stub с `getParameter(UNMASKED_VENDOR_WEBGL=0x9245)→"WebKit"`, `getParameter(UNMASKED_RENDERER_WEBGL=0x9246)→"Generic GPU"`, `getExtension('WEBGL_debug_renderer_info')` с константами, `toDataURL()→'data:,'` (блокировка canvas pixel-hash). 12 новых unit-тестов. 594 тестов lumen-js итого. 9D.2 завершена.
 - **p2-basic-tab-strip** ✅ 2026-05-31 — Basic tab strip UI в `lumen-shell`. `tabs/strip.rs`: `TabStrip` (список вкладок, active index, id-counter), `TabEntry`, `TabHit`, `hit_test()`, `build_tab_bar()` (viewport-locked overlay 36 px, тёмная хром-тема), `tab_page_push_transform()`. `PageSnapshot` struct — freeze/restore 42 per-page полей при смене вкладки (swap-on-switch). `KeyCommand::NewTab/CloseTab/NextTab` + Ctrl+T/W/Tab. MouseInput: hit_test tab bar перед scrollbar (y < 36 px). RedrawRequested: page DL оборачивается PushTransform(y=36)/PopTransform; tab bar в overlay_buf последним. `viewport_height_css()` -= 36 px. `set_active_title()` вызывается при обновлении заголовка страницы. 8 unit-тестов strip + 307 lumen-shell итого.
 - **p2-video-element** ✅ 2026-05-31 — `<video>` replaced block: `BoxKind::Video { src, poster }` в layout; UA default 300×150; `apply_image_presentational_hints` расширена на `<video>`; paint emit grey `DrawImage` placeholder (poster src приоритетнее video src); `// CSS: object-fit` comment; `video_bindings.rs` JS stubs: `play()→Promise`, `pause()`, `src/currentTime/duration/paused/readyState`; immediate `loadedmetadata+canplay` events. 7 layout + 4 paint + 8 JS тестов. Graphic test 55.
