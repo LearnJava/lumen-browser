@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p1-auto-wait** — 8D: Auto-wait inside engine  branch: p1-auto-wait
+Next step: реализовать Visible/NetworkIdle/JsIdle в `crates/driver/src/session.rs`
 
 ---
 
