@@ -4474,7 +4474,20 @@ function _lumen_ws_pump_one(ws) {
                 _lumen_ws_fire(ws, new Event('open', { isTrusted: true }));
             } else if (ev.t === 'msg') {
                 if (ws.readyState !== 1) { continue; }
-                _lumen_ws_fire(ws, new MessageEvent(ev.data, { isTrusted: true }));
+                var msgData;
+                if (ev.bin) {
+                    // Rust encodes binary payload as hex; decode to typed buffer.
+                    var hex = ev.data;
+                    var len = hex.length >>> 1;
+                    var u8 = new Uint8Array(len);
+                    for (var bi = 0; bi < len; bi++) {
+                        u8[bi] = parseInt(hex.substr(bi * 2, 2), 16);
+                    }
+                    msgData = ws.binaryType === 'arraybuffer' ? u8.buffer : u8;
+                } else {
+                    msgData = ev.data;
+                }
+                _lumen_ws_fire(ws, new MessageEvent(msgData, { isTrusted: true }));
             } else if (ev.t === 'close') {
                 ws.readyState = 3;
                 _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, ev.code === 1000, { isTrusted: true }));
@@ -4500,7 +4513,9 @@ function WebSocket(url) {
     this.url = String(url || '');
     this.readyState = 0;
     this.protocol = '';
+    this.extensions = '';
     this.binaryType = 'blob';
+    this.bufferedAmount = 0;
     this.onopen = null; this.onmessage = null;
     this.onclose = null; this.onerror = null;
     this._handle = 0;
@@ -8372,6 +8387,112 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt
             .eval("var me = new MessageEvent('payload'); me.data === 'payload' && me.type === 'message'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn websocket_has_buffered_amount() {
+        let rt = runtime_with_ws(make_doc());
+        let r = rt
+            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.bufferedAmount === 0")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn websocket_has_extensions_field() {
+        let rt = runtime_with_ws(make_doc());
+        let r = rt
+            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.extensions === ''")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn websocket_binary_type_default_blob() {
+        let rt = runtime_with_ws(make_doc());
+        let r = rt
+            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.binaryType")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("blob".into()));
+    }
+
+    // Mock provider: queues Open + one binary message (bytes [0x01, 0x02, 0x03]).
+    struct MockBinaryWsProvider;
+    struct MockBinaryWsSession {
+        queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsWsEvent>>,
+    }
+    impl lumen_core::ext::JsWebSocketSession for MockBinaryWsSession {
+        fn send_text(&self, _text: &str) -> lumen_core::error::Result<()> { Ok(()) }
+        fn send_binary(&self, _data: &[u8]) -> lumen_core::error::Result<()> { Ok(()) }
+        fn poll(&self) -> Option<lumen_core::ext::JsWsEvent> {
+            self.queue.lock().unwrap().pop_front()
+        }
+        fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
+    }
+    impl lumen_core::ext::JsWebSocketProvider for MockBinaryWsProvider {
+        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+            use lumen_core::ext::JsWsEvent;
+            let mut q = std::collections::VecDeque::new();
+            q.push_back(JsWsEvent::Open);
+            q.push_back(JsWsEvent::Message { data: vec![0x01, 0x02, 0x03], is_binary: true });
+            Ok(Box::new(MockBinaryWsSession { queue: std::sync::Mutex::new(q) }))
+        }
+    }
+
+    fn runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
+        rt.install_dom(doc, "", None, Some(provider), None, None).unwrap();
+        rt
+    }
+
+    #[test]
+    fn websocket_binary_blob_mode_delivers_uint8array() {
+        let rt = runtime_with_binary_ws(make_doc());
+        // Default binaryType='blob' → Uint8Array (our Phase 0 representation).
+        let r = rt
+            .eval(
+                "var received = null;
+                 var ws = new WebSocket('ws://mock');
+                 ws.onmessage = function(e) { received = e.data; };
+                 _lumen_pump_websockets();
+                 received instanceof Uint8Array && received[0] === 1 && received[1] === 2 && received[2] === 3",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn websocket_binary_arraybuffer_mode_delivers_arraybuffer() {
+        let rt = runtime_with_binary_ws(make_doc());
+        // binaryType='arraybuffer' → ArrayBuffer.
+        let r = rt
+            .eval(
+                "var received = null;
+                 var ws = new WebSocket('ws://mock');
+                 ws.binaryType = 'arraybuffer';
+                 ws.onmessage = function(e) { received = e.data; };
+                 _lumen_pump_websockets();
+                 received instanceof ArrayBuffer && new Uint8Array(received)[0] === 1",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn websocket_binary_hex_length_matches_byte_count() {
+        let rt = runtime_with_binary_ws(make_doc());
+        // 3 bytes → Uint8Array of length 3.
+        let r = rt
+            .eval(
+                "var len = 0;
+                 var ws = new WebSocket('ws://mock');
+                 ws.onmessage = function(e) { len = e.data.length; };
+                 _lumen_pump_websockets();
+                 len === 3",
+            )
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

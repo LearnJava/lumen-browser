@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Real WebSocket implementation — shell event loop pump + binaryType ArrayBuffer support  branch: p1-websocket-shell
+Next step: add `pump_websockets()` to `JsRuntime` trait and call in event loop  `crates/shell/src/main.rs:530`
 
 ---
 
@@ -16,13 +17,11 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | **Shadow DOM JS bindings** — `customElements.define(name, class)` + `connectedCallback`/`disconnectedCallback`/`attributeChangedCallback` lifecycle dispatch; `Element.attachShadow()` JS binding (P1 Rust side ✅, needs JS class + event dispatch in `lumen-js`); `HTMLTemplateElement.content` fragment clone; `<slot>` `slotchange` event | `lumen-js` | M | none (P1 Rust side ✅ in `lumen-dom`) |
-| 2 | **Real WebSocket implementation** — `WebSocket` JS class backed by real network (`JsWebSocketProvider` trait, `lumen-network` async bridge via tokio channel). `ws://`/`wss://` connect, `send(str\|ArrayBuffer)`, `onopen`/`onmessage`/`onerror`/`onclose`, `binaryType`, `readyState`, `close(code, reason)`. Shell integration: poll `JsWebSocketSession` on event loop step | `lumen-js`, `lumen-network`, `lumen-core::ext` | L | none |
-| 3 | **TLS fingerprint Chrome-matching (9B)** — cipher suite order, extension list, supported groups, ALPN order matching current stable Chrome; JA3/JA4 snapshot test. Per-profile TLS config (`Standard`/`Strict`) in `lumen-network/src/tls/fingerprint.rs`. See `lumen-plan.md §9B` | `lumen-network` | L | none |
-| 4 | **HTTP fingerprint Chrome-matching (9C)** — HTTP/1.1 header order + casing; HTTP/2 SETTINGS frame values + stream priority; `Accept-Language: en-US,en;q=0.9`; Client Hints opt-out. See `lumen-plan.md §9C` | `lumen-network` | M | 9B (TLS) for ALPN |
-| 5 | **Native input injection (8C)** — mouse/keyboard events go through the same winit event-loop path as real OS events (NOT via JS `dispatchEvent`). `InjectMouseEvent`/`InjectKeyEvent` in `shell/src/input/native.rs`; wire to `Lumen::handle_event` dispatch | `lumen-shell` | M | none |
-| 6 | **Behavioral mimicry (9E)** — opt-in `InputMode::HumanLike`: Bézier-curve mouse paths between coordinates, Gaussian inter-keystroke timing, pre-click dwell time. `shell/src/input/humanlike.rs`. Requires 8C native injection | `lumen-shell` | M | 8C (native input) |
-| 7 | **Tab lifecycle state machine (10A)** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + transition triggers (idle timeout + memory pressure + LRU). Per-user timeouts (5 min / 30 min / pinned). `shell/src/tab_lifecycle/state.rs`. Requires `MemoryPressureSource` (✅ in `lumen-core`) | `lumen-shell` | L | none |
+| 1 | **TLS fingerprint Chrome-matching (9B)** — cipher suite order, extension list, supported groups, ALPN order matching current stable Chrome; JA3/JA4 snapshot test. Per-profile TLS config (`Standard`/`Strict`) in `lumen-network/src/tls/fingerprint.rs`. See `lumen-plan.md §9B` | `lumen-network` | L | none |
+| 2 | **HTTP fingerprint Chrome-matching (9C)** — HTTP/1.1 header order + casing; HTTP/2 SETTINGS frame values + stream priority; `Accept-Language: en-US,en;q=0.9`; Client Hints opt-out. See `lumen-plan.md §9C` | `lumen-network` | M | 9B (TLS) for ALPN |
+| 3 | **Native input injection (8C)** — mouse/keyboard events go through the same winit event-loop path as real OS events (NOT via JS `dispatchEvent`). `InjectMouseEvent`/`InjectKeyEvent` in `shell/src/input/native.rs`; wire to `Lumen::handle_event` dispatch | `lumen-shell` | M | none |
+| 4 | **Behavioral mimicry (9E)** — opt-in `InputMode::HumanLike`: Bézier-curve mouse paths between coordinates, Gaussian inter-keystroke timing, pre-click dwell time. `shell/src/input/humanlike.rs`. Requires 8C native injection | `lumen-shell` | M | 8C (native input) |
+| 5 | **Tab lifecycle state machine (10A)** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + transition triggers (idle timeout + memory pressure + LRU). Per-user timeouts (5 min / 30 min / pinned). `shell/src/tab_lifecycle/state.rs`. Requires `MemoryPressureSource` (✅ in `lumen-core`) | `lumen-shell` | L | none |
 
 ---
 
