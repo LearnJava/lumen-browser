@@ -3,6 +3,7 @@ pub mod battery_bindings;
 pub mod dom;
 pub mod navigator_bindings;
 pub mod surface_api;
+pub mod video_bindings;
 pub mod webgl_bindings;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
@@ -169,6 +170,11 @@ impl QuickJsRuntime {
             // Install navigator/screen/timezone normalization (ADR-007 Layer 4, 9D.6) — after DOM.
             if let Err(e) = navigator_bindings::install_navigator_bindings(&ctx) {
                 eprintln!("Navigator bindings init failed: {}", e);
+            }
+
+            // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
+            if let Err(e) = video_bindings::install_video_bindings(&ctx) {
+                eprintln!("Video bindings init failed: {}", e);
             }
 
             // Install Layer 1 surface API protection (ADR-007 Layer 1, 9A) — after navigator.

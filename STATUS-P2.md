@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет активных задач)_
+**`<video>` element rendering** branch: p2-video-element
+Next step: BoxKind::Video in box_tree.rs, grey DrawImage placeholder in display_list.rs, JS stubs in video_bindings.rs
 
 ---
 

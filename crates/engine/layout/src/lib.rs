@@ -6923,6 +6923,84 @@ mod tests {
         assert!((img.rect.height - 30.0).abs() < 0.1);
     }
 
+    // ──────── <video> replaced element ────────
+
+    fn first_video_child(b: &LayoutBox) -> &LayoutBox {
+        b.children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Video { .. }))
+            .expect("expected at least one video child")
+    }
+
+    #[test]
+    fn video_creates_video_box_with_src() {
+        let root = lay(r#"<video src="clip.mp4"></video>"#, "");
+        let vid = first_video_child(&root);
+        match &vid.kind {
+            BoxKind::Video { src, poster } => {
+                assert_eq!(src, "clip.mp4");
+                assert_eq!(poster, "");
+            }
+            other => panic!("expected BoxKind::Video, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn video_captures_poster_attribute() {
+        let root = lay(r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#, "");
+        let vid = first_video_child(&root);
+        if let BoxKind::Video { poster, .. } = &vid.kind {
+            assert_eq!(poster, "thumb.jpg");
+        }
+    }
+
+    #[test]
+    fn video_ua_default_size_300_by_150() {
+        // HTML spec §14.1: UA default intrinsic size 300×150 CSS px.
+        let root = lay(r#"<video src="clip.mp4"></video>"#, "");
+        let vid = first_video_child(&root);
+        assert!((vid.rect.width - 300.0).abs() < 0.1, "width={}", vid.rect.width);
+        assert!((vid.rect.height - 150.0).abs() < 0.1, "height={}", vid.rect.height);
+    }
+
+    #[test]
+    fn video_html_attribute_dimensions_override_ua_default() {
+        let root = lay(r#"<video src="clip.mp4" width="640" height="360"></video>"#, "");
+        let vid = first_video_child(&root);
+        assert!((vid.rect.width - 640.0).abs() < 0.1, "width={}", vid.rect.width);
+        assert!((vid.rect.height - 360.0).abs() < 0.1, "height={}", vid.rect.height);
+    }
+
+    #[test]
+    fn video_css_overrides_ua_default() {
+        let root = lay(
+            r#"<video src="clip.mp4"></video>"#,
+            "video { width: 480px; height: 270px; }",
+        );
+        let vid = first_video_child(&root);
+        assert!((vid.rect.width - 480.0).abs() < 0.1, "width={}", vid.rect.width);
+        assert!((vid.rect.height - 270.0).abs() < 0.1, "height={}", vid.rect.height);
+    }
+
+    #[test]
+    fn video_display_none_is_skipped() {
+        let root = lay(
+            r#"<video src="clip.mp4"></video>"#,
+            "video { display: none; }",
+        );
+        let has_video = root.children.iter().any(|c| matches!(c.kind, BoxKind::Video { .. }));
+        assert!(!has_video, "video with display:none should not produce Video box");
+    }
+
+    #[test]
+    fn video_is_replaced_element_does_not_stretch() {
+        // Replaced elements do NOT stretch to fill container width (CSS 2.1 §10.3.2).
+        let root = lay(r#"<video src="clip.mp4"></video>"#, "");
+        let vid = first_video_child(&root);
+        // UA default 300px, not 800px (viewport width).
+        assert!((vid.rect.width - 300.0).abs() < 0.1, "width={}", vid.rect.width);
+    }
+
     // ──────── <picture> / <img srcset> source-selection integration ────────
 
     /// Рекурсивный поиск первого `Image`-бокса в дереве. Нужен для тестов

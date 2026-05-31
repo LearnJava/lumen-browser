@@ -2819,6 +2819,64 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             });
             emit_outline(b, out);
         }
+        BoxKind::Video { src, poster } => {
+            if !is_paint_visible(b) {
+                return;
+            }
+            emit_box_shadows(b, out);
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b);
+            emit_inset_box_shadows(b, out);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            // Phase 0: poster image if available, otherwise unregistered src → grey placeholder.
+            // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale poster/video frame.
+            let img_src = if !poster.is_empty() { poster.clone() } else { src.clone() };
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: img_src,
+                alt: String::new(),
+                object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
         // SVG elements: second-pass self-paint not needed (handled in walk).
         BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => {}
     }
@@ -3250,6 +3308,60 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 rect: b.rect,
                 src: src.clone(),
                 alt: alt.clone(),
+                object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
+        BoxKind::Video { src, poster } => {
+            // visibility:hidden на `<video>` пропускает всё (no children).
+            if !is_paint_visible(b) {
+                return;
+            }
+            // Painter's order для replaced element: фон → bg-image → border → placeholder.
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            // Phase 0: poster → DrawImage (registered by shell); no poster or unregistered src → grey placeholder.
+            // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale poster/video frame.
+            let img_src = if !poster.is_empty() { poster.clone() } else { src.clone() };
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: img_src,
+                alt: String::new(),
                 object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
@@ -4598,6 +4710,56 @@ mod tests {
         assert!(s.contains("DrawImage"), "must contain DrawImage line");
         assert!(s.contains(r#"src="photo.jpg""#), "must contain src");
         assert!(s.contains(r#"alt="A photo""#), "must contain alt");
+    }
+
+    // ── Тесты <video> / DrawImage placeholder ───────────────────────────────
+
+    #[test]
+    fn video_emits_draw_image_with_src() {
+        // <video src="clip.mp4"> → DrawImage with src="clip.mp4" (grey placeholder).
+        let dl = build(r#"<video src="clip.mp4"></video>"#, "");
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1, "video should emit exactly one DrawImage");
+        if let DisplayCommand::DrawImage { src, alt, .. } = imgs[0] {
+            assert_eq!(src, "clip.mp4");
+            assert_eq!(alt, "");
+        }
+    }
+
+    #[test]
+    fn video_with_poster_emits_draw_image_with_poster_src() {
+        // When poster is set, DrawImage uses the poster URL so shell can register it.
+        let dl = build(r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#, "");
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { src, .. } = imgs[0] {
+            assert_eq!(src, "thumb.jpg");
+        }
+    }
+
+    #[test]
+    fn video_ua_default_rect_300_by_150() {
+        let dl = build(r#"<video src="clip.mp4"></video>"#, "");
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
+            assert!((rect.width - 300.0).abs() < 0.1, "width={}", rect.width);
+            assert!((rect.height - 150.0).abs() < 0.1, "height={}", rect.height);
+        }
+    }
+
+    #[test]
+    fn video_css_dimensions_override_ua_default() {
+        let dl = build(
+            r#"<video src="clip.mp4"></video>"#,
+            "video { width: 640px; height: 360px; }",
+        );
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
+            assert!((rect.width - 640.0).abs() < 0.1, "width={}", rect.width);
+            assert!((rect.height - 360.0).abs() < 0.1, "height={}", rect.height);
+        }
     }
 
     // ── Тесты background-image url() / DrawBackgroundImage ─────────────────

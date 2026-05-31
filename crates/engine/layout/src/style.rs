@@ -6692,14 +6692,16 @@ fn ua_vertical_align(doc: &Document, node: NodeId) -> Option<VerticalAlign> {
     }
 }
 
-/// Применяет HTML presentational hints для `<img>`: `width`/`height`,
-/// `hspace`/`vspace` (→ margin), `border` (→ border-width + style=solid).
+/// Применяет HTML presentational hints для `<img>` и `<video>`: `width`/`height`,
+/// `hspace`/`vspace` (→ margin), `border` (→ border-width + style=solid) для `<img>`.
 /// HTML5 §15.3.9. Author CSS поверх — выигрывает.
 fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return;
     };
-    if name.local != "img" {
+    let is_img = name.local == "img";
+    let is_video = name.local == "video";
+    if !is_img && !is_video {
         return;
     }
     let node_ref = doc.get(node);
@@ -6709,26 +6711,27 @@ fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut Co
     if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
         style.height = Some(Length::Px(h));
     }
-    // HTML5 §15.3.9: hspace → margin-left/right, vspace → margin-top/bottom.
-    if let Some(h) = node_ref.get_attr("hspace").and_then(parse_html_dimension) {
-        style.margin_left = LengthOrAuto::Length(Length::Px(h));
-        style.margin_right = LengthOrAuto::Length(Length::Px(h));
-    }
-    if let Some(v) = node_ref.get_attr("vspace").and_then(parse_html_dimension) {
-        style.margin_top = LengthOrAuto::Length(Length::Px(v));
-        style.margin_bottom = LengthOrAuto::Length(Length::Px(v));
-    }
-    // HTML5 §15.3.9.1: border attr → all 4 border-widths; border>0 → style=solid.
-    if let Some(b) = node_ref.get_attr("border").and_then(parse_html_dimension) {
-        style.border_top_width = b;
-        style.border_right_width = b;
-        style.border_bottom_width = b;
-        style.border_left_width = b;
-        if b > 0.0 {
-            style.border_top_style = BorderStyle::Solid;
-            style.border_right_style = BorderStyle::Solid;
-            style.border_bottom_style = BorderStyle::Solid;
-            style.border_left_style = BorderStyle::Solid;
+    // hspace/vspace/border are <img>-only presentational attributes (HTML5 §15.3.9).
+    if is_img {
+        if let Some(h) = node_ref.get_attr("hspace").and_then(parse_html_dimension) {
+            style.margin_left = LengthOrAuto::Length(Length::Px(h));
+            style.margin_right = LengthOrAuto::Length(Length::Px(h));
+        }
+        if let Some(v) = node_ref.get_attr("vspace").and_then(parse_html_dimension) {
+            style.margin_top = LengthOrAuto::Length(Length::Px(v));
+            style.margin_bottom = LengthOrAuto::Length(Length::Px(v));
+        }
+        if let Some(b) = node_ref.get_attr("border").and_then(parse_html_dimension) {
+            style.border_top_width = b;
+            style.border_right_width = b;
+            style.border_bottom_width = b;
+            style.border_left_width = b;
+            if b > 0.0 {
+                style.border_top_style = BorderStyle::Solid;
+                style.border_right_style = BorderStyle::Solid;
+                style.border_bottom_style = BorderStyle::Solid;
+                style.border_left_style = BorderStyle::Solid;
+            }
         }
     }
 }
