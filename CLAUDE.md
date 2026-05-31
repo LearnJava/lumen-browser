@@ -367,7 +367,7 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 31 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 32 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
@@ -418,8 +418,15 @@ box-blur passes per axis (running-sum, replicate-edge), integer-only so it is cr
 saturate/sepia) mirror the GPU `apply_filter_fn` shader on un-premultiplied sRGB; `hue-rotate` uses a
 libm-free `sin`/`cos` minimax polynomial for the same determinism reason. CSS Filter Effects L1 §4/§7;
 pages `15-box-shadow` and `52-text-shadow-blur` — `52` carries text so, like `55`, it is snapshot-only,
-not in `run.py`. The element `filter` property page `30-css-filter` is **not** yet covered because the
-simple `walk` builder does not emit the element-level `PushFilter` — deferred to a later subtask).
+not in `run.py`. The simple `walk` builder now also emits the element-level `PushFilter`/`PopFilter`
+(wrapping the box subtree when `style.filter` is non-empty) **and** `backdrop-filter`
+(`PushBackdropFilter`/`PopBackdropFilter`, CSS Filter Effects L1 §6.2): on the matching Push the
+already-painted backdrop under the element bounds is filtered in place — `cpu_raster` clones the base
+layer, runs the filter chain, then blits it back through a rect `Mask` of the element box (`Source`
+blend), so only the region behind the element is affected; `PopBackdropFilter` is a no-op. Page
+`30-css-filter` is now covered (element `filter` row + the `backdrop-filter` scene row), which also
+required fixing BUG-051 — abs-pos `inset:0` height-from-insets in `lay_out_abs_children` (the gradient
+backdrop had collapsed to height 0)).
 
 ---
 

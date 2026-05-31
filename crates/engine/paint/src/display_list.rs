@@ -2946,6 +2946,27 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if let Some(matrix) = transform {
                 out.push(DisplayCommand::PushTransform { matrix });
             }
+            // CSS Filter Effects L1 §6.2 — `backdrop-filter` filters the content
+            // already painted *behind* the element, clipped to its border box,
+            // before the element's own content paints on top. Emitted after the
+            // transform (mirroring `box_layer_ops` ordering) and outermost
+            // relative to the element's own `filter`, so the element content
+            // composites over the filtered backdrop.
+            let has_backdrop = !b.style.backdrop_filter.is_empty();
+            if has_backdrop {
+                out.push(DisplayCommand::PushBackdropFilter {
+                    filters: b.style.backdrop_filter.clone(),
+                    bounds: b.rect,
+                });
+            }
+            // CSS Filter Effects L1 §4 — the element's own `filter` wraps the
+            // element's full painted output (shadows + background + border +
+            // children + outline) as the innermost layer; the matching
+            // `PopFilter` applies the chain and composites the result down.
+            let has_filter = !b.style.filter.is_empty();
+            if has_filter {
+                out.push(DisplayCommand::PushFilter { filters: b.style.filter.clone() });
+            }
             // CSS Display L3 §4 — `visibility: hidden`: self не рисуется
             // (фон/border/outline/shadow), но children обходятся (inherited
             // visibility, но child может вернуть себя через `:visible`).
@@ -3098,6 +3119,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 // (включая children), снаружи bounding-box-а. Phase 0 без
                 // деления paint phases для outline — эмитим в конце box-walk-а.
                 emit_outline(b, out);
+            }
+            if has_filter {
+                out.push(DisplayCommand::PopFilter);
+            }
+            if has_backdrop {
+                out.push(DisplayCommand::PopBackdropFilter);
             }
             if transform.is_some() {
                 out.push(DisplayCommand::PopTransform);

@@ -3695,6 +3695,16 @@ fn lay_out_abs_children(
         let c_mt = cs.margin_top.resolve_or_zero(c_em, cb.height, viewport);
         let c_mb = cs.margin_bottom.resolve_or_zero(c_em, cb.height, viewport);
 
+        // CSS Position L3 §6: an abs-pos box with both `top` and `bottom` non-auto
+        // and `height: auto` resolves its used height to fill the inset gap. Mirror of
+        // the `avail_w` width-from-insets path above. Applied post-layout because the
+        // gap height is a containing-block used value, not a content-driven size.
+        if top.is_some() && bottom.is_some() && cs.height.is_none() {
+            let resolved_h =
+                (cb.height - top.unwrap_or(0.0) - bottom.unwrap_or(0.0) - c_mt - c_mb).max(0.0);
+            parent.children[idx].rect.height = resolved_h;
+        }
+
         let child = &mut parent.children[idx];
 
         // Desired border-left edge.
@@ -6003,6 +6013,37 @@ mod tests {
         // Should be (1022-600)/2 = 211 relative to wrap's content_x (0).
         assert!((centered_x - 211.0).abs() < 1.0, "centered x expected ~211, got {centered_x}");
         assert_eq!(s.rect.y, 20.0, "top margin 20px must be respected, got {}", s.rect.y);
+    }
+
+    #[test]
+    fn abs_pos_inset_resolves_width_and_height() {
+        // CSS Position L3 §6: position:absolute with inset:0 (top/right/bottom/left
+        // all 0) and no explicit width/height must fill the relatively-positioned
+        // containing block on both axes. Regression for BUG-051 — height-from-insets
+        // was missing, so the box collapsed to height 0.
+        let html = r#"<div id="cb"><div id="bg"></div></div>"#;
+        let css = "#cb { position: relative; width: 660px; height: 120px; } \
+                   #bg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
+        let bg = find_by_id_all(&root, &doc, "bg").expect("bg not found");
+        assert_eq!(bg.rect.width, 660.0, "inset:0 width must fill cb, got {}", bg.rect.width);
+        assert_eq!(bg.rect.height, 120.0, "inset:0 height must fill cb, got {}", bg.rect.height);
+    }
+
+    #[test]
+    fn abs_pos_explicit_height_overrides_insets() {
+        // An explicit height wins over top+bottom insets (height is not auto), so the
+        // §6 gap-fill rule does not apply — guards the `cs.height.is_none()` guard.
+        let html = r#"<div id="cb"><div id="bg"></div></div>"#;
+        let css = "#cb { position: relative; width: 660px; height: 120px; } \
+                   #bg { position: absolute; top: 0; bottom: 0; left: 0; height: 40px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
+        let bg = find_by_id_all(&root, &doc, "bg").expect("bg not found");
+        assert_eq!(bg.rect.height, 40.0, "explicit height must win, got {}", bg.rect.height);
     }
 
     #[test]

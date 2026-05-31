@@ -261,6 +261,19 @@ pub(crate) fn rasterize_cpu(
                     close_layer(dst, &top, &op);
                 }
             }
+            // CSS Filter Effects L1 §6.2 — `backdrop-filter`. Unlike the group
+            // effects above, this does *not* open a new layer: it filters the
+            // content already painted behind the element (the active layer)
+            // within `bounds`, in place. The element's own content then paints
+            // on top via the draws emitted up to the matching `PopBackdropFilter`,
+            // which is therefore a no-op.
+            DisplayCommand::PushBackdropFilter { filters, bounds } => {
+                let target = layers.last_mut().expect("base layer");
+                apply_backdrop_filter(target, filters, bounds, width, height);
+            }
+            DisplayCommand::PopBackdropFilter => {
+                // No-op: the backdrop was filtered in place at the matching Push.
+            }
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
                 // Skipped for now; will be implemented in later phases.
@@ -343,6 +356,51 @@ fn composite_filter_layer(
         quality: tiny_skia::FilterQuality::Nearest,
     };
     dst.draw_pixmap(0, 0, cur.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Apply a `backdrop-filter` chain (CSS Filter Effects L1 §6.2) to the content
+/// already painted in `target` within `bounds`, in place.
+///
+/// The filter operates on the *backdrop* — the content painted behind the
+/// element so far, i.e. the current active layer. The whole layer is cloned and
+/// filtered (so Gaussian blur samples neighbouring backdrop pixels rather than
+/// only those inside `bounds`), then only the `bounds` border-box region of the
+/// filtered copy is written back over `target` with `Source` blend (replace).
+/// The element's own background/border paint on top afterwards via subsequent
+/// draws, so the matching `PopBackdropFilter` is a no-op. Reuses the same
+/// integer-only `gaussian_blur` and un-premultiplied `apply_color_filter` as
+/// `composite_filter_layer`, so the result is cross-OS bit-identical.
+fn apply_backdrop_filter(
+    target: &mut tiny_skia::Pixmap,
+    filters: &[FilterFn],
+    bounds: &Rect,
+    width: u32,
+    height: u32,
+) {
+    let mut filtered = target.clone();
+    for f in filters {
+        match f {
+            FilterFn::Blur(sigma) => filtered = gaussian_blur(&filtered, *sigma),
+            other => apply_color_filter(&mut filtered, other),
+        }
+    }
+    // Write back only the element's border-box region. A hard rect mask scopes
+    // the replace to `bounds`; `Source` blend overwrites the backdrop there with
+    // its filtered counterpart (outside the mask the original target is kept).
+    let mask = build_clip_mask(width, height, Some(*bounds));
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::Source,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    target.draw_pixmap(
+        0,
+        0,
+        filtered.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        mask.as_ref(),
+    );
 }
 
 /// Gaussian blur of a premultiplied-RGBA pixmap via the SVG Filter Effects
@@ -2078,5 +2136,73 @@ mod tests {
         ];
         let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "invert(black) = white");
+    }
+
+    /// `backdrop-filter: grayscale(1)` desaturates the content already painted
+    /// behind the element, clipped to the element's border box. A red backdrop
+    /// turns grey only inside `bounds`; outside `bounds` it stays red.
+    #[test]
+    fn backdrop_filter_grayscale_filters_backdrop_in_bounds() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
+            DisplayCommand::PushBackdropFilter {
+                filters: vec![FilterFn::Grayscale(1.0)],
+                bounds: rect(0.0, 0.0, 32.0, 32.0),
+            },
+            DisplayCommand::PopBackdropFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let (r, g, b, a) = px(&img, 10, 10);
+        assert_eq!(a, 255);
+        assert_eq!(r, g, "inside bounds: grayscale equalises channels");
+        assert_eq!(g, b, "inside bounds: grayscale equalises channels");
+        assert!((50..=58).contains(&r), "red luma ≈ 54 inside bounds (got {r})");
+        assert_eq!(px(&img, 50, 50), (255, 0, 0, 255), "outside bounds backdrop stays red");
+    }
+
+    /// `backdrop-filter: invert(1)` flips the backdrop within `bounds`. A black
+    /// backdrop becomes white inside the element's border box, stays black
+    /// outside it.
+    #[test]
+    fn backdrop_filter_invert_filters_backdrop_in_bounds() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: black },
+            DisplayCommand::PushBackdropFilter {
+                filters: vec![FilterFn::Invert(1.0)],
+                bounds: rect(0.0, 0.0, 32.0, 32.0),
+            },
+            DisplayCommand::PopBackdropFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "inside bounds: invert(black) = white");
+        assert_eq!(px(&img, 50, 50), (0, 0, 0, 255), "outside bounds backdrop stays black");
+    }
+
+    /// `backdrop-filter: blur` softens a sharp backdrop edge. With a black/white
+    /// split at x=32 and a blur covering the whole frame, the column at the edge
+    /// turns mid-grey while the far interior stays close to its original colour.
+    #[test]
+    fn backdrop_filter_blur_softens_backdrop_edge() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 64.0), color: black },
+            DisplayCommand::PushBackdropFilter {
+                filters: vec![FilterFn::Blur(4.0)],
+                bounds: rect(0.0, 0.0, 64.0, 64.0),
+            },
+            DisplayCommand::PopBackdropFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // At the edge the blur mixes black and white toward grey.
+        let (r, _, _, _) = px(&img, 32, 32);
+        assert!((40..=215).contains(&r), "edge column blurred toward grey (r={r})");
+        // Far inside the black half stays dark.
+        let (rl, _, _, _) = px(&img, 2, 32);
+        assert!(rl < 80, "left interior stays near black (r={rl})");
+        // Far inside the white half stays light.
+        let (rr, _, _, _) = px(&img, 62, 32);
+        assert!(rr > 200, "right interior stays near white (r={rr})");
     }
 }

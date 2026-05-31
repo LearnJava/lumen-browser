@@ -52,6 +52,10 @@ use std::path::{Path, PathBuf};
 /// and `52-text-shadow-blur` exercise the `PushFilter`/`PopFilter` Gaussian blur
 /// (the deterministic three-box-blur approximation); `52` carries text so, like
 /// `55`, it is a snapshot-only page not registered in `run.py`.
+/// `30-css-filter` exercises the element-level `filter` chain (`PushFilter` emitted
+/// by `walk` around the box subtree) plus `backdrop-filter`
+/// (`PushBackdropFilter`/`PopBackdropFilter` — the backdrop region under the element
+/// is filtered in place, CSS Filter Effects L1 §6.2).
 /// `18-images` is included because all its `<img>` boxes carry empty `alt`
 /// and explicit `width`/`height`, so the grey placeholder fully reproduces the
 /// (text-free) GPU headless output. `55-text-rendering` exercises the `DrawText`
@@ -89,6 +93,7 @@ const PAGES: &[&str] = &[
     "56-mix-blend-mode",
     "15-box-shadow",
     "52-text-shadow-blur",
+    "30-css-filter",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
