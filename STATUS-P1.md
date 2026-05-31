@@ -6,9 +6,6 @@
 
 ## In progress
 
-**p1-text-wrap-balance** — `text-wrap: balance/pretty` algorithm в `lumen-layout/src/box_tree.rs`
-Next step: implement `balance_wrap()` + `pretty_wrap()` helpers, wire via `text_wrap_style`  `box_tree.rs:2558`
-
 ---
 
 ## Next
@@ -22,6 +19,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-text-wrap-balance** ✅ 2026-05-31 — CSS Text L4 §6.4.2: `text-wrap: balance/pretty` алгоритмы в `lumen-layout/src/box_tree.rs`. `balance_wrap`: binary-search по wrap_width в [widest_word, container_width] — находит минимальную ширину с тем же числом строк что у greedy, выравнивает длины строк. `pretty_wrap`: widow prevention — находит последнее слово предпоследней строки (в т.ч. из merged InlineFrag), вычисляет trial_w, перепрогоняет wrap; принимает если последняя строка получила ≥2 слова. `stable` ≡ `auto` для статического layout. Wiring в `box_tree.rs:2562` через `s.text_wrap_style`. 9 unit-тестов. P4: CSS parsing+ComputedStyle уже готово.
 - **p1-scroll-driven-animations** ✅ 2026-05-31 — CSS Scroll-Driven Animations L1 algorithm stub в `lumen-layout/src/scroll_timeline.rs`: `ScrollTimeline`/`ViewTimeline`/`NamedScrollTimeline`/`NamedViewTimeline`/`ScrollAxis`/`Viewport`; `resolve_scroll_progress` (прогресс скролла [0,1], Block/Inline/X/Y, root/элемент) + `resolve_view_progress` («cover» range, прогресс видимости элемента [0,1]); `collect_named_scroll/view_timelines()` — стабы для P4 CSS wiring (`animation-timeline`, `scroll-timeline-name`, `view-timeline-name`). 15 unit-тестов. P4 handoff: STATUS-P4.md "Needs wiring".
 - **p1-streams-api** ✅ 2026-05-31 — WHATWG Streams Standard в `lumen-js` (чистый JS-шим): `ReadableStream`/`ReadableStreamDefaultController`/`ReadableStreamDefaultReader` (enqueue/close/error/read/cancel/tee/pipeTo/pipeThrough/from); `WritableStream`/`WritableStreamDefaultController`/`WritableStreamDefaultWriter`; `TransformStream`/`TransformStreamDefaultController` (passthrough + custom transform); `TextDecoderStream`/`TextEncoderStream` (поверх TextDecoder/TextEncoder); `ByteLengthQueuingStrategy`/`CountQueuingStrategy`. `Response.body` → ReadableStream, `Response.bodyUsed`. `Blob.prototype.stream()` → ReadableStream. Новый native binding `_lumen_drain_microtasks` (`ctx.execute_pending_job()` loop) для синхронного дренажа QuickJS microtask queue в unit-тестах. 22 тестов, итого lumen-js: 468.
 - **p1-event-classes** ✅ 2026-05-31 — DOM Event class hierarchy (WHATWG UI Events): UIEvent, MouseEvent, KeyboardEvent, InputEvent, FocusEvent, WheelEvent, PointerEvent, DragEvent, ClipboardEvent, CompositionEvent, AnimationEvent, TransitionEvent, StorageEvent, PopStateEvent, HashChangeEvent, ErrorEvent, SubmitEvent, PageTransitionEvent, BeforeUnloadEvent (21 classes). Prototype-chain inheritance. Dispatch helpers: `_lumen_dispatch_rich`, `_lumen_dispatch_mouse_event`, `_lumen_dispatch_key_event`. Shell click now creates proper MouseEvent with coordinates + modifier bitmask. 24 тестов, итого lumen-js: 440.

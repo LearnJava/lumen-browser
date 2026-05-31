@@ -13840,6 +13840,7 @@ mod tests {
         None
     }
 
+    #[allow(dead_code)]
     fn inline_line_count(root: &box_tree::LayoutBox) -> usize {
         let Some(run) = find_inline_run_in(root) else { return 0; };
         let box_tree::BoxKind::InlineRun { lines, .. } = &run.kind else { return 0; };
@@ -13863,7 +13864,7 @@ mod tests {
         let doc = lumen_html_parser::parse(&html);
         let sheet = lumen_css_parser::parse("p { width: 300px; -webkit-line-clamp: 2; font-size: 16px; }");
         let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
-        assert_eq!(inline_line_count(&root), 2, "must have exactly 2 lines after clamp");
+        assert_eq!(twrap_line_count(&root), 2, "must have exactly 2 lines after clamp");
     }
 
     /// line-clamp: 2 → последняя строка оканчивается на «…».
@@ -13886,7 +13887,7 @@ mod tests {
         let doc = lumen_html_parser::parse(&html);
         let sheet = lumen_css_parser::parse("p { width: 300px; -webkit-line-clamp: 1; font-size: 16px; }");
         let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
-        assert_eq!(inline_line_count(&root), 1, "must have exactly 1 line");
+        assert_eq!(twrap_line_count(&root), 1, "must have exactly 1 line");
         let last = inline_last_text(&root);
         assert!(last.ends_with('\u{2026}'), "single line must end with '…', got: {last:?}");
     }
@@ -13910,7 +13911,7 @@ mod tests {
         let doc = lumen_html_parser::parse(&html);
         let sheet = lumen_css_parser::parse("p { width: 300px; line-clamp: 3; font-size: 16px; }");
         let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
-        assert_eq!(inline_line_count(&root), 3);
+        assert_eq!(twrap_line_count(&root), 3);
     }
 
     /// line-clamp совместим с явной высотой блока.
@@ -13923,7 +13924,7 @@ mod tests {
             "p { width: 300px; height: 100px; -webkit-line-clamp: 2; font-size: 16px; }",
         );
         let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
-        assert_eq!(inline_line_count(&root), 2);
+        assert_eq!(twrap_line_count(&root), 2);
     }
 
     // ─── collect_clickable_elements tests ──────────────────────────────────────
@@ -14494,6 +14495,195 @@ mod tests {
         let mut root = lay_full("<div></div>", "");
         let found = set_scroll_position(&mut root, NodeId::from_index(9999), 0.0, 0.0);
         assert!(!found, "should return false for unknown node");
+    }
+
+    // ── text-wrap: balance / pretty ─────────────────────────────────────────
+
+    fn twrap_find_run(b: &LayoutBox) -> Option<&LayoutBox> {
+        if matches!(b.kind, BoxKind::InlineRun { .. }) {
+            return Some(b);
+        }
+        for c in &b.children {
+            if let Some(f) = twrap_find_run(c) {
+                return Some(f);
+            }
+        }
+        None
+    }
+
+    fn twrap_line_count(root: &LayoutBox) -> usize {
+        twrap_find_run(root)
+            .and_then(|b| {
+                if let BoxKind::InlineRun { lines, .. } = &b.kind {
+                    Some(lines.len())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    fn twrap_last_end_x(root: &LayoutBox) -> f32 {
+        twrap_find_run(root)
+            .and_then(|b| {
+                if let BoxKind::InlineRun { lines, .. } = &b.kind {
+                    lines.last().and_then(|l| l.last()).map(|f| f.x + f.width)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0.0)
+    }
+
+    // Fixed8: "aaaa"=32px, "bb"=16px, "cc"=16px, "dd"=16px, space=8px.
+    // Greedy at 80px: ["aaaa"(32) "bb"(16) "cc"(16)] end=80, ["dd"(16)] end=16.
+    // Balance: binary search → wrap_width≈56 → ["aaaa" "bb"] end=56, ["cc" "dd"] end=40.
+
+    #[test]
+    fn text_wrap_balance_preserves_line_count() {
+        let greedy = lay_measured("<p>aaaa bb cc dd</p>", "", 80.0);
+        let balanced = lay_measured("<p>aaaa bb cc dd</p>", "p { text-wrap: balance; }", 80.0);
+        assert_eq!(twrap_line_count(&greedy), 2, "greedy should produce 2 lines");
+        assert_eq!(twrap_line_count(&balanced), 2, "balance must keep same line count");
+    }
+
+    #[test]
+    fn text_wrap_balance_widens_last_line() {
+        let greedy = lay_measured("<p>aaaa bb cc dd</p>", "", 80.0);
+        let balanced = lay_measured("<p>aaaa bb cc dd</p>", "p { text-wrap: balance; }", 80.0);
+        // last line: greedy=16px ("dd"), balanced=40px ("cc dd")
+        assert!(
+            twrap_last_end_x(&balanced) > twrap_last_end_x(&greedy),
+            "balance must widen last line: {} <= {}",
+            twrap_last_end_x(&balanced),
+            twrap_last_end_x(&greedy)
+        );
+    }
+
+    #[test]
+    fn text_wrap_balance_narrows_first_line() {
+        let greedy = lay_measured("<p>aaaa bb cc dd</p>", "", 80.0);
+        let balanced = lay_measured("<p>aaaa bb cc dd</p>", "p { text-wrap: balance; }", 80.0);
+        // first line: greedy=80px, balanced=56px
+        let greedy_end = twrap_find_run(&greedy)
+            .and_then(|b| {
+                if let BoxKind::InlineRun { lines, .. } = &b.kind {
+                    lines.first().and_then(|l| l.last()).map(|f| f.x + f.width)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0.0);
+        let balanced_end = twrap_find_run(&balanced)
+            .and_then(|b| {
+                if let BoxKind::InlineRun { lines, .. } = &b.kind {
+                    lines.first().and_then(|l| l.last()).map(|f| f.x + f.width)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0.0);
+        assert!(
+            balanced_end < greedy_end,
+            "balance must narrow first line: {} >= {}",
+            balanced_end,
+            greedy_end
+        );
+    }
+
+    #[test]
+    fn text_wrap_balance_single_line_is_noop() {
+        // Single-line text must not be touched by balance.
+        let normal = lay_measured("<p>hello</p>", "", 200.0);
+        let balanced = lay_measured("<p>hello</p>", "p { text-wrap: balance; }", 200.0);
+        assert_eq!(twrap_line_count(&normal), 1);
+        assert_eq!(twrap_line_count(&balanced), 1);
+        assert_eq!(twrap_last_end_x(&normal), twrap_last_end_x(&balanced));
+    }
+
+    #[test]
+    fn text_wrap_stable_behaves_like_auto() {
+        // For static layout `stable` is identical to `auto` (stability is an
+        // incremental-editing concern, not a static-render concern).
+        let auto = lay_measured("<p>aaaa bb cc dd</p>", "p { text-wrap: auto; }", 80.0);
+        let stable = lay_measured("<p>aaaa bb cc dd</p>", "p { text-wrap: stable; }", 80.0);
+        assert_eq!(
+            twrap_line_count(&auto),
+            twrap_line_count(&stable),
+            "stable must produce same line count as auto"
+        );
+        assert_eq!(
+            twrap_last_end_x(&auto),
+            twrap_last_end_x(&stable),
+            "stable last line must match auto"
+        );
+    }
+
+    #[test]
+    fn text_wrap_pretty_prevents_widow() {
+        // Greedy: last line is just "dd" (16px). Pretty must widen it to "cc dd" (40px).
+        // Words may be merged into one InlineFrag, so we check end_x, not frag count.
+        let greedy = lay_measured("<p>aaaa bb cc dd</p>", "", 80.0);
+        let pretty = lay_measured("<p>aaaa bb cc dd</p>", "p { text-wrap: pretty; }", 80.0);
+        assert_eq!(twrap_line_count(&pretty), 2, "pretty must keep 2 lines");
+        assert!(
+            twrap_last_end_x(&pretty) > twrap_last_end_x(&greedy),
+            "pretty must widen last line: {} <= {}",
+            twrap_last_end_x(&pretty),
+            twrap_last_end_x(&greedy)
+        );
+    }
+
+    #[test]
+    fn text_wrap_pretty_no_widow_noop() {
+        // If last line already has ≥2 words, pretty must not change anything.
+        // "aaaa bb cc dd ee" at 80px → greedy: ["aaaa bb cc"(80), "dd ee"(40)].
+        // Last line already has 2 frags → pretty is a no-op.
+        let auto = lay_measured("<p>aaaa bb cc dd ee</p>", "", 80.0);
+        let pretty = lay_measured("<p>aaaa bb cc dd ee</p>", "p { text-wrap: pretty; }", 80.0);
+        assert_eq!(
+            twrap_line_count(&auto),
+            twrap_line_count(&pretty),
+            "pretty must not change non-widow layout"
+        );
+        assert_eq!(
+            twrap_last_end_x(&auto),
+            twrap_last_end_x(&pretty),
+            "pretty last line end must match auto when no widow"
+        );
+    }
+
+    #[test]
+    fn text_wrap_nowrap_ignores_balance() {
+        // white-space: nowrap overrides text-wrap — line count must stay 1.
+        let root = lay_measured(
+            "<p>aaaa bb cc dd</p>",
+            "p { white-space: nowrap; text-wrap: balance; }",
+            80.0,
+        );
+        assert_eq!(
+            twrap_line_count(&root),
+            1,
+            "nowrap must produce single line regardless of text-wrap-style"
+        );
+    }
+
+    #[test]
+    fn text_wrap_balance_longer_sequence() {
+        // "aa bb cc dd ee ff" — 6 two-char words × 8px = 16px each, space=8px.
+        // At 80px greedy: 3 lines → balance should equalize.
+        let balanced = lay_measured(
+            "<p>aa bb cc dd ee ff</p>",
+            "p { text-wrap: balance; }",
+            80.0,
+        );
+        let count = twrap_line_count(&balanced);
+        assert!((2..=3).contains(&count), "balanced should have 2-3 lines, got {count}");
+        // Last line must be wider than a single 2-char word (16px).
+        assert!(
+            twrap_last_end_x(&balanced) > 16.0,
+            "last line must have more than one word after balance"
+        );
     }
 
 }
