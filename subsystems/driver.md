@@ -17,24 +17,23 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Deferred
 
-- `screenshot()` — returns Err until task 8A.5 (tinyskia-cpu-raster CPU renderer).
+- `screenshot()` — returns Err; use `screenshot_cpu_rgba/png` (feature `cpu-render`) for deterministic CPU snapshots. GPU readback path planned for 8A.5+.
 - `eval(js)` — returns Err until task 8A.7 integrates persistent JS runtime.
 - Full auto-wait (`WaitCondition::Visible/Stable/NetworkIdle/JsIdle`) — task 8D.
 - Native input injection for click/type — task 8C.
-- Remote transport (BiDi over WebSocket, MCP over stdio) — tasks 8B / 8H.
+- Remote transport (BiDi over WebSocket) — task 8H.
 - CSS selector: descendant/child combinators, pseudo-classes — when needed.
 
 ## Invariants
 
 - `InProcessSession` is single-threaded (`!Send`-interior `FontMeasurer` lifetime).
-- `screenshot()` always returns Err in headless mode — do not change without task 8A.5.
+- `screenshot()` always returns Err — use `screenshot_cpu_rgba/png` (feature `cpu-render`).
 - No winit/wgpu dependency in this crate — keeps it usable in CI without GPU.
 - `navigate()` clears `net_log` and `con_log` — callers must read logs before next navigate.
-
 - `screenshot_cpu_rgba/png` (feature `cpu-render`): renders through the deterministic tiny-skia CPU path for cross-OS pixel-identical snapshots.
-- `driver/tests/snapshot_cpu.rs` (feature `cpu-render`): pixel-compares 34 geometry pages against committed references in `graphic_tests/snapshots/cpu/`.
+- `driver/tests/snapshot_cpu.rs` (feature `cpu-render`): pixel-compares all 57 graphic_tests pages against committed references in `graphic_tests/snapshots/cpu/`. Regenerate: `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render`.
 - `driver/tests/test_00..49.rs`: 50 structural-assert integration tests.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 34 pages.
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages.

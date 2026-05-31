@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(никто ничего не зарезервировал)_
+8A.6 doc-sync — обновление lumen-plan.md/CLAUDE.md/subsystems/driver.md  branch: p3-8a6-doc-sync
+Next step: commit doc changes, merge to main
 
 ## Next
 

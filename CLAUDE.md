@@ -348,102 +348,28 @@ Current coverage — `graphic_tests/COVERAGE.md`.
    ```
    New bug: append with next number (current tail: BUG-022). Fixed: change `OPEN` → `FIXED <date>`, do not delete. WONTFIX: stays in file as-is.
 
-### Planned migration (8A.6) — current scheme is transitional
+### 8A.6 migration — COMPLETE (2026-05-31)
 
-The Python/gdigrab/Edge pipeline (`graphic_tests/run.py`) is a **temporary** solution. Target state (task 8A.6, owner P3):
+The Python/gdigrab/Edge pipeline (`graphic_tests/run.py`) remains a **nightly CI job** (edge-comparison gate). The primary test gate is now:
 
-- Tests move to Rust: `driver/tests/graphic_*.rs` via `lumen-driver` (`InProcessSession`)
-- Each test renders via `session.screenshot()` → offscreen wgpu surface → CPU readback
-- Pixel comparison against committed reference PNGs in `graphic_tests/snapshots/`
-- Software rasterizer (`tiny-skia`, `cfg(test)`-only) ensures cross-OS pixel identity — no GPU driver variance
-- No ffmpeg, no gdigrab, no title bar calibration (`TEST-00` becomes unnecessary)
-- Run in milliseconds: `cargo test -p lumen-driver`
+```bash
+cargo test -p lumen-driver --features cpu-render   # CPU snapshot gate — all 57 pages
+cargo test -p lumen-driver                          # structural assertions — 50 tests
+```
 
-`run.py` moves to a **nightly CI job** (edge-comparison gate), not the primary test gate.
+**Completed subsystems of `cpu_raster` (all display-list primitives):**
+FillRect / FillRoundedRect / DrawBorder / DrawOutline / DrawLinearGradient / DrawRadialGradient /
+DrawConicGradient (libm-free `atan2` approx for cross-OS bit-identity) / DrawSvgPath / DrawImage
+(grey placeholder) / DrawText (bundled Inter via `lumen_font::Rasterizer`) / PushClipRect + PopClip /
+PushScrollLayer + PopScrollLayer / PushOpacity + PopOpacity / PushTransform + PopTransform (bilinear
+resample of page-space layer through affine) / PushBlendMode + PopBlendMode (all 16 CSS modes) /
+PushFilter + PopFilter (Gaussian blur + 7 colour filters) / PushBackdropFilter + PopBackdropFilter /
+PushMaskLinearGradient + PushMaskRadialGradient + PushMaskConicGradient + PushMaskImage + PopMask.
 
-Prerequisites: 8A.1 (`BrowserSession` trait) + 8A.2 (`InProcessSession`) must land first.
-Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
+`PAGES` in `snapshot_cpu.rs` covers all 57 html files in `graphic_tests/`. Regenerate references:
+`SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render`.
 
-**Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
-8A.6(b) framework done — deterministic CPU pixel snapshots:
-`InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 34 geometry pages against
-`graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
-skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
-`SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
-covers FillRect/FillRoundedRect/DrawBorder/DrawOutline, linear+radial gradients (incl.
-repeating; page `39-gradients`), the per-pixel conic gradient (`DrawConicGradient`; no native
-tiny-skia angular shader, so the sweep is computed with a deterministic libm-free `atan2`
-approximation for cross-OS bit-identity — page `40-conic-gradients`), tessellated SVG paths (`DrawSvgPath`; SVG basic shapes
-rect/circle/ellipse/line reuse the rect/rounded-rect/border primitives — page `47-svg-basic`)
-rectangular clipping (`PushClipRect`/`PopClip` + `PushScrollLayer`/`PopScrollLayer`, i.e.
-`overflow: hidden/scroll/auto` — page `14-overflow`; a tiny-skia `Mask` is applied only to draws
-that actually cross a clip edge, so fully-contained content stays byte-identical to the unclipped
-path), and the `<img>` grey placeholder quad (`DrawImage` → `rgba8(217,217,217,255)`; the headless
-CPU path registers no decoded pixels, so it mirrors the GPU renderer's placeholder fallback — page
-`18-images`, all `<img>` have empty `alt`), and text (`DrawText` — glyphs of the bundled Inter
-Regular face rasterized via `lumen_font::Rasterizer` directly at `font_size`, no atlas size-binning,
-then composited through a single coverage `tiny_skia::Mask` so anti-aliased edges blend exactly like
-fills; baseline + advance mirror the GPU `push_text_glyphs`; family/weight/style ignored — only the
-bundled face exists on the CPU path; page `55-text-rendering`, a snapshot-only page **not** registered
-in `run.py` because glyph anti-aliasing always diverges from Edge), and group opacity
-(`PushOpacity`/`PopOpacity`, emitted for `opacity < 1`; the subtree is drawn into a full-size,
-initially-transparent off-screen `tiny_skia::Pixmap` layer pushed on a stack, then composited onto
-the layer below with the group alpha via `draw_pixmap` — CSS Color L3 §3.2 group opacity, faded as a
-unit not per-child; page `13-visibility-opacity`), and 2D transforms
-(`PushTransform`/`PopTransform`, emitted for `transform != none`; the subtree renders into a
-full-size off-screen `tiny_skia::Pixmap` layer in page coordinates, then composites down through
-the box's affine via `draw_pixmap` with bilinear filtering — CSS Transforms L1 §13:
-translate/rotate/scale/skew/matrix2d. The `Mat4` carried by the command is column-major
-(`x'=a·x+c·y+e`, `y'=b·x+d·y+f`) and already bakes in `T(pivot)·M·T(-pivot)` from `transform-origin`,
-so resampling a page-space layer through it lands exactly where the GPU vertex transform would.
-Opacity and transform share one layer stack via `LayerComposite`; nested groups composite back in
-turn so a child transform `B` under a parent `A` yields `A·B`; pages `22-transform` and
-`46-individual-transforms` — the latter exercises the CSS Transforms L2 individual `translate`/
-`rotate`/`scale` properties, which `forward_box_transform` composes in spec order
-translate→rotate→scale→`transform` into the same `Mat4` that emits `PushTransform`, so they reuse the
-identical CPU layer path), and
-`mix-blend-mode` (`PushBlendMode`/`PopBlendMode`, emitted for `mix-blend-mode != normal`; the
-element renders into a transparent full-size layer on the same `LayerComposite` stack, then
-`PopBlendMode` composites it onto the backdrop below with the CSS blend formula via
-`draw_pixmap` carrying the mapped `tiny_skia::BlendMode` — all 16 CSS modes map 1:1, `plus-lighter`
-→ tiny-skia `Plus`. The simple `walk` builder (`build_display_list`, used by the driver CPU/GPU
-snapshot path) now emits `PushBlendMode` ordered Clip → Blend → Opacity, matching `box_layer_ops`
-in the stacking-aware `build_display_list_ordered` used by the shell/GPU; CSS Compositing &
-Blending L1 §5; page `56-mix-blend-mode`), and the CSS `filter` chain
-(`PushFilter`/`PopFilter`, `LayerComposite::Filter`; emitted by `walk` to wrap box-shadow and
-text-shadow blur — `PushFilter { Blur(σ) }` around the shadow `FillRect`/`DrawText` — and by the
-stacking-aware builder for the element's own `filter`. On `PopFilter` the chain is applied
-pixel-wise to the off-screen layer then composited `SourceOver`. **Gaussian blur** uses the SVG
-Filter Effects three-box-blur approximation: radius `r = round((√(4σ²+1)−1)/2)`, three separable
-box-blur passes per axis (running-sum, replicate-edge), integer-only so it is cross-OS bit-identical
-— the exact-match snapshot gate rules out `f32::exp`, same constraint that forced the conic-gradient
-`atan2` approximation. **Colour filters** (brightness/contrast/grayscale/hue-rotate/invert/opacity/
-saturate/sepia) mirror the GPU `apply_filter_fn` shader on un-premultiplied sRGB; `hue-rotate` uses a
-libm-free `sin`/`cos` minimax polynomial for the same determinism reason. CSS Filter Effects L1 §4/§7;
-pages `15-box-shadow` and `52-text-shadow-blur` — `52` carries text so, like `55`, it is snapshot-only,
-not in `run.py`. The simple `walk` builder now also emits the element-level `PushFilter`/`PopFilter`
-(wrapping the box subtree when `style.filter` is non-empty) **and** `backdrop-filter`
-(`PushBackdropFilter`/`PopBackdropFilter`, CSS Filter Effects L1 §6.2): on the matching Push the
-already-painted backdrop under the element bounds is filtered in place — `cpu_raster` clones the base
-layer, runs the filter chain, then blits it back through a rect `Mask` of the element box (`Source`
-blend), so only the region behind the element is affected; `PopBackdropFilter` is a no-op. Page
-`30-css-filter` is now covered (element `filter` row + the `backdrop-filter` scene row), which also
-required fixing BUG-051 — abs-pos `inset:0` height-from-insets in `lay_out_abs_children` (the gradient
-backdrop had collapsed to height 0)).
-The `walk` builder also emits gradient `mask-image` (`PushMaskLinearGradient` /
-`PushMaskRadialGradient` / `PushMaskConicGradient` / `PushMaskImage` → `PopMask`, CSS Masking L1 §4;
-`emit_push_mask` wraps the box subtree as the outermost layer). `cpu_raster` handles them on the same
-`LayerComposite` stack via `LayerComposite::Mask(MaskSpec)`: each `PushMask*` pushes a transparent
-full-size layer the subtree draws into; `PopMask` rasterizes the gradient mask into its own pixmap
-(`render_mask`, reusing the `rasterize_*_gradient` helpers), multiplies the layer's alpha by the mask's
-alpha (`multiply_alpha_by_mask`, integer `(v·m+127)/255` on premultiplied RGBA), then composites the
-result `SourceOver` onto the backdrop. **The mask is the gradient's ALPHA channel** — mirroring the GPU
-`MASK_COMPOSITE_SHADER` (`result = vec4(c.rgb, c.a·m.a)`); `mask-mode: luminance` is not wired for
-gradient masks (the push commands carry no mode), so the `mask-mode: luminance` cell renders the full
-box — a CSS feature gap owned by P4, not a CPU-path divergence. `PushMaskImage` (image source) maps to
-`MaskSpec::None` (the headless CPU path registers no decoded pixels, so the mask is identity, matching
-the GPU fallback). Page `26-mask-image` is covered.
+Next: 8A.7 (shell as first BrowserSession client, Phase 4) — not scheduled.
 
 ---
 
