@@ -6,8 +6,7 @@
 
 ## In progress
 
-**writing-mode vertical layout stub** (CSS Writing Modes L3 §3)  branch: `p1-clickable-nodes`  
-Next step: commit + /lumen-task-finish  `crates/engine/layout/src/vertical.rs`
+_(нет)_
 
 ---
 
@@ -29,6 +28,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-clickable-nodes** ✅ 2026-05-31 — CSS Writing Modes L3 §3: `writing-mode: vertical-rl/lr` layout stub. Новый модуль `lumen-layout/src/vertical.rs`: `lay_out_vertical_block` — axis-swap раскладка (CSS `height` → inline-size, `width` → block-size). `vertical-rl`: дети стекаются справа налево; `vertical-lr`: слева направо. `shift_subtree_x(child, dx)` рекурсивно смещает поддерево. Диспетч из `lay_out()` в `box_tree.rs` по `style.writing_mode`. P4 handoff: CSS parsing уже готово в `style.rs`. 8 unit-тестов, 2100 тестов lumen-layout.
 - **p1-antidetect-layer1** ✅ 2026-05-31 — 9A Layer 1: surface API без automation-маркеров (ADR-007). Новый модуль `lumen-js/src/surface_api.rs`: `install_surface_api_protection` — seals automation-globals (webdriver остаётся absent, __playwright/__selenium_*/__webdriver_*/_phantom/domAutomation заморожены как non-configurable undefined через `Object.defineProperty`); добавляет стандартные browser-совместимые свойства `navigator` (`appName="Netscape"`, `vendor="Google Inc."`, `product="Gecko"`, `productSub`, `cookieEnabled`, `doNotTrack`, `plugins=[]`, `mimeTypes=[]`). 11 unit-тестов в `surface_api.rs`. 19 runtime-тестов в `crates/js/tests/no_automation_markers.rs` (новый integration test файл): проверяют отсутствие маркеров Selenium/CDP/Playwright/WebDriver/PhantomJS при полной DOM-инициализации, корректность `isTrusted`, наличие стандартных nav-свойств. Итого lumen-js: 580 тестов (+30).
 - **p1-auto-wait** ✅ 2026-05-31 — 8D Auto-wait inside engine: `WaitCondition::Visible` проверяет border_box.width>0 && height>0 (display:none-элементы не создают layout-бокс → автоматически false); `WaitCondition::NetworkIdle` через счётчик `active_network_requests` (инкремент перед HTTP-fetch, saturating_sub после); `WaitCondition::JsIdle` через `pending_js_microtasks` + `pub fn set_pending_js_tasks(n)` для shell-интеграции с QuickJS microtask loop. Все три условия задокументированы для async-расширения. 5 новых тестов (29 итого в session::tests), clippy чист. Реализовано в `crates/driver/src/session.rs`.
 - **p1-message-channel-clipboard** ✅ 2026-05-31 — MessageChannel/MessagePort (WHATWG HTML §8.3.4-§8.3.5): два entangled-порта, postMessage через queueMicrotask, structuredClone-копия данных, onmessage auto-start (Object.defineProperty setter), start()/close(), addEventListener/removeEventListener. navigator.clipboard: readText/writeText → Promise (делегируют к `_lumen_clipboard_read/_write` когда shell их зарегистрирует, иначе '' / void). navigator.permissions: query({ name }) → Promise<PermissionStatus>; 'denied' для AV-сенсоров, 'granted' иначе. window.isSecureContext=true / crossOriginIsolated=false. 20 тестов, итого lumen-js: 550.
