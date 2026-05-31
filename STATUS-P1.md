@@ -6,8 +6,7 @@
 
 ## In progress
 
-MessageChannel/MessagePort + navigator.clipboard + isSecureContext + navigator.permissions  branch: p1-message-channel-clipboard
-Next step: add JS shim in crates/js/src/dom.rs — MessageChannel/MessagePort classes
+_(нет)_
 
 ---
 
@@ -22,6 +21,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-message-channel-clipboard** ✅ 2026-05-31 — MessageChannel/MessagePort (WHATWG HTML §8.3.4-§8.3.5): два entangled-порта, postMessage через queueMicrotask, structuredClone-копия данных, onmessage auto-start (Object.defineProperty setter), start()/close(), addEventListener/removeEventListener. navigator.clipboard: readText/writeText → Promise (делегируют к `_lumen_clipboard_read/_write` когда shell их зарегистрирует, иначе '' / void). navigator.permissions: query({ name }) → Promise<PermissionStatus>; 'denied' для AV-сенсоров, 'granted' иначе. window.isSecureContext=true / crossOriginIsolated=false. 20 тестов, итого lumen-js: 550.
 - **p1-mcp-shell-integration** ✅ 2026-05-31 — MCP-сервер для AI-агентов (8B, §6.11). `lumen-mcp` крейт: `McpServer<S,T>` (sync `run()`), `StdioTransport`/`TcpTransport`/`VecTransport` (тесты); `protocol.rs` (JSON-RPC 2.0 types). 5 ресурсов: `screenshot`/`a11y_tree`/`layout`/`console`/`network`. 7 инструментов: `navigate`/`click`/`type`/`scroll`/`wait`/`eval`/`query`. Shell integration: `--mcp [url]` (stdio) + `--mcp-port N [url]` (TCP) — `extract_mcp_mode()` + `run_mcp_mode()` в `shell/src/main.rs`. 15 unit-тестов (12 server + 3 transport). `lumen-mcp` добавлен в workspace deps + `lumen-shell` deps.
 - **p1-form-validation** ✅ 2026-05-31 — Form Constraint Validation API (HTML LS §4.10.21) + `requestIdleCallback`/`cancelIdleCallback` в `lumen-js`. `ValidityState` (11 флагов: valueMissing/typeMismatch/patternMismatch/tooLong/tooShort/rangeUnderflow/rangeOverflow/stepMismatch/badInput/customError/valid). `_compute_validity(el)` вычисляет ValidityState по `required`, `pattern`, `maxlength`/`minlength`, `min`/`max`/`step`, `type=email|url|number`. `element.validity`, `.validationMessage`, `.willValidate`, `.checkValidity()` (↑ `invalid` event), `.reportValidity()`, `.setCustomValidity(msg)` в `_lumen_make_element`; `.elements` (multi-query collect), `.noValidate`. `element.value`/`type`/`name`/`checked` — reflected через `_input_values` map (persists across re-calls). `requestIdleCallback(cb, opts)` — setTimeout-based stub (50ms delay, IdleDeadline.timeRemaining=50); `cancelIdleCallback(id)`. `window.ValidityState`/`requestIdleCallback`/`cancelIdleCallback` exports. 33 тестов (530 итого в lumen-js).
 - **p1-match-media** ✅ 2026-05-31 — `window.matchMedia(query)` + `MediaQueryList` (CSS Media Queries L4 §4.2). `_lumen_match_media(q, w, h, dark, rm)` Rust binding в `crates/js/src/dom.rs` (без захватов — `parse_media_query` + `MediaContext` чистые). `MediaQueryList` JS-класс: `media`/`matches`/`onchange`/`addListener`/`removeListener`/`addEventListener('change')`/`removeEventListener`/`dispatchEvent`. `MediaQueryListEvent extends Event`. `_lumen_deliver_media_changes(w,h,dark,rm)` пробегает по `_mqlRegistry` и фаерит `change` только если `matches` флипнулся. Shell: `PersistentJs::deliver_media_query_changes(w,h,dark)` вызывается из `relayout()` после `update_viewport_size`. 13 тестов (497 итого в lumen-js).
