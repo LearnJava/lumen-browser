@@ -1209,6 +1209,44 @@ impl Document {
         }
     }
 
+    /// Insert `new_node` immediately before `reference` in `reference`'s parent.
+    ///
+    /// If `reference` has no parent, `new_node` is left without a parent. If
+    /// `new_node` already has a parent it is detached first.
+    pub fn insert_before(&mut self, new_node: NodeId, reference: NodeId) {
+        self.detach(new_node);
+        let parent = match self.nodes[reference.index()].parent {
+            Some(p) => p,
+            None => return,
+        };
+        let siblings = &mut self.nodes[parent.index()].children;
+        let pos = siblings
+            .iter()
+            .position(|&n| n == reference)
+            .unwrap_or(siblings.len());
+        siblings.insert(pos, new_node);
+        self.nodes[new_node.index()].parent = Some(parent);
+    }
+
+    /// Deep-clone `node` and (if `deep`) all its descendants.
+    ///
+    /// Returns the `NodeId` of the new root clone. The clone has no parent.
+    /// Does not copy template content maps or shadow roots — those require
+    /// explicit re-attachment by the caller.
+    pub fn deep_clone(&mut self, node: NodeId, deep: bool) -> NodeId {
+        let data = self.nodes[node.index()].data.clone();
+        let clone = self.alloc(data);
+        if deep {
+            let children: Vec<NodeId> = self.nodes[node.index()].children.clone();
+            for child in children {
+                let child_clone = self.deep_clone(child, true);
+                self.nodes[clone.index()].children.push(child_clone);
+                self.nodes[child_clone.index()].parent = Some(clone);
+            }
+        }
+        clone
+    }
+
     // ── GC integration: JS wrapper reference tracking ─────────────────────────
 
     /// Increment the JS wrapper reference count for `node_id`.
