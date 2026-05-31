@@ -97,6 +97,10 @@ use std::path::{Path, PathBuf};
 /// is registered, mirroring the GPU renderer's skip for unregistered URLs; the
 /// coloured box geometry + DrawBorder + DrawText still captures the layout
 /// structure).
+/// SVG path stroke page added in б-20: `54-svg-path-stroke` (open/closed SVG
+/// `<path>` elements with `fill="none"` + `stroke`, and paths with both fill and
+/// stroke — the stroke tessellator (`tessellate_stroke`) emits triangles as
+/// `DrawSvgPath` just like fill, so cpu_raster handles both without a new primitive).
 const PAGES: &[&str] = &[
     "00-calibration",
     "01-sanity",
@@ -157,6 +161,8 @@ const PAGES: &[&str] = &[
     // б-19: vertical-align inline boxes; background-origin layout geometry
     "24-vertical-align",
     "53-background-origin",
+    // б-20: SVG path stroke — open/closed stroked paths via tessellate_stroke → DrawSvgPath
+    "54-svg-path-stroke",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
