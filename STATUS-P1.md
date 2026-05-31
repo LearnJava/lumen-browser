@@ -6,8 +6,7 @@
 
 ## In progress
 
-**Behavioral mimicry (9E)**  branch: `p1-behavioral-mimicry`
-Next step: cargo clippy + tests → commit  `crates/shell/src/input/humanlike.rs`
+_(нет)_
 
 ---
 
@@ -17,8 +16,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | **Behavioral mimicry (9E)** — opt-in `InputMode::HumanLike`: Bézier-curve mouse paths between coordinates, Gaussian inter-keystroke timing, pre-click dwell time. `shell/src/input/humanlike.rs`. Requires native input injection ✅ | `lumen-shell` | M | none |
-| 2 | **Tab lifecycle state machine (10A)** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + transition triggers (idle timeout + memory pressure + LRU). Per-user timeouts (5 min / 30 min / pinned). `shell/src/tab_lifecycle/state.rs` | `lumen-shell` | L | none |
+| 1 | **Tab lifecycle state machine (10A)** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + transition triggers (idle timeout + memory pressure + LRU). Per-user timeouts (5 min / 30 min / pinned). `shell/src/tab_lifecycle/state.rs` | `lumen-shell` | L | none |
 | 3 | **Download manager** — `DownloadManager` в `shell/src/download/manager.rs`: `start_download(url, dest)` → HTTP stream → progress channel → file write. Commands: `StartDownload`, `CancelDownload`, `OpenDownload`. `DownloadBar` floating Panel (bottom). See `lumen-plan.md §7D.1` | `lumen-shell`, `lumen-network` | M | none |
 | 4 | **Service Worker API stub** — `ServiceWorkerContainer.register(url)` → `ServiceWorkerRegistration`; `install`/`activate`/`fetch` events; registration persisted in `lumen-storage`; `navigator.serviceWorker` в `lumen-js`. See `lumen-plan.md §8E` | `lumen-js`, `lumen-storage` | L | none |
 | 5 | **Web Worker** — `new Worker(script_url)`: separate `QuickJsRuntime` on `std::thread`; `postMessage`/`onmessage`/`terminate`; message passing via `mpsc`. `lumen-js/src/worker.rs`. See `lumen-plan.md §8E` | `lumen-js` | L | none |
@@ -50,6 +48,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-behavioral-mimicry** ✅ 2026-06-01 — Behavioral mimicry (9E): `InputMode::HumanLike`, `HumanLikeSender` в `shell/src/input/humanlike.rs`. Bézier-кривые мышиного пути (кубик, 2 рандомных контрольных точки ±30% длины, N waypoints). Gaussian межнажатная задержка (Box-Muller, mean/sigma). Pre-click dwell. `InputCommand::MouseMove` + `dispatch_mouse_move()` в main.rs. Xorshift-64 PRNG без зависимостей. 29 новых тестов, 314 итого lumen-shell.
 - **p1-native-input-injection** ✅ 2026-05-31 — Native input injection (8C): `InputCommand` (Click/TypeText/Scroll) через `mpsc`-канал, дрейнируется в `about_to_wait`. `handle_click_at()` вынесен из winit `MouseInput` handler — reusable для инжекций и OS-кликов. `inject_char()` фаерит `keydown`+`input`+`keyup` через `_lumen_dispatch_key_event` (isTrusted=true). `escape_js_string_char()` для безопасной вставки символов в JS-строки. `focused_node: Option<NodeId>` — трекинг фокуса для TypeText. 8 unit-тестов в `input.rs`. `crates/shell/src/input.rs`, `crates/shell/src/main.rs`.
 - **p1-http-fingerprint** ✅ 2026-05-31 — HTTP fingerprint Chrome-matching (9C): подключил `build_request_headers()`, `H2Settings::for_profile()`, `ClientHintsProfile` к реальным HTTP-запросам. `fingerprint_profile` проброшен через весь стек: `HttpClient` → `fetch_with_redirect` → `fetch_single` → `do_request`/`h2_do_request` → `write_request`. `H2Conn::connect_with_profile()` — новый метод для SETTINGS Chrome-matching. 31 интеграционный тест. `crates/network/src/lib.rs`, `crates/network/src/h2/conn.rs`.
 - **p1-tls-fingerprint** ✅ 2026-05-31 — TLS fingerprint Chrome-matching (9B): `tls.rs` → `tls/mod.rs` + `tls/fingerprint.rs`. `TlsProfile` enum (Standard/Strict/Tor), `build_client_config()` с CryptoProvider (aws_lc_rs), Chrome 130 AEAD cipher order + kx_groups X25519→secp256r1→secp384r1. `TlsHandshakeInfo`: `ja3_raw_string()` + `ja4_raw_string()`. `CHROME_130_JA3_SNAPSHOT` (15 cipher suites, 16 extensions, 3 named groups) + `CHROME_130_JA4_SNAPSHOT` (sorted ciphers/exts, cipher/ext counts). `HttpClient.tls_profile` field + `with_tls_profile()` getter/builder. 25 интеграционных тестов (lumen-network/tests/tls_integration.rs) + 13 unit-тестов в fingerprint.rs.
