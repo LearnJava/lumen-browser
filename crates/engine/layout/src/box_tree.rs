@@ -23,6 +23,7 @@ use crate::style::{
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
     ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextOverflow, TextWrapMode,
+    TextWrapStyle,
     VerticalAlign, WordBreak,
 };
 use crate::counters::{precompute_counters, CounterMap};
@@ -2555,7 +2556,26 @@ fn lay_out(
                 content_width
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
-            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap);
+            let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap);
+            // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
+            // wrapping is active (wrap_width is finite) and text actually wraps.
+            *lines = if wrap_width.is_finite() {
+                match s.text_wrap_style {
+                    TextWrapStyle::Balance => balance_wrap(
+                        segments, wrap_width, raw_lines, s.font_size, text_indent_px,
+                        viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                    ),
+                    TextWrapStyle::Pretty => pretty_wrap(
+                        segments, wrap_width, raw_lines, s.font_size, text_indent_px,
+                        viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                    ),
+                    // Auto / Stable: greedy result unchanged.
+                    // Stable stability is about incremental editing; for static layout it's identical to auto.
+                    TextWrapStyle::Auto | TextWrapStyle::Stable => raw_lines,
+                }
+            } else {
+                raw_lines
+            };
             align_lines(lines, content_width, s.text_align, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
@@ -4698,6 +4718,167 @@ fn char_break_offset(
     }
     word.len()
 }
+
+// ─── text-wrap: balance / pretty (CSS Text L4 §6.4.2) ───────────────────────
+
+/// Returns the pixel width of the widest single word across all text segments.
+/// Used as the lower-bound for `balance_wrap` binary search (cannot wrap narrower
+/// than the longest token without breaking words).
+fn widest_word(segments: &[InlineSegment], m: &dyn TextMeasurer) -> f32 {
+    let mut max_w: f32 = 1.0;
+    for seg in segments {
+        if seg.img_src.is_some() {
+            max_w = max_w.max(seg.img_width);
+            continue;
+        }
+        let em = seg.style.font_size;
+        let ls = seg.style.letter_spacing;
+        let tab = seg.style.tab_size;
+        for raw in seg.text.split_whitespace() {
+            let (display, _) = strip_soft_hyphens(raw);
+            let w = measure_text_w(&display, em, ls, tab, m);
+            max_w = max_w.max(w);
+        }
+    }
+    max_w
+}
+
+/// CSS Text L4 §6.4.2 `text-wrap: balance` — redistributes line breaks so
+/// that all lines are roughly equal in length.
+///
+/// Binary-searches the interval `[widest_word, container_width]` for the
+/// minimum wrap width that produces the same number of lines as the greedy
+/// result.  20 iterations → sub-pixel convergence for any container up to
+/// ~500 000 px.  Single-line text is returned unchanged (nothing to balance).
+#[allow(clippy::too_many_arguments)]
+fn balance_wrap(
+    segments: &[InlineSegment],
+    container_width: f32,
+    greedy_lines: Vec<Vec<InlineFrag>>,
+    container_font_size: f32,
+    text_indent: f32,
+    viewport: Size,
+    m: &dyn TextMeasurer,
+    hyphens: Hyphens,
+    hp: &dyn HyphenationProvider,
+    white_space: crate::style::WhiteSpace,
+    word_break: WordBreak,
+    overflow_wrap: OverflowWrap,
+) -> Vec<Vec<InlineFrag>> {
+    let target = greedy_lines.len();
+    if target <= 1 {
+        return greedy_lines;
+    }
+    let min_w = widest_word(segments, m);
+    let mut lo = min_w;
+    let mut hi = container_width;
+    for _ in 0..20 {
+        if hi - lo < 0.5 {
+            break;
+        }
+        let mid = (lo + hi) * 0.5;
+        let n = wrap_inline_run(
+            segments, mid, container_font_size, text_indent, viewport,
+            m, hyphens, hp, white_space, word_break, overflow_wrap,
+        ).len();
+        if n <= target {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    // Only re-wrap if we found a genuinely narrower balanced width.
+    if hi < container_width - 0.5 {
+        wrap_inline_run(
+            segments, hi, container_font_size, text_indent, viewport,
+            m, hyphens, hp, white_space, word_break, overflow_wrap,
+        )
+    } else {
+        greedy_lines
+    }
+}
+
+/// CSS Text L4 §6.4.2 `text-wrap: pretty` — prevents typographic widows.
+///
+/// A widow occurs when the last line contains only a single fragment.
+/// This function finds a wrap width that moves one word from the penultimate
+/// line onto the last line, so the last line has ≥ 2 fragments.
+/// The total line count may increase by at most 1.
+#[allow(clippy::too_many_arguments)]
+fn pretty_wrap(
+    segments: &[InlineSegment],
+    container_width: f32,
+    greedy_lines: Vec<Vec<InlineFrag>>,
+    container_font_size: f32,
+    text_indent: f32,
+    viewport: Size,
+    m: &dyn TextMeasurer,
+    hyphens: Hyphens,
+    hp: &dyn HyphenationProvider,
+    white_space: crate::style::WhiteSpace,
+    word_break: WordBreak,
+    overflow_wrap: OverflowWrap,
+) -> Vec<Vec<InlineFrag>> {
+    // A "widow" is a last line with exactly one word. Words may be merged into a
+    // single InlineFrag, so check word count, not frag count.
+    let last_word_count: usize = greedy_lines
+        .last()
+        .map(|l| l.iter().map(|f| f.text.split_whitespace().count()).sum())
+        .unwrap_or(0);
+    if last_word_count != 1 || greedy_lines.len() < 2 {
+        return greedy_lines;
+    }
+    let target = greedy_lines.len();
+    let penult = &greedy_lines[greedy_lines.len() - 2];
+    if penult.is_empty() {
+        return greedy_lines;
+    }
+    let penult_end = penult.last().map(|f| f.x + f.width).unwrap_or(0.0);
+    let space_w = m.char_width(' ', container_font_size);
+    // The penultimate line's last frag may be merged (e.g. "aaaa bb cc").
+    // Extract the last word's width to find where a tighter wrap would push it down.
+    let last_frag = penult.last().unwrap();
+    let last_word_w = last_frag
+        .text
+        .split_whitespace()
+        .last()
+        .map(|w| {
+            let (display, _) = strip_soft_hyphens(w);
+            measure_text_w(
+                &display,
+                last_frag.style.font_size,
+                last_frag.style.letter_spacing,
+                0.0,
+                m,
+            )
+        })
+        .unwrap_or(last_frag.width);
+
+    // Width at which the last word of the penultimate line wraps to the last line,
+    // eliminating the widow.
+    let trial_w = (penult_end - last_word_w - space_w).max(widest_word(segments, m));
+
+    if trial_w >= container_width - 0.5 {
+        return greedy_lines;
+    }
+    let trial = wrap_inline_run(
+        segments, trial_w, container_font_size, text_indent, viewport,
+        m, hyphens, hp, white_space, word_break, overflow_wrap,
+    );
+    // Accept if the new last line has ≥ 2 words (merged or not) and line count
+    // didn't blow up by more than 1 line.
+    let trial_last_words: usize = trial
+        .last()
+        .map(|l| l.iter().map(|f| f.text.split_whitespace().count()).sum())
+        .unwrap_or(0);
+    if trial_last_words >= 2 && trial.len() <= target + 1 {
+        trial
+    } else {
+        greedy_lines
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
 /// `pre_space` / `post_space` (inline box model: margin + border + padding).
