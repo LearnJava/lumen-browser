@@ -110,7 +110,12 @@ impl QuickJsRuntime {
     /// `idb_backend` — per-origin IndexedDB persistence (`lumen_storage::IdbStore`
     ///   over a `StorageBackend`). Pass the same backend for one origin across
     ///   reloads so databases survive; `None` keeps IndexedDB in-heap only.
+    /// `sw_backend` — per-origin Service Worker registration persistence
+    ///   (`lumen_storage::SwStore` over a `StorageBackend`). Pass the same backend
+    ///   for one origin across reloads so SW registrations survive; `None` keeps
+    ///   registrations in-session only.
     /// Pass `None` for providers in sandboxed contexts or unit tests.
+    #[allow(clippy::too_many_arguments)]
     pub fn install_dom(
         &self,
         doc: Arc<Mutex<Document>>,
@@ -119,6 +124,7 @@ impl QuickJsRuntime {
         ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
         ls_store: Option<Arc<Mutex<WebStorage>>>,
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+        sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     ) -> JsResult<()> {
         let ls = ls_store.unwrap_or_else(|| Arc::new(Mutex::new(WebStorage::default())));
         let ss = Arc::new(Mutex::new(WebStorage::default()));
@@ -156,6 +162,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.lazy_img_requests),
                 None,
                 idb_backend,
+                sw_backend,
                 Arc::clone(&self.scroll_states),
                 Arc::clone(&self.pending_scrolls),
                 Arc::clone(&self.computed_styles),

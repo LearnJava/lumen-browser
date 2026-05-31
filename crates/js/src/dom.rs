@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsWebSocketProvider, JsWsEvent};
+use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
 use lumen_core::url::Url;
 use lumen_dom::{
     Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
@@ -149,11 +149,12 @@ pub fn install_dom_api(
     lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     idb_backend: Option<Arc<dyn IdbBackend>>,
+    sw_backend: Option<Arc<dyn SwBackend>>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, scroll_states, pending_scrolls, computed_styles)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -181,6 +182,7 @@ fn install_primitives(
     page_url: String,
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     idb_backend: Option<Arc<dyn IdbBackend>>,
+    sw_backend: Option<Arc<dyn SwBackend>>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
@@ -491,7 +493,7 @@ fn install_primitives(
         );
     }
 
-    // ── Service Worker / Cache Storage (in-memory scaffold) ─────────────────
+    // ── Service Worker / Cache Storage ───────────────────────────────────────
     {
         // SW registrations: origin+scope+scriptUrl stored in-memory.
         // Key: (origin, scope) → script_url
@@ -515,6 +517,33 @@ fn install_primitives(
             "_lumen_sw_has_registration",
             move |origin: String| -> bool {
                 sw.lock().unwrap().keys().any(|(o, _)| *o == origin)
+            }
+        );
+
+        let sw = Arc::clone(&sw_regs);
+        reg!(
+            "_lumen_sw_unregister",
+            move |origin: String, scope: String| {
+                sw.lock().unwrap().remove(&(origin, scope));
+            }
+        );
+
+        // Persistence bindings — forward to SwBackend when provided.
+        let sw_be = sw_backend.clone();
+        reg!(
+            "_lumen_sw_persist",
+            move |_origin: String, snapshot: String| {
+                if let Some(ref be) = sw_be {
+                    be.save(&snapshot);
+                }
+            }
+        );
+
+        let sw_be2 = sw_backend.clone();
+        reg!(
+            "_lumen_sw_load",
+            move |_origin: String| -> Option<String> {
+                sw_be2.as_ref().and_then(|be| be.load())
             }
         );
 
@@ -3339,38 +3368,192 @@ var caches = {
     },
 };
 
+// ── Service Worker lifecycle helpers ─────────────────────────────────────────
+
 var _sw_registrations = {};
-var _sw_container = {
+
+function _sw_make_event_target() {
+    var _listeners = {};
+    return {
+        addEventListener: function(type, fn) {
+            if (!_listeners[type]) _listeners[type] = [];
+            _listeners[type].push(fn);
+        },
+        removeEventListener: function(type, fn) {
+            if (!_listeners[type]) return;
+            _listeners[type] = _listeners[type].filter(function(f) { return f !== fn; });
+        },
+        dispatchEvent: function(evt) {
+            var handlers = _listeners[evt.type] || [];
+            var cb = this['on' + evt.type];
+            if (typeof cb === 'function') cb.call(this, evt);
+            for (var i = 0; i < handlers.length; i++) { handlers[i].call(this, evt); }
+            return !evt.defaultPrevented;
+        },
+    };
+}
+
+function _sw_make_worker(scriptUrl, initState) {
+    var et = _sw_make_event_target();
+    var w = Object.assign({
+        scriptURL: String(scriptUrl),
+        state: initState || 'installing',
+        onstatechange: null,
+        onerror: null,
+        postMessage: function() {},
+    }, et);
+    w._setState = function(s) {
+        w.state = s;
+        var e = new Event('statechange');
+        et.dispatchEvent.call(w, e);
+    };
+    return w;
+}
+
+function _sw_make_registration(scope, scriptUrl) {
+    var et = _sw_make_event_target();
+    var reg = Object.assign({
+        scope: scope,
+        scriptURL: String(scriptUrl),
+        updateViaCache: 'imports',
+        installing: null,
+        waiting: null,
+        active: null,
+        onupdatefound: null,
+        update: function() { return Promise.resolve(); },
+        unregister: function() {
+            _lumen_sw_unregister(_sw_origin, scope);
+            delete _sw_registrations[scope];
+            _sw_persist();
+            return Promise.resolve(true);
+        },
+    }, et);
+    return reg;
+}
+
+function _sw_persist() {
+    try {
+        var snap = [];
+        for (var sc in _sw_registrations) {
+            var r = _sw_registrations[sc];
+            snap.push({
+                scope: r.scope,
+                scriptURL: r.scriptURL,
+                state: r.active ? 'activated' : (r.waiting ? 'installed' : 'installing'),
+            });
+        }
+        _lumen_sw_persist(_sw_origin, JSON.stringify(snap));
+    } catch(e) {}
+}
+
+function _sw_run_lifecycle(reg) {
+    var sw = reg.installing;
+    // Notify updatefound
+    var uf = new Event('updatefound');
+    reg.dispatchEvent(uf);
+    // installing → install event → installed → activating → activate → activated
+    setTimeout(function() {
+        // Fire install event (SW spec §8.2.4)
+        var installEvt = new Event('install');
+        installEvt.waitUntil = function() {};
+        if (sw.state === 'installing') {
+            sw._setState('installed');
+            reg.waiting = sw;
+            reg.installing = null;
+            _lumen_sw_register(_sw_origin, reg.scope, reg.scriptURL);
+            setTimeout(function() {
+                reg.waiting = null;
+                sw._setState('activating');
+                reg.active = sw;
+                _sw_container.controller = sw;
+                var activateEvt = new Event('activate');
+                activateEvt.waitUntil = function() {};
+                sw._setState('activated');
+                _sw_persist();
+                // Fire controllerchange
+                var ce = new Event('controllerchange');
+                _sw_container.dispatchEvent(ce);
+                // Resolve ready
+                if (_sw_ready_resolve) {
+                    _sw_ready_resolve(reg);
+                    _sw_ready_resolve = null;
+                }
+            }, 0);
+        }
+    }, 0);
+}
+
+// Restore registrations saved from a previous page load.
+(function() {
+    try {
+        var snap = _lumen_sw_load(_sw_origin);
+        if (snap) {
+            var arr = JSON.parse(snap);
+            for (var i = 0; i < arr.length; i++) {
+                var item = arr[i];
+                var reg = _sw_make_registration(item.scope, item.scriptURL);
+                if (item.state === 'activated' || item.state === 'installed') {
+                    var sw = _sw_make_worker(item.scriptURL, item.state);
+                    reg.active = sw;
+                    _sw_registrations[item.scope] = reg;
+                    _lumen_sw_register(_sw_origin, item.scope, item.scriptURL);
+                }
+            }
+        }
+    } catch(e) {}
+}());
+
+var _sw_ready_resolve = null;
+var _sw_ready_promise = new Promise(function(resolve) {
+    _sw_ready_resolve = resolve;
+    // If already have an active registration, resolve immediately.
+    for (var sc in _sw_registrations) {
+        if (_sw_registrations[sc].active) {
+            resolve(_sw_registrations[sc]);
+            _sw_ready_resolve = null;
+            break;
+        }
+    }
+});
+
+var _sw_container_et = _sw_make_event_target();
+var _sw_container = Object.assign({
+    get controller() {
+        for (var sc in _sw_registrations) {
+            if (_sw_registrations[sc].active) return _sw_registrations[sc].active;
+        }
+        return null;
+    },
+    get ready() { return _sw_ready_promise; },
+    oncontrollerchange: null,
+    onmessage: null,
+    onmessageerror: null,
     register: function(scriptUrl, options) {
         var scope = (options && options.scope) ? String(options.scope) : '/';
-        _lumen_sw_register(_sw_origin, scope, String(scriptUrl));
-        var reg = {
-            scope: scope,
-            scriptURL: String(scriptUrl),
-            active: null,
-            installing: null,
-            waiting: null,
-            update: function() { return Promise.resolve(); },
-            unregister: function() { return Promise.resolve(true); },
-        };
+        var existing = _sw_registrations[scope];
+        if (existing && existing.active && existing.scriptURL === String(scriptUrl)) {
+            return Promise.resolve(existing);
+        }
+        var reg = _sw_make_registration(scope, scriptUrl);
+        var sw = _sw_make_worker(scriptUrl, 'installing');
+        reg.installing = sw;
         _sw_registrations[scope] = reg;
+        // Register immediately in Rust-side map (for _lumen_sw_has_registration sync checks).
+        _lumen_sw_register(_sw_origin, scope, String(scriptUrl));
+        _sw_run_lifecycle(reg);
         return Promise.resolve(reg);
     },
     getRegistration: function(url) {
         var u = url || _sw_origin + '/';
-        for (var scope in _sw_registrations) {
-            if (String(u).indexOf(scope) === 0) return Promise.resolve(_sw_registrations[scope]);
+        for (var sc in _sw_registrations) {
+            if (String(u).indexOf(sc) === 0) return Promise.resolve(_sw_registrations[sc]);
         }
         return Promise.resolve(undefined);
     },
     getRegistrations: function() {
         return Promise.resolve(Object.values(_sw_registrations));
     },
-    ready: Promise.resolve({ scope: '/', active: null }),
-    controller: null,
-    oncontrollerchange: null,
-    onmessage: null,
-};
+}, _sw_container_et);
 
 var navigator = {
     userAgent: 'Lumen/0.0',
@@ -7096,7 +7279,7 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(doc, "", None, None, None, None).unwrap();
+        rt.install_dom(doc, "", None, None, None, None, None).unwrap();
         rt
     }
 
@@ -7845,6 +8028,169 @@ mod tests {
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 
+    #[test]
+    fn sw_registration_has_installing_worker() {
+        let rt = runtime_with_url("https://example.com/");
+        let result = rt
+            .eval(
+                r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                    .then(function(r) { reg = r; });
+                _lumen_drain_microtasks();
+                reg !== null && reg.installing !== null
+                "#,
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sw_worker_has_state_installing() {
+        let rt = runtime_with_url("https://example.com/");
+        let result = rt
+            .eval(
+                r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                _lumen_drain_microtasks();
+                reg.installing.state
+                "#,
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("installing".into()));
+    }
+
+    #[test]
+    fn sw_container_has_event_target() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                r#"
+                typeof navigator.serviceWorker.addEventListener === 'function' &&
+                typeof navigator.serviceWorker.removeEventListener === 'function'
+                "#,
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sw_get_registration_returns_promise() {
+        let rt = runtime_with_url("https://example.com/");
+        rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
+            .unwrap();
+        let result = rt
+            .eval("typeof navigator.serviceWorker.getRegistration('/').then === 'function'")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sw_get_registrations_returns_array() {
+        let rt = runtime_with_url("https://example.com/");
+        rt.eval("navigator.serviceWorker.register('/sw.js');").unwrap();
+        let result = rt
+            .eval(
+                r#"
+                var arr = null;
+                navigator.serviceWorker.getRegistrations()
+                    .then(function(regs) { arr = regs; });
+                _lumen_drain_microtasks();
+                Array.isArray(arr) && arr.length === 1
+                "#,
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sw_ready_property_is_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("typeof navigator.serviceWorker.ready.then === 'function'")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sw_registration_has_event_target() {
+        let rt = runtime_with_url("https://example.com/");
+        let result = rt
+            .eval(
+                r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                _lumen_drain_microtasks();
+                typeof reg.addEventListener === 'function' &&
+                typeof reg.dispatchEvent === 'function'
+                "#,
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sw_persist_and_load_no_throw() {
+        let rt = runtime_with_url("https://example.com/");
+        // Without a backend, persist/load are no-ops — must not throw.
+        rt.eval("_lumen_sw_persist('https://example.com', '[{\"scope\":\"/\"}]');")
+            .unwrap();
+        let result = rt.eval("_lumen_sw_load('https://example.com')").unwrap();
+        assert!(matches!(
+            result,
+            lumen_core::JsValue::Null | lumen_core::JsValue::Undefined
+        ));
+    }
+
+    #[test]
+    fn sw_unregister_removes_registration() {
+        let rt = runtime_with_url("https://example.com/");
+        rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/app/' });")
+            .unwrap();
+        rt.eval(
+            r#"
+            navigator.serviceWorker.getRegistration('/app/')
+                .then(function(reg) { if (reg) reg.unregister(); });
+            _lumen_drain_microtasks();
+            "#,
+        )
+        .unwrap();
+        let result = rt
+            .eval(
+                r#"
+                var arr = null;
+                navigator.serviceWorker.getRegistrations()
+                    .then(function(r) { arr = r; });
+                _lumen_drain_microtasks();
+                arr.length
+                "#,
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn sw_worker_post_message_does_not_throw() {
+        let rt = runtime_with_url("https://example.com/");
+        let result = rt
+            .eval(
+                r#"
+                var threw = false;
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                _lumen_drain_microtasks();
+                try { reg.installing.postMessage('hello'); } catch(e) { threw = true; }
+                !threw
+                "#,
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
     // ── caches API ────────────────────────────────────────────────────────────
 
     #[test]
@@ -8255,7 +8601,7 @@ mod tests {
     fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
         rt
     }
 
@@ -8320,7 +8666,7 @@ mod tests {
     fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
         rt
     }
 
@@ -8444,7 +8790,7 @@ mod tests {
     fn runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
         rt
     }
 
@@ -8501,7 +8847,7 @@ mod tests {
 
     fn runtime_with_url(url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), url, None, None, None, None).unwrap();
+        rt.install_dom(make_doc(), url, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -8614,7 +8960,7 @@ mod tests {
 
     fn runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, ls, None).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, ls, None, None).unwrap();
         rt
     }
 
@@ -10585,7 +10931,7 @@ mod tests {
 
     fn runtime_with_idb(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, Some(backend))
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, Some(backend), None)
             .unwrap();
         rt
     }
@@ -10906,7 +11252,7 @@ mod tests {
     fn runtime_with_fetch(provider: Arc<CaptureFetch>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None).unwrap();
         rt
     }
 
