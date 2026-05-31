@@ -61,6 +61,16 @@ pub struct InProcessSession {
     con_log: Vec<ConsoleEntry>,
     /// Изолированный контекст сессии: cookies, storage, cache, fingerprint profile.
     context: SessionContext,
+    /// Счётчик активных HTTP-запросов (0 = NetworkIdle).
+    ///
+    /// В синхронной модели всегда 0 после возврата из `navigate()`.
+    /// Используется `wait(WaitCondition::NetworkIdle)`.
+    active_network_requests: usize,
+    /// Счётчик pending JS microtask/callback (0 = JsIdle).
+    ///
+    /// В headless-режиме без JS-движка всегда 0.
+    /// Shell-интеграция: вызывать `set_pending_js_tasks()` при изменении очереди.
+    pending_js_microtasks: usize,
 }
 
 impl InProcessSession {
@@ -73,6 +83,8 @@ impl InProcessSession {
             net_log: Vec::new(),
             con_log: Vec::new(),
             context: SessionContext::new(),
+            active_network_requests: 0,
+            pending_js_microtasks: 0,
         }
     }
 
@@ -85,7 +97,19 @@ impl InProcessSession {
             net_log: Vec::new(),
             con_log: Vec::new(),
             context: SessionContext::new(),
+            active_network_requests: 0,
+            pending_js_microtasks: 0,
         }
+    }
+
+    /// Установить количество pending JS microtask/callback для условия `JsIdle`.
+    ///
+    /// Вызывается shell-интеграцией при изменении очереди QuickJS microtask loop.
+    /// В headless-режиме без JS-движка счётчик остаётся 0.
+    ///
+    /// [`WaitCondition::JsIdle`] возвращает `true` когда счётчик == 0.
+    pub fn set_pending_js_tasks(&mut self, count: usize) {
+        self.pending_js_microtasks = count;
     }
 
     /// Загрузить HTML-строку без навигации по URL. Используется для тестов.
@@ -269,7 +293,10 @@ impl BrowserSession for InProcessSession {
             let client = lumen_network::HttpClient::new()
                 .with_sink(sink)
                 .with_content_decoder(Arc::new(lumen_network::BrotliContentDecoder::new()));
-            let bytes = client.fetch(&lumen_url)?;
+            self.active_network_requests += 1;
+            let result = client.fetch(&lumen_url);
+            self.active_network_requests = self.active_network_requests.saturating_sub(1);
+            let bytes = result?;
             return self.run_pipeline(&bytes, Some("text/html"), url.to_owned());
         }
 
@@ -859,10 +886,17 @@ impl InProcessSession {
                 Ok(self.state.is_some())
             }
             WaitCondition::Visible(selector) => {
-                // Проверить что элемент с этим селектором присутствует в layout
-                // и видим (не display:none). В Phase 0 headless нет CSS-свойств видимости,
-                // поэтому просто проверяем наличие layout-бокса.
-                self.layout_box_by_selector(selector).map(|opt| opt.is_some())
+                // 8D.1: элемент считается видимым, если:
+                // (a) имеет layout-бокс (display:none не создаёт боксов),
+                // (b) border-box имеет ненулевые размеры (width > 0 && height > 0).
+                //
+                // visibility:hidden оставляет элемент в layout с ненулевым боксом —
+                // полная проверка требует computed_style "visibility", реализуется в Phase 2
+                // когда ComputedStyle расширяется P4.
+                let Some(bm) = self.layout_box_by_selector(selector)? else {
+                    return Ok(false);
+                };
+                Ok(bm.border_box.width > 0.0 && bm.border_box.height > 0.0)
             }
             WaitCondition::Stable(selector) => {
                 // Стабильность layout: в headless нет animation или JavaScript,
@@ -875,15 +909,18 @@ impl InProcessSession {
                 Ok(!ids.is_empty())
             }
             WaitCondition::NetworkIdle => {
-                // Нет network запросов в headless. Phase 0/Phase 1 сеть — через fetch(),
-                // который синхронен и завершается до возврата navigate().
-                // Для Phase 1 — всегда true (нет активных запросов).
-                Ok(true)
+                // 8D.2: нет активных сетевых запросов.
+                // active_network_requests отслеживается в navigate() вокруг каждого
+                // HTTP-fetch. После возврата из navigate() счётчик == 0.
+                // Полная async-реализация — в WinitSession + shell (Phase 2).
+                Ok(self.active_network_requests == 0)
             }
             WaitCondition::JsIdle => {
-                // Нет JS engine в Phase 0/Phase 1 headless (task persistent-js-runtime).
-                // Для Phase 1 — всегда true.
-                Ok(true)
+                // 8D.3: JS event loop пуст (нет pending microtask/task/rAF).
+                // pending_js_microtasks устанавливается через set_pending_js_tasks().
+                // В headless без JS-движка счётчик == 0 → всегда idle.
+                // Shell-интеграция: обновлять счётчик из QuickJS execute_pending_job() loop.
+                Ok(self.pending_js_microtasks == 0)
             }
         }
     }
@@ -1096,6 +1133,57 @@ mod tests {
         // JS всегда idle в Phase 1 headless (нет JS engine)
         s.wait(WaitCondition::JsIdle, 1000)
             .expect("wait JsIdle");
+    }
+
+    // ── 8D: Auto-wait tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn wait_visible_with_dimensions_succeeds() {
+        let mut s = make_session(
+            r#"<html><body><div id="box" style="width:80px;height:40px;background:blue"></div></body></html>"#,
+        );
+        s.wait(WaitCondition::Visible("#box".into()), 1000)
+            .expect("visible element with explicit size should be found");
+    }
+
+    #[test]
+    fn wait_visible_zero_height_times_out() {
+        // div without content has height=0 — not considered visible (8D.1).
+        let mut s = make_session(r#"<html><body><div id="empty"></div></body></html>"#);
+        let result = s.wait(WaitCondition::Visible("#empty".into()), 100);
+        assert!(result.is_err(), "zero-height element must not satisfy Visible");
+        assert!(result.unwrap_err().to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn wait_network_idle_immediately_after_file_navigate() {
+        // File navigations don't touch active_network_requests → always 0.
+        let mut s = make_session("<html><body>hi</body></html>");
+        assert_eq!(s.active_network_requests, 0);
+        s.wait(WaitCondition::NetworkIdle, 100)
+            .expect("NetworkIdle must be true after file-based navigate");
+    }
+
+    #[test]
+    fn wait_js_idle_false_when_tasks_pending() {
+        let mut s = make_session("<html><body>test</body></html>");
+        s.set_pending_js_tasks(5);
+        let result = s.wait(WaitCondition::JsIdle, 100);
+        assert!(result.is_err(), "JsIdle must timeout when pending tasks > 0");
+        // Clear tasks → idle.
+        s.set_pending_js_tasks(0);
+        s.wait(WaitCondition::JsIdle, 100)
+            .expect("JsIdle must succeed after clearing pending tasks");
+    }
+
+    #[test]
+    fn set_pending_js_tasks_updates_counter() {
+        let mut s = InProcessSession::new();
+        assert_eq!(s.pending_js_microtasks, 0);
+        s.set_pending_js_tasks(3);
+        assert_eq!(s.pending_js_microtasks, 3);
+        s.set_pending_js_tasks(0);
+        assert_eq!(s.pending_js_microtasks, 0);
     }
 
     // ── Тесты для core::ext::BrowserSession adapter ────────────────────────
