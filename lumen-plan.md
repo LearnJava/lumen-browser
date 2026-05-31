@@ -100,7 +100,7 @@
 - ✅ lumen-image — PNG (8/16-bit + palette + tRNS + Adam7) + JPEG baseline (DCT/Huffman/YCbCr) + WebP (VP8 lossy + VP8L lossless, `image-webp`) декодеры; **GIF static + animated** (`decode_gif_animated` → `AnimatedGif { frames, width, height, loop_count }`, `AnimatedFrame { image, delay_cs }`, `frame_index_at(elapsed_ms)`, `frame_at(elapsed_ms)`; shell-handoff: P3 вызывает `frame_at(elapsed_ms)` на каждом тике); `ImageDecoder` trait в `lumen-core::ext`; `supported_mime_types()` для `<picture>` type-filter; AVIF — отдельной задачей
 - ✅ Composite glyphs в lumen-font (Cyrillic 'А' и другие) — `Anchor` enum (Offset/Points), `glyph_resolved` point-alignment; `crates/engine/font/src/glyf.rs`
 - ✅ Свой HTTP/1.1 + TLS через `rustls` — `lumen-network::HttpClient` (redirect, chunked, keep-alive, pool, DoH/DoT, HSTS, auth, CORS, HTTP/2); `crates/network/`
-- ✅ **`lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** — `core/src/ext.rs:1514` + `driver/src/session.rs`; §6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md). 8A.1+8A.2 завершены; 8A.6 (migration graphic_tests) 🟡 in progress.
+- ✅ **`lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** — `core/src/ext.rs:1514` + `driver/src/session.rs`; §6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md). 8A.1–8A.6 завершены; `cpu_raster` покрывает все 57 html-страниц graphic_tests.
 - ✅ **Tab lifecycle инварианты** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)): (1) DOM arena ✅ (10B — `NodeId(u32)` + `to_bytes`/`from_bytes` via bincode); (2) JsRuntime suspend/resume ✅ (10C — `pause/unpause/suspend/resume` в `rquickjs`); (3) layout+paint pure ✅ (10D.1/10D.2 audit). Все три инварианта закрыты.
 
 ---
@@ -297,13 +297,13 @@
 | 7E.4 | ⬜ Network panel (live request log) | `devtools` слушает `NetworkTransport` events | — |
 | 7E.5 | ⬜ JS console (eval в контексте страницы) | `devtools` + `JsRuntime::eval` | — |
 | 8 | ⬜ **`[P3]` Automation API** (§6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md)) | First-class automation surface, фундамент собственных тестов и внешних клиентов | `lumen-driver`, `lumen-mcp-server`, `lumen-bidi-server` |
-| 8A | 🟡 **`[P3]` `lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** (Phase 0) | 8A.1/8A.2/8A.3/8A.4/8A.5 ✅; 8A.6 🟡 (migration in progress); 8A.7 🟡 (Phase 4c done) | `crates/driver/` |
+| 8A | ✅ **`[P3]` `lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** (Phase 0) | 8A.1–8A.6 ✅; 8A.7 ⬜ (Phase 4) | `crates/driver/` |
 | 8A.1 | ✅ `BrowserSession` trait в `lumen-core::ext` + `NullBrowserSession` заглушка (object-safe, `Send`) | `core/src/ext.rs:1514` | 2026-05-29 |
 | 8A.2 | ✅ `InProcessSession` impl | `driver/src/session.rs:53` | 2026-05-28 |
 | 8A.3 | ✅ **`[P3+P2]` Off-screen рендер** (`Renderer::render_to_image() -> Image`) | `paint/src/renderer.rs` | P2/P3: `new_headless()` без winit + `render_to_image()` GPU readback — 2026-05-27 |
 | 8A.4 | ✅ **`[P3+P1]` Structural getters**: `layout_box`, `computed_style` через handle / selector | `layout` exposers: `find_box_by_selector`, `computed_style_by_selector`, `ComputedStyleSnapshot` | 2026-05-27 |
 | 8A.5 | ✅ Software rasterizer для тестов (`tiny-skia` opt-in под `cfg(test)`) | `paint/src/cpu_raster.rs` | детерминизм пикселей Windows/macOS/Linux CI — 2026-05-27 |
-| 8A.6 | 🟡 Миграция `graphic_tests/`: structural-assert Rust-тесты + `graphic_tests/snapshots/*.png` эталоны | `driver/tests/graphic_*.rs` + `graphic_tests/snapshots/` | в процессе, P3; cpu_raster покрывает 33 страницы (б-1..б-14) вкл. mix-blend-mode, filter (blur+color), элементный filter+backdrop-filter (страница 30), mask-image (страница 26) |
+| 8A.6 | ✅ Миграция `graphic_tests/`: structural-assert Rust-тесты + `graphic_tests/snapshots/*.png` эталоны | `driver/tests/test_00..49.rs` + `snapshot_cpu.rs` (57 страниц) | все 57 html-страниц graphic_tests покрыты CPU-снапшотами; `cargo test -p lumen-driver --features cpu-render` — 2026-05-31 |
 | 8A.7 | ⬜ Шелл переписать как первого клиента trait-а (winit/wgpu → один из транспортов) | `shell/src/main.rs` | — |
 | 8B | ✅ **`[P1]` `lumen-mcp` крейт** (Phase 1) | AI-агенты (Claude/GPT/Browser Use) без обёрток | `crates/mcp/` |
 | 8B.1 | ✅ JSON-RPC over stdio + TCP socket transport | `mcp/src/transport.rs` | P1 done 2026-05-31: StdioTransport + TcpTransport + VecTransport (tests) |
