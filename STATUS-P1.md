@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p1-text-wrap-balance** — `text-wrap: balance/pretty` algorithm в `lumen-layout/src/box_tree.rs`
+Next step: implement `balance_wrap()` + `pretty_wrap()` helpers, wire via `text_wrap_style`  `box_tree.rs:2558`
 
 ---
 
