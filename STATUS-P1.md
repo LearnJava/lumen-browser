@@ -6,6 +6,10 @@
 
 ## In progress
 
+**p1-details-dialog** — HTML `<details>/<summary>` toggle + `<dialog>` element (HTML5 §4.11.1 + §4.11.7)
+branch: `p1-details-dialog`
+Next step: Add UA display:none for `<dialog>` без `open` в `style.rs`, затем JS API в `dom.rs`
+
 ---
 
 ## Next
