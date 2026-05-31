@@ -21,6 +21,7 @@ pub mod pagination;
 pub mod property_trees;
 pub mod selection;
 pub mod selector_query;
+pub mod scroll_timeline;
 pub mod snapshot;
 pub mod stacking;
 pub mod style;
@@ -53,6 +54,11 @@ pub use selector_query::{
     find_box_by_selector, query_all, ComputedStyleSnapshot,
 };
 pub use text_iter::{collect_visible_text, TextFragment};
+pub use scroll_timeline::{
+    collect_named_scroll_timelines, collect_named_view_timelines,
+    resolve_scroll_progress, resolve_view_progress,
+    NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
+};
 pub use snapshot::serialize_layout_tree;
 pub use stacking::{
     box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,

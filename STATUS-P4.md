@@ -139,6 +139,15 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
   4. In `renderer.rs` `DrawScrollbar` handler: read the per-command color fields instead of `TRACK_COLOR`/`THUMB_COLOR` constants.
 - **Entry points:** `paint/src/display_list.rs` — `scrollbar_rects()` helper + `walk()` emit block after `PopScrollLayer`. `paint/src/renderer.rs` — `DrawScrollbar` match arm. `SCROLLBAR_WIDTH: f32 = 12.0` const controls default gutter width.
 
+### CSS Scroll-Driven Animations L1 — `ScrollTimeline` / `ViewTimeline` (P1 feature p1-scroll-driven-animations)
+- **Status:** Algorithm ready. `ScrollTimeline`, `ViewTimeline`, `NamedScrollTimeline`, `NamedViewTimeline`, `ScrollAxis`, `Viewport` in `lumen-layout/src/scroll_timeline.rs`. Progress resolvers: `resolve_scroll_progress()` + `resolve_view_progress()`. Collection stubs: `collect_named_scroll_timelines()` + `collect_named_view_timelines()`. All exported from `lumen-layout`. 15 unit tests.
+- **P4 task** (CSS Scroll-Driven Animations L1):
+  1. Add `scroll_timeline_name: Option<String>` + `scroll_timeline_axis: ScrollAxis` to `ComputedStyle`. Parse `scroll-timeline-name` + `scroll-timeline-axis` in `apply_declaration()`. Wire to `collect_named_scroll_timelines()` — iterate layout tree, emit `NamedScrollTimeline` for each node with a non-`none` `scroll_timeline_name`.
+  2. Add `view_timeline_name: Option<String>` + `view_timeline_axis: ScrollAxis` to `ComputedStyle`. Parse `view-timeline-name` + `view-timeline-axis`. Wire to `collect_named_view_timelines()`.
+  3. Add `animation_timeline: AnimationTimeline` enum (`Auto | ScrollFn(ScrollTimeline) | ViewFn(ViewTimeline) | Named(String)`) to `ComputedStyle`. Parse `animation-timeline` (`auto`, `scroll()`, `view()`, `<custom-ident>`).
+  4. In the animation scheduler (`AnimationScheduler` / shell tick loop): resolve `animation_timeline` to a progress fraction using `resolve_scroll_progress` / `resolve_view_progress`, then drive `CompositorAnimFrame` progress from it instead of wall-clock time.
+- **Entry points:** `lumen-layout/src/scroll_timeline.rs` (all public API), `lumen-layout/src/style.rs` (ComputedStyle), `lumen-layout/src/animation.rs` (AnimationScheduler).
+
 ### SVG path stroke advanced properties (P2 feature p2-svg-stroke-path)
 - **Status:** Stroke tessellation implemented. `tessellate_stroke(contours, half_width)` in `paint/src/svg_path.rs`. `emit_svg_shape` in `paint/src/display_list.rs` now reads `svg_stroke` + `svg_stroke_width` from `ComputedStyle` and emits a second `DrawSvgPath` for the stroke band (miter join, butt cap). Stroke works end-to-end for any SVG `<path>`.
 - **P4 task** (CSS Fill & Stroke L3):
