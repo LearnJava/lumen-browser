@@ -6,8 +6,7 @@
 
 ## In progress
 
-Vim keybindings  branch: p1-vim-keybindings
-Next step: создать `crates/shell/src/input/vim.rs`  VimMode state machine
+(none)
 
 ---
 
@@ -43,6 +42,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-vim-keybindings** ✅ 2026-06-01 — Vim keybindings (§7B.1): `input/vim.rs` VimMode state machine (Normal/Insert), j/k scroll, d/u half-page, gg top, G bottom, f/t/F hints, / find, yy copy URL, H/L history. Ctrl+Alt+V toggles mode. Escape в Normal — swallow (not close). 27 unit-тестов, итого lumen-shell: 399.
 - **p1-geolocation-api** ✅ 2026-06-01 — Geolocation API stub (W3C Geolocation L2 §5): `navigator.geolocation.getCurrentPosition/watchPosition/clearWatch`; по умолчанию `PERMISSION_DENIED`; opt-in fake coords через `FakeCoords { latitude, longitude, accuracy }` в `install_geolocation_bindings`. Вызов добавлен в `QuickJsRuntime::install_dom`. `GeolocationPositionError` с константами PERMISSION_DENIED/POSITION_UNAVAILABLE/TIMEOUT. 17 unit-тестов, итого lumen-js: 647.
 - **p1-cache-api** ✅ 2026-06-01 — Cache API (§8E): полный CacheStorage/Cache JS-шим. Rust: данные `(method, meta_json, body)`, новые биндинги `_lumen_cache_match_info`/`_lumen_cache_match_any_info`/`_lumen_cache_keys_full`, `delete`/`delete_cache` теперь возвращают `bool`, helper `cache_meta_method()`. JS: `Cache.put(req,resp)` сохраняет status+headers+method; `Cache.match()` возвращает `Response` с правильным статусом; `Cache.matchAll()`; `Cache.delete()` → реальный bool; `Cache.keys()` → Request с method; `Cache.add(url)`; `Cache.addAll(urls)`; `caches.match()` с метаданными. 22 теста (было 8 заглушек), итого 630 lumen-js.
 - **p1-web-worker** ✅ 2026-06-01 — Web Worker API (§8E): `new Worker(url)` → отдельный `std::thread` с собственным QuickJS Runtime; `postMessage`/`onmessage`/`terminate`; mpsc message passing, JSON serialization; `QuickJsRuntime::pump_workers()` → `_lumen_deliver_worker_messages(msgs)` в JS; `PersistentJs::pump_workers()` в shell's `about_to_wait`; Worker globals: `self`/`postMessage`/`onmessage`/`addEventListener`/`console`/`setTimeout`-stub; URL resolution: blob:lumen/ (Blob._bytes→TextDecoder), data: (plain+base64), external=stub. 15 unit-тестов (roundtrip, addEventListener, base64, blob URL), итого 617 lumen-js.
