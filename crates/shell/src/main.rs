@@ -63,7 +63,7 @@ use lumen_dom::{
 use std::collections::HashMap;
 use lumen_layout::{LayoutBox, Mat4, PaintOrder, StackingTree, TransitionScheduler};
 #[cfg(feature = "quickjs")]
-use lumen_layout::collect_computed_styles;
+use lumen_layout::{collect_computed_styles, collect_scroll_containers, set_scroll_position};
 use lumen_layout::style::ComputedStyle;
 use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, Renderer};
 use lumen_layout::Cursor as CssCursor;
@@ -2990,6 +2990,13 @@ impl Lumen {
             if !lazy_reqs.is_empty() {
                 self.fetch_and_register_lazy_images(lazy_reqs);
             }
+            // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
+            // immediately after relayout return the correct clamped values.
+            let scroll_states = collect_scroll_containers(lb_ref)
+                .iter()
+                .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                .collect();
+            js.update_scroll_states(scroll_states);
         }
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
@@ -3698,6 +3705,39 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(js) = &self.js_ctx {
             for (title, body) in js.take_notification_requests() {
                 notification::show_os_notification(&title, &body);
+            }
+        }
+
+        // JS scroll requests: drain programmatic scrolls queued by scrollTo/scrollBy/
+        // scrollIntoView.  Scroll position is applied directly to the existing layout
+        // tree (no CSS re-computation needed — scroll only affects paint offsets), the
+        // display list is rebuilt cheaply, and JS scroll-state cache is updated so
+        // subsequent scrollTop/scrollLeft reads return the new values.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let scroll_reqs = js.take_scroll_requests();
+            if !scroll_reqs.is_empty() {
+                if let Some(lb) = self.layout_box.as_mut() {
+                    let mut changed = false;
+                    for (nid, x, y) in scroll_reqs {
+                        if set_scroll_position(lb, NodeId::from_index(nid as usize), x, y) {
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        // Rebuild display list with the updated scroll offsets.
+                        self.display_list = paint_ordered(lb);
+                        // Sync JS cache so scrollTop/scrollLeft reads are accurate.
+                        let states = collect_scroll_containers(lb)
+                            .iter()
+                            .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                            .collect();
+                        js.update_scroll_states(states);
+                        if let Some(w) = self.window.as_ref() {
+                            w.request_redraw();
+                        }
+                    }
+                }
             }
         }
 

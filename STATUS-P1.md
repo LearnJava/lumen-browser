@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+JS scroll requests drain  branch: p1-js-scroll-drain
+Next step: drain take_scroll_requests() in about_to_wait, apply via set_scroll_position, repaint  crates/shell/src/main.rs:3702
 
 ---
 
