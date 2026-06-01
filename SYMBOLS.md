@@ -1758,7 +1758,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (353 symbols)
+## lumen-shell  (367 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1799,6 +1799,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/devtools/console_panel.rs:177` **fn** `scroll_up` — Scroll up by `n` lines (towards older messages)
 `crates/shell/src/devtools/console_panel.rs:184` **fn** `scroll_down` — Scroll down by `n` lines (towards newer messages)
 `crates/shell/src/devtools/console_panel.rs:196` **fn** `build_console_panel` — Build the viewport-locked console panel overlay
+`crates/shell/src/devtools/inspector.rs:54` **struct** `SelectedNode` — A node currently pinned by the inspector, with its computed-style snapshot
+`crates/shell/src/devtools/inspector.rs:70` **struct** `DomInspectorPanel` — DevTools DOM inspector panel state
+`crates/shell/src/devtools/inspector.rs:82` **fn** `new` — Create a hidden inspector with no hover or selection
+`crates/shell/src/devtools/inspector.rs:88` **fn** `toggle` — Toggle inspector activity. Clears hover (but keeps the last selection)
+`crates/shell/src/devtools/inspector.rs:97` **fn** `set_hovered` — Update the node under the cursor. Returns `true` when the value changed
+`crates/shell/src/devtools/inspector.rs:106` **fn** `select` — Pin a node as the current selection with its computed-style map
+`crates/shell/src/devtools/inspector.rs:117` **fn** `scroll_up` — Scroll the property list of the current selection up (towards the top)
+`crates/shell/src/devtools/inspector.rs:126` **fn** `scroll_down` — Scroll the property list down (towards the bottom), clamped so the last
+`crates/shell/src/devtools/inspector.rs:138` **fn** `find_box` — Find the [`LayoutBox`] for `node` in document order. Returns `None` when the
+`crates/shell/src/devtools/inspector.rs:157` **fn** `box_model_rects` — Compute the four box-model rectangles for `lb` in document (page) coordinates
+`crates/shell/src/devtools/inspector.rs:212` **fn** `build_box_overlay` — Build the box-model overlay for the hovered box, translated from page
+`crates/shell/src/devtools/inspector.rs:245` **fn** `element_label` — Build a human-readable DOM label for `node`, e.g. `div#main.card`, `#text`,
+`crates/shell/src/devtools/inspector.rs:276` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
+`crates/shell/src/devtools/inspector.rs:373` **fn** `build_inspector_panel` — Build the right-docked computed-style side panel
 `crates/shell/src/download.rs:45` **struct** `DownloadId` — Opaque identifier for a single download entry
 `crates/shell/src/download.rs:50` **enum** `DownloadStatus` — Current state of a download entry
 `crates/shell/src/download.rs:71` **struct** `DownloadEntry` — A single download: source URL, destination path, and current status
@@ -2509,4 +2523,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2444 symbols in 20 crates*
+*Total: 2458 symbols in 20 crates*

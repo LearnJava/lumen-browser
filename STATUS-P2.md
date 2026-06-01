@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**DOM inspector panel (7E.1)**  branch: `p2-dom-inspector`
+Next step: merge — `crates/shell/src/devtools/inspector.rs`
 
 ---
 
@@ -16,7 +17,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 14 | **DOM inspector panel (7E.1)** — `DomInspectorPanel: Panel` в `shell/src/devtools/inspector.rs`; hover → emit `BoxModelOverlay` (✅); click → show `NodeId` + computed style map; `F12` toggle. See `lumen-plan.md §7E.1` | `lumen-shell` | M | none |
 | 15 | **Network panel live log (7E.4)** — `NetworkPanel: Panel` в `shell/src/devtools/network_panel.rs`; слушает `NetworkEvent` channel; рендерит URL + method + status + timing; `F12` toggle. See `lumen-plan.md §7E.4` | `lumen-shell` | M | none |
 | 16 | **Cyrillic font fallback** — `FontDb::push_fallback_range(range, font_bytes)`: для codepoints не в primary font — fallback; detect Cyrillic block (`U+0400–U+04FF`) → load Noto Sans Cyrillic из assets или system. `lumen-font/src/fallback.rs` | `lumen-font`, `lumen-shell` | M | none |
 | 17 | **CSS `image-set()` function** — `select_image_set_url(value, dpr) → &str` в `lumen-paint/src/display_list.rs`; parse `image-set(url 1x, url 2x)`, select closest DPR; wire в `emit_background_image`. P4 handoff: ComputedStyle поле. See `lumen-plan.md §CSS` | `lumen-paint` | S | none |
