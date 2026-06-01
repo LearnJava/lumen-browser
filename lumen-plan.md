@@ -317,7 +317,7 @@
 | 8D.1 | ✅ `wait_for(Cond::Visible)` — border_box.width/height > 0; display:none → no layout box → false | layout-аware | P1 done 2026-05-31 |
 | 8D.2 | ✅ `wait_for(Cond::NetworkIdle)` — active_network_requests counter; saturating_sub after HTTP fetch | network-аware | P1 done 2026-05-31 |
 | 8D.3 | ✅ `wait_for(Cond::JsIdle)` — pending_js_microtasks counter; set_pending_js_tasks() for shell hook | shell runtime-аware | P1 done 2026-05-31 |
-| 8E | ⬜ **`[P3]` Per-context isolation by default** (Phase 1) | Cookies/storage/cache/viewport/UA/fingerprint per session | `driver/src/context.rs` |
+| 8E | ✅ **`[P1]` Per-context isolation by default** (Phase 1) | `OriginIsolationContext`: CookieJar + localStorage/sessionStorage + IDB per origin-group | `driver/src/isolation.rs` | P1 done 2026-06-01: `OriginGroup`+`OriginIsolationContext`, `InProcessSession::with_origin_isolation()`, 22 тестов |
 | 8F | ⬜ **`[P3]` Deterministic mode** (Phase 1) | Repeatable tests, опирается на §9.5 anti-fp инфраструктуру | `driver/src/determinism.rs` |
 | 8F.1 | ⬜ `set_clock(ClockMode::Frozen / Real / Monotonic)` | shell timers + Performance.now bridge | — |
 | 8F.2 | ⬜ `set_rng_seed(u64)` — детерминированный `Math.random()` | JS runtime hook | — |
