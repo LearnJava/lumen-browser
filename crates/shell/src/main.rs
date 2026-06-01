@@ -21,6 +21,7 @@
 
 mod address_bar;
 mod animation_scheduler;
+mod deterministic;
 mod download;
 mod find;
 mod forms;
@@ -169,6 +170,7 @@ fn main() -> ExitCode {
         }
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
+    let (det_mode, rest_args) = deterministic::extract_deterministic(&rest_args);
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let cli = if let Some(output) = pdf_output {
@@ -210,7 +212,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, initial_scroll, no_scrollbar),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, initial_scroll, no_scrollbar, det_mode),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
     }
@@ -222,6 +224,7 @@ fn run_window_mode(
     blocked_log: Arc<std::sync::Mutex<panels::shields_panel::BlockedLog>>,
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
+    deterministic: bool,
 ) -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
 
@@ -332,6 +335,7 @@ fn run_window_mode(
         gc_tick: gc_tick::GcTick::new(),
         memory_poll: memory_poll::MemoryPollTick::new(memory_poll::platform_source()),
         cache_registry: lumen_core::ext::CacheRegistry::new(),
+        deterministic,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -394,6 +398,7 @@ fn do_print_to_pdf(
         None,
         &NullHyphenationProvider,
         false, // headless PDF mode: no interactive JS needed
+        false, // deterministic: not needed for PDF rendering
     )?;
 
     let ctx = PaginationContext {
@@ -516,13 +521,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -1117,7 +1122,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone())?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1847,6 +1852,7 @@ fn parse_and_layout(
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
     cookie_banner_dismiss: bool,
+    deterministic: bool,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -1894,6 +1900,7 @@ fn parse_and_layout(
         idb_backend,
         sw_backend,
         cookie_banner_dismiss,
+        deterministic,
     );
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
@@ -2265,8 +2272,9 @@ fn render_bytes(
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
     cookie_banner_dismiss: bool,
+    deterministic: bool,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -2485,6 +2493,7 @@ fn run_scripts_with_dom(
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     cookie_banner_dismiss: bool,
+    deterministic: bool,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts);
@@ -2508,6 +2517,9 @@ fn run_scripts_with_dom(
         match lumen_js::QuickJsRuntime::new() {
             Ok(rt) => {
                 rt.set_cookie_banner_dismiss(cookie_banner_dismiss);
+                if deterministic {
+                    rt.set_deterministic_mode();
+                }
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store, idb_backend, sw_backend) {
                     eprintln!("JS DOM init failed: {e}");
                 }
@@ -2963,6 +2975,13 @@ struct Lumen {
     /// poll loop.  Owned per-page caches (`image_cache`, layer cache) are evicted
     /// directly rather than through the registry to avoid shared-ownership overhead.
     cache_registry: lumen_core::ext::CacheRegistry,
+    /// Deterministic render mode (8F).
+    ///
+    /// When `true` (`--deterministic` CLI flag): window opens at 1280×800,
+    /// `Date.now()` is frozen at 0, `Math.random` uses a seeded PRNG, and
+    /// `requestAnimationFrame` callbacks receive a 0 ms timestamp.
+    /// Intended for snapshot testing and reproducible output.
+    deterministic: bool,
 }
 
 impl Lumen {
@@ -3554,9 +3573,10 @@ impl Lumen {
 
 impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let (win_w, win_h) = if self.deterministic { (1280.0, 800.0) } else { (1024.0, 720.0) };
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
-            .with_inner_size(LogicalSize::new(1024.0, 720.0))
+            .with_inner_size(LogicalSize::new(win_w, win_h))
             .with_position(LogicalPosition::new(0, 0));
 
         let window = match event_loop.create_window(attrs) {
@@ -3628,7 +3648,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                     }
@@ -4432,8 +4452,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Snapshot-pattern: callbacks registered during this call go into
                 // the next frame. If any new rAF was registered (animation loop),
                 // request another redraw immediately.
+                // In deterministic mode (8F) pass 0.0 to suppress wall-clock jitter.
                 if let Some(js) = &self.js_ctx {
-                    js.run_animation_frame(timestamp_ms);
+                    let raf_ts = if self.deterministic { 0.0 } else { timestamp_ms };
+                    js.run_animation_frame(raf_ts);
                     if js.take_raf_pending() {
                         self.request_redraw();
                     }
