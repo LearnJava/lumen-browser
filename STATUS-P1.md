@@ -6,8 +6,7 @@
 
 ## In progress
 
-**DOM GC shell integration** (task #14)  branch: p1-dom-gc-shell
-Next step: добавить `_lumen_gc_collect` в WEB_API_SHIM, `gc_tick.rs`, wiring в `about_to_wait`  `crates/js/src/dom.rs:7355`, `crates/shell/src/main.rs:3629`
+(none)
 
 ---
 
@@ -38,6 +37,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-dom-gc-shell** ✅ 2026-06-01 — DOM GC shell integration (задача #14): `gc_tick.rs` — `GcTick` (throttle 30 с, `poll(&doc) → Option<Vec<NodeId>>`); JS-шим `_lumen_gc_collect(nids)` — чистит `_lumen_listeners` и `_input_values` для dead nodes; `PersistentJs::gc_collect(&[u32])` + `QuickPersistentJs` impl; поле `gc_tick` в `Lumen`; drain в `about_to_wait` после notifications. 10 unit-тестов (6 gc_tick + 4 js). lumen-shell: 536.
 - **p1-web-notifications** ✅ 2026-06-01 — Web Notifications API (W3C Notifications API Level 1): `notifications_bindings.rs` — `Notification` конструктор (title + option bag: body/icon/tag/data/requireInteraction/silent и др.); `Notification.permission`/"granted"/"denied"/"default"; `Notification.requestPermission([cb])` → Promise; `close()`; `onclick/onclose/onerror/onshow` handlers; `addEventListener/removeEventListener/dispatchEvent`. `NotificationQueue` + `drain_notifications()`. Shell: `notification.rs` — `show_os_notification(title, body)` — Windows PowerShell System.Windows.Forms balloon tip (env-var передача текста без injection), Linux `notify-send`, background thread. `PersistentJs::take_notification_requests()` + drain в `about_to_wait`. 21 unit-тест. lumen-js: 686.
 - **p1-audio-element** ✅ 2026-06-01 — `<audio>` element stub (HTML spec §4.8.10): `BoxKind::Audio { src, controls }` в layout — 0×0 без controls, full-width×40px с controls; серый FillRect в paint для controls bar. JS: `audio_element.rs` — HTMLAudioElement шим: `play()→Promise`, `pause()`, `src` setter (fires `loadedmetadata`+`canplay` немедленно), `currentTime`/`duration`/`volume`/`muted`/`controls`, `readyState=4`, `canPlayType()→''`, `networkState`/`error`/`buffered`/`seekable` стабы. 4 paint + 18 JS тестов. lumen-js: 665, lumen-layout: 2107, lumen-paint: 441.
 - **p1-omnibox-aliases** ✅ 2026-06-01 — Custom omnibox aliases (§7B.4): `lumen-storage::OmniboxAliases` — SQLite-таблица bang-алиасов (!g→Google, !gh→GitHub), set/get/list_all/delete, 9 тестов, итого lumen-storage: 493. `shell/src/omnibox/mod.rs` — `resolve(input, aliases)→Option<AliasAction>` (Navigate/CreateNote/SaveReadLater), URL-encode RFC 3986, 21 тест. Wiring: `handle_omnibox_commit` перехватывает commit перед navigate_to, обрабатывает bang и @-команды. Поля в Lumen: `omnibox_aliases`, `notes`, `read_later`. Shell tests: 459/459.
