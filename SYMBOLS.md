@@ -1725,7 +1725,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (300 symbols)
+## lumen-shell  (320 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1866,12 +1866,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/links.rs:43` **fn** `is_navigable_href` — Return true if `href` is a URL scheme the browser should navigate to
 `crates/shell/src/links.rs:53` **fn** `fragment_only` — If `href` is a fragment-only reference (starts with `#`), return the
 `crates/shell/src/links.rs:60` **fn** `find_element_by_id` — Walk the document tree and return the first element whose `id` attribute
+`crates/shell/src/memory_poll.rs:23` **struct** `MemoryPollTick` — Throttled memory pressure poller
+`crates/shell/src/memory_poll.rs:36` **fn** `new` — Create a new poller using the given platform source
+`crates/shell/src/memory_poll.rs:49` **fn** `tick` — Poll memory pressure and broadcast to `registry` if pressure is Medium or High
+`crates/shell/src/memory_poll.rs:66` **fn** `last_level` — Last sampled pressure level.  May be stale by up to [`POLL_INTERVAL`]
+`crates/shell/src/memory_poll.rs:75` **fn** `platform_source` — Build the appropriate [`MemoryPressureSource`] for the current platform
 `crates/shell/src/momentum_anim.rs:26` **struct** `MomentumAnim` — Velocity-based momentum анимация. Хранится в `Lumen.momentum_anim`
 `crates/shell/src/momentum_anim.rs:36` **fn** `new`
 `crates/shell/src/momentum_anim.rs:43` **fn** `advance` — Прогнать анимацию до `now_ms`. Возвращает `(Δy, Δx, done)`
 `crates/shell/src/notification.rs:18` **fn** `show_os_notification` — Show a desktop notification asynchronously
 `crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
+`crates/shell/src/panels/permission_panel.rs:58` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
+`crates/shell/src/panels/permission_panel.rs:79` **fn** `label` — Short display name for the permission row label
+`crates/shell/src/panels/permission_panel.rs:89` **fn** `icon` — Emoji icon shown to the left of the label
+`crates/shell/src/panels/permission_panel.rs:101` **enum** `PermissionState` — Grant state for a single permission on a single origin
+`crates/shell/src/panels/permission_panel.rs:114` **fn** `label` — Label shown on the toggle button
+`crates/shell/src/panels/permission_panel.rs:123` **fn** `cycle` — Cycle to the next state: Ask → Allow → Deny → Ask
+`crates/shell/src/panels/permission_panel.rs:135` **struct** `PermissionPanel` — Per-site permission popover state (7C.2)
+`crates/shell/src/panels/permission_panel.rs:150` **fn** `new` — Create a new hidden panel with no stored permissions
+`crates/shell/src/panels/permission_panel.rs:159` **fn** `toggle` — Flip panel visibility
+`crates/shell/src/panels/permission_panel.rs:164` **fn** `set_origin` — Update the current origin on navigation (does not clear stored grants)
+`crates/shell/src/panels/permission_panel.rs:171` **fn** `state_for` — Return the stored state for `kind` at the current origin
+`crates/shell/src/panels/permission_panel.rs:184` **fn** `cycle_permission` — Cycle the state for `kind` at the current origin to the next value
+`crates/shell/src/panels/permission_panel.rs:207` **enum** `PermissionHit` — Result of a click inside the permission panel
+`crates/shell/src/panels/permission_panel.rs:220` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
+`crates/shell/src/panels/permission_panel.rs:262` **fn** `build_panel` — Build the display list for the permission floating panel
 `crates/shell/src/panels/shields_panel.rs:58` **struct** `BlockedLog` — Shared accumulator for blocked-request counts, indexed by hostname
 `crates/shell/src/panels/shields_panel.rs:69` **fn** `record` — Increment the count for the hostname extracted from `url`
 `crates/shell/src/panels/shields_panel.rs:77` **fn** `clear` — Clear all counts (call on every top-level navigation)
@@ -2423,4 +2443,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2361 symbols in 19 crates*
+*Total: 2381 symbols in 19 crates*
