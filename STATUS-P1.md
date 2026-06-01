@@ -6,8 +6,7 @@
 
 ## In progress
 
-Memory pressure poll loop (задача #16)  branch: p1-memory-pressure-poll
-Next step: создать memory_poll.rs, добавить поля в Lumen, wire в about_to_wait  shell/src/memory_poll.rs
+(none)
 
 ---
 
@@ -18,7 +17,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
 | 8 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #2 |
-| 16 | **Memory pressure poll loop** — shell создаёт платформенный `MemoryPressureSource`, polling каждые 5s; на Medium+ → `CacheRegistry::broadcast_pressure(level)`. `shell/src/memory_poll.rs`. Requires `MemoryPressureSource` ✅ + `CacheRegistry` ✅ | `lumen-shell` | S | none |
 | 17 | **Tab auto-archive (10E.5)** — на `TabState::Hibernated`: `Document::to_bytes()`, drop `PersistentJs`, store bytes в tab slot; restore на switch через `Document::from_bytes()` + new `PersistentJs`. `shell/src/tab_lifecycle/hibernate.rs`. See `lumen-plan.md §10E.5` | `lumen-shell` | M | #2 |
 | 18 | **Deterministic render mode (8F)** — `--deterministic` CLI флаг: freeze `Date.now()` в t=0, seed `Math.random` из URL hash, suppress RAF jitter, fixed viewport 1280×800. `shell/src/deterministic.rs`. See `lumen-plan.md §8F` | `lumen-shell`, `lumen-js` | M | none |
 | 19 | **Per-context isolation (8E)** — `LumenSession::with_origin_isolation(origin)`: separate JS heap, cookie jar, `LocalStorage`/`IdbStore` per origin-group. `lumen-driver/src/isolation.rs`. See `lumen-plan.md §8E` | `lumen-driver`, `lumen-storage` | L | none |
@@ -36,6 +34,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-memory-pressure-poll** ✅ 2026-06-01 — Memory pressure poll loop (задача #16): `shell/src/memory_poll.rs` — `MemoryPollTick` (5s интервал), `platform_source()` выбирает `Win32/Linux/NullMemoryPressureSource` по `cfg(target_os)`. `tick(&mut CacheRegistry)` вызывает `broadcast_pressure` на Medium+. `Lumen`: поля `memory_poll` + `cache_registry`; `about_to_wait` вызывает `tick()` → `on_memory_pressure` у `image_cache` и `renderer.layer_cache_mut()`. 8 unit-тестов, итого lumen-shell: 566.
 - **p1-js-scroll-drain** ✅ 2026-06-01 — JS scroll requests drain (задача #15): дренирование `take_scroll_requests()` в `about_to_wait` — `set_scroll_position()` per entry → `paint_ordered()` (без CSS re-computation) → `update_scroll_states()` → redraw. Также `update_scroll_states` после каждого `relayout()` — scrollTop/scrollLeft корректны сразу. lumen-shell: 558.
 - **p1-dom-gc-shell** ✅ 2026-06-01 — DOM GC shell integration (задача #14): `gc_tick.rs` — `GcTick` (throttle 30 с, `poll(&doc) → Option<Vec<NodeId>>`); JS-шим `_lumen_gc_collect(nids)` — чистит `_lumen_listeners` и `_input_values` для dead nodes; `PersistentJs::gc_collect(&[u32])` + `QuickPersistentJs` impl; поле `gc_tick` в `Lumen`; drain в `about_to_wait` после notifications. 10 unit-тестов (6 gc_tick + 4 js). lumen-shell: 536.
 - **p1-web-notifications** ✅ 2026-06-01 — Web Notifications API (W3C Notifications API Level 1): `notifications_bindings.rs` — `Notification` конструктор (title + option bag: body/icon/tag/data/requireInteraction/silent и др.); `Notification.permission`/"granted"/"denied"/"default"; `Notification.requestPermission([cb])` → Promise; `close()`; `onclick/onclose/onerror/onshow` handlers; `addEventListener/removeEventListener/dispatchEvent`. `NotificationQueue` + `drain_notifications()`. Shell: `notification.rs` — `show_os_notification(title, body)` — Windows PowerShell System.Windows.Forms balloon tip (env-var передача текста без injection), Linux `notify-send`, background thread. `PersistentJs::take_notification_requests()` + drain в `about_to_wait`. 21 unit-тест. lumen-js: 686.
