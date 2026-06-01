@@ -15,17 +15,24 @@
 //! Опционально число измерений (по умолчанию 100):
 //!   LUMEN_BENCH_ITERS=500 cargo run -p lumen-bench --release
 //!
+//! CI gate (выход 1 при регрессии):
+//!   cargo run -p lumen-bench --release -- --ci
+//!
 //! Намеренно не используем `cargo bench` / nightly `test::Bencher`: первое
 //! требует exception в политике зависимостей (criterion), второе — nightly
 //! toolchain. Простой Instant-loop достаточен для baseline-цифр; статистики
 //! и графики прикрутим, если упрёмся в необходимость различать шумовые
 //! изменения < 5 %.
 
+mod ci_gate;
+mod util;
+
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use lumen_core::geom::Size;
-use lumen_dom::{Document, NodeData, NodeId};
+
+use util::{extract_style_blocks, get_rss_bytes};
 
 const PAGE_HTML: &[u8] = include_bytes!("../../../samples/page.html");
 const PAGE_CSS: &str = include_str!("../../../samples/page.css");
@@ -40,6 +47,12 @@ const VIEWPORT: Size = Size {
 };
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--ci") {
+        let passed = ci_gate::run_ci_gate();
+        std::process::exit(if passed { 0 } else { 1 });
+    }
+
     let iters = std::env::var("LUMEN_BENCH_ITERS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -122,50 +135,6 @@ struct PipelineResult {
     rss_bytes: u64,
     /// Peak RSS during this pipeline run (measured at start and end).
     peak_rss_bytes: u64,
-}
-
-/// Get current RSS (resident set size) in bytes.
-/// Cross-platform: uses getrusage on Unix, GetProcessMemoryInfo on Windows.
-fn get_rss_bytes() -> u64 {
-    #[cfg(unix)]
-    unsafe {
-        let mut rusage = std::mem::zeroed::<libc::rusage>();
-        if libc::getrusage(libc::RUSAGE_SELF, &mut rusage) == 0 {
-            #[cfg(target_os = "macos")]
-            {
-                // macOS reports in bytes
-                rusage.ru_maxrss as u64
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                // Linux and other Unix systems report in kilobytes
-                (rusage.ru_maxrss as u64) * 1024
-            }
-        } else {
-            0
-        }
-    }
-    #[cfg(target_os = "windows")]
-    unsafe {
-        use winapi::um::processthreadsapi::GetCurrentProcess;
-        use winapi::um::psapi::GetProcessMemoryInfo;
-        use winapi::um::psapi::PROCESS_MEMORY_COUNTERS;
-
-        let mut pmc = std::mem::zeroed::<PROCESS_MEMORY_COUNTERS>();
-        pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-
-        let h_process = GetCurrentProcess();
-        if GetProcessMemoryInfo(h_process, &mut pmc, pmc.cb) != 0 {
-            pmc.WorkingSetSize as u64
-        } else {
-            0
-        }
-    }
-    #[cfg(not(any(unix, target_os = "windows")))]
-    {
-        // Unsupported platform
-        0
-    }
 }
 
 fn run_pipeline(
@@ -366,28 +335,4 @@ fn print_peak_rss_stats(samples: &mut [u64]) {
         fmt_bytes(p95),
         fmt_bytes(max)
     );
-}
-
-fn extract_style_blocks(doc: &Document) -> String {
-    let mut out = String::new();
-    walk_style_blocks(doc, doc.root(), &mut out);
-    out
-}
-
-fn walk_style_blocks(doc: &Document, id: NodeId, out: &mut String) {
-    let node = doc.get(id);
-    if let NodeData::Element { name, .. } = &node.data
-        && name.local == "style"
-    {
-        for &child in &node.children {
-            if let NodeData::Text(s) = &doc.get(child).data {
-                out.push_str(s);
-                out.push('\n');
-            }
-        }
-        return;
-    }
-    for &child in &node.children {
-        walk_style_blocks(doc, child, out);
-    }
 }
