@@ -3,6 +3,7 @@
 
 pub mod permission_panel;
 pub mod shields_panel;
+pub mod sidebar_panel;
 pub mod split_view;
 pub mod tree_tabs;
 pub mod vertical_tabs;

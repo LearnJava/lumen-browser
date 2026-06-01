@@ -321,6 +321,7 @@ fn run_window_mode(
             .expect("workspaces in-memory"),
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
+        sidebar: panels::sidebar_panel::SidebarPanel::new(),
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1321,6 +1322,8 @@ enum KeyCommand {
     TogglePermissions,
     /// Включить/выключить авто-закрытие cookie-баннеров (Ctrl+Shift+K, 7C.3).
     ToggleCookieBannerDismiss,
+    /// Показать/скрыть правую боковую панель (Ctrl+Shift+A, 7D.3).
+    ToggleSidebar,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1399,6 +1402,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+K — toggle cookie-banner auto-dismiss (7C.3)
         KeyCode::KeyK if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleCookieBannerDismiss)
+        }
+        // Ctrl+Shift+A — toggle right sidebar web panel (7D.3)
+        KeyCode::KeyA if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleSidebar)
         }
         _ => None,
     }
@@ -2903,6 +2910,13 @@ struct Lumen {
     /// `Ctrl+Shift+P` toggles visibility.  State is in-memory only (no
     /// persistence across sessions).
     permission: panels::permission_panel::PermissionPanel,
+    /// Right-docked sidebar web panel state (7D.3).
+    ///
+    /// Shows a secondary web viewport in a 300 CSS px slot at the right edge.
+    /// `Ctrl+Shift+A` toggles visibility; `Lumen::open_sidebar_page` supplies
+    /// the page display list.  When visible, `page_content_width_css()`
+    /// subtracts [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
+    sidebar: panels::sidebar_panel::SidebarPanel,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -3993,6 +4007,32 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // Sidebar web panel (7D.3): right-docked panel.
+                    if self.sidebar.visible {
+                        let win_w = self.viewport_width_css();
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let win_h = self.viewport_height_css() + tab_h;
+                        if let Some(hit) = panels::sidebar_panel::hit_test(
+                            &self.sidebar,
+                            x_css,
+                            y_css,
+                            win_w,
+                            tab_h,
+                            win_h,
+                        ) {
+                            match hit {
+                                panels::sidebar_panel::SidebarHit::Close => {
+                                    self.sidebar.close();
+                                    self.relayout();
+                                    self.request_redraw();
+                                }
+                                panels::sidebar_panel::SidebarHit::Content
+                                | panels::sidebar_panel::SidebarHit::Header => {}
+                            }
+                            return;
+                        }
+                    }
+
                     // Workspace switcher bar (7A.3): clicks in the bottom bar area.
                     if self.workspace_panel.visible {
                         let win_w = self.viewport_width_css();
@@ -4527,6 +4567,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         tab_h,
                     );
                     overlay_buf.append(&mut perm_cmds);
+                }
+
+                // Sidebar web panel (7D.3): right-docked secondary viewport.
+                if self.sidebar.visible {
+                    let win_w = self.viewport_width_css();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + tab_h;
+                    let mut sb_cmds = panels::sidebar_panel::build_panel(
+                        &self.sidebar,
+                        win_w,
+                        tab_h,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut sb_cmds);
                 }
 
                 // Workspace switcher bar (7A.3): bottom-docked horizontal strip.
@@ -5122,6 +5176,13 @@ impl Lumen {
                 self.cookie_banner_dismiss = !self.cookie_banner_dismiss;
                 // Preference takes effect on the next page load.
             }
+            KeyCommand::ToggleSidebar => {
+                self.sidebar.toggle();
+                // Sidebar occupies right PANEL_WIDTH — relayout so main page
+                // content width adjusts accordingly.
+                self.relayout();
+                self.request_redraw();
+            }
         }
     }
 
@@ -5343,9 +5404,31 @@ impl Lumen {
 
     /// Process a committed omnibox value: resolve aliases, then navigate or act.
     ///
-    /// Order: bang aliases (`!g`) → `@notes` / `@read-later` → record in
-    /// search_history → plain navigate.
+    /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
+    /// → record in search_history → plain navigate.
     fn handle_omnibox_commit(&mut self, value: String) {
+        // `sidebar:<url>` — load the URL into the right-docked sidebar panel (7D.3).
+        if let Some(sidebar_url) = value.strip_prefix("sidebar:") {
+            let sidebar_url = sidebar_url.trim().to_owned();
+            if !sidebar_url.is_empty() {
+                let sink = Arc::clone(&self.event_sink);
+                let src = PageSource::from_arg(Some(&sidebar_url));
+                match src.load_bytes(sink) {
+                    Ok(raw) => {
+                        self.open_sidebar_page(sidebar_url, &raw.bytes, String::new());
+                    }
+                    Err(err) => {
+                        eprintln!("sidebar: не удалось загрузить {sidebar_url}: {err}");
+                        // Open panel with placeholder so user sees feedback.
+                        self.sidebar.open(sidebar_url);
+                        self.relayout();
+                        self.request_redraw();
+                    }
+                }
+            }
+            return;
+        }
+
         let aliases = self.omnibox_aliases.list_all().unwrap_or_default();
         if let Some(action) = omnibox::resolve(&value, &aliases) {
             match action {
@@ -5625,17 +5708,66 @@ impl Lumen {
     }
 
     /// CSS px ширина области контента страницы — полная ширина окна минус
-    /// ширина вертикальной панели вкладок, если она видима. Используется для
-    /// клампинга горизонтального скролла.
+    /// ширина вертикальных панелей вкладок (слева) и sidebar (справа), если
+    /// они видимы. Используется для клампинга горизонтального скролла.
     fn page_content_width_css(&self) -> f32 {
-        let panel_offset = if self.vertical_tabs.visible {
+        let left_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
         } else if self.tree_tabs.visible {
             panels::tree_tabs::PANEL_WIDTH
         } else {
             0.0
         };
-        (self.viewport_width_css() - panel_offset).max(0.0)
+        let right_offset = if self.sidebar.visible {
+            panels::sidebar_panel::PANEL_WIDTH
+        } else {
+            0.0
+        };
+        (self.viewport_width_css() - left_offset - right_offset).max(0.0)
+    }
+
+    /// Open the sidebar with `url` and populate it with a freshly-laid-out page.
+    ///
+    /// Parses `html_bytes` as HTML, lays it out at [`PANEL_WIDTH`]-wide viewport,
+    /// and stores the display list in the sidebar panel.  Triggers a relayout of
+    /// the main page when the sidebar becomes visible (page width changes).
+    fn open_sidebar_page(&mut self, url: String, html_bytes: &[u8], page_title: String) {
+        let was_visible = self.sidebar.visible;
+        self.sidebar.open(url.clone());
+
+        // Decode bytes and parse HTML.
+        let encoding = lumen_encoding::detect(html_bytes, None);
+        let source_str = lumen_encoding::decode(encoding, html_bytes);
+        let doc = lumen_html_parser::parse(&source_str);
+        let doc_title = if page_title.is_empty() {
+            extract_title(&doc).unwrap_or_default()
+        } else {
+            page_title
+        };
+
+        // Collect inline <style> blocks (no external CSS fetch for sidebar).
+        let css_text = extract_style_blocks(&doc);
+        let sheet = lumen_css_parser::parse(&css_text);
+
+        let doc_arc = Arc::new(Mutex::new(doc));
+        let src = LayoutSource {
+            document: doc_arc,
+            stylesheet: sheet,
+            html_source: None,
+        };
+
+        let sidebar_vp = Size::new(
+            panels::sidebar_panel::PANEL_WIDTH,
+            self.viewport_height_css().max(100.0),
+        );
+        let (dl, _lb) = relayout_page(&src, sidebar_vp, &self.hyp_provider);
+        let content_h = content_height_of(&dl);
+        self.sidebar.set_page(dl, doc_title, content_h);
+
+        if !was_visible {
+            self.relayout();
+        }
+        self.request_redraw();
     }
 
     /// Reload workspace list from SQLite storage into the panel cache.
