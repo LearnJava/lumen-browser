@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Shields toolbar widget (7C.4)  branch: p2-shields-panel
+Next step: cargo check + tests  crates/shell/src/panels/shields_panel.rs:1
 
 ---
 
