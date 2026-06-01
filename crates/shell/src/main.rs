@@ -28,6 +28,7 @@ mod hints;
 mod input;
 mod links;
 mod momentum_anim;
+mod notification;
 mod omnibox;
 mod panels;
 mod runtime;
@@ -863,6 +864,13 @@ trait PersistentJs {
     /// `onmessage` / `addEventListener('message', fn)` handlers fire promptly.
     #[allow(dead_code)]
     fn pump_workers(&self);
+    /// Drain OS notification requests queued by `new Notification(...)` in JS.
+    ///
+    /// Shell calls this in `about_to_wait` and forwards each entry to
+    /// `notification::show_os_notification`. Returns an empty vec when no
+    /// notifications were created since the last drain.
+    #[allow(dead_code)]
+    fn take_notification_requests(&self) -> Vec<(String, String)>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -955,6 +963,13 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn pump_workers(&self) {
         self.rt.pump_workers();
+    }
+    fn take_notification_requests(&self) -> Vec<(String, String)> {
+        self.rt
+            .take_notification_requests()
+            .into_iter()
+            .map(|r| (r.title, r.body))
+            .collect()
     }
 }
 
@@ -3603,6 +3618,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
+
+        // Web Notifications API: deliver pending OS notifications queued by JS.
+        if let Some(js) = &self.js_ctx {
+            for (title, body) in js.take_notification_requests() {
+                notification::show_os_notification(&title, &body);
+            }
+        }
 
         // Tab lifecycle: advance tier timers, trigger hibernation for overdue tabs.
         self.tick_lifecycle();
