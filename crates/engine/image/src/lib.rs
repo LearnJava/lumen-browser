@@ -2,6 +2,7 @@ mod jpeg;
 mod png;
 pub mod webp;
 mod gif;
+pub mod avif;
 pub mod decode_cache;
 
 pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
@@ -9,6 +10,7 @@ pub use jpeg::{decode_jpeg, JpegError};
 pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
 pub use gif::{decode_gif, decode_gif_animated, AnimatedFrame, AnimatedGif, GifError, GifLoopCount, is_gif};
+pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -21,11 +23,9 @@ pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 /// Передаётся в `PictureParams::supported_types` через `lumen-layout`, чтобы
 /// неподдерживаемые `<source type="...">` пропускались picker-ом и браузер
 /// выбирал подходящий fallback вместо пустой коробки.
-///
-/// Расширяется при добавлении декодеров (AVIF, …).
 #[must_use]
 pub fn supported_mime_types() -> &'static [&'static str] {
-    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]
+    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif"]
 }
 
 /// Декодирует растровое изображение по сигнатуре первых байтов.
@@ -36,6 +36,7 @@ pub fn supported_mime_types() -> &'static [&'static str] {
 /// - [`ImageError::Jpeg`] — JPEG-сигнатура совпала, но декодер выдал ошибку.
 /// - [`ImageError::Gif`] — GIF-сигнатура (GIF87a/GIF89a) совпала, но декодер выдал ошибку.
 /// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодер выдал ошибку.
+/// - [`ImageError::Avif`] — AVIF ftyp-бокс обнаружен, но декодирование не удалось.
 pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     if bytes.len() >= PNG_SIGNATURE.len() && bytes[..PNG_SIGNATURE.len()] == PNG_SIGNATURE {
         return decode_png(bytes).map_err(ImageError::Png);
@@ -52,12 +53,17 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
         let (width, height, data) = decode_webp(bytes).map_err(ImageError::Webp)?;
         return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
     }
+    if is_avif(bytes) {
+        let (width, height, data) = decode_avif(bytes).map_err(ImageError::Avif)?;
+        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
+    }
     Err(ImageError::UnknownFormat)
 }
 
 /// Ошибка `decode`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageError {
+    /// Сигнатура не совпала ни с одним известным форматом.
     UnknownFormat,
     Png(DecodeError),
     Jpeg(JpegError),
@@ -65,6 +71,8 @@ pub enum ImageError {
     Webp(WebpError),
     /// GIF-сигнатура распознана (GIF87a/GIF89a), но декодирование не удалось.
     Gif(GifError),
+    /// AVIF ftyp-бокс обнаружен (brand=avif/avis), но декодирование не удалось.
+    Avif(AvifError),
 }
 
 impl core::fmt::Display for ImageError {
@@ -75,6 +83,7 @@ impl core::fmt::Display for ImageError {
             Self::Jpeg(e) => write!(f, "JPEG: {e}"),
             Self::Webp(e) => write!(f, "WebP: {e}"),
             Self::Gif(e) => write!(f, "GIF: {e}"),
+            Self::Avif(e) => write!(f, "AVIF: {e}"),
         }
     }
 }
@@ -95,6 +104,10 @@ impl From<WebpError> for ImageError {
 
 impl From<GifError> for ImageError {
     fn from(e: GifError) -> Self { Self::Gif(e) }
+}
+
+impl From<AvifError> for ImageError {
+    fn from(e: AvifError) -> Self { Self::Avif(e) }
 }
 
 /// ICC профиль изображения (опциональный).
@@ -406,6 +419,43 @@ mod tests {
     fn supported_mime_types_includes_gif() {
         let types = supported_mime_types();
         assert!(types.contains(&"image/gif"), "image/gif должен быть в поддерживаемых типах");
+    }
+
+    #[test]
+    fn supported_mime_types_includes_avif() {
+        let types = supported_mime_types();
+        assert!(types.contains(&"image/avif"), "image/avif должен быть в поддерживаемых типах");
+    }
+
+    #[test]
+    fn avif_signature_dispatches_to_avif_decoder() {
+        // Минимальный ftyp-бокс с major brand avif
+        let bytes: Vec<u8> = [
+            0x00, 0x00, 0x00, 0x18_u8,   // box size = 24
+            b'f', b't', b'y', b'p',       // box type = ftyp
+            b'a', b'v', b'i', b'f',       // major brand = avif
+            0x00, 0x00, 0x00, 0x00,       // minor version
+            b'm', b'i', b'f', b'1',       // compatible brand
+            0x00, 0x00, 0x00, 0x00,       // padding
+        ]
+        .into_iter()
+        .chain([0u8; 32])
+        .collect();
+        let err = decode(&bytes).unwrap_err();
+        assert!(matches!(err, ImageError::Avif(_)), "ожидался Avif(_), получено {err:?}");
+    }
+
+    #[test]
+    fn image_error_from_avif_error() {
+        let err: ImageError = AvifError::InvalidSignature.into();
+        assert!(matches!(err, ImageError::Avif(AvifError::InvalidSignature)));
+    }
+
+    #[test]
+    fn image_error_display_avif() {
+        let err = ImageError::Avif(AvifError::InvalidSignature);
+        let s = format!("{err}");
+        assert!(s.starts_with("AVIF:"), "Display должен начинаться с AVIF: — получено {s:?}");
     }
 
     fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8, a: u8) -> Image {

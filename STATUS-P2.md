@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: AVIF image decoder (#13)  branch: p2-avif-decoder
+Next step: реализовать decode_avif + is_avif + AvifImageDecoder  crates/engine/image/src/avif/mod.rs:1
 
 ---
 

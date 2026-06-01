@@ -5,7 +5,12 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Lumen: декодер растровых изображений (PNG, JPEG, WebP)"
+description = "Lumen: декодер растровых изображений (PNG, JPEG, WebP, GIF, AVIF)"
+
+[features]
+# Enable AVIF decoding via libavif (requires cmake + nasm on the build host).
+# Without this feature: AVIF files are recognised by signature but return AvifError::Decode.
+avif = ["dep:image"]
 
 [dependencies]
 lumen-core.workspace = true
@@ -16,3 +21,8 @@ image-webp = "0.2"
 png = "0.17"
 gif = "0.14"
 flate2.workspace = true
+# Provisional: image 0.25 для AVIF-декодирования через libavif (Phase 0).
+# Trait-anchor: lumen_core::ext::ImageDecoder (AvifImageDecoder).
+# Graduation: permanent когда AVIF станет обязательным форматом в pipeline.
+# Требует cmake + nasm — подключается через feature "avif".
+image = { version = "0.25", default-features = false, features = ["avif"], optional = true }
