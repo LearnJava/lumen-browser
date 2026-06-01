@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+Mouse gesture recognizer (§7B.3)  branch: p1-mouse-gesture
+Next step: implement GestureRecognizer in crates/shell/src/input/gesture.rs
 
 ---
 
