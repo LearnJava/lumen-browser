@@ -23,6 +23,7 @@
 //! create events with `isTrusted=true`.  JS `dispatchEvent()` is never used.
 
 pub mod humanlike;
+pub mod vim;
 
 use std::sync::mpsc;
 

@@ -303,6 +303,7 @@ fn run_window_mode(
         },
         lifecycle_last_tick: std::time::Instant::now(),
         split_view: None,
+        vim_mode: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -1245,6 +1246,8 @@ enum KeyCommand {
     SplitView,
     /// Переключить фокус между левой и правой панелями split view (Ctrl+M).
     SplitFocusSwitch,
+    /// Включить/выключить Vim-режим навигации (Ctrl+Alt+V).
+    VimModeToggle,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1298,6 +1301,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Backslash if ctrl_only => Some(KeyCommand::SplitView),
         // Ctrl+M — move focus between left / right pane in split mode
         KeyCode::KeyM if ctrl_only => Some(KeyCommand::SplitFocusSwitch),
+        // Ctrl+Alt+V — toggle Vim navigation mode
+        KeyCode::KeyV if mods == (ModifiersState::CONTROL | ModifiersState::ALT) => {
+            Some(KeyCommand::VimModeToggle)
+        }
         _ => None,
     }
 }
@@ -2756,6 +2763,12 @@ struct Lumen {
     /// left = active tab (live `Lumen` state), right = `SplitView::right`
     /// (frozen snapshot of another tab). `Ctrl+\` toggles; `Ctrl+M` switches focus.
     split_view: Option<panels::split_view::SplitView>,
+    /// Vim keybinding mode state.  `None` = vim mode is off (default).
+    ///
+    /// Activated via `Ctrl+Alt+V`; deactivated via `Ctrl+Alt+V` again.
+    /// When `Some`, [`VimMode::feed`] intercepts navigation keys before the
+    /// global keybinding table.  [`VimState::Insert`] passes keys through.
+    vim_mode: Option<input::vim::VimMode>,
 }
 
 impl Lumen {
@@ -4379,6 +4392,86 @@ impl Lumen {
             return;
         }
 
+        // Vim keybinding mode: intercept navigation keys in Normal state.
+        // In Insert state, PassThrough falls through to the keybinding table.
+        if let Some(ref mut vm) = self.vim_mode {
+            let action = vm.feed(code, self.modifiers);
+            match action {
+                input::vim::VimAction::PassThrough => {} // fall through below
+                input::vim::VimAction::Consumed => return,
+                input::vim::VimAction::Deactivate => {
+                    self.vim_mode = None;
+                    return;
+                }
+                input::vim::VimAction::EnterInsert | input::vim::VimAction::ExitInsert => {
+                    return;
+                }
+                input::vim::VimAction::ScrollDown => {
+                    self.scroll_active_pane(LINE_STEP_CSS_PX);
+                    return;
+                }
+                input::vim::VimAction::ScrollUp => {
+                    self.scroll_active_pane(-LINE_STEP_CSS_PX);
+                    return;
+                }
+                input::vim::VimAction::ScrollHalfPageDown => {
+                    let half = self.viewport_height_css() * 0.5;
+                    self.scroll_active_pane(half);
+                    return;
+                }
+                input::vim::VimAction::ScrollHalfPageUp => {
+                    let half = self.viewport_height_css() * 0.5;
+                    self.scroll_active_pane(-half);
+                    return;
+                }
+                input::vim::VimAction::ScrollTop => {
+                    self.scroll_active_pane_to(0.0);
+                    return;
+                }
+                input::vim::VimAction::ScrollBottom => {
+                    self.scroll_active_pane_to(f32::INFINITY);
+                    return;
+                }
+                input::vim::VimAction::OpenFind => {
+                    self.hint.close();
+                    self.find.open();
+                    self.request_redraw();
+                    return;
+                }
+                input::vim::VimAction::OpenHints | input::vim::VimAction::OpenHintsNewTab => {
+                    if let (Some(lb), Some(src)) =
+                        (self.layout_box.as_ref(), self.layout_source.as_ref())
+                    {
+                        let doc = src.document.lock().unwrap();
+                        let elements = lumen_layout::collect_clickable_elements(lb, &doc);
+                        drop(doc);
+                        if !elements.is_empty() {
+                            self.hint.open(elements);
+                            self.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                input::vim::VimAction::Copy => {
+                    // Copy the current page URL.  Full clipboard integration is
+                    // wired in task #26 (navigator.clipboard shell binding).
+                    // For now emit the URL to stderr so it is available for testing.
+                    if let Some(url) = self.source.url_str() {
+                        eprintln!("[vim] copy URL: {url}");
+                    }
+                    return;
+                }
+                input::vim::VimAction::HistoryBack => {
+                    self.navigate_back();
+                    return;
+                }
+                input::vim::VimAction::HistoryForward => {
+                    self.navigate_forward();
+                    return;
+                }
+            }
+        }
+
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };
@@ -4478,6 +4571,13 @@ impl Lumen {
                 if let Some(ref mut sv) = self.split_view {
                     sv.toggle_focus();
                     self.request_redraw();
+                }
+            }
+            KeyCommand::VimModeToggle => {
+                if self.vim_mode.is_some() {
+                    self.vim_mode = None;
+                } else {
+                    self.vim_mode = Some(input::vim::VimMode::new());
                 }
             }
         }
