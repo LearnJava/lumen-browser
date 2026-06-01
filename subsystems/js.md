@@ -105,6 +105,14 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - `install_dom` / `run_scripts_with_dom` got `#[allow(clippy::too_many_arguments)]` (8 params).
   - 10 unit tests: register/resolve Promise, state progression, persist no-throw, duplicate scope, getRegistration, unregister, getRegistrations, ready, multiple-scope isolation. **623 JS tests total.**
 
+- **Broadcast Channel API** (`crates/js/src/broadcast_channel.rs`, WHATWG HTML §9.5). 2026-06-02.
+  - `new BroadcastChannel(name)`, `postMessage(message)`, `close()`, `onmessage`/`onmessageerror`, `addEventListener`/`removeEventListener`/`dispatchEvent`.
+  - Routing via a process-global `BroadcastHub` (`static OnceLock<Mutex<…>>`) keyed by channel name, holding one `mpsc::Sender<String>` per live instance. `post` clones the JSON payload to every same-name sender except the sender itself (spec: senders never receive their own messages), pruning dead receivers on send failure.
+  - Each runtime owns a `BroadcastRegistry` (`Arc<Mutex<Vec<LocalChannel>>>`) of receiver halves; `QuickJsRuntime::pump_broadcast_channels()` drains them and calls `_lumen_deliver_broadcast_messages(msgs)` in JS (delivery payload reuses `build_worker_messages_json`, so `m.json` arrives already-parsed — no double `JSON.parse`). Cross-thread/cross-context delivery works because the hub is process-global.
+  - Native bindings: `_lumen_bc_register(name)→u32`, `_lumen_bc_post(id, name, json)`, `_lumen_bc_close(id, name)`. Installed after the DOM shim (needs `MessageEvent`, `DOMException`).
+  - Shell wiring: `PersistentJs::pump_broadcast_channels()` called in `about_to_wait` alongside `pump_workers()`.
+  - 14 unit tests (constructor/name stringify, missing-arg throw, same-name delivery, no-self-delivery, name isolation, addEventListener/removeEventListener, closed-channel stops receiving, post-on-closed throws, MessageEvent type, 3-way fan-out, structured-data round-trip, window-exposed). **752 JS tests total.**
+
 - **AudioContext fingerprint noise** (`crates/js/src/audio_bindings.rs`, ADR-007 Layer 4, 9D.3). 2026-05-30.
   - New module `audio_bindings`: `install_audio_bindings(ctx, seed)` + `new_session_seed()`.
   - JS shim (IIFE): defines `globalThis.AudioContext`, `webkitAudioContext`, `OfflineAudioContext`, `AudioBuffer`.
