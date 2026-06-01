@@ -6,8 +6,7 @@
 
 ## In progress
 
-Mouse gesture recognizer (§7B.3)  branch: p1-mouse-gesture
-Next step: implement GestureRecognizer in crates/shell/src/input/gesture.rs
+(none)
 
 ---
 
@@ -18,8 +17,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
 | 8 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #2 |
-| 9 | **Vim keybindings** — `InputMode::Vim` в `shell/src/input/vim.rs`: normal/insert state machine; `j/k` scroll, `gg/G` top/bottom, `f/t` char jump, `/` find, `yy` copy. Emits `Command::Scroll` / `Command::Find`. See `lumen-plan.md §7B.1` | `lumen-shell` | M | none |
-| 10 | **Mouse gesture recognizer** — `shell/src/input/gesture.rs`: track right-button drag → classify L/R/U/D/LD/RD → emit `Command::Navigate(Back/Forward)`, `Command::Tab(Close)`, `Command::NewTab`. Configurable gesture→command map. See `lumen-plan.md §7B.3` | `lumen-shell` | S | none |
 | 11 | **Custom omnibox aliases** — `shell/src/omnibox/aliases.rs`: `!g <q>` → Google, `!gh <q>` → GitHub, `@notes <text>` → `Command::CreateNote`, `@read-later <url>` → `Command::SaveReadLater`; configurable via `settings` table. See `lumen-plan.md §7B.4` | `lumen-shell` | S | none |
 | 12 | **`<audio>` element stub** — `<audio>` as 0×0 replaced block (with `controls` attr: 40px bar); JS: `play()→Promise`, `pause()`, `src`/`currentTime`/`duration`/`volume`/`muted`; `canplay`/`loadedmetadata` fire immediately. `lumen-js/src/audio_element.rs` | `lumen-js`, `lumen-layout` | S | none |
 | 13 | **Web Notifications API** — `new Notification(title, opts)`, `Notification.requestPermission()`; shell delivers via `OsNotification` surface (winit + OS API). `lumen-js/src/notifications.rs` + `shell/src/platform/notification.rs` | `lumen-js`, `lumen-shell` | M | none |
@@ -43,6 +40,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-mouse-gesture** ✅ 2026-06-01 — Mouse gesture recognizer (§7B.3): `input/gesture.rs` `GestureRecognizer` — отслеживает drag ПКМ, классифицирует L/R/U/D/LD/RD, маппирует на действие через конфигурируемый `GestureMap`. Дефолт: Left=Back, Right=Forward, LeftDown=CloseTab, RightDown=NewTab. Минимальный порог 30px. Wiring: CursorMoved→track, CursorLeft→cancel, Right Press→begin, Right Release→finish→execute_gesture_action. 28 unit-тестов, итого lumen-shell: 427.
 - **p1-vim-keybindings** ✅ 2026-06-01 — Vim keybindings (§7B.1): `input/vim.rs` VimMode state machine (Normal/Insert), j/k scroll, d/u half-page, gg top, G bottom, f/t/F hints, / find, yy copy URL, H/L history. Ctrl+Alt+V toggles mode. Escape в Normal — swallow (not close). 27 unit-тестов, итого lumen-shell: 399.
 - **p1-geolocation-api** ✅ 2026-06-01 — Geolocation API stub (W3C Geolocation L2 §5): `navigator.geolocation.getCurrentPosition/watchPosition/clearWatch`; по умолчанию `PERMISSION_DENIED`; opt-in fake coords через `FakeCoords { latitude, longitude, accuracy }` в `install_geolocation_bindings`. Вызов добавлен в `QuickJsRuntime::install_dom`. `GeolocationPositionError` с константами PERMISSION_DENIED/POSITION_UNAVAILABLE/TIMEOUT. 17 unit-тестов, итого lumen-js: 647.
 - **p1-cache-api** ✅ 2026-06-01 — Cache API (§8E): полный CacheStorage/Cache JS-шим. Rust: данные `(method, meta_json, body)`, новые биндинги `_lumen_cache_match_info`/`_lumen_cache_match_any_info`/`_lumen_cache_keys_full`, `delete`/`delete_cache` теперь возвращают `bool`, helper `cache_meta_method()`. JS: `Cache.put(req,resp)` сохраняет status+headers+method; `Cache.match()` возвращает `Response` с правильным статусом; `Cache.matchAll()`; `Cache.delete()` → реальный bool; `Cache.keys()` → Request с method; `Cache.add(url)`; `Cache.addAll(urls)`; `caches.match()` с метаданными. 22 теста (было 8 заглушек), итого 630 lumen-js.
