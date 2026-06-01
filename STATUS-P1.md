@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+Cache API (§8E) — branch: p1-cache-api
+Next step: upgrade Rust bindings + JS shim in crates/js/src/dom.rs:503
 
 ---
 
