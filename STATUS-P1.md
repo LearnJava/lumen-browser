@@ -6,8 +6,7 @@
 
 ## In progress
 
-Cache API (§8E) — branch: p1-cache-api
-Next step: upgrade Rust bindings + JS shim in crates/js/src/dom.rs:503
+(none)
 
 ---
 
@@ -46,6 +45,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-cache-api** ✅ 2026-06-01 — Cache API (§8E): полный CacheStorage/Cache JS-шим. Rust: данные `(method, meta_json, body)`, новые биндинги `_lumen_cache_match_info`/`_lumen_cache_match_any_info`/`_lumen_cache_keys_full`, `delete`/`delete_cache` теперь возвращают `bool`, helper `cache_meta_method()`. JS: `Cache.put(req,resp)` сохраняет status+headers+method; `Cache.match()` возвращает `Response` с правильным статусом; `Cache.matchAll()`; `Cache.delete()` → реальный bool; `Cache.keys()` → Request с method; `Cache.add(url)`; `Cache.addAll(urls)`; `caches.match()` с метаданными. 22 теста (было 8 заглушек), итого 630 lumen-js.
 - **p1-web-worker** ✅ 2026-06-01 — Web Worker API (§8E): `new Worker(url)` → отдельный `std::thread` с собственным QuickJS Runtime; `postMessage`/`onmessage`/`terminate`; mpsc message passing, JSON serialization; `QuickJsRuntime::pump_workers()` → `_lumen_deliver_worker_messages(msgs)` в JS; `PersistentJs::pump_workers()` в shell's `about_to_wait`; Worker globals: `self`/`postMessage`/`onmessage`/`addEventListener`/`console`/`setTimeout`-stub; URL resolution: blob:lumen/ (Blob._bytes→TextDecoder), data: (plain+base64), external=stub. 15 unit-тестов (roundtrip, addEventListener, base64, blob URL), итого 617 lumen-js.
 - **p1-service-worker-api** ✅ 2026-06-01 — Service Worker API stub (§8E): `navigator.serviceWorker` → `ServiceWorkerContainer` (register/unregister/getRegistration/getRegistrations/ready); `ServiceWorkerRegistration` (installing/waiting/active, update/unregister); `ServiceWorker` lifecycle state machine (`installing→installed→activating→activated`) via `setTimeout`; `install`/`activate`/`fetch`/`message` events; `SwBackend` trait in `lumen-core::ext:1530`; `SwStore` in `lumen-storage` (JSON snapshot over `StorageBackend`); `_lumen_sw_persist`/`_lumen_sw_load`/`_lumen_sw_unregister` Rust bindings; `SwStore` wired in `lumen-shell` via `sw_store_for_base()`; `#[allow(too_many_arguments)]` on `install_dom`+`run_scripts_with_dom`. 10 unit tests, 623 total lumen-js.
 - **p1-download-manager** ✅ 2026-06-01 — Download manager (7D.1): `DownloadManager` (`shell/src/download.rs`) — `start_download(url,dest)` → фоновый thread → `HttpClient::fetch` → mpsc progress → file write; `cancel(id)`; `open_download(id)` (ShellExecuteW/xdg-open); `poll()` дренирует события в `about_to_wait`; Ctrl+Shift+J toggle панели. UI: `build_download_bar` — bottom-right overlay, до 5 записей, indeterminate progress bar для InProgress, зелёный bar для Done, красный текст для Failed. 22 unit-теста, 355 итого lumen-shell.
