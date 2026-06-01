@@ -191,7 +191,13 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let event_sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
+    let blocked_log = Arc::new(std::sync::Mutex::new(
+        panels::shields_panel::BlockedLog::default(),
+    ));
+    let event_sink: Arc<dyn EventSink> = Arc::new(panels::shields_panel::ShieldCountSink {
+        inner: Arc::new(StdoutEventSink),
+        log: Arc::clone(&blocked_log),
+    });
 
     // --import-session переопределяет источник страницы и начальный scroll.
     let (cli, initial_scroll) = match import_session {
@@ -201,7 +207,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, initial_scroll, no_scrollbar),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, initial_scroll, no_scrollbar),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
     }
@@ -210,6 +216,7 @@ fn main() -> ExitCode {
 fn run_window_mode(
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
+    blocked_log: Arc<std::sync::Mutex<panels::shields_panel::BlockedLog>>,
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
 ) -> ExitCode {
@@ -310,6 +317,7 @@ fn run_window_mode(
         workspace_panel: panels::workspace_panel::WorkspacePanel::new(),
         workspaces: lumen_storage::Workspaces::open_in_memory()
             .expect("workspaces in-memory"),
+        shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1265,6 +1273,8 @@ enum KeyCommand {
     ToggleTreeTabs,
     /// Показать/скрыть панель воркспейсов (Ctrl+Shift+W).
     ToggleWorkspaces,
+    /// Показать/скрыть панель Shields (Ctrl+Shift+S).
+    ToggleShields,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1331,6 +1341,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+W — toggle workspace switcher bar
         KeyCode::KeyW if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleWorkspaces)
+        }
+        // Ctrl+Shift+S — toggle shields panel
+        KeyCode::KeyS if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleShields)
         }
         _ => None,
     }
@@ -2816,6 +2830,13 @@ struct Lumen {
     /// Persistent workspace storage — SQLite in-memory during testing; wired to
     /// a disk path in production via `Workspaces::open(path)`.
     workspaces: lumen_storage::Workspaces,
+    /// Shields floating panel state (7C.4).
+    ///
+    /// Shows blocked-request counts per domain, and lets the user toggle
+    /// request filtering on/off for the current site.  `Ctrl+Shift+S` toggles
+    /// visibility.  Backed by a shared [`BlockedLog`] updated from the network
+    /// thread via [`ShieldCountSink`].
+    shields: panels::shields_panel::ShieldsPanel,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -3355,6 +3376,20 @@ impl Lumen {
             self.animated_gifs.insert(url, gif);
         }
 
+        // Update shields panel domain and clear per-page blocked counts.
+        {
+            let domain = self.source.url_str().and_then(|u| {
+                // Extract hostname from the loaded URL for the shields panel.
+                let rest = u.strip_prefix("https://").or_else(|| u.strip_prefix("http://"))?;
+                let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+                let host = &rest[..host_end];
+                let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+                if host.is_empty() { None } else { Some(host.to_ascii_lowercase()) }
+            });
+            self.shields.clear_log();
+            self.shields.set_domain(domain);
+        }
+
         // Reset CPU image cache for the new page (10E.4 scroll-discard).
         self.image_cache.clear();
         if let Some(r) = self.renderer.as_mut() {
@@ -3792,6 +3827,32 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             Some(panels::tree_tabs::TreeTabHit::Empty) | None => {}
                         }
                         return;
+                    }
+
+                    // Shields floating panel (7C.4): top-right overlay.
+                    if self.shields.visible {
+                        let win_w = self.viewport_width_css();
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        if let Some(hit) = panels::shields_panel::hit_test(
+                            &self.shields,
+                            x_css,
+                            y_css,
+                            win_w,
+                            tab_h,
+                        ) {
+                            match hit {
+                                panels::shields_panel::ShieldsHit::Toggle => {
+                                    self.shields.enabled = !self.shields.enabled;
+                                    self.request_redraw();
+                                }
+                                panels::shields_panel::ShieldsHit::Close => {
+                                    self.shields.visible = false;
+                                    self.request_redraw();
+                                }
+                                panels::shields_panel::ShieldsHit::Empty => {}
+                            }
+                            return;
+                        }
                     }
 
                     // Workspace switcher bar (7A.3): clicks in the bottom bar area.
@@ -4304,6 +4365,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         win_h,
                     );
                     overlay_buf.append(&mut tt_cmds);
+                }
+
+                // Shields floating panel (7C.4): top-right overlay anchored below
+                // the tab bar.  Refresh blocked counts before rendering.
+                if self.shields.visible {
+                    self.shields.refresh();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let win_w = self.viewport_width_css();
+                    let mut sh_cmds = panels::shields_panel::build_panel(
+                        &self.shields,
+                        win_w,
+                        tab_h,
+                    );
+                    overlay_buf.append(&mut sh_cmds);
                 }
 
                 // Workspace switcher bar (7A.3): bottom-docked horizontal strip.
@@ -4885,6 +4960,10 @@ impl Lumen {
                 self.workspace_panel.toggle();
                 // Viewport height changes — re-layout so content doesn't hide under bar.
                 self.relayout();
+                self.request_redraw();
+            }
+            KeyCommand::ToggleShields => {
+                self.shields.toggle();
                 self.request_redraw();
             }
         }
