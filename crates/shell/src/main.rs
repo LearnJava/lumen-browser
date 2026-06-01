@@ -305,6 +305,7 @@ fn run_window_mode(
         split_view: None,
         vim_mode: None,
         vertical_tabs: panels::vertical_tabs::VerticalTabsPanel::new(),
+        gesture: input::gesture::GestureRecognizer::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -2779,6 +2780,13 @@ struct Lumen {
     /// When visible, the left `PANEL_WIDTH` CSS px of the window are occupied by
     /// the tab list and the page viewport shifts right accordingly.
     vertical_tabs: panels::vertical_tabs::VerticalTabsPanel,
+    /// Right-button drag gesture recognizer (§7B.3).
+    ///
+    /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
+    /// and maps each direction to a [`GestureAction`] via a configurable
+    /// [`GestureMap`].  Default bindings: Left=Back, Right=Forward,
+    /// LeftDown=CloseTab, RightDown=NewTab.
+    gesture: input::gesture::GestureRecognizer,
 }
 
 impl Lumen {
@@ -3585,6 +3593,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = Some(position);
                 self.update_cursor_icon();
+                // Feed current position to the gesture recognizer (right-drag tracking).
+                {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    self.gesture.track(
+                        (position.x as f32) / dpr,
+                        (position.y as f32) / dpr,
+                    );
+                }
                 // Активный drag — пересчитать scroll по новой позиции.
                 if let Some(drag) = self.scroll_drag {
                     let dpr = self
@@ -3603,6 +3623,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
+                self.gesture.cancel();
                 // Драг продолжается даже когда курсор вышел из окна — winit
                 // продолжит слать CursorMoved-события за пределами client area,
                 // пока зажата кнопка. Сбросим drag только на MouseInput Release
@@ -3611,9 +3632,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // для Phase 0).
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if button != MouseButton::Left {
-                    // Phase 0: только левая кнопка управляет drag-ом scrollbar-а.
-                    // Middle / right / back / forward — пропускаем.
+                if button == MouseButton::Right {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let (x_css, y_css) = self
+                        .cursor_position
+                        .map(|p| ((p.x as f32) / dpr, (p.y as f32) / dpr))
+                        .unwrap_or((0.0, 0.0));
+                    if state == ElementState::Pressed {
+                        self.gesture.begin(x_css, y_css);
+                    } else if state == ElementState::Released
+                        && let Some(action) = self.gesture.finish()
+                    {
+                        self.execute_gesture_action(action, event_loop);
+                    }
+                } else if button != MouseButton::Left {
+                    // Middle / back / forward — ignore.
                 } else if state == ElementState::Pressed {
                     let Some(cursor) = self.cursor_position else {
                         // Без CursorMoved-snapshot-а до Press — не знаем где
@@ -4762,6 +4799,24 @@ impl Lumen {
         self.scroll_x = sx;
         self.scroll_y = sy;
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
+    }
+
+    /// Execute a gesture action produced by the right-button drag recognizer.
+    fn execute_gesture_action(
+        &mut self,
+        action: input::gesture::GestureAction,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
+        use input::gesture::GestureAction;
+        match action {
+            GestureAction::NavigateBack => self.navigate_back(),
+            GestureAction::NavigateForward => self.navigate_forward(),
+            GestureAction::NewTab => self.open_new_tab(),
+            GestureAction::CloseTab => {
+                let idx = self.tab_strip.active;
+                self.close_tab(idx, event_loop);
+            }
+        }
     }
 
     fn handle_ime(&mut self, ime: &Ime) {
