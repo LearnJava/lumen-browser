@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+Custom omnibox aliases (§7B.4)  branch: p1-omnibox-aliases
+Next step: storage/src/omnibox_aliases.rs → shell/src/omnibox/mod.rs → main.rs wiring
 
 ---
 

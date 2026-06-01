@@ -1716,7 +1716,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (237 symbols)
+## lumen-shell  (257 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1809,6 +1809,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/hints.rs:99` **fn** `typed` — Characters typed so far — used to dim non-matching badges
 `crates/shell/src/hints.rs:107` **fn** `items` — Compute viewport-space hint items for the current scroll offsets
 `crates/shell/src/hints.rs:172` **fn** `build_hints_overlay` — Build the viewport-locked overlay display list for all active hint badges
+`crates/shell/src/input/gesture.rs:36` **enum** `GestureDir` — Six-way gesture direction code
+`crates/shell/src/input/gesture.rs:55` **enum** `GestureAction` — Shell action emitted when a completed gesture matches a binding
+`crates/shell/src/input/gesture.rs:81` **struct** `GestureMap` — Configurable mapping from [`GestureDir`] to [`GestureAction`]
+`crates/shell/src/input/gesture.rs:97` **fn** `empty` — Empty map — no bindings
+`crates/shell/src/input/gesture.rs:103` **fn** `bind` — Bind `dir` to `action`, replacing any previous binding
+`crates/shell/src/input/gesture.rs:109` **fn** `unbind` — Remove the binding for `dir`
+`crates/shell/src/input/gesture.rs:114` **fn** `lookup` — Return the action bound to `dir`, or `None` if unbound
+`crates/shell/src/input/gesture.rs:150` **struct** `GestureRecognizer` — State machine for recognizing right-button drag mouse gestures
+`crates/shell/src/input/gesture.rs:157` **fn** `new` — Create a recognizer with the default gesture map
+`crates/shell/src/input/gesture.rs:163` **fn** `with_map` — Create a recognizer with a custom gesture map
+`crates/shell/src/input/gesture.rs:169` **fn** `set_map` — Replace the gesture map at runtime (e.g. from settings)
+`crates/shell/src/input/gesture.rs:175` **fn** `map` — Shared reference to the current gesture map
+`crates/shell/src/input/gesture.rs:181` **fn** `map_mut` — Mutable reference to the current gesture map
+`crates/shell/src/input/gesture.rs:189` **fn** `begin` — Begin tracking a right-button drag from `(x, y)` in CSS pixels
+`crates/shell/src/input/gesture.rs:197` **fn** `track` — Update the current drag end-point
+`crates/shell/src/input/gesture.rs:211` **fn** `finish` — Finish the drag and return the mapped [`GestureAction`], if any
+`crates/shell/src/input/gesture.rs:226` **fn** `cancel` — Cancel the in-progress drag without emitting an action
+`crates/shell/src/input/gesture.rs:232` **fn** `is_active` — Returns `true` while a right-button drag is being tracked
 `crates/shell/src/input/humanlike.rs:136` **struct** `HumanLikeConfig` — Timing and motion parameters for [`HumanLikeSender`]
 `crates/shell/src/input/humanlike.rs:177` **enum** `InputMode` — Controls how injected inputs are delivered to the shell
 `crates/shell/src/input/humanlike.rs:202` **struct** `HumanLikeSender` — Wraps [`InputSender`] and injects human-like timing and mouse motion
@@ -1818,15 +1836,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/input/humanlike.rs:267` **fn** `type_text` — Type `text` with Gaussian-distributed inter-keystroke delays
 `crates/shell/src/input/humanlike.rs:287` **fn** `scroll_to` — Scroll to `(x, y)` immediately (no path animation for scrolls)
 `crates/shell/src/input/humanlike.rs:295` **fn** `set_cursor_position` — Override the assumed cursor starting position without moving it
-`crates/shell/src/input/mod.rs:37` **enum** `InputCommand` — A single injected input command
-`crates/shell/src/input/mod.rs:89` **struct** `InputSender` — Sender side of the input injection channel
-`crates/shell/src/input/mod.rs:94` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:100` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:106` **fn** `type_text` — Send a synthetic text-typing command
-`crates/shell/src/input/mod.rs:112` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
-`crates/shell/src/input/mod.rs:120` **struct** `InputReceiver` — Receiver side of the input injection channel
-`crates/shell/src/input/mod.rs:124` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
-`crates/shell/src/input/mod.rs:133` **fn** `channel` — Create a new input injection channel
+`crates/shell/src/input/mod.rs:38` **enum** `InputCommand` — A single injected input command
+`crates/shell/src/input/mod.rs:90` **struct** `InputSender` — Sender side of the input injection channel
+`crates/shell/src/input/mod.rs:95` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:101` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:107` **fn** `type_text` — Send a synthetic text-typing command
+`crates/shell/src/input/mod.rs:113` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
+`crates/shell/src/input/mod.rs:121` **struct** `InputReceiver` — Receiver side of the input injection channel
+`crates/shell/src/input/mod.rs:125` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
+`crates/shell/src/input/mod.rs:134` **fn** `channel` — Create a new input injection channel
 `crates/shell/src/input/vim.rs:41` **enum** `VimState` — Which sub-mode the Vim keybinding layer is currently in
 `crates/shell/src/input/vim.rs:61` **enum** `VimAction` — Decoded action that the caller should execute in response to a keypress
 `crates/shell/src/input/vim.rs:106` **struct** `VimMode` — Vim-mode state machine
@@ -1839,6 +1857,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/momentum_anim.rs:26` **struct** `MomentumAnim` — Velocity-based momentum анимация. Хранится в `Lumen.momentum_anim`
 `crates/shell/src/momentum_anim.rs:36` **fn** `new`
 `crates/shell/src/momentum_anim.rs:43` **fn** `advance` — Прогнать анимацию до `now_ms`. Возвращает `(Δy, Δx, done)`
+`crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
+`crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
 `crates/shell/src/panels/split_view.rs:20` **enum** `SplitFocus` — Which pane receives keyboard and scroll input
 `crates/shell/src/panels/split_view.rs:34` **struct** `SplitPane` — Frozen rendering state for the right pane in a split view
 `crates/shell/src/panels/split_view.rs:54` **struct** `SplitView` — Active split-view state: two side-by-side `ContentViewport` slots
@@ -1956,7 +1976,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/strip.rs:162` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
 `crates/shell/src/tabs/strip.rs:193` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
 
-## lumen-storage  (383 symbols)
+## lumen-storage  (391 symbols)
 
 `crates/storage/src/autofill.rs:17` **struct** `AutofillEntry`
 `crates/storage/src/autofill.rs:25` **struct** `Autofill`
@@ -2122,6 +2142,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/notifications.rs:229` **fn** `delete`
 `crates/storage/src/notifications.rs:239` **fn** `delete_older_than`
 `crates/storage/src/notifications.rs:253` **fn** `count`
+`crates/storage/src/omnibox_aliases.rs:23` **struct** `OmniboxAlias` — One omnibox bang-alias entry
+`crates/storage/src/omnibox_aliases.rs:35` **struct** `OmniboxAliases` — SQLite-backed registry of omnibox bang-aliases
+`crates/storage/src/omnibox_aliases.rs:47` **fn** `open` — Open persistent alias store at `path`
+`crates/storage/src/omnibox_aliases.rs:54` **fn** `open_in_memory` — Open in-memory store (tests / ephemeral sessions)
+`crates/storage/src/omnibox_aliases.rs:97` **fn** `set` — Add or replace an alias.  `trigger` must start with `!`
+`crates/storage/src/omnibox_aliases.rs:109` **fn** `get` — Look up an alias by its `trigger` (e.g. `"!g"`)
+`crates/storage/src/omnibox_aliases.rs:124` **fn** `list_all` — All aliases ordered by trigger
+`crates/storage/src/omnibox_aliases.rs:145` **fn** `delete` — Delete an alias by trigger.  No-op if not found
 `crates/storage/src/permissions.rs:20` **enum** `PermissionKind` — Известные типы permissions. Произвольные строки тоже допустимы для
 `crates/storage/src/permissions.rs:34` **fn** `as_str`
 `crates/storage/src/permissions.rs:47` **fn** `parse`
@@ -2343,4 +2371,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2281 symbols in 19 crates*
+*Total: 2309 symbols in 19 crates*

@@ -28,6 +28,7 @@ mod hints;
 mod input;
 mod links;
 mod momentum_anim;
+mod omnibox;
 mod panels;
 mod runtime;
 mod scroll;
@@ -307,6 +308,10 @@ fn run_window_mode(
         vertical_tabs: panels::vertical_tabs::VerticalTabsPanel::new(),
         tree_tabs: panels::tree_tabs::TreeTabsPanel::new(),
         gesture: input::gesture::GestureRecognizer::new(),
+        omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
+            .expect("omnibox_aliases init"),
+        notes: Vec::new(),
+        read_later: Vec::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -2800,6 +2805,21 @@ struct Lumen {
     /// [`GestureMap`].  Default bindings: Left=Back, Right=Forward,
     /// LeftDown=CloseTab, RightDown=NewTab.
     gesture: input::gesture::GestureRecognizer,
+    /// SQLite-backed omnibox bang-alias registry (§7B.4).
+    ///
+    /// Seeded with `!g` (Google) and `!gh` (GitHub) on startup.  Custom aliases
+    /// are addable via `set(trigger, expansion)`.
+    omnibox_aliases: lumen_storage::OmniboxAliases,
+    /// In-session notes created via `@notes <text>` in the omnibox.
+    ///
+    /// Persisted in-memory for the session; each entry is a raw text string.
+    /// Displayed nowhere yet — UI is a future task.
+    notes: Vec<String>,
+    /// In-session read-later list created via `@read-later <url>` in the omnibox.
+    ///
+    /// Each entry is a URL string.  Persisted in-memory; future task wires this
+    /// to the bookmarks backend with a `read-later` tag.
+    read_later: Vec<String>,
 }
 
 impl Lumen {
@@ -4960,15 +4980,7 @@ impl Lumen {
             KeyCode::Enter if !key_event.repeat => {
                 self.address_bar.commit();
                 if let Some(value) = self.address_bar.take_commit() {
-                    // Записываем в search_history если это не URL.
-                    if !value.contains("://") && !value.starts_with('@') {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64;
-                        let _ = self.search_history.record(&value, now);
-                    }
-                    self.navigate_to(PageSource::from_arg(Some(&value)));
+                    self.handle_omnibox_commit(value);
                 }
             }
             KeyCode::ArrowDown if !key_event.repeat => {
@@ -4996,6 +5008,38 @@ impl Lumen {
                 }
             }
         }
+    }
+
+    /// Process a committed omnibox value: resolve aliases, then navigate or act.
+    ///
+    /// Order: bang aliases (`!g`) → `@notes` / `@read-later` → record in
+    /// search_history → plain navigate.
+    fn handle_omnibox_commit(&mut self, value: String) {
+        let aliases = self.omnibox_aliases.list_all().unwrap_or_default();
+        if let Some(action) = omnibox::resolve(&value, &aliases) {
+            match action {
+                omnibox::AliasAction::Navigate(url) => {
+                    self.navigate_to(PageSource::from_arg(Some(&url)));
+                }
+                omnibox::AliasAction::CreateNote(text) => {
+                    self.notes.push(text);
+                }
+                omnibox::AliasAction::SaveReadLater(url) => {
+                    self.read_later.push(url);
+                }
+            }
+            return;
+        }
+
+        // No alias matched — plain URL or search query.
+        if !value.contains("://") && !value.starts_with('@') {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let _ = self.search_history.record(&value, now);
+        }
+        self.navigate_to(PageSource::from_arg(Some(&value)));
     }
 
     /// Запрашивает подсказки для текущего ввода в адресной строке.
