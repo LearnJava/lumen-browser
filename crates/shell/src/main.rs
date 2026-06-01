@@ -28,6 +28,7 @@ mod hints;
 mod input;
 mod links;
 mod momentum_anim;
+mod panels;
 mod runtime;
 mod scroll;
 mod scroll_anim;
@@ -301,6 +302,7 @@ fn run_window_mode(
             mgr
         },
         lifecycle_last_tick: std::time::Instant::now(),
+        split_view: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -1238,6 +1240,11 @@ enum KeyCommand {
     NextTab,
     /// Открыть/закрыть панель загрузок (Ctrl+Shift+J).
     DownloadsPanel,
+    /// Открыть/закрыть split view (Ctrl+\): показывает активную и следующую
+    /// вкладку рядом. При повторном нажатии закрывает split.
+    SplitView,
+    /// Переключить фокус между левой и правой панелями split view (Ctrl+M).
+    SplitFocusSwitch,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1287,6 +1294,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Home if no_mods => Some(KeyCommand::ScrollHome),
         KeyCode::End if no_mods => Some(KeyCommand::ScrollEnd),
         KeyCode::KeyJ if ctrl_and_shift => Some(KeyCommand::DownloadsPanel),
+        // Ctrl+\ — toggle split view (show active + next tab side-by-side)
+        KeyCode::Backslash if ctrl_only => Some(KeyCommand::SplitView),
+        // Ctrl+M — move focus between left / right pane in split mode
+        KeyCode::KeyM if ctrl_only => Some(KeyCommand::SplitFocusSwitch),
         _ => None,
     }
 }
@@ -2739,6 +2750,12 @@ struct Lumen {
     /// Monotonic instant of the last `tick_lifecycle` call — used to throttle
     /// polling to approximately once per second.
     lifecycle_last_tick: std::time::Instant,
+    /// Active split-view state. `None` = single-pane mode (normal).
+    ///
+    /// When `Some`, the window is divided into two side-by-side panes:
+    /// left = active tab (live `Lumen` state), right = `SplitView::right`
+    /// (frozen snapshot of another tab). `Ctrl+\` toggles; `Ctrl+M` switches focus.
+    split_view: Option<panels::split_view::SplitView>,
 }
 
 impl Lumen {
@@ -3602,6 +3619,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // Split-view focus routing: clicking in the right pane
+                    // transfers focus there; clicking in the left pane transfers
+                    // focus back. Right-pane clicks do not navigate (frozen pane).
+                    if self.split_view.is_some() {
+                        // Pre-compute before mutable borrow of split_view.
+                        let split_x = (self.viewport_width_css() / 2.0).floor();
+                        if let Some(ref mut sv) = self.split_view {
+                            sv.focus_at(x_css, split_x);
+                            if sv.cursor_in_right(x_css, split_x) {
+                                // Right pane clicked — focus only, no link navigation.
+                                self.request_redraw();
+                                return;
+                            }
+                        }
+                        // Left pane clicked — fall through to normal handling below.
+                    }
+
                     let vh = self.viewport_height_css();
                     match scrollbar::classify_track_click(
                         x_css,
@@ -3652,6 +3686,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     .as_ref()
                     .map_or(1.0_f32, |r| r.scale_factor() as f32);
                 let shift = self.modifiers.shift_key();
+
+                // In split mode, check if right pane is focused; route scroll there.
+                let right_pane_focused = self
+                    .split_view
+                    .as_ref()
+                    .is_some_and(|sv| sv.focused == panels::split_view::SplitFocus::Right);
+
                 match delta {
                     MouseScrollDelta::LineDelta(cols, lines) => {
                         // Mouse wheel: дискретные тики, momentum не нужен.
@@ -3660,8 +3701,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let dx = -cols * 40.0;
                         let dy = -lines * 40.0;
                         let (dx_css, dy_css) = if shift { (dy, 0.0) } else { (dx, dy) };
-                        if dx_css != 0.0 { self.scroll_x_by(dx_css); }
-                        self.scroll_by_smooth(dy_css);
+                        if right_pane_focused {
+                            let vh = self.viewport_height_css();
+                            let vw = (self.viewport_width_css() / 2.0).floor();
+                            if let Some(ref mut sv) = self.split_view {
+                                if dy_css != 0.0 {
+                                    let max =
+                                        (sv.right.content_height - vh).max(0.0);
+                                    sv.right.scroll_y =
+                                        (sv.right.scroll_y + dy_css).clamp(0.0, max);
+                                }
+                                if dx_css != 0.0 {
+                                    let max = (sv.right.content_width - vw).max(0.0);
+                                    sv.right.scroll_x =
+                                        (sv.right.scroll_x + dx_css).clamp(0.0, max);
+                                }
+                            }
+                            self.request_redraw();
+                        } else {
+                            if dx_css != 0.0 { self.scroll_x_by(dx_css); }
+                            self.scroll_by_smooth(dy_css);
+                        }
                     }
                     MouseScrollDelta::PixelDelta(p) => {
                         let raw_x = -(p.x as f32) / dpr.max(1e-6);
@@ -3689,8 +3749,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.touchpad_vel = (0.0, 0.0);
                                 let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
                                 self.touchpad_vel_time_ms = now;
-                                if dx_css != 0.0 { self.scroll_x_by(dx_css); }
-                                self.scroll_by_smooth(dy_css);
+                                if right_pane_focused {
+                                    let vh = self.viewport_height_css();
+                                    if let Some(ref mut sv) = self.split_view
+                                        && dy_css != 0.0
+                                    {
+                                        let max =
+                                            (sv.right.content_height - vh).max(0.0);
+                                        sv.right.scroll_y =
+                                            (sv.right.scroll_y + dy_css).clamp(0.0, max);
+                                    }
+                                    self.request_redraw();
+                                } else {
+                                    if dx_css != 0.0 { self.scroll_x_by(dx_css); }
+                                    self.scroll_by_smooth(dy_css);
+                                }
                             }
                             TouchPhase::Moved => {
                                 // Палец движется: обновляем scroll и velocity (EWMA).
@@ -3707,8 +3780,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     ALPHA * inst_x + (1.0 - ALPHA) * vx,
                                     ALPHA * inst_y + (1.0 - ALPHA) * vy,
                                 );
-                                if dx_css != 0.0 { self.scroll_x_by(dx_css); }
-                                self.scroll_by_smooth(dy_css);
+                                if right_pane_focused {
+                                    let vh = self.viewport_height_css();
+                                    if let Some(ref mut sv) = self.split_view
+                                        && dy_css != 0.0
+                                    {
+                                        let max =
+                                            (sv.right.content_height - vh).max(0.0);
+                                        sv.right.scroll_y =
+                                            (sv.right.scroll_y + dy_css).clamp(0.0, max);
+                                    }
+                                    self.request_redraw();
+                                } else {
+                                    if dx_css != 0.0 { self.scroll_x_by(dx_css); }
+                                    self.scroll_by_smooth(dy_css);
+                                }
                             }
                         }
                     }
@@ -3972,22 +4058,51 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut tab_cmds);
                 }
 
-                if let Some(r) = self.renderer.as_mut() {
-                    // Priority: animated DL > find-highlighted DL > base DL.
-                    let base: &[lumen_paint::DisplayCommand] = anim_dl
+                // Build the split-view combined DL before borrowing renderer,
+                // so the immutable borrow of self.split_view ends first.
+                let split_combined: Option<lumen_paint::DisplayList> = {
+                    let base_ref: &[lumen_paint::DisplayCommand] = anim_dl
                         .as_deref()
                         .or(page_buf.as_deref())
                         .unwrap_or(&self.display_list);
-                    // Wrap page content in a PushTransform / PopTransform so all
-                    // page content is shifted down by TAB_BAR_HEIGHT (36 px) and
-                    // does not overlap the tab strip rendered in overlay_buf.
-                    let mut shifted: lumen_paint::DisplayList =
-                        Vec::with_capacity(base.len() + 2);
-                    shifted.push(tabs::strip::tab_page_push_transform());
-                    shifted.extend_from_slice(base);
-                    shifted.push(lumen_paint::DisplayCommand::PopTransform);
-                    if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
-                        eprintln!("Ошибка рендера: {err:?}");
+                    if let Some(ref sv) = self.split_view {
+                        let vp_w = self.viewport_width_css();
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let vp_full_h = self.viewport_height_css() + tab_h;
+                        let split_x = (vp_w / 2.0).floor();
+                        Some(sv.build_combined_dl(
+                            base_ref,
+                            scroll_y,
+                            scroll_x,
+                            split_x,
+                            tab_h,
+                            vp_full_h,
+                        ))
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(r) = self.renderer.as_mut() {
+                    if let Some(combined) = split_combined {
+                        // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
+                        if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
+                            eprintln!("Ошибка рендера (split): {err:?}");
+                        }
+                    } else {
+                        // Normal single-pane mode: shift page below tab bar.
+                        let base: &[lumen_paint::DisplayCommand] = anim_dl
+                            .as_deref()
+                            .or(page_buf.as_deref())
+                            .unwrap_or(&self.display_list);
+                        let mut shifted: lumen_paint::DisplayList =
+                            Vec::with_capacity(base.len() + 2);
+                        shifted.push(tabs::strip::tab_page_push_transform());
+                        shifted.extend_from_slice(base);
+                        shifted.push(lumen_paint::DisplayCommand::PopTransform);
+                        if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
+                            eprintln!("Ошибка рендера: {err:?}");
+                        }
                     }
                 }
             }
@@ -4324,20 +4439,20 @@ impl Lumen {
             }
             KeyCommand::HistoryBack => self.navigate_back(),
             KeyCommand::HistoryForward => self.navigate_forward(),
-            KeyCommand::ScrollLineDown => self.scroll_by_smooth(LINE_STEP_CSS_PX),
-            KeyCommand::ScrollLineUp => self.scroll_by_smooth(-LINE_STEP_CSS_PX),
+            KeyCommand::ScrollLineDown => self.scroll_active_pane(LINE_STEP_CSS_PX),
+            KeyCommand::ScrollLineUp => self.scroll_active_pane(-LINE_STEP_CSS_PX),
             KeyCommand::ScrollLineRight => self.scroll_x_by(LINE_STEP_CSS_PX),
             KeyCommand::ScrollLineLeft => self.scroll_x_by(-LINE_STEP_CSS_PX),
             KeyCommand::ScrollPageDown => {
                 let vh = self.viewport_height_css();
-                self.scroll_by_smooth(page_step(vh));
+                self.scroll_active_pane(page_step(vh));
             }
             KeyCommand::ScrollPageUp => {
                 let vh = self.viewport_height_css();
-                self.scroll_by_smooth(-page_step(vh));
+                self.scroll_active_pane(-page_step(vh));
             }
-            KeyCommand::ScrollHome => self.start_smooth_scroll(0.0),
-            KeyCommand::ScrollEnd => self.start_smooth_scroll(f32::INFINITY),
+            KeyCommand::ScrollHome => self.scroll_active_pane_to(0.0),
+            KeyCommand::ScrollEnd => self.scroll_active_pane_to(f32::INFINITY),
             KeyCommand::NewTab => self.open_new_tab(),
             KeyCommand::CloseTab => {
                 let idx = self.tab_strip.active;
@@ -4350,6 +4465,20 @@ impl Lumen {
             KeyCommand::DownloadsPanel => {
                 self.downloads.toggle_visible();
                 self.request_redraw();
+            }
+            KeyCommand::SplitView => {
+                if self.split_view.is_some() {
+                    self.split_view = None;
+                } else {
+                    self.toggle_split_view();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::SplitFocusSwitch => {
+                if let Some(ref mut sv) = self.split_view {
+                    sv.toggle_focus();
+                    self.request_redraw();
+                }
             }
         }
     }
@@ -4871,6 +5000,48 @@ impl Lumen {
     fn scroll_by_smooth(&mut self, delta: f32) {
         let base = self.scroll_anim.as_ref().map_or(self.scroll_y, |a| a.target());
         self.start_smooth_scroll(base + delta);
+    }
+
+    /// Scroll the currently focused pane by `delta` CSS px.
+    ///
+    /// In split mode, routes to the right pane when it has focus; otherwise
+    /// falls through to `scroll_by_smooth` for the left (active) pane.
+    fn scroll_active_pane(&mut self, delta: f32) {
+        // Pre-compute viewport height before mutably borrowing split_view.
+        let vh = self.viewport_height_css();
+        let right_focused = self
+            .split_view
+            .as_ref()
+            .is_some_and(|sv| sv.focused == panels::split_view::SplitFocus::Right);
+        if right_focused {
+            if let Some(ref mut sv) = self.split_view {
+                let max = (sv.right.content_height - vh).max(0.0);
+                sv.right.scroll_y = (sv.right.scroll_y + delta).clamp(0.0, max);
+            }
+            self.request_redraw();
+            return;
+        }
+        self.scroll_by_smooth(delta);
+    }
+
+    /// Scroll the currently focused pane to an absolute position.
+    ///
+    /// `target = f32::INFINITY` scrolls to the bottom of the pane's content.
+    fn scroll_active_pane_to(&mut self, target: f32) {
+        let vh = self.viewport_height_css();
+        let right_focused = self
+            .split_view
+            .as_ref()
+            .is_some_and(|sv| sv.focused == panels::split_view::SplitFocus::Right);
+        if right_focused {
+            if let Some(ref mut sv) = self.split_view {
+                let max = (sv.right.content_height - vh).max(0.0);
+                sv.right.scroll_y = target.clamp(0.0, max);
+            }
+            self.request_redraw();
+            return;
+        }
+        self.start_smooth_scroll(target);
     }
 
     /// Тик анимации перед `Renderer::render`. Если анимация активна —
@@ -5398,6 +5569,46 @@ impl Lumen {
         self.request_redraw();
     }
 
+    /// Open or toggle split view (Ctrl+\).
+    ///
+    /// Picks the next tab after the active one for the right pane. If no other
+    /// tab exists, does nothing (split requires at least two tabs).
+    fn toggle_split_view(&mut self) {
+        let tab_count = self.tab_strip.len();
+        if tab_count < 2 {
+            return;
+        }
+        let next_idx = (self.tab_strip.active + 1) % tab_count;
+        let next_id = self.tab_strip.tabs[next_idx].id;
+
+        let (dl, scroll_y, scroll_x, content_height, content_width) =
+            if let Some(snap) = self.bg_tabs.get(&next_id) {
+                (
+                    snap.display_list.clone(),
+                    snap.scroll_y,
+                    snap.scroll_x,
+                    snap.content_height,
+                    snap.content_width,
+                )
+            } else if let Some(meta) = self.hibernated_tabs.get(&next_id) {
+                // Hibernated tab: show a minimal placeholder with its title/url.
+                let placeholder_dl = build_split_placeholder(&meta.url);
+                (placeholder_dl, 0.0, 0.0, 0.0, 0.0)
+            } else {
+                // Blank/new tab — show empty pane.
+                (vec![], 0.0, 0.0, 0.0, 0.0)
+            };
+
+        self.split_view = Some(panels::split_view::SplitView::new(
+            next_id,
+            dl,
+            scroll_y,
+            scroll_x,
+            content_height,
+            content_width,
+        ));
+    }
+
     /// Close the tab at `idx`. If it was the last tab, exits the app instead.
     fn close_tab(&mut self, idx: usize, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.tab_strip.len() == 1 {
@@ -5675,6 +5886,37 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
         }
     }
     max_x
+}
+
+/// Build a minimal placeholder display list for a hibernated tab in split view.
+///
+/// Shows a dark grey background with the URL text — used when the hibernated
+/// tab's full display list has been evicted from memory.
+fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
+    use lumen_layout::{Color, FontStyle, FontWeight};
+    use lumen_paint::DisplayCommand;
+
+    let bg = Color { r: 30, g: 30, b: 35, a: 255 };
+    let fg = Color { r: 180, g: 180, b: 190, a: 255 };
+    vec![
+        // Background fill — large enough to cover any viewport half.
+        DisplayCommand::FillRect {
+            rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 4096.0, height: 4096.0 },
+            color: bg,
+        },
+        // URL label near vertical centre of a typical viewport half.
+        DisplayCommand::DrawText {
+            rect: lumen_core::geom::Rect { x: 16.0, y: 300.0, width: 480.0, height: 20.0 },
+            text: url.to_owned(),
+            font_size: 13.0,
+            color: fg,
+            font_family: vec![],
+            font_weight: FontWeight(400),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+        },
+    ]
 }
 
 /// Escape a single character for safe embedding in a JS string literal.

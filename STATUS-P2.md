@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(none)_
+Multi-viewport split view (7A.4)  branch: p2-split-view
+Next step: create panels/split_view.rs  crates/shell/src/panels/split_view.rs:1
 
 ---
 
