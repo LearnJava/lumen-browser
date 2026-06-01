@@ -6,8 +6,7 @@
 
 ## In progress
 
-WebRTC mDNS-only stub (9D.5)  branch: p1-webrtc-stub
-Next step: implement `lumen-js/src/webrtc_stub.rs` + install in lib.rs
+_(нет)_
 
 ---
 
@@ -31,6 +30,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-webrtc-stub** ✅ 2026-06-01 — WebRTC mDNS-only stub (9D.5): `lumen-js/src/webrtc_stub.rs` — `RTCPeerConnection` + `RTCSessionDescription` + `RTCIceCandidate`. `onicecandidate` фаерит один UUID.local кандидат (mDNS, без утечки реального IP), затем null (end-of-gathering). `createOffer/createAnswer` → `Promise<RTCSessionDescription>`, `setLocalDescription/setRemoteDescription/addIceCandidate` → stub-Promise. `addEventListener/removeEventListener/dispatchEvent` поддержаны. 17 тестов, clippy чист. lumen-js: 748.
 - **p1-per-context-isolation** ✅ 2026-06-01 — Per-context isolation (8E): `lumen-driver/src/isolation.rs` — `OriginGroup` (eTLD+1 heuristic, `for_origin(url)`) + `OriginIsolationContext` (`CookieJar` in-memory, `localStorage`/`sessionStorage` per origin as `Arc<Mutex<WebStorage>>`, shared `InMemoryStorage` backend для `IdbStore` per origin). `InProcessSession::with_origin_isolation(origin)` builder + `isolation_context()`/`isolation_context_mut()` getters. `run_pipeline` очищает `sessionStorage` на каждую навигацию. `OriginGroup` и `OriginIsolationContext` экспортированы из `lumen-driver`. 22 unit-теста (origin group parsing, localStorage isolation, sessionStorage clear, IDB per-origin + cross-context isolation, cookie jar independence).
 - **p1-deterministic-render** ✅ 2026-06-01 — Deterministic render mode (8F): `--deterministic` CLI флаг замораживает источники недетерминизма в JS — `Date.now()→0`, `Math.random()` заменяется xorshift32 PRNG с seed из FNV-1a хеша URL, RAF timestamp=0, viewport 1280×800. `shell/src/deterministic.rs` + `js/src/lib.rs::set_deterministic_mode()` + JS-инъекция после WEB_API_SHIM. 6 unit-тестов в lumen-js. lumen-shell: 589.
 - **p1-memory-pressure-poll** ✅ 2026-06-01 — Memory pressure poll loop (задача #16): `shell/src/memory_poll.rs` — `MemoryPollTick` (5s интервал), `platform_source()` выбирает `Win32/Linux/NullMemoryPressureSource` по `cfg(target_os)`. `tick(&mut CacheRegistry)` вызывает `broadcast_pressure` на Medium+. `Lumen`: поля `memory_poll` + `cache_registry`; `about_to_wait` вызывает `tick()` → `on_memory_pressure` у `image_cache` и `renderer.layer_cache_mut()`. 8 unit-тестов, итого lumen-shell: 566.
