@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**Web Notifications API (task #13)**  branch: p1-web-notifications
+Next step: create `crates/js/src/notifications_bindings.rs` + `crates/shell/src/notification.rs`
 
 ---
 
