@@ -835,6 +835,12 @@ trait PersistentJs {
     /// which drains `_lumen_ws_poll()` for every open handle.
     #[allow(dead_code)]
     fn pump_websockets(&self);
+    /// Deliver messages posted by Web Worker threads to their `Worker` JS instances.
+    ///
+    /// Must be called on every event-loop tick alongside `tick_timers()` so that
+    /// `onmessage` / `addEventListener('message', fn)` handlers fire promptly.
+    #[allow(dead_code)]
+    fn pump_workers(&self);
 }
 
 #[cfg(feature = "quickjs")]
@@ -924,6 +930,9 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn pump_websockets(&self) {
         self.eval_js("if(typeof _lumen_pump_websockets==='function')_lumen_pump_websockets();");
+    }
+    fn pump_workers(&self) {
+        self.rt.pump_workers();
     }
 }
 
@@ -3414,6 +3423,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(js) = &self.js_ctx {
             js.tick_timers();
             js.pump_websockets();
+            js.pump_workers();
             if let Some(nav) = js.take_navigate_request() {
                 self.pending_js_navigate = Some(nav);
             }

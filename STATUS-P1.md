@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+In progress: Web Worker (§8E)  branch: p1-web-worker
+Next step: write crates/js/src/worker.rs — WorkerHandle, spawn_worker, install_worker_bindings
 
 ---
 
