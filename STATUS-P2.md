@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(none)_
+**Vertical tabs panel (7A.1)**  branch: p2-vertical-tabs
+Next step: create `crates/shell/src/panels/vertical_tabs.rs`
 
 ---
 

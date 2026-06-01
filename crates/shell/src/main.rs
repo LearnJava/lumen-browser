@@ -58,7 +58,7 @@ use lumen_dom::{
     collect_iframes, check_popup_gate,
 };
 use std::collections::HashMap;
-use lumen_layout::{LayoutBox, PaintOrder, StackingTree, TransitionScheduler};
+use lumen_layout::{LayoutBox, Mat4, PaintOrder, StackingTree, TransitionScheduler};
 #[cfg(feature = "quickjs")]
 use lumen_layout::collect_computed_styles;
 use lumen_layout::style::ComputedStyle;
@@ -303,6 +303,7 @@ fn run_window_mode(
         },
         lifecycle_last_tick: std::time::Instant::now(),
         split_view: None,
+        vertical_tabs: panels::vertical_tabs::VerticalTabsPanel::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -1245,6 +1246,8 @@ enum KeyCommand {
     SplitView,
     /// Переключить фокус между левой и правой панелями split view (Ctrl+M).
     SplitFocusSwitch,
+    /// Показать/скрыть вертикальную панель вкладок (Ctrl+B).
+    ToggleVerticalTabs,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1298,6 +1301,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Backslash if ctrl_only => Some(KeyCommand::SplitView),
         // Ctrl+M — move focus between left / right pane in split mode
         KeyCode::KeyM if ctrl_only => Some(KeyCommand::SplitFocusSwitch),
+        // Ctrl+B — toggle vertical tab sidebar
+        KeyCode::KeyB if ctrl_only => Some(KeyCommand::ToggleVerticalTabs),
         _ => None,
     }
 }
@@ -2756,6 +2761,11 @@ struct Lumen {
     /// left = active tab (live `Lumen` state), right = `SplitView::right`
     /// (frozen snapshot of another tab). `Ctrl+\` toggles; `Ctrl+M` switches focus.
     split_view: Option<panels::split_view::SplitView>,
+    /// Vertical tab panel state. Toggled via Ctrl+B.
+    ///
+    /// When visible, the left `PANEL_WIDTH` CSS px of the window are occupied by
+    /// the tab list and the page viewport shifts right accordingly.
+    vertical_tabs: panels::vertical_tabs::VerticalTabsPanel,
 }
 
 impl Lumen {
@@ -3475,7 +3485,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.dispatch_mouse_move(x, y);
                 }
                 input::InputCommand::Scroll { x, y } => {
-                    self.scroll_x = clamp_scroll(x, (self.content_width - self.viewport_width_css()).max(0.0));
+                    self.scroll_x = clamp_scroll(x, self.max_scroll_x());
                     self.scroll_y = clamp_scroll(y, (self.content_height - self.viewport_height_css()).max(0.0));
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
@@ -3615,6 +3625,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.close_tab(idx, event_loop);
                             }
                             tabs::strip::TabHit::Empty => {}
+                        }
+                        return;
+                    }
+
+                    // Vertical tab panel: intercept clicks in x < PANEL_WIDTH area.
+                    if self.vertical_tabs.visible
+                        && x_css < panels::vertical_tabs::PANEL_WIDTH
+                    {
+                        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        match panels::vertical_tabs::hit_test(
+                            &self.tab_strip,
+                            x_css,
+                            y_css,
+                            tabs::strip::TAB_BAR_HEIGHT,
+                            win_h,
+                        ) {
+                            Some(panels::vertical_tabs::VTabHit::Tab(idx)) => {
+                                self.switch_tab(idx);
+                            }
+                            Some(panels::vertical_tabs::VTabHit::Close(idx)) => {
+                                self.close_tab(idx, event_loop);
+                            }
+                            Some(panels::vertical_tabs::VTabHit::Empty) | None => {}
                         }
                         return;
                     }
@@ -4049,6 +4082,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut dl_cmds);
                 }
 
+                // Vertical tab panel: docked left sidebar, below the tab bar.
+                // Rendered before the tab bar so tab bar draws on top.
+                if self.vertical_tabs.visible {
+                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let mut vt_cmds = panels::vertical_tabs::build_panel(
+                        &self.tab_strip,
+                        tabs::strip::TAB_BAR_HEIGHT,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut vt_cmds);
+                }
+
                 // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
                 // Rendered last → always on top of all other overlays.
                 {
@@ -4090,14 +4135,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             eprintln!("Ошибка рендера (split): {err:?}");
                         }
                     } else {
-                        // Normal single-pane mode: shift page below tab bar.
+                        // Normal single-pane mode: shift page below tab bar (and right of
+                        // vertical tabs panel when it is visible).
                         let base: &[lumen_paint::DisplayCommand] = anim_dl
                             .as_deref()
                             .or(page_buf.as_deref())
                             .unwrap_or(&self.display_list);
                         let mut shifted: lumen_paint::DisplayList =
                             Vec::with_capacity(base.len() + 2);
-                        shifted.push(tabs::strip::tab_page_push_transform());
+                        let page_x_offset = if self.vertical_tabs.visible {
+                            panels::vertical_tabs::PANEL_WIDTH
+                        } else {
+                            0.0
+                        };
+                        shifted.push(lumen_paint::DisplayCommand::PushTransform {
+                            matrix: Mat4::translation_2d(
+                                page_x_offset,
+                                tabs::strip::TAB_BAR_HEIGHT,
+                            ),
+                        });
                         shifted.extend_from_slice(base);
                         shifted.push(lumen_paint::DisplayCommand::PopTransform);
                         if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
@@ -4128,7 +4184,12 @@ impl Lumen {
     /// [`input::humanlike::HumanLikeSender`] to trace Bézier-curve paths before
     /// a click.  No-op when there is no JS context or no element at the position.
     fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
-        let page_x = x_css + self.scroll_x;
+        let panel_x_offset = if self.vertical_tabs.visible {
+            panels::vertical_tabs::PANEL_WIDTH
+        } else {
+            0.0
+        };
+        let page_x = (x_css - panel_x_offset) + self.scroll_x;
         let page_y = y_css + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
@@ -4193,7 +4254,14 @@ impl Lumen {
 
         // ── Form control + link click ────────────────────
         // Single hit test shared by form dispatch and link navigation.
-        let page_x = x_css + self.scroll_x;
+        // When the vertical tabs panel is visible, page content is shifted right
+        // by PANEL_WIDTH, so we subtract that offset to convert to page coords.
+        let panel_x_offset = if self.vertical_tabs.visible {
+            panels::vertical_tabs::PANEL_WIDTH
+        } else {
+            0.0
+        };
+        let page_x = (x_css - panel_x_offset) + self.scroll_x;
         let page_y = y_css + self.scroll_y;
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
@@ -4479,6 +4547,12 @@ impl Lumen {
                     sv.toggle_focus();
                     self.request_redraw();
                 }
+            }
+            KeyCommand::ToggleVerticalTabs => {
+                self.vertical_tabs.toggle();
+                // Viewport width changes — re-layout the current page.
+                self.relayout();
+                self.request_redraw();
             }
         }
     }
@@ -4921,9 +4995,9 @@ impl Lumen {
         (total - tabs::strip::TAB_BAR_HEIGHT).max(0.0)
     }
 
-    /// CSS px ширина viewport-а — нужна scrollbar-overlay-у для размещения
-    /// у правого края. Fallback на layout-viewport 1024 px (тот же hardcoded
-    /// размер, что и в pipeline до создания окна).
+    /// CSS px ширина viewport-а — полная ширина окна, нужна scrollbar-overlay-у
+    /// для размещения у правого края. Fallback на layout-viewport 1024 px (тот
+    /// же hardcoded размер, что и в pipeline до создания окна).
     fn viewport_width_css(&self) -> f32 {
         match (self.window.as_ref(), self.renderer.as_ref()) {
             (Some(w), Some(r)) => {
@@ -4935,6 +5009,18 @@ impl Lumen {
         }
     }
 
+    /// CSS px ширина области контента страницы — полная ширина окна минус
+    /// ширина вертикальной панели вкладок, если она видима. Используется для
+    /// клампинга горизонтального скролла.
+    fn page_content_width_css(&self) -> f32 {
+        let panel_offset = if self.vertical_tabs.visible {
+            panels::vertical_tabs::PANEL_WIDTH
+        } else {
+            0.0
+        };
+        (self.viewport_width_css() - panel_offset).max(0.0)
+    }
+
     /// Максимальный валидный scroll_y: ничего не скроллим, если контент
     /// помещается в viewport. Иначе — `content_height − viewport_height`.
     fn max_scroll(&self) -> f32 {
@@ -4942,8 +5028,10 @@ impl Lumen {
     }
 
     /// Максимальный валидный scroll_x: 0 если контент помещается по ширине.
+    ///
+    /// Использует `page_content_width_css()` — полная ширина минус панель вкладок.
     fn max_scroll_x(&self) -> f32 {
-        (self.content_width - self.viewport_width_css()).max(0.0)
+        (self.content_width - self.page_content_width_css()).max(0.0)
     }
 
     /// Горизонтальный скролл на delta CSS px (инстантный).
