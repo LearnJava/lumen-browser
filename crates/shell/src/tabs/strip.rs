@@ -12,6 +12,7 @@ use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::tab_lifecycle::state::TabState;
+use crate::tabs::containers::ContainerKind;
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -45,6 +46,9 @@ const CLOSE_SZ: f32 = 14.0;
 const CLOSE_MARGIN: f32 = 4.0;
 /// Badge dot diameter in CSS px.
 const BADGE_SIZE: f32 = 5.0;
+/// Height of the container border-top strip in CSS px (7D.2). Drawn at the
+/// very top of each tab button when its `container` is not `ContainerKind::None`.
+const CONTAINER_STRIP_HEIGHT: f32 = 3.0;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +72,13 @@ pub struct TabEntry {
     /// because `opener_id` is set once at creation and always points to an
     /// already-existing tab.
     pub opener_id: Option<usize>,
+    /// Container assigned to this tab (7D.2). Drives the border-top strip
+    /// rendered above the tab and the cookie/storage isolation key.
+    ///
+    /// Default `ContainerKind::None` — no container, shared state. New
+    /// tabs inherit `None`; the user changes containers via the shell's
+    /// `set_tab_container` API.
+    pub container: ContainerKind,
 }
 
 /// State of the tab strip (tab list + active index).
@@ -89,6 +100,7 @@ impl TabStrip {
                 title: "Новая вкладка".to_owned(),
                 tab_state: TabState::Active,
                 opener_id: None,
+                container: ContainerKind::None,
             }],
             active: 0,
             next_id: 1,
@@ -109,6 +121,7 @@ impl TabStrip {
             title: "Новая вкладка".to_owned(),
             tab_state: TabState::Active,
             opener_id: None,
+            container: ContainerKind::None,
         });
         self.tabs.len() - 1
     }
@@ -125,8 +138,21 @@ impl TabStrip {
             title: "Новая вкладка".to_owned(),
             tab_state: TabState::Active,
             opener_id: Some(opener_id),
+            container: ContainerKind::None,
         });
         self.tabs.len() - 1
+    }
+
+    /// Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op.
+    ///
+    /// Triggers a visual change on the next `build_tab_bar` call — the
+    /// border-top strip swaps colour or appears/disappears. Cookie/storage
+    /// isolation rewiring is the caller's responsibility (see
+    /// `ContainerStore::get_or_create`).
+    pub fn set_tab_container(&mut self, idx: usize, container: ContainerKind) {
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.container = container;
+        }
     }
 
     /// Remove the tab at `idx`. Returns the new active index (clamped to valid
@@ -241,6 +267,15 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(left, TAB_BAR_HEIGHT - 2.0, right - left, 2.0),
                 color: TAB_ACTIVE_ACCENT,
+            });
+        }
+
+        // Container border-top strip (7D.2). 3 px tall coloured bar at the
+        // very top edge of the tab. Skipped for ContainerKind::None.
+        if let Some(color) = tab.container.border_color() {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(left, 0.0, right - left, CONTAINER_STRIP_HEIGHT),
+                color,
             });
         }
 
@@ -454,4 +489,132 @@ mod tests {
         assert!(has_grey, "Hibernated tab must render grey badge");
     }
 
+    // ── Container strip tests (7D.2) ─────────────────────────────────────────
+
+    #[test]
+    fn new_tab_has_no_container() {
+        let s = TabStrip::new();
+        assert_eq!(s.tabs[0].container, ContainerKind::None);
+    }
+
+    #[test]
+    fn push_blank_starts_without_container() {
+        let mut s = TabStrip::new();
+        s.push_blank();
+        assert_eq!(s.tabs[1].container, ContainerKind::None);
+    }
+
+    #[test]
+    fn push_with_opener_starts_without_container() {
+        let mut s = TabStrip::new();
+        let opener_id = s.tabs[0].id;
+        s.push_with_opener(opener_id);
+        assert_eq!(s.tabs[1].container, ContainerKind::None);
+    }
+
+    #[test]
+    fn set_tab_container_updates_entry() {
+        let mut s = TabStrip::new();
+        s.set_tab_container(0, ContainerKind::Work);
+        assert_eq!(s.tabs[0].container, ContainerKind::Work);
+    }
+
+    #[test]
+    fn set_tab_container_out_of_bounds_no_panic() {
+        let mut s = TabStrip::new();
+        s.set_tab_container(99, ContainerKind::Personal); // must not panic
+        assert_eq!(s.tabs[0].container, ContainerKind::None);
+    }
+
+    /// Helper: count `FillRect` commands whose rect matches the container
+    /// border-top strip — height equals `CONTAINER_STRIP_HEIGHT` and origin
+    /// `y == 0.0`. Excludes the full-bar background rect (its height ==
+    /// `TAB_BAR_HEIGHT`).
+    fn count_container_strips(dl: &DisplayList, expected_color: Color) -> usize {
+        dl.iter()
+            .filter(|c| match c {
+                DisplayCommand::FillRect { rect, color } => {
+                    (rect.height - CONTAINER_STRIP_HEIGHT).abs() < f32::EPSILON
+                        && rect.y.abs() < f32::EPSILON
+                        && *color == expected_color
+                }
+                _ => false,
+            })
+            .count()
+    }
+
+    #[test]
+    fn build_tab_bar_renders_strip_for_work() {
+        let mut s = TabStrip::new();
+        s.set_tab_container(0, ContainerKind::Work);
+        let dl = build_tab_bar(&s, 1024.0);
+        let expected = ContainerKind::Work.border_color().expect("Work has colour");
+        assert_eq!(count_container_strips(&dl, expected), 1);
+    }
+
+    #[test]
+    fn build_tab_bar_renders_strip_for_personal() {
+        let mut s = TabStrip::new();
+        s.set_tab_container(0, ContainerKind::Personal);
+        let dl = build_tab_bar(&s, 1024.0);
+        let expected = ContainerKind::Personal.border_color().expect("Personal has colour");
+        assert_eq!(count_container_strips(&dl, expected), 1);
+    }
+
+    #[test]
+    fn build_tab_bar_renders_strip_for_finance() {
+        let mut s = TabStrip::new();
+        s.set_tab_container(0, ContainerKind::Finance);
+        let dl = build_tab_bar(&s, 1024.0);
+        let expected = ContainerKind::Finance.border_color().expect("Finance has colour");
+        assert_eq!(count_container_strips(&dl, expected), 1);
+    }
+
+    #[test]
+    fn build_tab_bar_renders_strip_for_shopping() {
+        let mut s = TabStrip::new();
+        s.set_tab_container(0, ContainerKind::Shopping);
+        let dl = build_tab_bar(&s, 1024.0);
+        let expected = ContainerKind::Shopping.border_color().expect("Shopping has colour");
+        assert_eq!(count_container_strips(&dl, expected), 1);
+    }
+
+    #[test]
+    fn build_tab_bar_renders_strip_for_custom_rgb() {
+        let mut s = TabStrip::new();
+        s.set_tab_container(0, ContainerKind::Custom(200, 50, 100));
+        let dl = build_tab_bar(&s, 1024.0);
+        let expected = Color { r: 200, g: 50, b: 100, a: 255 };
+        assert_eq!(count_container_strips(&dl, expected), 1);
+    }
+
+    #[test]
+    fn build_tab_bar_no_strip_for_none_container() {
+        let s = TabStrip::new(); // single tab, ContainerKind::None
+        let dl = build_tab_bar(&s, 1024.0);
+        // No FillRect of CONTAINER_STRIP_HEIGHT may exist when container is None.
+        let strips = dl
+            .iter()
+            .filter(|c| match c {
+                DisplayCommand::FillRect { rect, .. } => {
+                    (rect.height - CONTAINER_STRIP_HEIGHT).abs() < f32::EPSILON
+                        && rect.y.abs() < f32::EPSILON
+                }
+                _ => false,
+            })
+            .count();
+        assert_eq!(strips, 0, "ContainerKind::None must not render a strip");
+    }
+
+    #[test]
+    fn build_tab_bar_strip_only_for_tabs_with_container() {
+        let mut s = TabStrip::new();
+        s.push_blank();
+        s.push_blank();
+        s.set_tab_container(1, ContainerKind::Work);
+        let dl = build_tab_bar(&s, 1024.0);
+        let work_color = ContainerKind::Work.border_color().expect("Work has colour");
+        // Exactly one Work-coloured strip (tab 1); tabs 0 and 2 have None.
+        assert_eq!(count_container_strips(&dl, work_color), 1);
+    }
 }

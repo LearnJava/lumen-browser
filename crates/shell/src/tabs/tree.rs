@@ -126,6 +126,7 @@ mod tests {
             title: format!("tab-{id}"),
             tab_state: TabState::Active,
             opener_id: opener,
+            container: crate::tabs::containers::ContainerKind::None,
         }
     }
 
