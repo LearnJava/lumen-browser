@@ -2,6 +2,7 @@ pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
 pub mod broadcast_channel;
+pub mod clipboard;
 pub mod cookie_banner;
 pub mod dom;
 pub mod geolocation;
@@ -22,6 +23,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+pub use clipboard::set_clipboard_provider;
 pub use dom::NavigateRequest;
 pub use lumen_core::WebStorage;
 

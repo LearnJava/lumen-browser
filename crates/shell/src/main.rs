@@ -35,6 +35,7 @@ mod momentum_anim;
 mod notification;
 mod omnibox;
 mod panels;
+mod platform;
 mod runtime;
 mod scroll;
 mod scroll_anim;
@@ -228,6 +229,13 @@ fn run_window_mode(
     deterministic: bool,
 ) -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
+
+    // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
+    // installed once; the JS bindings _lumen_clipboard_read/_write forward here.
+    #[cfg(feature = "quickjs")]
+    lumen_js::set_clipboard_provider(std::sync::Arc::new(
+        platform::clipboard::PlatformClipboard,
+    ));
 
     // Streaming pipeline: окно создаётся немедленно, загрузка стартует
     // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
@@ -918,6 +926,20 @@ trait PersistentJs {
     /// Returns an empty vec when no console calls have been made since last drain.
     #[allow(dead_code)]
     fn take_console_messages(&self) -> Vec<(u8, String)>;
+    /// Push a fresh snapshot of per-node scroll state into the JS runtime.
+    ///
+    /// Maps NodeId index → `[scroll_x, scroll_y, scroll_width, scroll_height]`.
+    /// Called after every `relayout_page` so JS reads `scrollTop`/`scrollLeft`/
+    /// `scrollWidth`/`scrollHeight` consistently.
+    #[allow(dead_code)]
+    fn update_scroll_states(&self, states: HashMap<u32, [f32; 4]>);
+    /// Drain programmatic scroll requests queued by JS (`scrollTo`/`scrollBy`/
+    /// `scrollIntoView`/`scrollTop=`).
+    ///
+    /// Returns `(node_id, target_scroll_x, target_scroll_y)` tuples. Shell
+    /// applies each via `set_scroll_position()`. Empty when none are pending.
+    #[allow(dead_code)]
+    fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -1043,6 +1065,12 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_console_messages(&self) -> Vec<(u8, String)> {
         self.rt.take_console_messages()
+    }
+    fn update_scroll_states(&self, states: HashMap<u32, [f32; 4]>) {
+        self.rt.update_scroll_states(states);
+    }
+    fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
+        self.rt.take_scroll_requests()
     }
 }
 
@@ -3094,30 +3122,35 @@ impl Lumen {
         // Notify JS observers about the new layout geometry (ResizeObserver /
         // IntersectionObserver / getBoundingClientRect).
         #[cfg(feature = "quickjs")]
-        if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
-            js.update_layout_rects(collect_layout_rects(lb_ref));
-            js.update_computed_styles(collect_computed_styles(lb_ref));
-            js.update_viewport_size(viewport.width, viewport.height);
-            js.deliver_layout_observers();
-            // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
-            // viewport. Shell doesn't yet honour OS-level prefers-color-scheme,
-            // so dark = false until that preference is exposed.
-            js.deliver_media_query_changes(viewport.width, viewport.height, false);
-            // After fresh rects are in JS: fire lazy-load proximity check.
-            // Images that entered the viewport+margin are queued by JS via
-            // _lumen_request_lazy_image_load; we drain and fetch them here.
-            js.deliver_lazy_images();
-            let lazy_reqs = js.take_lazy_image_requests();
+        {
+            // Lazy-load requests drained while `self` is borrowed immutably;
+            // fetched after the borrow ends (fetch needs `&mut self`).
+            let mut lazy_reqs: Vec<(u32, String)> = Vec::new();
+            if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
+                js.update_layout_rects(collect_layout_rects(lb_ref));
+                js.update_computed_styles(collect_computed_styles(lb_ref));
+                js.update_viewport_size(viewport.width, viewport.height);
+                js.deliver_layout_observers();
+                // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
+                // viewport. Shell doesn't yet honour OS-level prefers-color-scheme,
+                // so dark = false until that preference is exposed.
+                js.deliver_media_query_changes(viewport.width, viewport.height, false);
+                // After fresh rects are in JS: fire lazy-load proximity check.
+                // Images that entered the viewport+margin are queued by JS via
+                // _lumen_request_lazy_image_load; we drain and fetch them below.
+                js.deliver_lazy_images();
+                lazy_reqs = js.take_lazy_image_requests();
+                // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
+                // immediately after relayout return the correct clamped values.
+                let scroll_states = collect_scroll_containers(lb_ref)
+                    .iter()
+                    .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                    .collect();
+                js.update_scroll_states(scroll_states);
+            }
             if !lazy_reqs.is_empty() {
                 self.fetch_and_register_lazy_images(lazy_reqs);
             }
-            // Keep JS scroll-state cache in sync so scrollTop/scrollLeft reads
-            // immediately after relayout return the correct clamped values.
-            let scroll_states = collect_scroll_containers(lb_ref)
-                .iter()
-                .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
-                .collect();
-            js.update_scroll_states(scroll_states);
         }
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
@@ -3866,26 +3899,26 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         #[cfg(feature = "quickjs")]
         if let Some(js) = &self.js_ctx {
             let scroll_reqs = js.take_scroll_requests();
-            if !scroll_reqs.is_empty() {
-                if let Some(lb) = self.layout_box.as_mut() {
-                    let mut changed = false;
-                    for (nid, x, y) in scroll_reqs {
-                        if set_scroll_position(lb, NodeId::from_index(nid as usize), x, y) {
-                            changed = true;
-                        }
+            if !scroll_reqs.is_empty()
+                && let Some(lb) = self.layout_box.as_mut()
+            {
+                let mut changed = false;
+                for (nid, x, y) in scroll_reqs {
+                    if set_scroll_position(lb, NodeId::from_index(nid as usize), x, y) {
+                        changed = true;
                     }
-                    if changed {
-                        // Rebuild display list with the updated scroll offsets.
-                        self.display_list = paint_ordered(lb);
-                        // Sync JS cache so scrollTop/scrollLeft reads are accurate.
-                        let states = collect_scroll_containers(lb)
-                            .iter()
-                            .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
-                            .collect();
-                        js.update_scroll_states(states);
-                        if let Some(w) = self.window.as_ref() {
-                            w.request_redraw();
-                        }
+                }
+                if changed {
+                    // Rebuild display list with the updated scroll offsets.
+                    self.display_list = paint_ordered(lb);
+                    // Sync JS cache so scrollTop/scrollLeft reads are accurate.
+                    let states = collect_scroll_containers(lb)
+                        .iter()
+                        .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                        .collect();
+                    js.update_scroll_states(states);
+                    if let Some(w) = self.window.as_ref() {
+                        w.request_redraw();
                     }
                 }
             }
@@ -5334,10 +5367,10 @@ impl Lumen {
                     return;
                 }
                 input::vim::VimAction::Copy => {
-                    // Copy the current page URL.  Full clipboard integration is
-                    // wired in task #26 (navigator.clipboard shell binding).
-                    // For now emit the URL to stderr so it is available for testing.
+                    // Copy the current page URL to the OS clipboard (task #26).
                     if let Some(url) = self.source.url_str() {
+                        use lumen_core::ext::ClipboardProvider;
+                        platform::clipboard::PlatformClipboard.write_text(url);
                         eprintln!("[vim] copy URL: {url}");
                     }
                     return;

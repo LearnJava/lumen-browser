@@ -1428,6 +1428,31 @@ pub trait JsFetchProvider: Send + Sync {
     }
 }
 
+/// Synchronous access to the host platform clipboard for the JS runtime.
+///
+/// Backs `navigator.clipboard.readText()` / `writeText()`. The JS shim delegates
+/// to the native bindings `_lumen_clipboard_read` / `_lumen_clipboard_write`,
+/// which forward to the process-global provider installed by the shell
+/// (`lumen_js::set_clipboard_provider`). Kept in `lumen-core::ext` to keep the
+/// crate dependency graph acyclic (mirrors [`JsFetchProvider`]).
+///
+/// Implementations must be cheap and non-blocking enough to call from the script
+/// thread; OS clipboard access is synchronous on all target platforms.
+pub trait ClipboardProvider: Send + Sync {
+    /// Return the current plain-text contents of the system clipboard.
+    ///
+    /// Returns an empty string when the clipboard is empty, holds non-text data,
+    /// or the read fails — `navigator.clipboard.readText()` resolves with `""`
+    /// rather than rejecting in those cases.
+    fn read_text(&self) -> String;
+
+    /// Replace the system clipboard contents with `text` (plain text, UTF-8).
+    ///
+    /// Failures are swallowed: `navigator.clipboard.writeText()` resolves
+    /// regardless so a clipboard-permission denial does not surface as a JS error.
+    fn write_text(&self, text: &str);
+}
+
 /// A single queued event from a WebSocket connection, ready for delivery to JS.
 ///
 /// Produced by the background recv thread; consumed by `JsWebSocketSession::poll`.
