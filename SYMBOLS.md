@@ -1716,7 +1716,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (227 symbols)
+## lumen-shell  (237 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1818,15 +1818,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/input/humanlike.rs:267` **fn** `type_text` — Type `text` with Gaussian-distributed inter-keystroke delays
 `crates/shell/src/input/humanlike.rs:287` **fn** `scroll_to` — Scroll to `(x, y)` immediately (no path animation for scrolls)
 `crates/shell/src/input/humanlike.rs:295` **fn** `set_cursor_position` — Override the assumed cursor starting position without moving it
-`crates/shell/src/input/mod.rs:36` **enum** `InputCommand` — A single injected input command
-`crates/shell/src/input/mod.rs:88` **struct** `InputSender` — Sender side of the input injection channel
-`crates/shell/src/input/mod.rs:93` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:99` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
-`crates/shell/src/input/mod.rs:105` **fn** `type_text` — Send a synthetic text-typing command
-`crates/shell/src/input/mod.rs:111` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
-`crates/shell/src/input/mod.rs:119` **struct** `InputReceiver` — Receiver side of the input injection channel
-`crates/shell/src/input/mod.rs:123` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
-`crates/shell/src/input/mod.rs:132` **fn** `channel` — Create a new input injection channel
+`crates/shell/src/input/mod.rs:37` **enum** `InputCommand` — A single injected input command
+`crates/shell/src/input/mod.rs:89` **struct** `InputSender` — Sender side of the input injection channel
+`crates/shell/src/input/mod.rs:94` **fn** `click` — Send a synthetic left-click at CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:100` **fn** `mouse_move` — Send a synthetic mouse-move event to CSS-pixel coordinates `(x, y)`
+`crates/shell/src/input/mod.rs:106` **fn** `type_text` — Send a synthetic text-typing command
+`crates/shell/src/input/mod.rs:112` **fn** `scroll` — Send a synthetic scroll command to position `(x, y)` in CSS pixels
+`crates/shell/src/input/mod.rs:120` **struct** `InputReceiver` — Receiver side of the input injection channel
+`crates/shell/src/input/mod.rs:124` **fn** `drain` — Non-blocking drain: returns all pending commands without blocking
+`crates/shell/src/input/mod.rs:133` **fn** `channel` — Create a new input injection channel
+`crates/shell/src/input/vim.rs:41` **enum** `VimState` — Which sub-mode the Vim keybinding layer is currently in
+`crates/shell/src/input/vim.rs:61` **enum** `VimAction` — Decoded action that the caller should execute in response to a keypress
+`crates/shell/src/input/vim.rs:106` **struct** `VimMode` — Vim-mode state machine
+`crates/shell/src/input/vim.rs:115` **fn** `new` — Create a new `VimMode` in [`VimState::Normal`]
+`crates/shell/src/input/vim.rs:123` **fn** `feed` — Feed one physical key event.  Returns the action to take
 `crates/shell/src/links.rs:15` **fn** `find_link_href` — Walk up the ancestor chain from `node_id` to find the nearest `<a>` element
 `crates/shell/src/links.rs:43` **fn** `is_navigable_href` — Return true if `href` is a URL scheme the browser should navigate to
 `crates/shell/src/links.rs:53` **fn** `fragment_only` — If `href` is a fragment-only reference (starts with `#`), return the
@@ -1845,6 +1850,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/split_view.rs:168` **fn** `toggle_focus` — Toggle keyboard/scroll focus between left and right pane
 `crates/shell/src/panels/split_view.rs:176` **fn** `focus_at` — Transfer focus to whichever pane contains `window_x`
 `crates/shell/src/panels/split_view.rs:186` **fn** `scroll_focused_by` — Scroll the focused pane by `dy` CSS px (clamped to content bounds)
+`crates/shell/src/panels/vertical_tabs.rs:54` **struct** `VerticalTabsPanel` — Vertical tabs panel: list of open tabs rendered as a left-docked sidebar
+`crates/shell/src/panels/vertical_tabs.rs:61` **fn** `new` — Create a new (hidden) panel
+`crates/shell/src/panels/vertical_tabs.rs:66` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
+`crates/shell/src/panels/vertical_tabs.rs:81` **enum** `VTabHit` — Result of a click inside the vertical tab panel area
+`crates/shell/src/panels/vertical_tabs.rs:95` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the vertical tabs panel
+`crates/shell/src/panels/vertical_tabs.rs:125` **fn** `build_panel` — Build the display list for the vertical tabs panel
 `crates/shell/src/runtime.rs:39` **enum** `TaskSource` — Источник task-а — HTML §8.1.4.3 «Task sources». Каждому источнику —
 `crates/shell/src/runtime.rs:91` **struct** `Task` — Task — отложенное действие, выполняемое за пределами текущего call-stack-а
 `crates/shell/src/runtime.rs:97` **fn** `new`
@@ -1944,7 +1955,6 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/strip.rs:142` **enum** `TabHit` — Result of clicking inside the tab bar area
 `crates/shell/src/tabs/strip.rs:162` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
 `crates/shell/src/tabs/strip.rs:193` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
-`crates/shell/src/tabs/strip.rs:289` **fn** `tab_page_push_transform` — Build a `PushTransform` display command that shifts page content below the
 
 ## lumen-storage  (383 symbols)
 
@@ -2333,4 +2343,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2271 symbols in 19 crates*
+*Total: 2281 symbols in 19 crates*

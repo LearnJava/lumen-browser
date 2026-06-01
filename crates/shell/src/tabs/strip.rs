@@ -8,7 +8,7 @@
 //! `address_bar.rs` and `find.rs`.
 
 use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight, Mat4};
+use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::tab_lifecycle::state::TabState;
@@ -283,15 +283,6 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
     out
 }
 
-/// Build a `PushTransform` display command that shifts page content below the
-/// tab bar. Prepend this (and a matching `PopTransform`) to the page display
-/// list before passing it to `Renderer::render`.
-pub fn tab_page_push_transform() -> DisplayCommand {
-    DisplayCommand::PushTransform {
-        matrix: Mat4::translation_2d(0.0, TAB_BAR_HEIGHT),
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -438,9 +429,4 @@ mod tests {
         assert!(has_grey, "Hibernated tab must render grey badge");
     }
 
-    #[test]
-    fn tab_page_push_transform_is_push_transform() {
-        let cmd = tab_page_push_transform();
-        assert!(matches!(cmd, DisplayCommand::PushTransform { .. }));
-    }
 }

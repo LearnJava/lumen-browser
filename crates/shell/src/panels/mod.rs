@@ -2,3 +2,4 @@
 //! page viewport (split view, vertical tabs, sidebar panels, etc.).
 
 pub mod split_view;
+pub mod vertical_tabs;
