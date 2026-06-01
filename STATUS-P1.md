@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+CI bench gate (9G.3)  branch: p1-ci-bench-gate
+Next step: create bench/src/ci_gate.rs + wire --ci flag in main.rs
 
 ---
 
