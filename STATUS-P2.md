@@ -6,8 +6,7 @@
 
 ## In progress
 
-Cookie-banner auto-dismiss (7C.3)  branch: p2-cookie-banner-dismiss
-Next step: create `crates/js/src/cookie_banner.rs`  crates/js/src/lib.rs:134
+_(нет)_
 
 ---
 
@@ -42,6 +41,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-cookie-banner-dismiss** ✅ 2026-06-01 — Cookie-banner auto-dismiss (7C.3). `cookie_banner.rs` в `lumen-js`: MutationObserver + setInterval 500ms + DOMContentLoaded скан. 30+ EasyList consent-selector-ов (OneTrust, Cookiebot, Didomi, TrustArc и др.). `dispatchEvent(MouseEvent('click', {bubbles:true}))` на первом видимом совпадении — single-shot per page. `Lumen.cookie_banner_dismiss: bool` (default: true), toggle Ctrl+Shift+K. `QuickJsRuntime::set_cookie_banner_dismiss()` + `AtomicBool`. Пробрасывается через `parse_and_layout` → `run_scripts_with_dom`. 15 unit-тестов (disabled noop, match/click, hidden-skip, cleanup, observer, interval, selector-coverage, multiple-selectors, no-MO fallback); итого lumen-js: 700 тестов.
 - **p2-shields-panel** ✅ 2026-06-01 — Shields toolbar widget (7C.4). `ShieldsPanel` floating top-right overlay (220×90px), Ctrl+Shift+S toggle. `BlockedLog` per-hostname счётчики + `clear()` при навигации. `ShieldCountSink` перехватывает `Event::RequestBlocked` из HTTP-слоя, пишет в `Arc<Mutex<BlockedLog>>`. `build_panel()`: статус ON/OFF, текущий домен, счётчик blocked, кнопка Enable/Disable for this site. `hit_test()`: Close/Toggle/Empty зоны. `Lumen.shields`, `ToggleShields` KeyCommand. Domain update в `apply_loaded_page`. 24 unit-тестов; итого lumen-shell: 530 тестов.
 - **p2-workspaces-ui** ✅ 2026-06-01 — Workspaces UI (7A.3). `WorkspacePanel { visible, workspaces, active_id }` + `WsEntry { id, name, accent }` в `panels/workspace_panel.rs`. Bottom-docked 32px switcher bar: цветные чипы воркспейсов + "×" удаление + "+" добавление. `parse_ws_color()` (#RRGGBB/#RGB/named). `hit_test()` — SwitchTo/DeleteWorkspace/NewWorkspace/Empty. `viewport_height_css()` вычитает `SWITCHER_HEIGHT` когда панель видима. `refresh_workspaces()` синхронизирует кэш с SQLite. Click handler: SwitchTo/Delete (не последний)/NewWorkspace (auto-name "Workspace N"). Ctrl+Shift+W toggle. `Lumen.workspaces: Workspaces` (in-memory SQLite). 17 unit-тестов; итого lumen-shell: 488 тестов.
 - **p2-tree-tabs** ✅ 2026-06-01 — Tree-style tabs (7A.2). `TabEntry.opener_id: Option<usize>` + `TabStrip::push_with_opener`. `tabs/tree.rs`: `depth_of`/`children_of`/`subtree_ids`/`visible_order`/`VisibleRow`. `panels/tree_tabs.rs`: `TreeTabsPanel { visible, collapsed: HashSet }`, `hit_test` (Arrow/Tab/Close/Empty), `build_panel` — отступ depth×8px + ▶/▼ стрелки + lifecycle-бейджи. Ctrl+Shift+B toggle; Ctrl+T в tree-mode = дочерняя вкладка. Arrow-клик чистит stale collapsed entries через `subtree_ids`. 443 тестов lumen-shell.
