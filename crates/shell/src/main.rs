@@ -270,6 +270,7 @@ fn run_window_mode(
         color_picker_node: None,
         ls_storage: HashMap::new(),
         idb_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+        sw_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
         js_ctx: None,
         no_scrollbar,
         first_paint_delivered: false,
@@ -344,6 +345,7 @@ fn do_print_to_pdf(
         &event_sink,
         vp,
         &mut std::collections::HashSet::new(),
+        None,
         None,
         None,
         &NullHyphenationProvider,
@@ -469,13 +471,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, &NullHyphenationProvider)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, &NullHyphenationProvider)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -1017,6 +1019,7 @@ impl PageSource {
         viewport: Size,
         ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+        sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
         hp: &dyn HyphenationProvider,
     ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty) {
@@ -1024,7 +1027,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone())?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, hp)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1677,6 +1680,7 @@ struct PageSnapshot {
     color_picker_node: Option<NodeId>,
     ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
+    sw_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     js_ctx: Option<Box<dyn PersistentJs>>,
     first_paint_delivered: bool,
     first_contentful_paint_delivered: bool,
@@ -1695,6 +1699,7 @@ fn parse_and_layout(
     preload_seen: &mut std::collections::HashSet<String>,
     ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
@@ -1741,6 +1746,7 @@ fn parse_and_layout(
         ws_provider,
         ls_store,
         idb_backend,
+        sw_backend,
     );
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
@@ -2082,6 +2088,23 @@ fn idb_store_for_base(
     Some(Arc::new(lumen_storage::IdbStore::new(Arc::clone(backend), origin)))
 }
 
+/// Build the per-origin Service Worker registration persistence handle for the
+/// given `ResourceBase`. Returns `None` for `file:` bases (no persistent storage).
+/// The returned `SwStore` shares `backend`, so SW registrations survive page reloads.
+fn sw_store_for_base(
+    base: &ResourceBase,
+    backend: &Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+) -> Option<Arc<dyn lumen_core::ext::SwBackend>> {
+    let origin = match base {
+        ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
+            let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+            format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
+        })?,
+        ResourceBase::File(_) => return None,
+    };
+    Some(Arc::new(lumen_storage::SwStore::new(Arc::clone(backend), origin)))
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn render_bytes(
     bytes: &[u8],
@@ -2092,9 +2115,10 @@ fn render_bytes(
     preload_seen: &mut std::collections::HashSet<String>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, hp)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -2302,7 +2326,7 @@ fn apply_iframe_sandbox_gates(doc: &Document) {
 /// `ls_store` — localStorage partition для текущего origin (persists across reloads).
 /// `None` = no network (sandboxed context или отключён quickjs feature).
 #[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
-#[allow(unused_variables, clippy::type_complexity)] // ls_store is used only inside #[cfg(feature = "quickjs")]
+#[allow(unused_variables, clippy::type_complexity, clippy::too_many_arguments)]
 fn run_scripts_with_dom(
     doc: Document,
     sandbox: lumen_core::SandboxFlags,
@@ -2311,6 +2335,7 @@ fn run_scripts_with_dom(
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
+    sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts);
@@ -2333,7 +2358,7 @@ fn run_scripts_with_dom(
         use lumen_core::ext::JsRuntime as _;
         match lumen_js::QuickJsRuntime::new() {
             Ok(rt) => {
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store, idb_backend) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store, idb_backend, sw_backend) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 for src in &scripts {
@@ -2606,6 +2631,10 @@ struct Lumen {
     /// IndexedDB databases survive page reloads within the session (mirrors
     /// `ls_storage`). Swap `InMemoryStorage` for `SqliteStorage` to persist on disk.
     idb_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Shared backend for Service Worker registration persistence. A per-origin
+    /// `SwStore` is built over this for each page load so SW registrations survive
+    /// page navigations within the session (same pattern as `idb_backend`).
+    sw_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
     /// Live JS context for the current page — keeps event listeners active after
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
@@ -2903,7 +2932,11 @@ impl Lumen {
                 Arc::new(lumen_storage::IdbStore::new(Arc::clone(&self.idb_backend), o))
                     as Arc<dyn lumen_core::ext::IdbBackend>
             });
-            self.source.load(self.event_sink.clone(), viewport, ls_store, idb_backend, &self.hyp_provider)
+            let sw_backend = self.source.origin_str().map(|o| {
+                Arc::new(lumen_storage::SwStore::new(Arc::clone(&self.sw_backend), o))
+                    as Arc<dyn lumen_core::ext::SwBackend>
+            });
+            self.source.load(self.event_sink.clone(), viewport, ls_store, idb_backend, sw_backend, &self.hyp_provider)
         };
 
         match load_result {
@@ -3296,7 +3329,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 );
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, &self.hyp_provider) {
+                let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                     }
@@ -5014,6 +5048,12 @@ impl Lumen {
                     lumen_storage::store::InMemoryStorage::new(),
                 )),
             ),
+            sw_backend: std::mem::replace(
+                &mut self.sw_backend,
+                Arc::new(std::sync::Mutex::new(
+                    lumen_storage::store::InMemoryStorage::new(),
+                )),
+            ),
             js_ctx: self.js_ctx.take(),
             first_paint_delivered: self.first_paint_delivered,
             first_contentful_paint_delivered: self.first_contentful_paint_delivered,
@@ -5062,6 +5102,7 @@ impl Lumen {
         self.color_picker_node = snap.color_picker_node;
         self.ls_storage = snap.ls_storage;
         self.idb_backend = snap.idb_backend;
+        self.sw_backend = snap.sw_backend;
         self.js_ctx = snap.js_ctx;
         self.first_paint_delivered = snap.first_paint_delivered;
         self.first_contentful_paint_delivered = snap.first_contentful_paint_delivered;
@@ -5107,6 +5148,9 @@ impl Lumen {
         self.color_picker_node = None;
         self.ls_storage = HashMap::new();
         self.idb_backend = Arc::new(std::sync::Mutex::new(
+            lumen_storage::store::InMemoryStorage::new(),
+        ));
+        self.sw_backend = Arc::new(std::sync::Mutex::new(
             lumen_storage::store::InMemoryStorage::new(),
         ));
         self.js_ctx = None;

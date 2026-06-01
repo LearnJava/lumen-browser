@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(нет)_
+(none)
 
 ---
 
@@ -16,8 +16,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 4 | **Service Worker API stub** — `ServiceWorkerContainer.register(url)` → `ServiceWorkerRegistration`; `install`/`activate`/`fetch` events; registration persisted in `lumen-storage`; `navigator.serviceWorker` в `lumen-js`. See `lumen-plan.md §8E` | `lumen-js`, `lumen-storage` | L | none |
-| 4 | **Service Worker API stub** — `ServiceWorkerContainer.register(url)` → `ServiceWorkerRegistration`; `install`/`activate`/`fetch` events; registration persisted in `lumen-storage`; `navigator.serviceWorker` в `lumen-js`. See `lumen-plan.md §8E` | `lumen-js`, `lumen-storage` | L | none |
 | 5 | **Web Worker** — `new Worker(script_url)`: separate `QuickJsRuntime` on `std::thread`; `postMessage`/`onmessage`/`terminate`; message passing via `mpsc`. `lumen-js/src/worker.rs`. See `lumen-plan.md §8E` | `lumen-js` | L | none |
 | 6 | **Cache API** — `caches.open(name)`, `CacheStorage`, `Cache.put/match/delete/keys/add/addAll`; backed by `lumen-storage` blob store. `lumen-js/src/cache_api.rs`. See `lumen-plan.md §8E` | `lumen-js`, `lumen-storage` | M | none |
 | 7 | **Geolocation API stub** — `navigator.geolocation.getCurrentPosition/watchPosition/clearWatch`; returns `PERMISSION_DENIED` by default; opt-in fake coords via `FingerprintProfile`. `lumen-js/src/geolocation.rs` | `lumen-js` | S | none |
@@ -47,6 +45,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-service-worker-api** ✅ 2026-06-01 — Service Worker API stub (§8E): `navigator.serviceWorker` → `ServiceWorkerContainer` (register/unregister/getRegistration/getRegistrations/ready); `ServiceWorkerRegistration` (installing/waiting/active, update/unregister); `ServiceWorker` lifecycle state machine (`installing→installed→activating→activated`) via `setTimeout`; `install`/`activate`/`fetch`/`message` events; `SwBackend` trait in `lumen-core::ext:1530`; `SwStore` in `lumen-storage` (JSON snapshot over `StorageBackend`); `_lumen_sw_persist`/`_lumen_sw_load`/`_lumen_sw_unregister` Rust bindings; `SwStore` wired in `lumen-shell` via `sw_store_for_base()`; `#[allow(too_many_arguments)]` on `install_dom`+`run_scripts_with_dom`. 10 unit tests, 623 total lumen-js.
 - **p1-download-manager** ✅ 2026-06-01 — Download manager (7D.1): `DownloadManager` (`shell/src/download.rs`) — `start_download(url,dest)` → фоновый thread → `HttpClient::fetch` → mpsc progress → file write; `cancel(id)`; `open_download(id)` (ShellExecuteW/xdg-open); `poll()` дренирует события в `about_to_wait`; Ctrl+Shift+J toggle панели. UI: `build_download_bar` — bottom-right overlay, до 5 записей, indeterminate progress bar для InProgress, зелёный bar для Done, красный текст для Failed. 22 unit-теста, 355 итого lumen-shell.
 - **p1-tab-lifecycle-10a** ✅ 2026-06-01 — Tab lifecycle state machine (10A): `TabState` (Active/BackgroundRecent/BackgroundOld/Hibernated/Closed), `TierTimeouts` (0ms/5min/30min), `TabLifecycleManager` — open/activate/close, `tick_idle(pressure)` каждую секунду, LRU-эвикция `lru_evict()` при превышении max_background_tabs, pinned-защита. Модуль `shell/src/tab_lifecycle/` (state.rs + manager.rs). 20 тестов.
 - **p1-behavioral-mimicry** ✅ 2026-06-01 — Behavioral mimicry (9E): `InputMode::HumanLike`, `HumanLikeSender` в `shell/src/input/humanlike.rs`. Bézier-кривые мышиного пути (кубик, 2 рандомных контрольных точки ±30% длины, N waypoints). Gaussian межнажатная задержка (Box-Muller, mean/sigma). Pre-click dwell. `InputCommand::MouseMove` + `dispatch_mouse_move()` в main.rs. Xorshift-64 PRNG без зависимостей. 29 новых тестов, 314 итого lumen-shell.

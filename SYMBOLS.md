@@ -54,7 +54,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
 `crates/engine/canvas/src/rasterize.rs:41` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
 
-## lumen-core  (169 symbols)
+## lumen-core  (170 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -125,21 +125,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:1465` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
 `crates/core/src/ext.rs:1480` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
 `crates/core/src/ext.rs:1507` **trait** `IdbBackend` — Persistence boundary for the IndexedDB JS shim
-`crates/core/src/ext.rs:1533` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
-`crates/core/src/ext.rs:1605` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
-`crates/core/src/ext.rs:1705` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
-`crates/core/src/ext.rs:1725` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
-`crates/core/src/ext.rs:1732` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
-`crates/core/src/ext.rs:1754` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:1788` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:1794` **fn** `new` — Create an empty registry
-`crates/core/src/ext.rs:1799` **fn** `register` — Register a cache. Caches are notified in registration order
-`crates/core/src/ext.rs:1804` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
-`crates/core/src/ext.rs:1811` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
-`crates/core/src/ext.rs:1819` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
-`crates/core/src/ext.rs:1828` **fn** `clear_all` — Evict all entries in every registered cache
-`crates/core/src/ext.rs:1835` **fn** `len` — Number of registered caches
-`crates/core/src/ext.rs:1840` **fn** `is_empty` — `true` if no caches are registered
+`crates/core/src/ext.rs:1530` **trait** `SwBackend` — Per-origin Service Worker registration persistence
+`crates/core/src/ext.rs:1554` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
+`crates/core/src/ext.rs:1626` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
+`crates/core/src/ext.rs:1726` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
+`crates/core/src/ext.rs:1746` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
+`crates/core/src/ext.rs:1753` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
+`crates/core/src/ext.rs:1775` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:1809` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:1815` **fn** `new` — Create an empty registry
+`crates/core/src/ext.rs:1820` **fn** `register` — Register a cache. Caches are notified in registration order
+`crates/core/src/ext.rs:1825` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
+`crates/core/src/ext.rs:1832` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
+`crates/core/src/ext.rs:1840` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
+`crates/core/src/ext.rs:1849` **fn** `clear_all` — Evict all entries in every registered cache
+`crates/core/src/ext.rs:1856` **fn** `len` — Number of registered caches
+`crates/core/src/ext.rs:1861` **fn** `is_empty` — `true` if no caches are registered
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -845,20 +846,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/dom.rs:135` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
 `crates/js/src/lib.rs:25` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
 `crates/js/src/lib.rs:80` **fn** `new`
-`crates/js/src/lib.rs:114` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:192` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:200` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:209` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:218` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:227` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:235` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:244` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:256` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:265` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:274` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:284` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:302` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:314` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:119` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:199` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:207` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:216` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:225` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:234` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:242` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:251` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:263` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:272` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:281` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:291` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:309` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:321` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
 `crates/js/src/navigator_bindings.rs:31` **fn** `install_navigator_bindings` — Install navigator/screen/timezone normalization shim into the JS context
 `crates/js/src/surface_api.rs:29` **fn** `install_surface_api_protection` — Install Layer 1 surface API protection into the JS context
 `crates/js/src/video_bindings.rs:27` **fn** `install_video_bindings` — Install HTMLVideoElement stubs into the JS context
@@ -1921,7 +1922,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/strip.rs:193` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
 `crates/shell/src/tabs/strip.rs:289` **fn** `tab_page_push_transform` — Build a `PushTransform` display command that shifts page content below the
 
-## lumen-storage  (373 symbols)
+## lumen-storage  (375 symbols)
 
 `crates/storage/src/autofill.rs:17` **struct** `AutofillEntry`
 `crates/storage/src/autofill.rs:25` **struct** `Autofill`
@@ -2257,6 +2258,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/store.rs:139` **fn** `load` — Загружает snapshot из файла
 `crates/storage/src/sw_interceptor.rs:25` **struct** `ServiceWorkerInterceptor` — SQLite-backed SW fetch interceptor
 `crates/storage/src/sw_interceptor.rs:31` **fn** `new`
+`crates/storage/src/sw_store.rs:25` **struct** `SwStore` — Per-origin persistence SW-регистраций поверх общего [`StorageBackend`]
+`crates/storage/src/sw_store.rs:35` **fn** `new` — Создать store для конкретного `origin` поверх разделяемого `backend`
 `crates/storage/src/tab_sessions.rs:19` **struct** `TabSession` — Одна вкладка в сохранённой сессии
 `crates/storage/src/tab_sessions.rs:40` **struct** `SessionSnapshot` — Снимок сессии — корневая запись для group of tabs
 `crates/storage/src/tab_sessions.rs:46` **struct** `TabSessions`
@@ -2298,4 +2301,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2236 symbols in 19 crates*
+*Total: 2239 symbols in 19 crates*

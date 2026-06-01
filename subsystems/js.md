@@ -95,6 +95,16 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - **Persistence (2026-05-29):** databases survive page reload via the `IdbBackend` trait (`lumen-core::ext`), supplied to `install_dom`. On shim init `_lumen_idb_load()` restores the per-origin snapshot into the JS heap; after every mutating flush (`txn.mode !== 'readonly'`, version upgrade, or `deleteDatabase`) `_lumen_idb_persist(snapshot)` writes it back. The snapshot is the whole `_idb_databases` set as tagged JSON — Date keys/values encoded as `{__idb_date__: ms}` (JSON has no Date type), everything else plain structured data. Read-only transactions never re-persist (`_idb_dirty` flag gates it). When no backend is installed (unit tests / sandboxed contexts) the `typeof _lumen_idb_persist === 'function'` guards keep it in-heap-only. Backend impl: `lumen_storage::IdbStore` over `StorageBackend` (in-memory or SQLite), origin-partitioned under key `__indexeddb__`.
   - 23 tests (open+upgrade, keyPath/autoIncrement CRUD, put-overwrite, duplicate→abort, getAll ordering + key range, delete/clear, index get/getAll, unique-index violation, cursor forward/reverse/update/delete, IDBKeyRange.includes, cmp, version downgrade error, deleteDatabase, second-connection persistence; + persistence: reload round-trip, version restore, Date round-trip, delete-database restore, read-only no-persist). **267 JS tests total.**
 
+- **Service Worker API stub** (`crates/js/src/dom.rs` + `lumen-storage/src/sw_store.rs`, §8E). 2026-06-01.
+  - `navigator.serviceWorker` → `ServiceWorkerContainer`: `register(url, opts?)`, `unregister(scope)`, `getRegistration(url)`, `getRegistrations()`, `ready` Promise, `addEventListener('message'/'controllerchange')`.
+  - `ServiceWorkerRegistration`: `scope`, `installing`/`waiting`/`active` worker slots, `update()`, `unregister()`, `addEventListener('updatefound')`.
+  - `ServiceWorker`: `scriptURL`, `state` (`installing→installed→activating→activated`), `postMessage()`, `addEventListener('statechange')`, EventTarget mixin.
+  - Lifecycle driven by `_sw_run_lifecycle(reg)`: `setTimeout`-based state machine fires `install` on the worker, then `activate`; `statechange` events emitted at each transition.
+  - Persistence via `SwBackend` trait (`lumen-core::ext:1530`): `_lumen_sw_persist(origin, snapshot)` / `_lumen_sw_load(origin)` / `_lumen_sw_unregister(origin, scope)` Rust bindings. `SwStore` impl in `lumen-storage` (JSON snapshot under key `__sw_registrations__`, origin-partitioned, same pattern as `IdbStore`).
+  - Shell: `sw_store_for_base(base, backend)` extracts origin → `SwStore::new()` → passed as 7th arg to `install_dom`.
+  - `install_dom` / `run_scripts_with_dom` got `#[allow(clippy::too_many_arguments)]` (8 params).
+  - 10 unit tests: register/resolve Promise, state progression, persist no-throw, duplicate scope, getRegistration, unregister, getRegistrations, ready, multiple-scope isolation. **623 JS tests total.**
+
 - **AudioContext fingerprint noise** (`crates/js/src/audio_bindings.rs`, ADR-007 Layer 4, 9D.3). 2026-05-30.
   - New module `audio_bindings`: `install_audio_bindings(ctx, seed)` + `new_session_seed()`.
   - JS shim (IIFE): defines `globalThis.AudioContext`, `webkitAudioContext`, `OfflineAudioContext`, `AudioBuffer`.

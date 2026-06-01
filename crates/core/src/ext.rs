@@ -1517,6 +1517,27 @@ pub trait IdbBackend: Send + Sync {
     fn save(&self, snapshot: &str);
 }
 
+/// Per-origin Service Worker registration persistence.
+///
+/// Mirrors [`IdbBackend`]: the JS shim serialises all SW registrations for an
+/// origin into a single JSON snapshot and calls `save`; on the next page load
+/// `load` restores them so sites that depend on a registered SW work correctly
+/// after a reload.  The snapshot format is engine-private; the backend stores
+/// it as an opaque blob.
+///
+/// Implemented in `lumen-storage::SwStore` over a [`StorageBackend`]; `lumen-js`
+/// references only this trait, keeping the dependency graph acyclic.
+pub trait SwBackend: Send + Sync {
+    /// Return the persisted SW registration snapshot for this origin, or `None`
+    /// if no snapshot has been stored yet.
+    fn load(&self) -> Option<String>;
+
+    /// Persist the SW registration snapshot for this origin (full overwrite).
+    ///
+    /// Best-effort: a write failure must not abort any JS operation.
+    fn save(&self, snapshot: &str);
+}
+
 // ============================================================================
 // ADR-006: Automation API — first-class engine surface
 // ============================================================================
