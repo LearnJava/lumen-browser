@@ -9,6 +9,7 @@ pub mod notifications_bindings;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod webgl_bindings;
+pub mod webrtc_stub;
 pub mod worker;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
@@ -282,6 +283,12 @@ impl QuickJsRuntime {
             let cb_enabled = self.cookie_banner_dismiss.load(Ordering::Relaxed);
             if let Err(e) = cookie_banner::install(&ctx, cb_enabled) {
                 eprintln!("Cookie-banner bindings init failed: {}", e);
+            }
+
+            // Install WebRTC mDNS-only stub (9D.5) — after DOM so Promise and setTimeout
+            // are available.  Fires a single .local candidate; never leaks real IP.
+            if let Err(e) = webrtc_stub::install_webrtc_bindings(&ctx) {
+                eprintln!("WebRTC bindings init failed: {}", e);
             }
 
             Ok(())
