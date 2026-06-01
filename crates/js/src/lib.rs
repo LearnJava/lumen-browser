@@ -1,6 +1,7 @@
 pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
+pub mod broadcast_channel;
 pub mod cookie_banner;
 pub mod dom;
 pub mod geolocation;
@@ -114,6 +115,12 @@ pub struct QuickJsRuntime {
     /// Each entry is `(level, text)` where level is 0=log, 1=warn, 2=error.
     /// Drained by the shell's DevTools console panel via `take_console_messages()`.
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
+    /// `BroadcastChannel` instances created on this page (WHATWG HTML §9.5).
+    ///
+    /// Holds the receiver halves; the process-global hub in
+    /// `broadcast_channel` routes posted messages here. Drained by
+    /// `pump_broadcast_channels()` and delivered to the matching JS instance.
+    broadcast_channels: broadcast_channel::BroadcastRegistry,
 }
 
 struct Inner {
@@ -152,6 +159,7 @@ impl QuickJsRuntime {
             deterministic: AtomicBool::new(false),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
+            broadcast_channels: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -304,6 +312,15 @@ impl QuickJsRuntime {
                 eprintln!("WebRTC bindings init failed: {}", e);
             }
 
+            // Install Broadcast Channel API (WHATWG HTML §9.5) — after DOM so
+            // MessageEvent and DOMException are available for delivery.
+            if let Err(e) = broadcast_channel::install_broadcast_channel_bindings(
+                &ctx,
+                &self.broadcast_channels,
+            ) {
+                eprintln!("BroadcastChannel bindings init failed: {}", e);
+            }
+
             Ok(())
         })
     }
@@ -343,6 +360,31 @@ impl QuickJsRuntime {
         let script = format!(
             "if(typeof _lumen_deliver_worker_messages==='function')\
              _lumen_deliver_worker_messages({json})"
+        );
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>(script.as_str()).ok();
+        });
+    }
+
+    /// Deliver messages posted to this page's `BroadcastChannel` instances.
+    ///
+    /// Drains the per-runtime receiver queues (filled by the process-global hub
+    /// in `broadcast_channel`) and calls `_lumen_deliver_broadcast_messages(msgs)`
+    /// in the main JS context so `onmessage` / `addEventListener('message', fn)`
+    /// handlers fire.
+    ///
+    /// Shell must call this on every event-loop tick (alongside `pump_workers()`)
+    /// so that broadcasts from other contexts are delivered promptly.
+    pub fn pump_broadcast_channels(&self) {
+        let messages = broadcast_channel::drain(&self.broadcast_channels);
+        if messages.is_empty() {
+            return;
+        }
+        let json = build_worker_messages_json(&messages);
+        let script = format!(
+            "if(typeof _lumen_deliver_broadcast_messages==='function')\
+             _lumen_deliver_broadcast_messages({json})"
         );
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
