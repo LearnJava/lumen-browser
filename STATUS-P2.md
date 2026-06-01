@@ -6,8 +6,7 @@
 
 ## In progress
 
-**Tab snapshot restore (10J)** — branch: `p2-tab-snapshot-restore`
-Next step: `crates/storage/src/tab_snapshot.rs:1` — TabSnapshotStore + HibernatedTabData
+_(none)_
 
 ---
 
@@ -17,7 +16,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | **Tab snapshot restore (10J)** — при switch на Hibernated tab: fetch bytes из SQLite `sessions`, `Document::from_bytes()`, init new `PersistentJs`, restore scroll. `shell/src/tab_lifecycle/restore.rs`. See `lumen-plan.md §10J` | `lumen-shell` | M | none |
 | 2 | **Multi-viewport split view (7A.4)** — `SplitViewSlot` в layout tree: два side-by-side `ContentViewport` slot'а; `Command::SplitView(left_tab, right_tab)` + `Command::CloseSplit`. `shell/src/panels/split_view.rs`. See `lumen-plan.md §7A.4` | `lumen-shell` | M | none |
 | 5 | **Vertical tabs panel (7A.1)** — `VerticalTabPanel: Panel` в `shell/src/panels/vertical_tabs.rs`; `Surface::Docked` left slot; tab list с favicon + title + close; `Ctrl+B` toggle. See design V1. See `lumen-plan.md §7A.1` | `lumen-shell` | M | none |
 | 6 | **Tree-style tabs (7A.2)** — расширить `VerticalTabPanel`: `opener_id` на `TabEntry`; indent children 8px/level; collapse/expand subtree. `shell/src/panels/tree_tabs.rs`. See `lumen-plan.md §7A.2` | `lumen-shell` | M | #5 |
@@ -46,6 +44,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-tab-snapshot-restore** ✅ 2026-06-01 — T3 tab hibernation + restore (ADR-008 §10J). `lumen-storage::TabSnapshotStore` (SQLite WAL) + `HibernatedTabData` (dom_blob, css_source, url, title, scroll_x/y). `tab_lifecycle::TabMetadata` — 200 B RAM stub per hibernated tab (url + title для быстрого отображения). `Lumen`: поля `hibernated_tabs/tab_snapshots/lifecycle_mgr/lifecycle_last_tick`; методы `hibernate_bg_tab` (Document::to_bytes → SQLite), `restore_hibernated_tab` (SQLite → Document::from_bytes → relayout), `tick_lifecycle` (1 Hz poll tick_idle + lru_evict). Интеграция в open/close/switch_tab + about_to_wait. 9 unit-тестов storage, 364 итого lumen-shell.
 - **p2-tab-lifecycle-indicators** ✅ 2026-06-01 — Tab lifecycle UI indicators (10K). `TabEntry.tab_state: TabState` — хранит lifecycle tier. `TabStrip::set_tab_state(idx, state)`. `build_tab_bar` рендерит `FillRoundedRect` badge: BackgroundOld → amber (255,168,0), Hibernated → grey (110,110,120). `switch_tab`/`open_new_tab` ставят старой вкладке BackgroundRecent; `close_tab` ставит новой Active. 10 новых unit-тестов strip, итого 362 lumen-shell.
 - **p2-heavy-bench** ✅ 2026-06-01 — `samples/heavy.html` benchmark page (10M). Расширен с 40 до 85 статей Habr-style: mix-blend-mode trending section (5 карточек), 6 постов с HTML-таблицами (сравнения БД/фреймворков/облаков/языков), 6 постов с `float: left` аватаром + multi-paragraph body, 8 постов с grey placeholder images (`.post-thumb`), ad-banner placeholder. `bench/src/main.rs`: `HEAVY_HTML: &[u8]`, `run_pipeline(html, external_css, measurer)` параметризован, `run_bench()` — переиспользуемый цикл; main запускает оба бенчмарка подряд. Clippy clean.
 - **p2-webgl-getparam** ✅ 2026-06-01 — WebGL `getParameter(UNMASKED_*)` fingerprint stub (9D.2). IIFE-шим в `crates/js/src/webgl_bindings.rs` перехватывает `document.createElement('canvas')`: `canvas.getContext('webgl'/'webgl2'/'experimental-webgl')` возвращает stub с `getParameter(UNMASKED_VENDOR_WEBGL=0x9245)→"WebKit"`, `getParameter(UNMASKED_RENDERER_WEBGL=0x9246)→"Generic GPU"`, `getExtension('WEBGL_debug_renderer_info')` с константами, `toDataURL()→'data:,'` (блокировка canvas pixel-hash). 12 новых unit-тестов. 594 тестов lumen-js итого. 9D.2 завершена.
