@@ -6,8 +6,7 @@
 
 ## In progress
 
-Shields toolbar widget (7C.4)  branch: p2-shields-panel
-Next step: cargo check + tests  crates/shell/src/panels/shields_panel.rs:1
+_(нет)_
 
 ---
 
@@ -42,6 +41,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-shields-panel** ✅ 2026-06-01 — Shields toolbar widget (7C.4). `ShieldsPanel` floating top-right overlay (220×90px), Ctrl+Shift+S toggle. `BlockedLog` per-hostname счётчики + `clear()` при навигации. `ShieldCountSink` перехватывает `Event::RequestBlocked` из HTTP-слоя, пишет в `Arc<Mutex<BlockedLog>>`. `build_panel()`: статус ON/OFF, текущий домен, счётчик blocked, кнопка Enable/Disable for this site. `hit_test()`: Close/Toggle/Empty зоны. `Lumen.shields`, `ToggleShields` KeyCommand. Domain update в `apply_loaded_page`. 24 unit-тестов; итого lumen-shell: 530 тестов.
 - **p2-workspaces-ui** ✅ 2026-06-01 — Workspaces UI (7A.3). `WorkspacePanel { visible, workspaces, active_id }` + `WsEntry { id, name, accent }` в `panels/workspace_panel.rs`. Bottom-docked 32px switcher bar: цветные чипы воркспейсов + "×" удаление + "+" добавление. `parse_ws_color()` (#RRGGBB/#RGB/named). `hit_test()` — SwitchTo/DeleteWorkspace/NewWorkspace/Empty. `viewport_height_css()` вычитает `SWITCHER_HEIGHT` когда панель видима. `refresh_workspaces()` синхронизирует кэш с SQLite. Click handler: SwitchTo/Delete (не последний)/NewWorkspace (auto-name "Workspace N"). Ctrl+Shift+W toggle. `Lumen.workspaces: Workspaces` (in-memory SQLite). 17 unit-тестов; итого lumen-shell: 488 тестов.
 - **p2-tree-tabs** ✅ 2026-06-01 — Tree-style tabs (7A.2). `TabEntry.opener_id: Option<usize>` + `TabStrip::push_with_opener`. `tabs/tree.rs`: `depth_of`/`children_of`/`subtree_ids`/`visible_order`/`VisibleRow`. `panels/tree_tabs.rs`: `TreeTabsPanel { visible, collapsed: HashSet }`, `hit_test` (Arrow/Tab/Close/Empty), `build_panel` — отступ depth×8px + ▶/▼ стрелки + lifecycle-бейджи. Ctrl+Shift+B toggle; Ctrl+T в tree-mode = дочерняя вкладка. Arrow-клик чистит stale collapsed entries через `subtree_ids`. 443 тестов lumen-shell.
 - **p2-vertical-tabs** ✅ 2026-06-01 — Вертикальная панель вкладок (7A.1). `VerticalTabsPanel` в `shell/src/panels/vertical_tabs.rs`: боковая панель 200px слева, `Ctrl+B` toggle. Список вкладок: favicon-circle + title + close-кнопка, lifecycle-бейджи (BackgroundOld→amber, Hibernated→grey). PushTransform сдвигает контент страницы на PANEL_WIDTH вправо. `page_content_width_css()` для scroll-clamping. Hit-test с X-коррекцией для кликов по странице. 17 unit-тестов.
