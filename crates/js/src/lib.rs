@@ -1,6 +1,7 @@
 pub mod audio_bindings;
 pub mod battery_bindings;
 pub mod dom;
+pub mod geolocation;
 pub mod navigator_bindings;
 pub mod surface_api;
 pub mod video_bindings;
@@ -195,6 +196,13 @@ impl QuickJsRuntime {
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
             if let Err(e) = video_bindings::install_video_bindings(&ctx) {
                 eprintln!("Video bindings init failed: {}", e);
+            }
+
+            // Install Geolocation API stub (W3C Geolocation L2, §7.7) — after DOM/navigator.
+            // Default: PERMISSION_DENIED. Shell may reinitialise with fake coords via
+            // install_geolocation_bindings when FingerprintProfile enables them.
+            if let Err(e) = geolocation::install_geolocation_bindings(&ctx, None) {
+                eprintln!("Geolocation bindings init failed: {}", e);
             }
 
             // Install Layer 1 surface API protection (ADR-007 Layer 1, 9A) — after navigator.

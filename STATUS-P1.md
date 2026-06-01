@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+Geolocation API stub (§7, 9D.5-adjacent)  branch: p1-geolocation-api
+Next step: implement geolocation.rs + wire in install_dom  crates/js/src/geolocation.rs:1
 
 ---
 
