@@ -339,6 +339,7 @@ fn run_window_mode(
         cache_registry: lumen_core::ext::CacheRegistry::new(),
         deterministic,
         devtools_console: devtools::console_panel::ConsolePanel::new(),
+        dom_inspector: devtools::inspector::DomInspectorPanel::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -1371,6 +1372,8 @@ enum KeyCommand {
     ToggleSidebar,
     /// Показать/скрыть DevTools JS-консоль (F12, §7E.5).
     DevConsole,
+    /// Показать/скрыть DevTools DOM-инспектор (Ctrl+Shift+I, §7E.1).
+    DevInspector,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1464,6 +1467,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         }
         // F12 — toggle DevTools JS console (§7E.5)
         KeyCode::F12 if no_mods => Some(KeyCommand::DevConsole),
+        // Ctrl+Shift+I — toggle DevTools DOM inspector (§7E.1)
+        KeyCode::KeyI if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::DevInspector)
+        }
         _ => None,
     }
 }
@@ -3042,6 +3049,12 @@ struct Lumen {
     /// Captures `console.log/warn/error` output from the active page's JS runtime.
     /// Visible as a bottom overlay; toggled with `F12`.
     devtools_console: devtools::console_panel::ConsolePanel,
+    /// DevTools DOM inspector panel (§7E.1).
+    ///
+    /// While active, hovering highlights the box under the cursor with a
+    /// box-model overlay and clicking pins a node, showing its computed style
+    /// in a right-docked side panel. Toggled with `Ctrl+Shift+I`.
+    dom_inspector: devtools::inspector::DomInspectorPanel,
 }
 
 impl Lumen {
@@ -3978,6 +3991,28 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = Some(position);
                 self.update_cursor_icon();
+                // DevTools inspector: highlight the box under the cursor.
+                if self.dom_inspector.visible {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                        None
+                    } else {
+                        let (page_x, page_y) = self.page_point(x_css, y_css);
+                        self.layout_box
+                            .as_ref()
+                            .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
+                            .map(|r| r.node)
+                    };
+                    if self.dom_inspector.set_hovered(hovered) {
+                        self.request_redraw();
+                    }
+                }
                 // Feed current position to the gesture recognizer (right-drag tracking).
                 {
                     let dpr = self
@@ -4705,6 +4740,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut con_cmds);
                 }
 
+                // DevTools DOM inspector: right-docked computed-style side panel.
+                // Viewport-locked; the box-model overlay for the hovered node is
+                // emitted into the scrollable page layer below.
+                if self.dom_inspector.visible {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let (pw, ph) = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let win_css = (
+                        (pw as f32 / dpr) as u32,
+                        (ph as f32 / dpr) as u32,
+                    );
+                    let mut insp_cmds = devtools::inspector::build_inspector_panel(
+                        &self.dom_inspector,
+                        win_css,
+                        tabs::strip::TAB_BAR_HEIGHT,
+                    );
+                    overlay_buf.append(&mut insp_cmds);
+                }
+
                 // Vertical tab panel: docked left sidebar, below the tab bar.
                 // Rendered before the tab bar so tab bar draws on top.
                 if self.vertical_tabs.visible {
@@ -4819,6 +4879,28 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 };
 
+                // DevTools inspector box-model overlay, in page coordinates so it
+                // rides the same scroll/tab-bar transform as the page content.
+                // Built before borrowing the renderer to keep borrows disjoint.
+                let inspector_box_dl: lumen_paint::DisplayList = if self.dom_inspector.visible {
+                    if let Some(lb) = self.layout_box.as_ref() {
+                        let vp = Size::new(
+                            self.viewport_width_css(),
+                            self.viewport_height_css(),
+                        );
+                        devtools::inspector::build_box_overlay(
+                            &self.dom_inspector,
+                            lb,
+                            vp,
+                            (0.0, 0.0),
+                        )
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+
                 if let Some(r) = self.renderer.as_mut() {
                     if let Some(combined) = split_combined {
                         // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
@@ -4848,6 +4930,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             ),
                         });
                         shifted.extend_from_slice(base);
+                        // Inspector box-model overlay rides inside the page transform.
+                        shifted.extend_from_slice(&inspector_box_dl);
                         shifted.push(lumen_paint::DisplayCommand::PopTransform);
                         if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
                             eprintln!("Ошибка рендера: {err:?}");
@@ -4913,10 +4997,55 @@ impl Lumen {
     ///
     /// Used by both the winit `MouseInput::Pressed` handler and the injected
     /// [`InputCommand::Click`] path so both share identical dispatch logic.
+    /// Convert viewport CSS-pixel coordinates `(x_css, y_css)` into page
+    /// (document) coordinates, accounting for the current scroll offset and the
+    /// left tabs panel width when visible. Mirrors the conversion used by
+    /// [`Lumen::handle_click_at`] so hit tests stay consistent across input
+    /// paths.
+    fn page_point(&self, x_css: f32, y_css: f32) -> (f32, f32) {
+        let panel_x_offset = if self.vertical_tabs.visible {
+            panels::vertical_tabs::PANEL_WIDTH
+        } else if self.tree_tabs.visible {
+            panels::tree_tabs::PANEL_WIDTH
+        } else {
+            0.0
+        };
+        ((x_css - panel_x_offset) + self.scroll_x, y_css + self.scroll_y)
+    }
+
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
         // Dismiss validation tooltip on any non-scrollbar click.
         self.validation_tooltip = None;
         let scroll_y = self.scroll_y;
+
+        // DevTools inspector: a click pins the box under the cursor and shows
+        // its computed style, suppressing normal navigation / JS dispatch.
+        if self.dom_inspector.visible {
+            let (page_x, page_y) = self.page_point(x_css, y_css);
+            if let Some(hit) = self
+                .layout_box
+                .as_ref()
+                .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
+            {
+                let node = hit.node;
+                let label = self
+                    .layout_source
+                    .as_ref()
+                    .map(|src| {
+                        devtools::inspector::element_label(&src.document.lock().unwrap(), node)
+                    })
+                    .unwrap_or_else(|| format!("NodeId({})", node.index()));
+                let props = self
+                    .layout_box
+                    .as_ref()
+                    .and_then(|lb| devtools::inspector::find_box(lb, node))
+                    .map(devtools::inspector::computed_style_map)
+                    .unwrap_or_default();
+                self.dom_inspector.select(node, label, props);
+                self.request_redraw();
+            }
+            return;
+        }
 
         // ── Color picker swatch hit ──────────────────────
         // Check if click lands on an open color picker swatch.
@@ -5375,6 +5504,10 @@ impl Lumen {
             }
             KeyCommand::DevConsole => {
                 self.devtools_console.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::DevInspector => {
+                self.dom_inspector.toggle();
                 self.request_redraw();
             }
         }

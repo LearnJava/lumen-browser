@@ -291,7 +291,7 @@
 | 7D.2 | ⬜ Tab containers (storage partitioning) | `storage/src/partition.rs` + `shell` | — |
 | 7D.3 | ⬜ Sidebar web panels (мини-страница в sidebar) | `shell/src/sidebar/web_panel.rs` | — |
 | 7E | ⬜ **`[P3]` DevTools полный** (§12.12, Phase 4+) | Поверх существующего CDP-минимума (5C) | `crates/devtools/` |
-| 7E.1 | ⬜ DOM inspector panel (tree + attributes) | `devtools` + read из `lumen-dom` | — |
+| 7E.1 | ✅ **`[P2]` DOM inspector panel** (hover box-model overlay + click computed style) | `shell/src/devtools/inspector.rs` + read из `lumen-dom` | P2: Ctrl+Shift+I toggle — 2026-06-02 |
 | 7E.2 | ⬜ **`[P3+P4]` Computed styles panel** | сериализация `ComputedStyle` | P4: expose ComputedStyle как serializable JSON |
 | 7E.3 | ✅ **`[P3+P2]` Box model overlay** (margin/border/padding overlay) | через display list | P2: overlay primitive в `DisplayCommand` — 2026-05-29 |
 | 7E.4 | ⬜ Network panel (live request log) | `devtools` слушает `NetworkTransport` events | — |
