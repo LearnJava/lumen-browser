@@ -6,8 +6,7 @@
 
 ## In progress
 
-**Vertical tabs panel (7A.1)**  branch: p2-vertical-tabs
-Next step: create `crates/shell/src/panels/vertical_tabs.rs`
+_(нет)_
 
 ---
 
@@ -17,7 +16,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 5 | **Vertical tabs panel (7A.1)** — `VerticalTabPanel: Panel` в `shell/src/panels/vertical_tabs.rs`; `Surface::Docked` left slot; tab list с favicon + title + close; `Ctrl+B` toggle. See design V1. See `lumen-plan.md §7A.1` | `lumen-shell` | M | none |
 | 6 | **Tree-style tabs (7A.2)** — расширить `VerticalTabPanel`: `opener_id` на `TabEntry`; indent children 8px/level; collapse/expand subtree. `shell/src/panels/tree_tabs.rs`. See `lumen-plan.md §7A.2` | `lumen-shell` | M | #5 |
 | 7 | **Workspaces UI (7A.3)** — `WorkspacePanel: Panel` в `shell/src/panels/workspace_panel.rs`: switcher bar; `Command::SwitchWorkspace(id)` / `CreateWorkspace(name)` / `DeleteWorkspace(id)`; persisted в SQLite `workspaces`. See `lumen-plan.md §7A.3` | `lumen-shell`, `lumen-storage` | M | none |
 | 8 | **Shields toolbar widget (7C.4)** — `ShieldsPanel: Panel` floating от address-bar: blocked counts из `EasyListFilter`/`HostsFilter` per domain; toggle → `Command::ToggleShields(url)`. `shell/src/panels/shields_panel.rs`. See `lumen-plan.md §7C.4` | `lumen-shell` | M | none |
@@ -44,6 +42,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-vertical-tabs** ✅ 2026-06-01 — Вертикальная панель вкладок (7A.1). `VerticalTabsPanel` в `shell/src/panels/vertical_tabs.rs`: боковая панель 200px слева, `Ctrl+B` toggle. Список вкладок: favicon-circle + title + close-кнопка, lifecycle-бейджи (BackgroundOld→amber, Hibernated→grey). PushTransform сдвигает контент страницы на PANEL_WIDTH вправо. `page_content_width_css()` для scroll-clamping. Hit-test с X-коррекцией для кликов по странице. 17 unit-тестов.
 - **p2-split-view** ✅ 2026-06-01 — Multi-viewport split view (7A.4). `SplitPane` + `SplitView` + `SplitFocus` в `shell/src/panels/split_view.rs`. `build_combined_dl()` — clips left/right panes, bakes scroll into PushTransform, adds 1px divider. Keybindings: `Ctrl+\` toggle split, `Ctrl+M` switch focus. Right pane populated from background or hibernated tabs; fallback `build_split_placeholder(url)` для hibernated. Click routing: right-pane clicks set focus only. `scroll_active_pane()` / `scroll_active_pane_to()` — unified scroll for both panes. 10 unit-тестов SplitView + 373 lumen-shell итого.
 - **p2-tab-snapshot-restore** ✅ 2026-06-01 — T3 tab hibernation + restore (ADR-008 §10J). `lumen-storage::TabSnapshotStore` (SQLite WAL) + `HibernatedTabData` (dom_blob, css_source, url, title, scroll_x/y). `tab_lifecycle::TabMetadata` — 200 B RAM stub per hibernated tab (url + title для быстрого отображения). `Lumen`: поля `hibernated_tabs/tab_snapshots/lifecycle_mgr/lifecycle_last_tick`; методы `hibernate_bg_tab` (Document::to_bytes → SQLite), `restore_hibernated_tab` (SQLite → Document::from_bytes → relayout), `tick_lifecycle` (1 Hz poll tick_idle + lru_evict). Интеграция в open/close/switch_tab + about_to_wait. 9 unit-тестов storage, 364 итого lumen-shell.
 - **p2-tab-lifecycle-indicators** ✅ 2026-06-01 — Tab lifecycle UI indicators (10K). `TabEntry.tab_state: TabState` — хранит lifecycle tier. `TabStrip::set_tab_state(idx, state)`. `build_tab_bar` рендерит `FillRoundedRect` badge: BackgroundOld → amber (255,168,0), Hibernated → grey (110,110,120). `switch_tab`/`open_new_tab` ставят старой вкладке BackgroundRecent; `close_tab` ставит новой Active. 10 новых unit-тестов strip, итого 362 lumen-shell.
