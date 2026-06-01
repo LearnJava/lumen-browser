@@ -349,7 +349,7 @@
 | 9C.5 | ✅ Client Hints handling (опционально, выключено на Strict) | `network/src/http/client_hints.rs` | — |
 | 9D | ⬜ **`[P3+P2]` Layer 4: rendering fingerprint** (Phase 2) | Canvas/WebGL/audio randomization, Battery API disable, WebRTC mDNS-only | `lumen-canvas`, `lumen-paint`, `lumen-js` |
 | 9D.1 | ✅ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
-| 9D.2 | 🟡 WebGL renderer/vendor normalization | `js/src/webgl_bindings.rs` | P1 done: GpuFingerprint normalization (paint/fingerprint.rs), JS stub (_LUMEN_GPU_VENDOR/_RENDERER); P3 pending: wire to getParameter(UNMASKED_VENDOR/RENDERER_WEBGL) |
+| 9D.2 | ✅ WebGL renderer/vendor normalization | `js/src/webgl_canvas.rs` | GpuFingerprint normalization (paint/fingerprint.rs) wired into the functional WebGL context: `getParameter(UNMASKED_VENDOR/RENDERER_WEBGL)` + `getParameter(VENDOR/RENDERER)` return normalized strings; `toDataURL`/`toBlob` blank. 2026-06-02 |
 | 9D.3 | ✅ AudioContext fingerprint noise | `js/src/audio_bindings.rs` | 2026-05-30 |
 | 9D.4 | ✅ Battery API disable on Strict | `js/src/battery_bindings.rs` | 2026-05-30: navigator.getBattery() → rejected Promise, 4 unit-тестов |
 | 9D.5 | ⬜ WebRTC mDNS-only host candidates | `network/src/webrtc/candidates.rs` | при наличии WebRTC; иначе noop |
@@ -2303,7 +2303,7 @@ CI gate (задачи 9G.3 + 9G.5 в Roadmap): `cargo run -p lumen-bench --relea
 - **Цель:** стабильный релиз.
 
 ### Фаза 4 — После 1.0
-- Подмножество WebGL (по запросам).
+- Подмножество WebGL (по запросам). 🟡 Базовый функциональный контекст готов (§7F): `canvas.getContext('webgl')` → `lumen_paint::SoftwareWebGl` (CPU-растеризатор), buffers/shaders/programs/attribs/uniform4f/drawArrays/readPixels. GLSL не исполняется — плоская заливка цветом из uniform4f.
 - Mobile (Android через NDK; iOS — упрётся в Apple-policy).
 - **Sync через E2E (§12.11)** — self-host или P2P. Mobile-клиент критичен для real use-case.
 - **Граф знаний (§12.9)** — визуализация коллекции.

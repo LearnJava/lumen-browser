@@ -865,7 +865,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-js  (61 symbols)
+## lumen-js  (62 symbols)
 
 `crates/js/src/audio_bindings.rs:25` **fn** `new_session_seed` — Generate a unique per-session noise seed
 `crates/js/src/audio_bindings.rs:37` **fn** `install_audio_bindings` — Install AudioContext stub with fingerprint noise into the JS context
@@ -886,30 +886,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/dom.rs:156` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
 `crates/js/src/geolocation.rs:25` **struct** `FakeCoords` — Fake geographic coordinates injected into the Geolocation API
 `crates/js/src/geolocation.rs:43` **fn** `install_geolocation_bindings` — Install the Geolocation API stub into the JS context
-`crates/js/src/lib.rs:35` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:49` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:141` **fn** `new`
-`crates/js/src/lib.rs:189` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:335` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:344` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:356` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:381` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:400` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:408` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:417` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:426` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:435` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:443` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:452` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:464` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:473` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:482` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:493` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:502` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:511` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:521` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:539` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:551` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:36` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:50` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:142` **fn** `new`
+`crates/js/src/lib.rs:190` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:338` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:347` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:359` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:384` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:403` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:411` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:420` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:429` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:438` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:446` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:455` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:467` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:476` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:485` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:496` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:505` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:514` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:524` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:542` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:554` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
 `crates/js/src/navigator_bindings.rs:31` **fn** `install_navigator_bindings` — Install navigator/screen/timezone normalization shim into the JS context
 `crates/js/src/notifications_bindings.rs:21` **struct** `NotificationRequest` — A notification request queued by `new Notification(...)` in JS
 `crates/js/src/notifications_bindings.rs:34` **type** `NotificationQueue` — Shared queue of pending notification requests
@@ -918,6 +918,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/surface_api.rs:29` **fn** `install_surface_api_protection` — Install Layer 1 surface API protection into the JS context
 `crates/js/src/video_bindings.rs:27` **fn** `install_video_bindings` — Install HTMLVideoElement stubs into the JS context
 `crates/js/src/webgl_bindings.rs:25` **fn** `install_webgl_bindings` — Install WebGL fingerprint shim into the JS context
+`crates/js/src/webgl_canvas.rs:57` **fn** `install_webgl_canvas` — Install functional WebGL bindings into the JS context
 `crates/js/src/webrtc_stub.rs:27` **fn** `install_webrtc_bindings` — Install the WebRTC mDNS-only stub into the JS context
 `crates/js/src/worker.rs:22` **enum** `WorkerInMsg` — Message sent from the main JS thread to a worker thread
 `crates/js/src/worker.rs:32` **struct** `WorkerHandle` — Live handle to a spawned worker thread
@@ -1625,7 +1626,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/tls/mod.rs:47` **fn** `http_to_tls_profile` — Map an `HttpProfile` to the corresponding `TlsProfile`
 `crates/network/src/tls/mod.rs:64` **fn** `build_client_config` — Build a `ClientConfig` for the given `TlsProfile`
 
-## lumen-paint  (140 symbols)
+## lumen-paint  (168 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -1707,8 +1708,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:175` **fn** `is_empty` — Check if cache is empty
 `crates/engine/paint/src/layer_cache.rs:180` **fn** `contains` — Check if a specific layer is in cache
 `crates/engine/paint/src/layer_cache.rs:189` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:56` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:66` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/lib.rs:58` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:68` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1331` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
@@ -1767,6 +1768,34 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:102` **fn** `len_for_size` — Get the number of free textures of a specific size
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
+`crates/engine/paint/src/webgl.rs:107` **struct** `SoftwareWebGl` — Pure-Rust software WebGL 1.0 context
+`crates/engine/paint/src/webgl.rs:145` **fn** `new` — Create a context with a `width × height` drawing buffer
+`crates/engine/paint/src/webgl.rs:168` **fn** `width` — Drawing-buffer width in pixels
+`crates/engine/paint/src/webgl.rs:173` **fn** `height` — Drawing-buffer height in pixels
+`crates/engine/paint/src/webgl.rs:178` **fn** `pixels` — Borrow the RGBA8 framebuffer (top-left origin, `width*height*4` bytes)
+`crates/engine/paint/src/webgl.rs:184` **fn** `pixel` — Read the RGBA pixel at `(x, y)` (top-left origin). Returns
+`crates/engine/paint/src/webgl.rs:198` **fn** `viewport` — `gl.viewport(x, y, w, h)`
+`crates/engine/paint/src/webgl.rs:203` **fn** `clear_color` — `gl.clearColor(r, g, b, a)`. Components are clamped to `[0, 1]`
+`crates/engine/paint/src/webgl.rs:209` **fn** `clear` — `gl.clear(mask)`. Only `COLOR_BUFFER_BIT` has a visible effect; the
+`crates/engine/paint/src/webgl.rs:226` **fn** `create_buffer` — `gl.createBuffer()` → opaque buffer id (never 0)
+`crates/engine/paint/src/webgl.rs:236` **fn** `bind_buffer` — `gl.bindBuffer(target, buffer)`. `buffer == 0` unbinds. Only
+`crates/engine/paint/src/webgl.rs:244` **fn** `buffer_data_f32` — `gl.bufferData(target, data, usage)` for float data. Stores `data`
+`crates/engine/paint/src/webgl.rs:251` **fn** `create_shader` — `gl.createShader(kind)` → opaque shader id, or 0 for an unknown kind
+`crates/engine/paint/src/webgl.rs:269` **fn** `shader_source` — `gl.shaderSource(shader, source)`
+`crates/engine/paint/src/webgl.rs:277` **fn** `compile_shader` — `gl.compileShader(shader)`. Always marks the shader compiled; the
+`crates/engine/paint/src/webgl.rs:284` **fn** `shader_compiled` — `gl.getShaderParameter(shader, COMPILE_STATUS)` — true once compiled
+`crates/engine/paint/src/webgl.rs:289` **fn** `create_program` — `gl.createProgram()` → opaque program id (never 0)
+`crates/engine/paint/src/webgl.rs:297` **fn** `attach_shader` — `gl.attachShader(program, shader)`. Slots the shader by its kind
+`crates/engine/paint/src/webgl.rs:312` **fn** `link_program` — `gl.linkProgram(program)`. Always marks the program linked
+`crates/engine/paint/src/webgl.rs:319` **fn** `program_linked` — `gl.getProgramParameter(program, LINK_STATUS)` — true once linked
+`crates/engine/paint/src/webgl.rs:324` **fn** `use_program` — `gl.useProgram(program)`. `program == 0` clears the active program
+`crates/engine/paint/src/webgl.rs:330` **fn** `get_attrib_location` — `gl.getAttribLocation(program, name)` → stable location (≥ 0), or -1 if
+`crates/engine/paint/src/webgl.rs:347` **fn** `get_uniform_location` — `gl.getUniformLocation(program, name)` → stable location (≥ 0), or -1 if
+`crates/engine/paint/src/webgl.rs:363` **fn** `enable_vertex_attrib_array` — `gl.enableVertexAttribArray(index)`
+`crates/engine/paint/src/webgl.rs:368` **fn** `disable_vertex_attrib_array` — `gl.disableVertexAttribArray(index)`
+`crates/engine/paint/src/webgl.rs:379` **fn** `vertex_attrib_pointer` — `gl.vertexAttribPointer(index, size, type, normalized, stride, offset)`
+`crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
+`crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
 ## lumen-shell  (370 symbols)
 
@@ -2545,4 +2574,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2480 symbols in 20 crates*
+*Total: 2509 symbols in 20 crates*

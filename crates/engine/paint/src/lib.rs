@@ -19,6 +19,7 @@ pub mod renderer;
 pub mod scroll_snap;
 pub mod svg_path;
 pub mod texture_pool;
+pub mod webgl;
 
 #[cfg(feature = "cpu-render")]
 pub mod cpu_raster;
@@ -39,6 +40,7 @@ pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
 pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};
 pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
+pub use webgl::SoftwareWebGl;
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
 
