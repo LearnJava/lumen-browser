@@ -4,6 +4,7 @@ pub mod battery_bindings;
 pub mod dom;
 pub mod geolocation;
 pub mod navigator_bindings;
+pub mod notifications_bindings;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod webgl_bindings;
@@ -74,6 +75,9 @@ pub struct QuickJsRuntime {
     worker_messages: worker::WorkerMessageQueue,
     /// Monotonically increasing counter used to assign unique IDs to new workers.
     worker_next_id: Arc<Mutex<u32>>,
+    /// Pending OS notification requests queued by `new Notification(...)` in JS.
+    /// Drained by the shell in `about_to_wait` via `take_notification_requests()`.
+    pending_notifications: notifications_bindings::NotificationQueue,
 }
 
 struct Inner {
@@ -107,6 +111,7 @@ impl QuickJsRuntime {
             workers: Arc::new(Mutex::new(HashMap::new())),
             worker_messages: Arc::new(Mutex::new(Vec::new())),
             worker_next_id: Arc::new(Mutex::new(1)),
+            pending_notifications: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -227,6 +232,17 @@ impl QuickJsRuntime {
                 eprintln!("Worker bindings init failed: {}", e);
             }
 
+            // Install Web Notifications API (W3C Notifications API L1) — after DOM so
+            // Event, Promise, and queueMicrotask are already defined.
+            // Default permission: "denied" (privacy-first; shell can override per origin).
+            if let Err(e) = notifications_bindings::install_notifications_bindings(
+                &ctx,
+                Arc::clone(&self.pending_notifications),
+                false,
+            ) {
+                eprintln!("Notifications bindings init failed: {}", e);
+            }
+
             Ok(())
         })
     }
@@ -333,6 +349,17 @@ impl QuickJsRuntime {
     /// `set_scroll_position(root, NodeId::from_index(nid), x, y)`.
     pub fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
         std::mem::take(&mut self.pending_scrolls.lock().unwrap())
+    }
+
+    /// Drain all OS notification requests queued by `new Notification(...)` in JS.
+    ///
+    /// Called by the shell in `about_to_wait`.  Each returned entry should be
+    /// forwarded to `notification::show_os_notification(title, body)`.
+    /// Returns an empty vec when no notifications were created since the last call.
+    pub fn take_notification_requests(
+        &self,
+    ) -> Vec<notifications_bindings::NotificationRequest> {
+        notifications_bindings::drain_notifications(&self.pending_notifications)
     }
 
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
