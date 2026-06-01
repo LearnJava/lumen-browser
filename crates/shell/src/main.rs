@@ -298,6 +298,7 @@ fn run_window_mode(
         focused_node: None,
         downloads: download::DownloadManager::new(),
         tab_strip: tabs::strip::TabStrip::new(),
+        container_store: tabs::containers::ContainerStore::new(),
         bg_tabs: HashMap::new(),
         hibernated_tabs: HashMap::new(),
         tab_snapshots: lumen_storage::TabSnapshotStore::open_in_memory()
@@ -1324,6 +1325,14 @@ enum KeyCommand {
     ToggleCookieBannerDismiss,
     /// Показать/скрыть правую боковую панель (Ctrl+Shift+A, 7D.3).
     ToggleSidebar,
+    /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
+    /// диспатчится программно (контекстное меню вкладки / omnibox-команда
+    /// `container <name>`). См. `tabs::containers::ContainerKind`.
+    ///
+    /// Конструируется через шелл-команды/omnibox в follow-up таске; пока
+    /// гасим dead_code-предупреждение, чтобы `cargo clippy -D warnings` прошёл.
+    #[allow(dead_code)]
+    SetTabContainer(tabs::containers::ContainerKind),
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -2844,6 +2853,12 @@ struct Lumen {
     /// The ACTIVE tab's page state lives directly in the `Lumen` fields.
     /// Background tabs have their page state in `bg_tabs` keyed by `TabEntry::id`.
     tab_strip: tabs::strip::TabStrip,
+    /// Per-`(origin, ContainerKind)` cookie/storage store ids (7D.2).
+    ///
+    /// Allocated lazily on first access; the actual cookie jar / storage
+    /// dispatch picks up the store id as a partitioning key. Stored on the
+    /// shell so isolation survives tab open/close/restore.
+    container_store: tabs::containers::ContainerStore,
     /// Frozen page state for each background tab, keyed by `TabEntry::id`.
     ///
     /// `None` entry means the tab was opened but never loaded (blank new tab).
@@ -5223,6 +5238,10 @@ impl Lumen {
                 self.relayout();
                 self.request_redraw();
             }
+            KeyCommand::SetTabContainer(container) => {
+                let idx = self.tab_strip.active;
+                self.set_tab_container(idx, container);
+            }
         }
     }
 
@@ -6550,6 +6569,29 @@ impl Lumen {
         self.request_redraw();
     }
 
+    /// Assign `kind` to tab at `idx` for task 7D.2.
+    ///
+    /// Pre-registers a cookie/storage store id for the active page's origin
+    /// if one is known, so subsequent requests can be partitioned. UI
+    /// border-top strip refreshes on the next redraw via `build_tab_bar`.
+    fn set_tab_container(&mut self, idx: usize, kind: tabs::containers::ContainerKind) {
+        if idx >= self.tab_strip.len() {
+            return;
+        }
+        self.tab_strip.set_tab_container(idx, kind);
+        // Pre-warm a store id for the active tab's origin so cookie/storage
+        // dispatch can partition by container id without a later allocation
+        // step. Best-effort only — non-active tabs are wired up the same way
+        // the next time their page loads.
+        if idx == self.tab_strip.active
+            && let Some(url) = self.source.url_str()
+            && let Some(origin) = origin_of_url(url)
+        {
+            self.container_store.get_or_create(&origin, kind);
+        }
+        self.request_redraw();
+    }
+
     /// Switch to tab at `idx`. No-op if already active.
     ///
     /// Handles all three cases:
@@ -6595,6 +6637,14 @@ impl Lumen {
 /// нужно физическое состояние).
 fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
     mods.state()
+}
+
+/// Извлечь origin (`scheme://host[:port]`) из URL-строки (7D.2). Для file://
+/// или невалидных URL возвращает `None`. Используется как ключ
+/// `ContainerStore` для cookie/storage партиционирования.
+fn origin_of_url(url: &str) -> Option<String> {
+    let parsed = lumen_core::url::Url::parse(url).ok()?;
+    lumen_network::Origin::from_url(&parsed).ok().map(|o| o.to_string())
 }
 
 /// Сколько CSS px скроллим за стрелку (line-step). Эмпирическое значение,

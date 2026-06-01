@@ -1725,7 +1725,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (300 symbols)
+## lumen-shell  (335 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1872,6 +1872,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/notification.rs:18` **fn** `show_os_notification` — Show a desktop notification asynchronously
 `crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
+`crates/shell/src/panels/permission_panel.rs:58` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
+`crates/shell/src/panels/permission_panel.rs:79` **fn** `label` — Short display name for the permission row label
+`crates/shell/src/panels/permission_panel.rs:89` **fn** `icon` — Emoji icon shown to the left of the label
+`crates/shell/src/panels/permission_panel.rs:101` **enum** `PermissionState` — Grant state for a single permission on a single origin
+`crates/shell/src/panels/permission_panel.rs:114` **fn** `label` — Label shown on the toggle button
+`crates/shell/src/panels/permission_panel.rs:123` **fn** `cycle` — Cycle to the next state: Ask → Allow → Deny → Ask
+`crates/shell/src/panels/permission_panel.rs:135` **struct** `PermissionPanel` — Per-site permission popover state (7C.2)
+`crates/shell/src/panels/permission_panel.rs:150` **fn** `new` — Create a new hidden panel with no stored permissions
+`crates/shell/src/panels/permission_panel.rs:159` **fn** `toggle` — Flip panel visibility
+`crates/shell/src/panels/permission_panel.rs:164` **fn** `set_origin` — Update the current origin on navigation (does not clear stored grants)
+`crates/shell/src/panels/permission_panel.rs:171` **fn** `state_for` — Return the stored state for `kind` at the current origin
+`crates/shell/src/panels/permission_panel.rs:184` **fn** `cycle_permission` — Cycle the state for `kind` at the current origin to the next value
+`crates/shell/src/panels/permission_panel.rs:207` **enum** `PermissionHit` — Result of a click inside the permission panel
+`crates/shell/src/panels/permission_panel.rs:220` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
+`crates/shell/src/panels/permission_panel.rs:262` **fn** `build_panel` — Build the display list for the permission floating panel
 `crates/shell/src/panels/shields_panel.rs:58` **struct** `BlockedLog` — Shared accumulator for blocked-request counts, indexed by hostname
 `crates/shell/src/panels/shields_panel.rs:69` **fn** `record` — Increment the count for the hostname extracted from `url`
 `crates/shell/src/panels/shields_panel.rs:77` **fn** `clear` — Clear all counts (call on every top-level navigation)
@@ -1888,6 +1903,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/shields_panel.rs:202` **enum** `ShieldsHit` — Result of a click inside the shields panel
 `crates/shell/src/panels/shields_panel.rs:215` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the shields panel
 `crates/shell/src/panels/shields_panel.rs:249` **fn** `build_panel` — Build the display list for the shields floating panel
+`crates/shell/src/panels/sidebar_panel.rs:62` **struct** `SidebarPanel` — Right-docked sidebar web panel state (7D.3)
+`crates/shell/src/panels/sidebar_panel.rs:81` **fn** `new` — Create a new hidden sidebar panel with no page loaded
+`crates/shell/src/panels/sidebar_panel.rs:93` **fn** `toggle` — Toggle panel visibility.  No-op when no URL has been set
+`crates/shell/src/panels/sidebar_panel.rs:103` **fn** `open` — Open the sidebar with `url`.  Clears content if the URL changed
+`crates/shell/src/panels/sidebar_panel.rs:116` **fn** `close` — Close the sidebar (hide; URL and content are preserved for re-open)
+`crates/shell/src/panels/sidebar_panel.rs:123` **fn** `set_page` — Store a freshly-rendered display list for the sidebar page
+`crates/shell/src/panels/sidebar_panel.rs:132` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
+`crates/shell/src/panels/sidebar_panel.rs:148` **enum** `SidebarHit` — Result of a click inside the sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:161` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:198` **fn** `build_panel` — Build the display list for the right-docked sidebar panel
 `crates/shell/src/panels/split_view.rs:20` **enum** `SplitFocus` — Which pane receives keyboard and scroll input
 `crates/shell/src/panels/split_view.rs:34` **struct** `SplitPane` — Frozen rendering state for the right pane in a split view
 `crates/shell/src/panels/split_view.rs:54` **struct** `SplitView` — Active split-view state: two side-by-side `ContentViewport` slots
@@ -2010,18 +2035,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle/state.rs:136` **fn** `advance_tier` — Advance to the next tier. Returns `true` if a transition occurred
 `crates/shell/src/tab_lifecycle/state.rs:150` **fn** `should_transition_on_idle` — Returns `true` if the idle timeout for the current tier has elapsed
 `crates/shell/src/tab_lifecycle/state.rs:167` **fn** `suggested_pressure_state` — If memory pressure justifies an earlier-than-scheduled tier advance, returns
-`crates/shell/src/tabs/strip.rs:52` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:74` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:85` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:99` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:104` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:120` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:134` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:146` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:156` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:167` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:187` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:218` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/containers.rs:44` **enum** `ContainerKind` — Kind of tab container. Drives the border-top colour in the tab strip
+`crates/shell/src/tabs/containers.rs:65` **fn** `border_color` — Border-top strip colour, or `None` for [`ContainerKind::None`]
+`crates/shell/src/tabs/containers.rs:82` **fn** `name` — Human-readable container name for UI labels
+`crates/shell/src/tabs/containers.rs:112` **struct** `ContainerStore` — Origin+container → cookie/storage store id
+`crates/shell/src/tabs/containers.rs:122` **fn** `new` — Create an empty store. First minted id will be `0`
+`crates/shell/src/tabs/containers.rs:131` **fn** `get_or_create` — Get the store id for `(origin, container)`, allocating a fresh one
+`crates/shell/src/tabs/containers.rs:144` **fn** `get` — Look up an existing store id without allocating
+`crates/shell/src/tabs/containers.rs:150` **fn** `len` — Number of `(origin, container)` mappings tracked
+`crates/shell/src/tabs/containers.rs:156` **fn** `is_empty` — `true` if no mapping has been allocated yet
+`crates/shell/src/tabs/strip.rs:56` **struct** `TabEntry` — Metadata for one browser tab
+`crates/shell/src/tabs/strip.rs:85` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:96` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:111` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:116` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:133` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:152` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:160` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:172` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:182` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:193` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:213` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:244` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -2423,4 +2458,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2361 symbols in 19 crates*
+*Total: 2396 symbols in 19 crates*
