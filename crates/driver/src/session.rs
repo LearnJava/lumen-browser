@@ -19,6 +19,7 @@ use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
     ConsoleEntry, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
     context::SessionContext,
+    isolation::OriginIsolationContext,
 };
 
 /// Встроенный шрифт Inter-Regular (SIL OFL 1.1).
@@ -61,6 +62,10 @@ pub struct InProcessSession {
     con_log: Vec<ConsoleEntry>,
     /// Изолированный контекст сессии: cookies, storage, cache, fingerprint profile.
     context: SessionContext,
+    /// Per-origin-group isolation (8E). `Some` when created via
+    /// [`InProcessSession::with_origin_isolation`]; `None` for the default
+    /// shared-context session created by [`InProcessSession::new`].
+    isolation: Option<OriginIsolationContext>,
     /// Счётчик активных HTTP-запросов (0 = NetworkIdle).
     ///
     /// В синхронной модели всегда 0 после возврата из `navigate()`.
@@ -83,6 +88,7 @@ impl InProcessSession {
             net_log: Vec::new(),
             con_log: Vec::new(),
             context: SessionContext::new(),
+            isolation: None,
             active_network_requests: 0,
             pending_js_microtasks: 0,
         }
@@ -97,9 +103,54 @@ impl InProcessSession {
             net_log: Vec::new(),
             con_log: Vec::new(),
             context: SessionContext::new(),
+            isolation: None,
             active_network_requests: 0,
             pending_js_microtasks: 0,
         }
+    }
+
+    /// Create a session with per-origin-group isolation (Phase 1: 8E).
+    ///
+    /// Cookies, `localStorage`, `sessionStorage`, and `IndexedDB` are scoped to
+    /// the origin group derived from `origin` (eTLD+1). Two sessions created
+    /// with different origins from the same site (e.g. `www.example.com` and
+    /// `api.example.com`) share the same origin group but have **independent**
+    /// storage — each `with_origin_isolation` call returns a fully isolated
+    /// session instance.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use lumen_driver::{BrowserSession, InProcessSession};
+    ///
+    /// let mut s1 = InProcessSession::with_origin_isolation("https://example.com");
+    /// let mut s2 = InProcessSession::with_origin_isolation("https://example.com");
+    /// // s1 and s2 have independent cookie jars, localStorage, and IDB.
+    /// ```
+    pub fn with_origin_isolation(origin: &str) -> Self {
+        Self {
+            viewport: DEFAULT_VIEWPORT,
+            current_url: String::new(),
+            state: None,
+            net_log: Vec::new(),
+            con_log: Vec::new(),
+            context: SessionContext::new(),
+            isolation: Some(OriginIsolationContext::new(origin)),
+            active_network_requests: 0,
+            pending_js_microtasks: 0,
+        }
+    }
+
+    /// Access the per-origin-group isolation context, if this session was
+    /// created via [`with_origin_isolation`](InProcessSession::with_origin_isolation).
+    ///
+    /// Returns `None` for sessions created with `new()` or `with_viewport()`.
+    pub fn isolation_context(&self) -> Option<&OriginIsolationContext> {
+        self.isolation.as_ref()
+    }
+
+    /// Mutable access to the per-origin-group isolation context.
+    pub fn isolation_context_mut(&mut self) -> Option<&mut OriginIsolationContext> {
+        self.isolation.as_mut()
     }
 
     /// Установить количество pending JS microtask/callback для условия `JsIdle`.
@@ -120,6 +171,11 @@ impl InProcessSession {
     /// Загрузить байты по URL и запустить pipeline. Внутренняя реализация
     /// навигации, используемая также для тестов с прямой передачей HTML.
     fn run_pipeline(&mut self, bytes: &[u8], content_type: Option<&str>, url: String) -> Result<()> {
+        // sessionStorage is cleared on top-level navigation (HTML LS §8.1).
+        if let Some(iso) = &mut self.isolation {
+            iso.clear_all_session_storage();
+        }
+
         let encoding = lumen_encoding::detect(bytes, content_type);
         let source = lumen_encoding::decode(encoding, bytes);
 
