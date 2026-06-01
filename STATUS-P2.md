@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+- **Tab containers (7D.2)** branch: `p2-tab-containers`
+  Next step: реализовать `ContainerKind` + `ContainerStore` в `crates/shell/src/tabs/containers.rs`, добавить поле `container` в `TabEntry` и border-top рендер в `build_tab_bar` (`crates/shell/src/tabs/strip.rs`).
 
 ---
 
