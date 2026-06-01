@@ -106,6 +106,24 @@ pub enum NavigateRequest {
     Reload,
 }
 
+/// A popup window request emitted by JS `window.open(url, target, features)`.
+///
+/// Captured in `window_open_requests` during script execution and drained by the
+/// shell in `about_to_wait` — each entry opens a new tab navigated to `url`.
+/// `width` and `height` come from the `features` string (default 800×600).
+#[derive(Debug, Clone)]
+pub struct PopupRequest {
+    /// Target URL. Empty string means `about:blank`.
+    pub url: String,
+    /// Window target (`_blank`, `_self`, named window, etc.). Lumen treats all
+    /// targets as a new tab for now.
+    pub target: String,
+    /// Requested popup width in CSS px (from `width=` feature, default 800).
+    pub width: u32,
+    /// Requested popup height in CSS px (from `height=` feature, default 600).
+    pub height: u32,
+}
+
 // ─── public entry point ───────────────────────────────────────────────────────
 
 /// Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`.
@@ -156,9 +174,10 @@ pub fn install_dom_api(
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, deterministic_seed)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -218,6 +237,7 @@ fn install_primitives(
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
 ) -> QjResult<()> {
     macro_rules! reg {
@@ -1222,6 +1242,30 @@ fn install_primitives(
         reg!("_lumen_request_scroll", move |nid: u32, x: f64, y: f64| {
             ps.lock().unwrap().push((nid, x as f32, y as f32));
         });
+    }
+
+    // ── window.open() popup requests ────────────────────────────────────────────
+    // Queues a popup window request. Shell drains via `take_window_open_requests()`.
+    // `features` is the raw feature string ("width=800,height=600,..."); we parse
+    // `width=` and `height=` here so the shell receives typed values.
+    {
+        let wor = Arc::clone(&window_open_requests);
+        reg!(
+            "_lumen_window_open",
+            move |url: String, target: String, features: String| {
+                let mut width: u32 = 800;
+                let mut height: u32 = 600;
+                for part in features.split(',') {
+                    let part = part.trim();
+                    if let Some(v) = part.strip_prefix("width=") {
+                        width = v.trim().parse().unwrap_or(800);
+                    } else if let Some(v) = part.strip_prefix("height=") {
+                        height = v.trim().parse().unwrap_or(600);
+                    }
+                }
+                wor.lock().unwrap().push(PopupRequest { url, target, width, height });
+            }
+        );
     }
 
     // ── Computed styles (window.getComputedStyle) ────────────────────────────────
@@ -6152,6 +6196,35 @@ window.PermissionStatus      = PermissionStatus;
 window.isSecureContext       = true;
 // COOP/COEP cross-origin isolation is not yet implemented in Lumen.
 window.crossOriginIsolated   = false;
+
+// ── window.open() (HTML LS §8.7.1) ─────────────────────────────────────────
+// Opens a new browsing context (implemented as a new tab in Lumen).
+// Returns a stub WindowProxy with location/close — actual cross-window state
+// sharing is not implemented (window.opener is always null).
+window.opener = null;
+window.open = function(url, target, features) {
+  url     = (url     == null) ? '' : String(url);
+  target  = (target  == null) ? '_blank' : String(target);
+  features = (features == null) ? '' : String(features);
+  _lumen_window_open(url, target, features);
+  // Return a minimal stub so callers can call .close() / read .location.href
+  // without throwing. Real cross-window messaging is not yet supported.
+  var href = url || 'about:blank';
+  return {
+    closed: false,
+    opener: null,
+    name: target,
+    location: {
+      href: href,
+      toString: function() { return href; }
+    },
+    close: function() { this.closed = true; },
+    focus: function() {},
+    blur: function() {},
+    postMessage: function() {}
+  };
+};
+window.close = function() {};
 
 // ── Lazy image loading (HTML LS §2.6.6.9) ──────────────────────────────────
 // Maps nid (u32 as string key) → url for images deferred by loading=\"lazy\".
@@ -14389,5 +14462,91 @@ mod tests {
         } else {
             panic!("Date.now() must return a number");
         }
+    }
+
+    // ─── window.open() / window.opener tests ─────────────────────────────────
+
+    #[test]
+    fn window_open_function_exists() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "typeof window.open === 'function'"));
+    }
+
+    #[test]
+    fn window_opener_is_null() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "window.opener === null"));
+    }
+
+    #[test]
+    fn window_open_queues_popup_request() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.open('https://example.com', '_blank', 'width=800,height=600')")
+            .unwrap();
+        let reqs = rt.take_window_open_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "https://example.com");
+        assert_eq!(reqs[0].target, "_blank");
+        assert_eq!(reqs[0].width, 800);
+        assert_eq!(reqs[0].height, 600);
+    }
+
+    #[test]
+    fn window_open_empty_url_defaults_to_empty_string() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.open()").unwrap();
+        let reqs = rt.take_window_open_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "");
+    }
+
+    #[test]
+    fn window_open_returns_stub_object() {
+        let rt = runtime_with_dom(make_doc());
+        // Should return an object (not null/undefined) with a close() method.
+        assert!(bool_eval(
+            &rt,
+            "var w = window.open('about:blank'); typeof w === 'object' && w !== null && typeof w.close === 'function'"
+        ));
+    }
+
+    #[test]
+    fn window_open_stub_location_href() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(
+            &rt,
+            "var w = window.open('https://lumen.example/'); w.location.href === 'https://lumen.example/'"
+        ));
+    }
+
+    #[test]
+    fn window_open_multiple_calls_queue_all() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.open('https://a.com'); window.open('https://b.com', '_self')").unwrap();
+        let reqs = rt.take_window_open_requests();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0].url, "https://a.com");
+        assert_eq!(reqs[1].url, "https://b.com");
+    }
+
+    #[test]
+    fn window_open_feature_parsing_partial() {
+        // Only width specified — height should default to 600.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.open('https://x.com', '', 'width=1024')").unwrap();
+        let reqs = rt.take_window_open_requests();
+        assert_eq!(reqs[0].width, 1024);
+        assert_eq!(reqs[0].height, 600);
+    }
+
+    #[test]
+    fn window_open_take_clears_queue() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.open('https://a.com')").unwrap();
+        let first = rt.take_window_open_requests();
+        assert_eq!(first.len(), 1);
+        // Second drain must be empty.
+        let second = rt.take_window_open_requests();
+        assert_eq!(second.len(), 0);
     }
 }
