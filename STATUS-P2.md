@@ -6,8 +6,7 @@
 
 ## In progress
 
-**Workspaces UI (7A.3)**  branch: p2-workspaces-ui
-Next step: workspace_panel.rs — WorkspacePanel struct + build_panel + hit_test  `crates/shell/src/panels/workspace_panel.rs`
+_(нет)_
 
 ---
 
@@ -18,7 +17,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
 | 6 | **Tree-style tabs (7A.2)** — расширить `VerticalTabPanel`: `opener_id` на `TabEntry`; indent children 8px/level; collapse/expand subtree. `shell/src/panels/tree_tabs.rs`. See `lumen-plan.md §7A.2` | `lumen-shell` | M | #5 |
-| 7 | **Workspaces UI (7A.3)** — `WorkspacePanel: Panel` в `shell/src/panels/workspace_panel.rs`: switcher bar; `Command::SwitchWorkspace(id)` / `CreateWorkspace(name)` / `DeleteWorkspace(id)`; persisted в SQLite `workspaces`. See `lumen-plan.md §7A.3` | `lumen-shell`, `lumen-storage` | M | none |
 | 8 | **Shields toolbar widget (7C.4)** — `ShieldsPanel: Panel` floating от address-bar: blocked counts из `EasyListFilter`/`HostsFilter` per domain; toggle → `Command::ToggleShields(url)`. `shell/src/panels/shields_panel.rs`. See `lumen-plan.md §7C.4` | `lumen-shell` | M | none |
 | 9 | **Cookie-banner auto-dismiss (7C.3)** — DOM `MutationObserver` shim: watch для элементов matching EasyList consent selectors; auto-click `.accept`/`.agree`; opt-out via `settings`. `lumen-js/src/cookie_banner.rs`. See `lumen-plan.md §7C.3` | `lumen-js` | M | none |
 | 10 | **Per-site permission popover (7C.2)** — `PermissionPanel: Panel` floating ниже address-bar lock icon; показывает camera/mic/notifications/clipboard state; toggle → `Command::SetPermission { origin, kind, allow }`. `shell/src/panels/permission_panel.rs`. See `lumen-plan.md §7C.2` | `lumen-shell` | M | none |
@@ -43,6 +41,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-workspaces-ui** ✅ 2026-06-01 — Workspaces UI (7A.3). `WorkspacePanel { visible, workspaces, active_id }` + `WsEntry { id, name, accent }` в `panels/workspace_panel.rs`. Bottom-docked 32px switcher bar: цветные чипы воркспейсов + "×" удаление + "+" добавление. `parse_ws_color()` (#RRGGBB/#RGB/named). `hit_test()` — SwitchTo/DeleteWorkspace/NewWorkspace/Empty. `viewport_height_css()` вычитает `SWITCHER_HEIGHT` когда панель видима. `refresh_workspaces()` синхронизирует кэш с SQLite. Click handler: SwitchTo/Delete (не последний)/NewWorkspace (auto-name "Workspace N"). Ctrl+Shift+W toggle. `Lumen.workspaces: Workspaces` (in-memory SQLite). 17 unit-тестов; итого lumen-shell: 488 тестов.
 - **p2-tree-tabs** ✅ 2026-06-01 — Tree-style tabs (7A.2). `TabEntry.opener_id: Option<usize>` + `TabStrip::push_with_opener`. `tabs/tree.rs`: `depth_of`/`children_of`/`subtree_ids`/`visible_order`/`VisibleRow`. `panels/tree_tabs.rs`: `TreeTabsPanel { visible, collapsed: HashSet }`, `hit_test` (Arrow/Tab/Close/Empty), `build_panel` — отступ depth×8px + ▶/▼ стрелки + lifecycle-бейджи. Ctrl+Shift+B toggle; Ctrl+T в tree-mode = дочерняя вкладка. Arrow-клик чистит stale collapsed entries через `subtree_ids`. 443 тестов lumen-shell.
 - **p2-vertical-tabs** ✅ 2026-06-01 — Вертикальная панель вкладок (7A.1). `VerticalTabsPanel` в `shell/src/panels/vertical_tabs.rs`: боковая панель 200px слева, `Ctrl+B` toggle. Список вкладок: favicon-circle + title + close-кнопка, lifecycle-бейджи (BackgroundOld→amber, Hibernated→grey). PushTransform сдвигает контент страницы на PANEL_WIDTH вправо. `page_content_width_css()` для scroll-clamping. Hit-test с X-коррекцией для кликов по странице. 17 unit-тестов.
 - **p2-split-view** ✅ 2026-06-01 — Multi-viewport split view (7A.4). `SplitPane` + `SplitView` + `SplitFocus` в `shell/src/panels/split_view.rs`. `build_combined_dl()` — clips left/right panes, bakes scroll into PushTransform, adds 1px divider. Keybindings: `Ctrl+\` toggle split, `Ctrl+M` switch focus. Right pane populated from background or hibernated tabs; fallback `build_split_placeholder(url)` для hibernated. Click routing: right-pane clicks set focus only. `scroll_active_pane()` / `scroll_active_pane_to()` — unified scroll for both panes. 10 unit-тестов SplitView + 373 lumen-shell итого.
