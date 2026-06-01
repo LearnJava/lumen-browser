@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+WebRTC mDNS-only stub (9D.5)  branch: p1-webrtc-stub
+Next step: implement `lumen-js/src/webrtc_stub.rs` + install in lib.rs
 
 ---
 
@@ -18,8 +19,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 |---|------|----------|--------|---------|
 | 8 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #2 |
 | 17 | **Tab auto-archive (10E.5)** — на `TabState::Hibernated`: `Document::to_bytes()`, drop `PersistentJs`, store bytes в tab slot; restore на switch через `Document::from_bytes()` + new `PersistentJs`. `shell/src/tab_lifecycle/hibernate.rs`. See `lumen-plan.md §10E.5` | `lumen-shell` | M | #2 |
-| 20 | **CSS @font-face network fetch** — P4 парсит `@font-face src: url(...)`; P1 fetches: `shell/src/font_loader.rs` загружает URL через `HttpClient`, передаёт bytes в `lumen-font::FontDb::insert`, trigger relayout. See `lumen-plan.md §6.8` | `lumen-shell`, `lumen-font`, `lumen-network` | M | none |
-| 21 | **WebRTC mDNS-only stub (9D.5)** — `RTCPeerConnection` + `createOffer/setLocalDescription` stubs; `onicecandidate` fires single mDNS candidate (no IP leak). `lumen-js/src/webrtc_stub.rs`. See `lumen-plan.md §9D.5` | `lumen-js` | S | none |
 | 22 | **CI bench gate (9G.3)** — `bench/src/ci_gate.rs`: load `heavy_page`, 3× warm layout, assert mean < 200ms + peak RSS < 512MB; `lumen-bench --ci` exits 1 on failure. See `lumen-plan.md §9G.3` | `lumen-bench` | S | none |
 | 23 | **`window.open()` popup handling** — `window.open(url, target, features)` → `Command::OpenPopup { url, width, height }`; shell spawns secondary winit window с new `Lumen` instance; `window.opener` через shared `Arc<AppState>`. `shell/src/popup.rs` | `lumen-shell`, `lumen-js` | M | none |
 | 24 | **DevTools JS console (7E.5)** — `ConsolePanel: Panel` в `shell/src/devtools/console_panel.rs`; captures `console.log/warn/error` из `QuickJsRuntime::console_log_buffer`; scrollable `DrawText` list; `F12` toggle. See `lumen-plan.md §7E.5` | `lumen-shell` | M | none |
