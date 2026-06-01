@@ -40,6 +40,7 @@ mod runtime;
 mod scroll;
 mod scroll_anim;
 mod scrollbar;
+mod session_persist;
 mod tab_lifecycle;
 mod tabs;
 
@@ -316,6 +317,7 @@ fn run_window_mode(
         hibernated_tabs: HashMap::new(),
         tab_snapshots: lumen_storage::TabSnapshotStore::open_in_memory()
             .expect("tab_snapshots in-memory"),
+        session_store: session_persist::open_store(),
         lifecycle_mgr: {
             let mut mgr = tab_lifecycle::TabLifecycleManager::new(
                 tab_lifecycle::TierTimeouts::default(),
@@ -349,6 +351,13 @@ fn run_window_mode(
         devtools_console: devtools::console_panel::ConsolePanel::new(),
         dom_inspector: devtools::inspector::DomInspectorPanel::new(),
     };
+    // Restore the previous session only when launched without an explicit page
+    // (no file/url argument and no --import-session), so we never clobber an
+    // argv-requested page. Sets the active tab's source before `run_app`, so the
+    // streaming load in `resumed` picks it up.
+    if matches!(app.source, PageSource::Empty) {
+        app.restore_session();
+    }
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
         return ExitCode::FAILURE;
@@ -2961,6 +2970,10 @@ struct Lumen {
     hibernated_tabs: HashMap<usize, tab_lifecycle::TabMetadata>,
     /// SQLite-backed blob store for T3 DOM snapshots (ADR-008 §10J).
     tab_snapshots: lumen_storage::TabSnapshotStore,
+    /// SQLite-backed store for the last session — all open tabs at window close
+    /// (§10I). Overwritten wholesale on `CloseRequested`, read back on launch to
+    /// reopen the previous set of tabs. On-disk at `session_persist::SESSION_DB_PATH`.
+    session_store: lumen_storage::SessionStore,
     /// Lifecycle tier manager — tracks T0→T4 transitions and LRU ordering.
     ///
     /// Synced with `tab_strip` on open/switch/close; `tick_idle` is polled
@@ -3980,6 +3993,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         match event {
             WindowEvent::CloseRequested => {
                 self.save_session_on_close();
+                self.save_full_session();
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
@@ -6429,6 +6443,132 @@ impl Lumen {
         let _ = std::fs::write("last_session.lsession", json.as_bytes());
     }
 
+    /// Persist every open tab (URL + title + scroll + serialised DOM) to the
+    /// SQLite session store on window close (§10I).
+    ///
+    /// Walks the tab strip in left-to-right order, pulling each tab's state from
+    /// whichever slot holds it: the active tab from `self`, background tabs from
+    /// `bg_tabs`, hibernated tabs from `tab_snapshots`. Tabs without a real URL
+    /// (blank, never-loaded) are skipped. Silent — write errors do not block exit.
+    fn save_full_session(&self) {
+        let mut tabs: Vec<lumen_storage::PersistedTab> = Vec::new();
+        let active_idx = self.tab_strip.active;
+        for (idx, entry) in self.tab_strip.tabs.iter().enumerate() {
+            let persisted = if idx == active_idx {
+                source_url_string(&self.source).map(|url| lumen_storage::PersistedTab {
+                    url,
+                    title: self.title.clone().unwrap_or_default(),
+                    scroll_x: self.scroll_x,
+                    scroll_y: self.scroll_y,
+                    is_active: true,
+                    dom_blob: dom_blob_of(self.layout_source.as_ref()),
+                })
+            } else if let Some(snap) = self.bg_tabs.get(&entry.id) {
+                source_url_string(&snap.source).map(|url| lumen_storage::PersistedTab {
+                    url,
+                    title: snap.title.clone().unwrap_or_default(),
+                    scroll_x: snap.scroll_x,
+                    scroll_y: snap.scroll_y,
+                    is_active: false,
+                    dom_blob: dom_blob_of(snap.layout_source.as_ref()),
+                })
+            } else if self.hibernated_tabs.contains_key(&entry.id) {
+                // DOM blob already on disk in tab_snapshots — copy it over.
+                match self.tab_snapshots.fetch(entry.id as i64) {
+                    Ok(Some(data)) if !data.url.is_empty() => Some(lumen_storage::PersistedTab {
+                        url: data.url,
+                        title: data.title,
+                        scroll_x: data.scroll_x,
+                        scroll_y: data.scroll_y,
+                        is_active: false,
+                        dom_blob: data.dom_blob,
+                    }),
+                    _ => None,
+                }
+            } else {
+                None // Blank / never-loaded tab.
+            };
+            if let Some(t) = persisted {
+                tabs.push(t);
+            }
+        }
+
+        if let Err(e) = self.session_store.save(&tabs) {
+            eprintln!("session: не удалось сохранить сессию: {e}");
+        }
+    }
+
+    /// Reopen the tabs saved by [`Self::save_full_session`] (§10I).
+    ///
+    /// Called once at launch only when the user started the browser with no
+    /// explicit page (so we do not clobber an `argv`-requested page). The
+    /// previously-active tab's source + scroll are installed into `self` so the
+    /// normal load pipeline renders it; each background tab is parked via the
+    /// hibernation machinery (`hibernated_tabs` + `tab_snapshots`) so switching
+    /// to it reconstructs it from its DOM blob without a network round-trip.
+    fn restore_session(&mut self) {
+        let tabs = match self.session_store.load() {
+            Ok(t) if !t.is_empty() => t,
+            Ok(_) => return,
+            Err(e) => {
+                eprintln!("session: не удалось прочитать сессию: {e}");
+                return;
+            }
+        };
+        let active_idx = session_persist::active_index(&tabs);
+
+        // Rebuild the tab strip from scratch — one entry per restored tab, in
+        // saved order. The strip starts with a single blank tab (id 0); reuse it.
+        self.tab_strip.tabs.clear();
+        self.tab_strip.next_id = 0;
+
+        for (idx, tab) in tabs.into_iter().enumerate() {
+            let id = self.tab_strip.next_id;
+            self.tab_strip.next_id += 1;
+            self.tab_strip.tabs.push(tabs::strip::TabEntry {
+                id,
+                title: if tab.title.is_empty() {
+                    "Восстановленная вкладка".to_owned()
+                } else {
+                    tab.title.clone()
+                },
+                tab_state: TabState::Active,
+                opener_id: None,
+                container: tabs::containers::ContainerKind::None,
+            });
+            self.lifecycle_mgr.open_tab(id as u64);
+
+            if idx == active_idx {
+                // Active tab: load fresh through the normal pipeline.
+                self.source = PageSource::from_arg(Some(&tab.url));
+                self.scroll_x = tab.scroll_x;
+                self.scroll_y = tab.scroll_y;
+                self.title = Some(tab.title);
+            } else {
+                // Background tab: park as hibernated so switch_tab restores it
+                // from the DOM blob on demand.
+                let data = lumen_storage::HibernatedTabData {
+                    dom_blob: tab.dom_blob,
+                    css_source: String::new(),
+                    url: tab.url.clone(),
+                    title: tab.title.clone(),
+                    scroll_x: tab.scroll_x,
+                    scroll_y: tab.scroll_y,
+                };
+                if self.tab_snapshots.store(id as i64, &data).is_ok() {
+                    self.hibernated_tabs.insert(
+                        id,
+                        tab_lifecycle::TabMetadata { url: tab.url, title: tab.title },
+                    );
+                    let last = self.tab_strip.tabs.len() - 1;
+                    self.tab_strip.set_tab_state(last, TabState::Hibernated);
+                }
+            }
+        }
+
+        self.tab_strip.active = active_idx.min(self.tab_strip.tabs.len().saturating_sub(1));
+    }
+
     // ── Tab lifecycle: hibernation and restore ─────────────────────────────────
 
     /// Promote a background tab from T2→T3 (Hibernated) by serialising its DOM
@@ -6938,6 +7078,27 @@ impl Lumen {
 /// нужно физическое состояние).
 fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
     mods.state()
+}
+
+/// URL-строка из `PageSource` для записи в сессию, или `None` для `Empty`
+/// (нечего восстанавливать). `File` → путь, `Snapshot` → `base_url`.
+fn source_url_string(src: &PageSource) -> Option<String> {
+    match src {
+        PageSource::Empty => None,
+        PageSource::File(p) => Some(p.display().to_string()),
+        PageSource::Url(u) => Some(u.clone()),
+        PageSource::Snapshot { base_url, .. } => Some(base_url.clone()),
+    }
+}
+
+/// Bincode-сериализованный `Document` (`Document::to_bytes()`) для вкладки, или
+/// пустой вектор, если страница не загружена либо сериализация не удалась.
+/// Пустой blob на восстановлении означает fresh-navigate по URL.
+fn dom_blob_of(layout_source: Option<&LayoutSource>) -> Vec<u8> {
+    layout_source
+        .and_then(|ls| ls.document.lock().ok())
+        .and_then(|doc| doc.to_bytes().ok())
+        .unwrap_or_default()
 }
 
 /// Извлечь origin (`scheme://host[:port]`) из URL-строки (7D.2). Для file://

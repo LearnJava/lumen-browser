@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Tab session persist (10I)**  branch: `p1-session-persist`
+Next step: wire restore-on-launch + clippy `crates/shell/src/session_persist.rs`
 
 ---
 
@@ -16,7 +17,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 8 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #2 |
 | 17 | **Tab auto-archive (10E.5)** — на `TabState::Hibernated`: `Document::to_bytes()`, drop `PersistentJs`, store bytes в tab slot; restore на switch через `Document::from_bytes()` + new `PersistentJs`. `shell/src/tab_lifecycle/hibernate.rs`. See `lumen-plan.md §10E.5` | `lumen-shell` | M | #2 |
 | 27 | **SharedWorker stub** — `new SharedWorker(url)`: single shared `QuickJsRuntime` per name+origin; `port.postMessage/onmessage`; `connect` event on registration. `lumen-js/src/shared_worker.rs` | `lumen-js` | M | #5 |
 | 28 | **`<canvas>` WebGL context wiring** — `canvas.getContext('webgl')` proxy → `lumen-paint` GPU pipeline; `createBuffer/bindBuffer/bufferData`, `createShader/compileShader/createProgram/drawArrays`. `lumen-js/src/webgl_canvas.rs` + `lumen-paint/src/webgl.rs`. See `lumen-plan.md §7F` | `lumen-js`, `lumen-paint` | L | none |

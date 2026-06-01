@@ -1768,7 +1768,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (368 symbols)
+## lumen-shell  (370 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2086,6 +2086,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/scrollbar.rs:185` **struct** `ScrollDrag` — Снапшот состояния на момент начала drag-а: scroll_y страницы и cursor_y
 `crates/shell/src/scrollbar.rs:191` **fn** `new`
 `crates/shell/src/scrollbar.rs:199` **fn** `scroll_for` — Желаемый `scroll_y` при текущей позиции курсора. Если scrollbar
+`crates/shell/src/session_persist.rs:31` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
+`crates/shell/src/session_persist.rs:43` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
 `crates/shell/src/tab_lifecycle/manager.rs:14` **type** `TabId` — Opaque tab identifier. Callers create sequential IDs (0, 1, 2, …) or any u64
 `crates/shell/src/tab_lifecycle/manager.rs:18` **struct** `TierTransition` — A tier transition that occurred during `tick_idle` or `lru_evict`
 `crates/shell/src/tab_lifecycle/manager.rs:35` **struct** `TabLifecycleManager` — Manages lifecycle state for all open tabs
@@ -2139,7 +2141,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/tree.rs:63` **struct** `VisibleRow` — A row item produced by [`visible_order`]
 `crates/shell/src/tabs/tree.rs:82` **fn** `visible_order` — Build the ordered list of visible tabs for tree-style rendering
 
-## lumen-storage  (391 symbols)
+## lumen-storage  (400 symbols)
 
 `crates/storage/src/autofill.rs:17` **struct** `AutofillEntry`
 `crates/storage/src/autofill.rs:25` **struct** `Autofill`
@@ -2461,6 +2463,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/session_export.rs:51` **fn** `to_json` — Serialize a [`SessionFile`] to a compact JSON string
 `crates/storage/src/session_export.rs:77` **fn** `from_json` — Deserialize a [`SessionFile`] from a JSON string
 `crates/storage/src/session_export.rs:139` **fn** `active_tab` — Return the first active tab, or the first tab if none is marked active
+`crates/storage/src/session_store.rs:29` **struct** `PersistedTab` — One persisted tab in the saved session
+`crates/storage/src/session_store.rs:48` **struct** `SessionStore` — SQLite-backed store holding exactly one session — the tabs open at last close
+`crates/storage/src/session_store.rs:60` **fn** `open_in_memory` — Open an in-memory store (data lost when the process exits)
+`crates/storage/src/session_store.rs:67` **fn** `open` — Open a persistent on-disk store at `path`
+`crates/storage/src/session_store.rs:98` **fn** `save` — Replace the saved session with `tabs`, preserving their order
+`crates/storage/src/session_store.rs:130` **fn** `load` — Load all saved tabs in their original left-to-right order
+`crates/storage/src/session_store.rs:158` **fn** `clear` — Remove all saved tabs (e.g. user disabled session restore)
+`crates/storage/src/session_store.rs:166` **fn** `len` — Number of tabs in the saved session
+`crates/storage/src/session_store.rs:175` **fn** `is_empty` — Returns `true` when no session has been saved
 `crates/storage/src/site_engagement.rs:22` **struct** `SiteEngagement`
 `crates/storage/src/site_engagement.rs:36` **fn** `score` — Engagement score с exponential decay по last_visit. Чем дальше
 `crates/storage/src/site_engagement.rs:45` **struct** `SiteEngagementStore`
@@ -2534,4 +2545,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2469 symbols in 20 crates*
+*Total: 2480 symbols in 20 crates*
