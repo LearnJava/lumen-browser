@@ -6,8 +6,7 @@
 
 ## In progress
 
-Sidebar web panels (7D.3)  branch: p2-sidebar-panel
-Next step: create sidebar_panel.rs, wire into main.rs  crates/shell/src/panels/sidebar_panel.rs
+_(нет)_
 
 ---
 
@@ -39,6 +38,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-sidebar-panel** ✅ 2026-06-01 — Sidebar web panels (7D.3). `SidebarPanel` right-docked 300 CSS px slot. Ctrl+Shift+A toggle; `sidebar:<url>` in omnibox открывает страницу через `open_sidebar_page` (HTML parse → inline CSS → relayout_page при ширине 300px). `ToggleSidebar` KeyCommand. `page_content_width_css()` вычитает PANEL_WIDTH. `close()` через клик ×. Placeholder "Loading…" до загрузки DL. `hit_test()` (Close/Header/Content). `build_panel()`: left border, header bg, title, × button, PushClipRect+PushTransform контент. 17 unit-тестов; итого lumen-shell: 578 тестов.
 - **p2-permission-panel** ✅ 2026-06-01 — Per-site permission popover (7C.2). `PermissionPanel` floating top-left overlay (240×164px), Ctrl+Shift+P toggle. `PermissionKind { Camera, Microphone, Notifications, Clipboard }` + `PermissionState { Ask, Allow, Deny }` с циклом Ask→Allow→Deny→Ask. Хранение в `HashMap<(origin, kind), state>`. Origin = scheme+host (https://example.com), обновляется в `apply_loaded_page`. Цветовое кодирование: Allow=зелёный, Deny=красный, Ask=жёлтый. `hit_test()`: Close/Toggle(kind)/Empty зоны. Поле `Lumen.permission` + `TogglePermissions` KeyCommand. 22 unit-тестов; итого lumen-shell: 552 теста.
 - **p2-cookie-banner-dismiss** ✅ 2026-06-01 — Cookie-banner auto-dismiss (7C.3). `cookie_banner.rs` в `lumen-js`: MutationObserver + setInterval 500ms + DOMContentLoaded скан. 30+ EasyList consent-selector-ов (OneTrust, Cookiebot, Didomi, TrustArc и др.). `dispatchEvent(MouseEvent('click', {bubbles:true}))` на первом видимом совпадении — single-shot per page. `Lumen.cookie_banner_dismiss: bool` (default: true), toggle Ctrl+Shift+K. `QuickJsRuntime::set_cookie_banner_dismiss()` + `AtomicBool`. Пробрасывается через `parse_and_layout` → `run_scripts_with_dom`. 15 unit-тестов (disabled noop, match/click, hidden-skip, cleanup, observer, interval, selector-coverage, multiple-selectors, no-MO fallback); итого lumen-js: 700 тестов.
 - **p2-shields-panel** ✅ 2026-06-01 — Shields toolbar widget (7C.4). `ShieldsPanel` floating top-right overlay (220×90px), Ctrl+Shift+S toggle. `BlockedLog` per-hostname счётчики + `clear()` при навигации. `ShieldCountSink` перехватывает `Event::RequestBlocked` из HTTP-слоя, пишет в `Arc<Mutex<BlockedLog>>`. `build_panel()`: статус ON/OFF, текущий домен, счётчик blocked, кнопка Enable/Disable for this site. `hit_test()`: Close/Toggle/Empty зоны. `Lumen.shields`, `ToggleShields` KeyCommand. Domain update в `apply_loaded_page`. 24 unit-тестов; итого lumen-shell: 530 тестов.
