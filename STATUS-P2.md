@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: AVIF image decoder (#13)  branch: p2-avif-decoder
-Next step: реализовать decode_avif + is_avif + AvifImageDecoder  crates/engine/image/src/avif/mod.rs:1
+_(нет)_
 
 ---
 
@@ -17,7 +16,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 13 | **AVIF image decoder** — `decode_avif(bytes) → Result<Image, ImageError>` в `lumen-image/src/avif.rs` через provisional `libavif-image` crate; register в `ImageDecoder` dispatch. See `lumen-plan.md §6.6` | `lumen-image` | M | none |
 | 14 | **DOM inspector panel (7E.1)** — `DomInspectorPanel: Panel` в `shell/src/devtools/inspector.rs`; hover → emit `BoxModelOverlay` (✅); click → show `NodeId` + computed style map; `F12` toggle. See `lumen-plan.md §7E.1` | `lumen-shell` | M | none |
 | 15 | **Network panel live log (7E.4)** — `NetworkPanel: Panel` в `shell/src/devtools/network_panel.rs`; слушает `NetworkEvent` channel; рендерит URL + method + status + timing; `F12` toggle. See `lumen-plan.md §7E.4` | `lumen-shell` | M | none |
 | 16 | **Cyrillic font fallback** — `FontDb::push_fallback_range(range, font_bytes)`: для codepoints не в primary font — fallback; detect Cyrillic block (`U+0400–U+04FF`) → load Noto Sans Cyrillic из assets или system. `lumen-font/src/fallback.rs` | `lumen-font`, `lumen-shell` | M | none |
@@ -36,6 +34,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-avif-decoder** ✅ 2026-06-01 — AVIF image decoder (lumen-image #13). `avif::is_avif(bytes)` — чистый Rust ISOBMFF ftyp-детект (major brand avif/avis). `avif::decode_avif(bytes) → Result<(u32,u32,Vec<u8>), AvifError>` — RGBA8 через `image = "0.25"` feature "avif" (cmake + nasm opt-in); без feature — graceful AvifError::Decode. `AvifImageDecoder: lumen_core::ext::ImageDecoder`. `ImageError::Avif` + From impl в диспетчере `decode()`. `supported_mime_types()` += "image/avif". 20 новых unit-тестов; итого lumen-image: 141 тест.
 - **p2-tab-containers** ✅ 2026-06-01 — Tab containers (7D.2). `ContainerKind { None, Personal, Work, Finance, Shopping, Custom(r,g,b) }` с фиксированными цветами (violet/blue/green/orange). `ContainerStore` — `(origin, ContainerKind) → store_id: u32` для будущей cookie-изоляции. `TabEntry.container: ContainerKind` (default None). `build_tab_bar` рендерит 3px `FillRect` border-top для вкладок с контейнером. `TabStrip::set_tab_container(idx, kind)`. `KeyCommand::SetTabContainer(ContainerKind)` + `Lumen::set_tab_container`. 29 новых unit-тестов; итого lumen-shell: 608 тестов.
 - **p2-sidebar-panel** ✅ 2026-06-01 — Sidebar web panels (7D.3). `SidebarPanel` right-docked 300 CSS px slot. Ctrl+Shift+A toggle; `sidebar:<url>` in omnibox открывает страницу через `open_sidebar_page` (HTML parse → inline CSS → relayout_page при ширине 300px). `ToggleSidebar` KeyCommand. `page_content_width_css()` вычитает PANEL_WIDTH. `close()` через клик ×. Placeholder "Loading…" до загрузки DL. `hit_test()` (Close/Header/Content). `build_panel()`: left border, header bg, title, × button, PushClipRect+PushTransform контент. 17 unit-тестов; итого lumen-shell: 578 тестов.
 - **p2-permission-panel** ✅ 2026-06-01 — Per-site permission popover (7C.2). `PermissionPanel` floating top-left overlay (240×164px), Ctrl+Shift+P toggle. `PermissionKind { Camera, Microphone, Notifications, Clipboard }` + `PermissionState { Ask, Allow, Deny }` с циклом Ask→Allow→Deny→Ask. Хранение в `HashMap<(origin, kind), state>`. Origin = scheme+host (https://example.com), обновляется в `apply_loaded_page`. Цветовое кодирование: Allow=зелёный, Deny=красный, Ask=жёлтый. `hit_test()`: Close/Toggle(kind)/Empty зоны. Поле `Lumen.permission` + `TogglePermissions` KeyCommand. 22 unit-тестов; итого lumen-shell: 552 теста.
