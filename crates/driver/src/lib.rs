@@ -26,6 +26,7 @@
 
 mod types;
 pub mod context;
+pub mod isolation;
 pub mod session;
 pub mod winit_session;
 pub mod gpu_session;
@@ -37,6 +38,7 @@ pub use types::{
 pub use session::InProcessSession;
 pub use winit_session::WinitSession;
 pub use gpu_session::{GpuSession, RenderedPage, JsNavigateRequest};
+pub use isolation::{OriginGroup, OriginIsolationContext};
 /// Типизированный снимок вычисленных CSS-свойств из lumen-layout.
 ///
 /// Возвращается [`BrowserSession::computed_style_snapshot`]; предпочтительнее

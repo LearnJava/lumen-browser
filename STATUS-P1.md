@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Per-context isolation (8E)**  branch: p1-per-context-isolation
+Next step: create `lumen-driver/src/isolation.rs` with `OriginGroup` + `OriginIsolationContext`
 
 ---
 
