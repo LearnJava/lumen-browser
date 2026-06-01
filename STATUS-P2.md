@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Cookie-banner auto-dismiss (7C.3)  branch: p2-cookie-banner-dismiss
+Next step: create `crates/js/src/cookie_banner.rs`  crates/js/src/lib.rs:134
 
 ---
 
