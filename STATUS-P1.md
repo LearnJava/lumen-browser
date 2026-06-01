@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+Vim keybindings  branch: p1-vim-keybindings
+Next step: создать `crates/shell/src/input/vim.rs`  VimMode state machine
 
 ---
 
