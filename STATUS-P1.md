@@ -6,8 +6,7 @@
 
 ## In progress
 
-Deterministic render mode (8F)  branch: p1-deterministic-render
-Next step: create `shell/src/deterministic.rs`, wire `--deterministic` flag  `shell/src/main.rs:1187`
+_(нет)_
 
 ---
 
@@ -19,7 +18,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 |---|------|----------|--------|---------|
 | 8 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #2 |
 | 17 | **Tab auto-archive (10E.5)** — на `TabState::Hibernated`: `Document::to_bytes()`, drop `PersistentJs`, store bytes в tab slot; restore на switch через `Document::from_bytes()` + new `PersistentJs`. `shell/src/tab_lifecycle/hibernate.rs`. See `lumen-plan.md §10E.5` | `lumen-shell` | M | #2 |
-| 18 | **Deterministic render mode (8F)** — `--deterministic` CLI флаг: freeze `Date.now()` в t=0, seed `Math.random` из URL hash, suppress RAF jitter, fixed viewport 1280×800. `shell/src/deterministic.rs`. See `lumen-plan.md §8F` | `lumen-shell`, `lumen-js` | M | none |
 | 19 | **Per-context isolation (8E)** — `LumenSession::with_origin_isolation(origin)`: separate JS heap, cookie jar, `LocalStorage`/`IdbStore` per origin-group. `lumen-driver/src/isolation.rs`. See `lumen-plan.md §8E` | `lumen-driver`, `lumen-storage` | L | none |
 | 20 | **CSS @font-face network fetch** — P4 парсит `@font-face src: url(...)`; P1 fetches: `shell/src/font_loader.rs` загружает URL через `HttpClient`, передаёт bytes в `lumen-font::FontDb::insert`, trigger relayout. See `lumen-plan.md §6.8` | `lumen-shell`, `lumen-font`, `lumen-network` | M | none |
 | 21 | **WebRTC mDNS-only stub (9D.5)** — `RTCPeerConnection` + `createOffer/setLocalDescription` stubs; `onicecandidate` fires single mDNS candidate (no IP leak). `lumen-js/src/webrtc_stub.rs`. See `lumen-plan.md §9D.5` | `lumen-js` | S | none |
@@ -35,6 +33,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-deterministic-render** ✅ 2026-06-01 — Deterministic render mode (8F): `--deterministic` CLI флаг замораживает источники недетерминизма в JS — `Date.now()→0`, `Math.random()` заменяется xorshift32 PRNG с seed из FNV-1a хеша URL, RAF timestamp=0, viewport 1280×800. `shell/src/deterministic.rs` + `js/src/lib.rs::set_deterministic_mode()` + JS-инъекция после WEB_API_SHIM. 6 unit-тестов в lumen-js. lumen-shell: 589.
 - **p1-memory-pressure-poll** ✅ 2026-06-01 — Memory pressure poll loop (задача #16): `shell/src/memory_poll.rs` — `MemoryPollTick` (5s интервал), `platform_source()` выбирает `Win32/Linux/NullMemoryPressureSource` по `cfg(target_os)`. `tick(&mut CacheRegistry)` вызывает `broadcast_pressure` на Medium+. `Lumen`: поля `memory_poll` + `cache_registry`; `about_to_wait` вызывает `tick()` → `on_memory_pressure` у `image_cache` и `renderer.layer_cache_mut()`. 8 unit-тестов, итого lumen-shell: 566.
 - **p1-js-scroll-drain** ✅ 2026-06-01 — JS scroll requests drain (задача #15): дренирование `take_scroll_requests()` в `about_to_wait` — `set_scroll_position()` per entry → `paint_ordered()` (без CSS re-computation) → `update_scroll_states()` → redraw. Также `update_scroll_states` после каждого `relayout()` — scrollTop/scrollLeft корректны сразу. lumen-shell: 558.
 - **p1-dom-gc-shell** ✅ 2026-06-01 — DOM GC shell integration (задача #14): `gc_tick.rs` — `GcTick` (throttle 30 с, `poll(&doc) → Option<Vec<NodeId>>`); JS-шим `_lumen_gc_collect(nids)` — чистит `_lumen_listeners` и `_input_values` для dead nodes; `PersistentJs::gc_collect(&[u32])` + `QuickPersistentJs` impl; поле `gc_tick` в `Lumen`; drain в `about_to_wait` после notifications. 10 unit-тестов (6 gc_tick + 4 js). lumen-shell: 536.
