@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+Deterministic render mode (8F)  branch: p1-deterministic-render
+Next step: create `shell/src/deterministic.rs`, wire `--deterministic` flag  `shell/src/main.rs:1187`
 
 ---
 
