@@ -319,6 +319,7 @@ fn run_window_mode(
         workspaces: lumen_storage::Workspaces::open_in_memory()
             .expect("workspaces in-memory"),
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
+        permission: panels::permission_panel::PermissionPanel::new(),
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1293,6 +1294,8 @@ enum KeyCommand {
     ToggleWorkspaces,
     /// Показать/скрыть панель Shields (Ctrl+Shift+S).
     ToggleShields,
+    /// Показать/скрыть панель разрешений сайта (Ctrl+Shift+P, 7C.2).
+    TogglePermissions,
     /// Включить/выключить авто-закрытие cookie-баннеров (Ctrl+Shift+K, 7C.3).
     ToggleCookieBannerDismiss,
 }
@@ -1365,6 +1368,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+S — toggle shields panel
         KeyCode::KeyS if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleShields)
+        }
+        // Ctrl+Shift+P — toggle per-site permission popover (7C.2)
+        KeyCode::KeyP if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::TogglePermissions)
         }
         // Ctrl+Shift+K — toggle cookie-banner auto-dismiss (7C.3)
         KeyCode::KeyK if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
@@ -2866,6 +2873,13 @@ struct Lumen {
     /// visibility.  Backed by a shared [`BlockedLog`] updated from the network
     /// thread via [`ShieldCountSink`].
     shields: panels::shields_panel::ShieldsPanel,
+    /// Per-site permission popover state (7C.2).
+    ///
+    /// Shows camera/mic/notifications/clipboard grant state for the current
+    /// page origin.  Each row has a toggle button cycling Ask → Allow → Deny.
+    /// `Ctrl+Shift+P` toggles visibility.  State is in-memory only (no
+    /// persistence across sessions).
+    permission: panels::permission_panel::PermissionPanel,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -3425,6 +3439,21 @@ impl Lumen {
             self.shields.set_domain(domain);
         }
 
+        // Update permission panel origin on navigation.
+        {
+            let origin = self.source.url_str().and_then(|u| {
+                // Build bare origin (scheme + host) for permission keying.
+                let scheme_end = u.find("://")?;
+                let scheme = &u[..scheme_end + 3];
+                let rest = &u[scheme_end + 3..];
+                let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+                let host = &rest[..host_end];
+                let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+                if host.is_empty() { None } else { Some(format!("{}{}", scheme, host.to_ascii_lowercase())) }
+            });
+            self.permission.set_origin(origin);
+        }
+
         // Reset CPU image cache for the new page (10E.4 scroll-discard).
         self.image_cache.clear();
         if let Some(r) = self.renderer.as_mut() {
@@ -3892,6 +3921,30 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     self.request_redraw();
                                 }
                                 panels::shields_panel::ShieldsHit::Empty => {}
+                            }
+                            return;
+                        }
+                    }
+
+                    // Permission popover (7C.2): top-left overlay below tab bar.
+                    if self.permission.visible {
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        if let Some(hit) = panels::permission_panel::hit_test(
+                            &self.permission,
+                            x_css,
+                            y_css,
+                            tab_h,
+                        ) {
+                            match hit {
+                                panels::permission_panel::PermissionHit::Toggle(kind) => {
+                                    self.permission.cycle_permission(kind);
+                                    self.request_redraw();
+                                }
+                                panels::permission_panel::PermissionHit::Close => {
+                                    self.permission.visible = false;
+                                    self.request_redraw();
+                                }
+                                panels::permission_panel::PermissionHit::Empty => {}
                             }
                             return;
                         }
@@ -4421,6 +4474,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         tab_h,
                     );
                     overlay_buf.append(&mut sh_cmds);
+                }
+
+                // Permission popover (7C.2): top-left overlay anchored below the tab bar.
+                if self.permission.visible {
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let mut perm_cmds = panels::permission_panel::build_panel(
+                        &self.permission,
+                        tab_h,
+                    );
+                    overlay_buf.append(&mut perm_cmds);
                 }
 
                 // Workspace switcher bar (7A.3): bottom-docked horizontal strip.
@@ -5006,6 +5069,10 @@ impl Lumen {
             }
             KeyCommand::ToggleShields => {
                 self.shields.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::TogglePermissions => {
+                self.permission.toggle();
                 self.request_redraw();
             }
             KeyCommand::ToggleCookieBannerDismiss => {
