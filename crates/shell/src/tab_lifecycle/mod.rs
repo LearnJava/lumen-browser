@@ -11,7 +11,9 @@
 ///    and hibernate / restore resources accordingly.
 /// 4. Call `lru_evict()` after `tick_idle` to enforce the background-tab budget.
 pub mod manager;
+pub mod restore;
 pub mod state;
 
 pub use manager::{TabId, TabLifecycleManager, TierTransition};
+pub use restore::TabMetadata;
 pub use state::{MemoryPressure, TabLifecycle, TabState, TierTimeouts, TransitionReason};

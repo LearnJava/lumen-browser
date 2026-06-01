@@ -44,6 +44,7 @@ pub mod sw_interceptor;
 pub mod sqlite_store;
 pub mod store;
 pub mod tab_sessions;
+pub mod tab_snapshot;
 pub mod web_manifest;
 pub mod workspaces;
 
@@ -85,5 +86,6 @@ pub use store::InMemoryStorage;
 pub use session_export::{active_tab, from_json as session_from_json, to_json as session_to_json,
     ExportedTab, SessionFile};
 pub use tab_sessions::{SessionSnapshot, TabSession, TabSessions};
+pub use tab_snapshot::{HibernatedTabData, TabSnapshotStore};
 pub use web_manifest::{WebManifest, WebManifests};
 pub use workspaces::{Workspace, Workspaces};

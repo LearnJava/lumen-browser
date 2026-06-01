@@ -287,6 +287,19 @@ fn run_window_mode(
         downloads: download::DownloadManager::new(),
         tab_strip: tabs::strip::TabStrip::new(),
         bg_tabs: HashMap::new(),
+        hibernated_tabs: HashMap::new(),
+        tab_snapshots: lumen_storage::TabSnapshotStore::open_in_memory()
+            .expect("tab_snapshots in-memory"),
+        lifecycle_mgr: {
+            let mut mgr = tab_lifecycle::TabLifecycleManager::new(
+                tab_lifecycle::TierTimeouts::default(),
+                8, // max 8 non-hibernated background tabs
+            );
+            // Register the initial blank tab (id=0) as the active tab.
+            mgr.open_tab(0);
+            mgr
+        },
+        lifecycle_last_tick: std::time::Instant::now(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -2672,6 +2685,22 @@ struct Lumen {
     ///
     /// `None` entry means the tab was opened but never loaded (blank new tab).
     bg_tabs: HashMap<usize, PageSnapshot>,
+    /// Lightweight identity for hibernated (T3) tabs — keyed by `TabEntry::id`.
+    ///
+    /// When a background tab is promoted to Hibernated its full `PageSnapshot`
+    /// is evicted from `bg_tabs` and stored in `tab_snapshots`; only this
+    /// cheap struct remains in RAM.
+    hibernated_tabs: HashMap<usize, tab_lifecycle::TabMetadata>,
+    /// SQLite-backed blob store for T3 DOM snapshots (ADR-008 §10J).
+    tab_snapshots: lumen_storage::TabSnapshotStore,
+    /// Lifecycle tier manager — tracks T0→T4 transitions and LRU ordering.
+    ///
+    /// Synced with `tab_strip` on open/switch/close; `tick_idle` is polled
+    /// from `about_to_wait` once per second to drive automatic hibernation.
+    lifecycle_mgr: tab_lifecycle::TabLifecycleManager,
+    /// Monotonic instant of the last `tick_lifecycle` call — used to throttle
+    /// polling to approximately once per second.
+    lifecycle_last_tick: std::time::Instant,
 }
 
 impl Lumen {
@@ -3396,6 +3425,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
+
+        // Tab lifecycle: advance tier timers, trigger hibernation for overdue tabs.
+        self.tick_lifecycle();
 
         // Пост-дренажный check: reload, запланированный через queue_task
         // (UserInteraction source), исполняется после microtask checkpoint.
@@ -4963,6 +4995,179 @@ impl Lumen {
         let _ = std::fs::write("last_session.lsession", json.as_bytes());
     }
 
+    // ── Tab lifecycle: hibernation and restore ─────────────────────────────────
+
+    /// Promote a background tab from T2→T3 (Hibernated) by serialising its DOM
+    /// to SQLite and evicting the in-memory `PageSnapshot`.
+    ///
+    /// On failure (serialise error, SQLite error) the snapshot is put back into
+    /// `bg_tabs` and the tab stays at T2.
+    fn hibernate_bg_tab(&mut self, tab_id: usize) {
+        let Some(snap) = self.bg_tabs.remove(&tab_id) else { return };
+
+        // Serialise DOM via Document::to_bytes() (bincode).
+        let (dom_blob, css_source) = if let Some(ls) = snap.layout_source.as_ref() {
+            match ls.document.lock() {
+                Ok(doc) => {
+                    let blob = doc.to_bytes().unwrap_or_default();
+                    let css = extract_style_blocks(&doc);
+                    (blob, css)
+                }
+                Err(_) => (vec![], String::new()),
+            }
+        } else {
+            (vec![], String::new())
+        };
+
+        let url = match &snap.source {
+            PageSource::Url(u) => u.clone(),
+            PageSource::File(p) => format!("file://{}", p.display()),
+            PageSource::Snapshot { base_url, .. } => base_url.clone(),
+            PageSource::Empty => String::new(),
+        };
+        let title = snap.title.clone().unwrap_or_default();
+        let scroll_x = snap.scroll_x;
+        let scroll_y = snap.scroll_y;
+
+        let data = lumen_storage::HibernatedTabData {
+            dom_blob,
+            css_source,
+            url: url.clone(),
+            title: title.clone(),
+            scroll_x,
+            scroll_y,
+        };
+
+        if let Err(e) = self.tab_snapshots.store(tab_id as i64, &data) {
+            eprintln!("Ошибка hibernate tab {tab_id}: {e}");
+            // Rollback — keep the snapshot in RAM.
+            self.bg_tabs.insert(tab_id, snap);
+            return;
+        }
+
+        // Keep only lightweight metadata in RAM (scroll state stays in SQLite).
+        self.hibernated_tabs.insert(
+            tab_id,
+            tab_lifecycle::TabMetadata { url, title },
+        );
+
+        // Update badge in the strip (T3 = grey dot).
+        if let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == tab_id) {
+            self.tab_strip.set_tab_state(idx, tab_lifecycle::TabState::Hibernated);
+        }
+    }
+
+    /// Restore a T3-hibernated tab into the active slot.
+    ///
+    /// Fetches the DOM blob from SQLite, reconstructs the `Document` via
+    /// `Document::from_bytes()`, re-parses inline CSS, and re-runs
+    /// layout+paint.  Returns `true` on success so `switch_tab` knows
+    /// whether to fall back to a blank tab.
+    fn restore_hibernated_tab(&mut self, tab_id: usize) -> bool {
+        let Some(meta) = self.hibernated_tabs.remove(&tab_id) else {
+            return false;
+        };
+
+        // Pre-fill title from lightweight metadata for immediate window title update.
+        self.title = Some(meta.title.clone());
+
+        let data = match self.tab_snapshots.fetch(tab_id as i64) {
+            Ok(Some(d)) => d,
+            Ok(None) => {
+                eprintln!("tab {tab_id}: snapshot missing (url={})", meta.url);
+                // Put metadata back so the strip still shows Hibernated.
+                self.hibernated_tabs.insert(tab_id, meta);
+                return false;
+            }
+            Err(e) => {
+                eprintln!("tab {tab_id}: snapshot read error (url={}): {e}", meta.url);
+                self.hibernated_tabs.insert(tab_id, meta);
+                return false;
+            }
+        };
+
+        // Reconstruct Document from bincode blob.
+        let doc = match Document::from_bytes(&data.dom_blob) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Ошибка десериализации DOM вкладки {tab_id}: {e}");
+                self.hibernated_tabs.insert(tab_id, meta);
+                return false;
+            }
+        };
+
+        // Re-parse CSS from inline <style> blocks preserved in the DOM.
+        let css = if data.css_source.is_empty() {
+            extract_style_blocks(&doc)
+        } else {
+            data.css_source
+        };
+        let stylesheet = lumen_css_parser::parse(&css);
+
+        let document_arc = Arc::new(Mutex::new(doc));
+        let layout_source = LayoutSource {
+            document: Arc::clone(&document_arc),
+            stylesheet,
+            html_source: None,
+        };
+
+        // Re-run layout+paint with the current viewport.
+        let viewport = self.renderer.as_ref().map_or_else(
+            || lumen_core::geom::Size::new(1024.0, 720.0),
+            |r| {
+                let s = r.viewport_size();
+                lumen_core::geom::Size::new(s.width as f32, s.height as f32)
+            },
+        );
+        let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider);
+
+        // Install into the active slot.
+        self.display_list = display_list;
+        self.title = Some(data.title);
+        self.layout_source = Some(layout_source);
+        self.layout_box = Some(lb);
+        self.scroll_x = data.scroll_x;
+        self.scroll_y = data.scroll_y;
+        self.content_height = content_height_of(&self.display_list);
+        self.content_width = content_width_of(&self.display_list);
+
+        // Remove the SQLite entry — it is no longer needed.
+        let _ = self.tab_snapshots.delete(tab_id as i64);
+
+        true
+    }
+
+    /// Poll the lifecycle manager approximately once per second.
+    ///
+    /// Processes tier transitions returned by `tick_idle` + `lru_evict`:
+    /// - `Hibernated` transitions evict the corresponding `bg_tabs` entry to SQLite.
+    /// - Other transitions update the tab strip badge.
+    fn tick_lifecycle(&mut self) {
+        if self.lifecycle_last_tick.elapsed().as_secs() < 1 {
+            return;
+        }
+        self.lifecycle_last_tick = std::time::Instant::now();
+
+        let transitions = self.lifecycle_mgr.tick_idle(tab_lifecycle::MemoryPressure::Low);
+        let evicted = self.lifecycle_mgr.lru_evict();
+
+        for tr in transitions.into_iter().chain(evicted) {
+            let tab_id = tr.tab_id as usize;
+
+            if tr.to == tab_lifecycle::TabState::Hibernated {
+                if self.bg_tabs.contains_key(&tab_id) {
+                    self.hibernate_bg_tab(tab_id);
+                }
+                continue;
+            }
+
+            // Update strip badge for BackgroundOld (amber) or other tier changes.
+            if let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == tab_id) {
+                self.tab_strip.set_tab_state(idx, tr.to);
+            }
+        }
+    }
+
     // ── Tab management ────────────────────────────────────────────────────────
 
     /// Move all per-page fields from `self` into a `PageSnapshot`.
@@ -5124,6 +5329,7 @@ impl Lumen {
     /// Open a new blank tab.
     fn open_new_tab(&mut self) {
         let new_idx = self.tab_strip.push_blank();
+        let new_id = self.tab_strip.tabs[new_idx].id;
         // Save current page into bg_tabs under the old active tab's id.
         let old_active = self.tab_strip.active;
         let old_id = self.tab_strip.tabs[old_active].id;
@@ -5133,6 +5339,8 @@ impl Lumen {
         self.bg_tabs.insert(old_id, snap);
         self.tab_strip.active = new_idx;
         self.reset_to_blank_tab();
+        // Register the new tab with the lifecycle manager.
+        self.lifecycle_mgr.open_tab(new_id as u64);
         self.request_redraw();
     }
 
@@ -5144,6 +5352,8 @@ impl Lumen {
             return;
         }
         let closing_id = self.tab_strip.tabs[idx].id;
+        // Remove from lifecycle manager.
+        self.lifecycle_mgr.close_tab(closing_id as u64);
         if idx == self.tab_strip.active {
             // Closing the active tab: save nothing (it will be dropped),
             // restore the tab that will become active after removal.
@@ -5155,16 +5365,26 @@ impl Lumen {
             self.reset_to_blank_tab();
             if let Some(snap) = self.bg_tabs.remove(&new_id) {
                 self.restore_page_snapshot(snap);
+            } else if self.hibernated_tabs.contains_key(&new_id) {
+                // Target tab is hibernated — restore from SQLite.
+                self.restore_hibernated_tab(new_id);
             }
         } else {
-            // Closing a background tab: just drop its snapshot.
+            // Closing a background tab: drop snapshot and any hibernated data.
             self.bg_tabs.remove(&closing_id);
+            self.hibernated_tabs.remove(&closing_id);
+            let _ = self.tab_snapshots.delete(closing_id as i64);
             self.tab_strip.remove(idx);
         }
         self.request_redraw();
     }
 
     /// Switch to tab at `idx`. No-op if already active.
+    ///
+    /// Handles all three cases:
+    /// - T1/T2 tab: restore full `PageSnapshot` from `bg_tabs` (in-memory, fast).
+    /// - T3 Hibernated tab: restore from SQLite via `Document::from_bytes()`.
+    /// - Blank new tab: reset to empty state.
     fn switch_tab(&mut self, idx: usize) {
         if idx == self.tab_strip.active || idx >= self.tab_strip.len() {
             return;
@@ -5175,14 +5395,26 @@ impl Lumen {
         self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
         let snap = self.save_page_snapshot();
         self.bg_tabs.insert(old_id, snap);
+
+        // Sync lifecycle manager: deactivate old, activate new.
+        let new_id = self.tab_strip.tabs[idx].id;
+        self.lifecycle_mgr.activate_tab(new_id as u64);
+
         // Restore new active tab, marking it Active so any badge clears.
         self.tab_strip.active = idx;
         self.tab_strip.set_tab_state(idx, TabState::Active);
-        let new_id = self.tab_strip.tabs[idx].id;
+
         self.reset_to_blank_tab();
+
         if let Some(snap) = self.bg_tabs.remove(&new_id) {
+            // T1/T2: fast in-memory restore.
             self.restore_page_snapshot(snap);
+        } else if self.hibernated_tabs.contains_key(&new_id) {
+            // T3: restore from SQLite — Document::from_bytes() + relayout.
+            self.restore_hibernated_tab(new_id);
         }
+        // Otherwise the tab is blank (never loaded) — leave reset state.
+
         self.request_redraw();
     }
 }
