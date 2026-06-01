@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: `<audio>` element stub (task 12)  branch: p1-audio-element
-Next step: commit, then lumen-task-finish
+(none)
 
 ---
 
@@ -19,7 +18,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 |---|------|----------|--------|---------|
 | 8 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #2 |
 | 11 | **Custom omnibox aliases** — `shell/src/omnibox/aliases.rs`: `!g <q>` → Google, `!gh <q>` → GitHub, `@notes <text>` → `Command::CreateNote`, `@read-later <url>` → `Command::SaveReadLater`; configurable via `settings` table. See `lumen-plan.md §7B.4` | `lumen-shell` | S | none |
-| 12 | **`<audio>` element stub** — `<audio>` as 0×0 replaced block (with `controls` attr: 40px bar); JS: `play()→Promise`, `pause()`, `src`/`currentTime`/`duration`/`volume`/`muted`; `canplay`/`loadedmetadata` fire immediately. `lumen-js/src/audio_element.rs` | `lumen-js`, `lumen-layout` | S | none |
 | 13 | **Web Notifications API** — `new Notification(title, opts)`, `Notification.requestPermission()`; shell delivers via `OsNotification` surface (winit + OS API). `lumen-js/src/notifications.rs` + `shell/src/platform/notification.rs` | `lumen-js`, `lumen-shell` | M | none |
 | 14 | **DOM GC shell integration** — idle-tick в shell event loop: `document.dead_node_ids()` → release QuickJS class instances via `_lumen_gc_collect(nids)`. `shell/src/gc_tick.rs`. Requires `p1-dom-gc-hooks` ✅ | `lumen-shell` | S | none |
 | 15 | **JS scroll requests drain** — в `about_to_wait`: `runtime.take_scroll_requests()` → `shell::set_scroll_position(nid, x, y)` → re-layout + redraw. `shell/src/event_loop.rs`. Requires `p1-clickable-iterator` ✅ | `lumen-shell` | S | none |
@@ -41,6 +39,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-audio-element** ✅ 2026-06-01 — `<audio>` element stub (HTML spec §4.8.10): `BoxKind::Audio { src, controls }` в layout — 0×0 без controls, full-width×40px с controls; серый FillRect в paint для controls bar. JS: `audio_element.rs` — HTMLAudioElement шим: `play()→Promise`, `pause()`, `src` setter (fires `loadedmetadata`+`canplay` немедленно), `currentTime`/`duration`/`volume`/`muted`/`controls`, `readyState=4`, `canPlayType()→''`, `networkState`/`error`/`buffered`/`seekable` стабы. 4 paint + 18 JS тестов. lumen-js: 665, lumen-layout: 2107, lumen-paint: 441.
 - **p1-omnibox-aliases** ✅ 2026-06-01 — Custom omnibox aliases (§7B.4): `lumen-storage::OmniboxAliases` — SQLite-таблица bang-алиасов (!g→Google, !gh→GitHub), set/get/list_all/delete, 9 тестов, итого lumen-storage: 493. `shell/src/omnibox/mod.rs` — `resolve(input, aliases)→Option<AliasAction>` (Navigate/CreateNote/SaveReadLater), URL-encode RFC 3986, 21 тест. Wiring: `handle_omnibox_commit` перехватывает commit перед navigate_to, обрабатывает bang и @-команды. Поля в Lumen: `omnibox_aliases`, `notes`, `read_later`. Shell tests: 459/459.
 - **p1-mouse-gesture** ✅ 2026-06-01 — Mouse gesture recognizer (§7B.3): `input/gesture.rs` `GestureRecognizer` — отслеживает drag ПКМ, классифицирует L/R/U/D/LD/RD, маппирует на действие через конфигурируемый `GestureMap`. Дефолт: Left=Back, Right=Forward, LeftDown=CloseTab, RightDown=NewTab. Минимальный порог 30px. Wiring: CursorMoved→track, CursorLeft→cancel, Right Press→begin, Right Release→finish→execute_gesture_action. 28 unit-тестов, итого lumen-shell: 427.
 - **p1-vim-keybindings** ✅ 2026-06-01 — Vim keybindings (§7B.1): `input/vim.rs` VimMode state machine (Normal/Insert), j/k scroll, d/u half-page, gg top, G bottom, f/t/F hints, / find, yy copy URL, H/L history. Ctrl+Alt+V toggles mode. Escape в Normal — swallow (not close). 27 unit-тестов, итого lumen-shell: 399.
