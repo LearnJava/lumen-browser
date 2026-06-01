@@ -164,6 +164,20 @@ pub fn install_dom_api(
 
 // ─── primitive registrations ──────────────────────────────────────────────────
 
+/// Extract `"method"` field from a cache meta JSON string.
+///
+/// Fast path without serde — scans for `"method":"<VALUE>"` literally.
+/// Falls back to `"GET"` on any parse failure.
+fn cache_meta_method(meta_json: &str) -> String {
+    if let Some(start) = meta_json.find("\"method\":\"") {
+        let rest = &meta_json[start + 10..];
+        if let Some(end) = rest.find('"') {
+            return rest[..end].to_string();
+        }
+    }
+    "GET".to_string()
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn install_primitives(
     ctx: &Ctx<'_>,
@@ -500,8 +514,11 @@ fn install_primitives(
         type SwMap = std::collections::HashMap<(String, String), String>;
         let sw_regs: Arc<Mutex<SwMap>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
-        // Cache storage: origin → cache_name → url → body (Vec<u8>)
-        type CacheMap = std::collections::HashMap<String, std::collections::HashMap<String, std::collections::HashMap<String, Vec<u8>>>>;
+        // Cache storage: origin → cache_name → url → (method, meta_json, body)
+        // meta_json: {"method":"GET","status":200,"statusText":"OK","headers":{…}}
+        // method is stored separately for O(1) `keys()` without re-parsing meta_json.
+        type CacheEntry = (String, String, Vec<u8>);
+        type CacheMap = std::collections::HashMap<String, std::collections::HashMap<String, std::collections::HashMap<String, CacheEntry>>>;
         let cache_data: Arc<Mutex<CacheMap>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         let sw = Arc::clone(&sw_regs);
@@ -550,14 +567,17 @@ fn install_primitives(
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_put",
-            move |origin: String, cache_name: String, url: String, body: Vec<u8>| {
+            // meta_json: {"method":"GET","status":200,"statusText":"OK","headers":{...}}
+            // Grouped into one string to stay within rquickjs 5-arg IntoJsFunc limit.
+            move |origin: String, cache_name: String, url: String, meta_json: String, body: Vec<u8>| {
+                let method = cache_meta_method(&meta_json);
                 cd.lock()
                     .unwrap()
                     .entry(origin)
                     .or_default()
                     .entry(cache_name)
                     .or_default()
-                    .insert(url, body);
+                    .insert(url, (method, meta_json, body));
             }
         );
 
@@ -570,7 +590,21 @@ fn install_primitives(
                     .get(&origin)
                     .and_then(|caches| caches.get(&cache_name))
                     .and_then(|cache| cache.get(&url))
-                    .cloned()
+                    .map(|(_, _, body)| body.clone())
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_match_info",
+            // Returns the raw meta_json stored at put time (already JSON-encoded).
+            move |origin: String, cache_name: String, url: String| -> Option<String> {
+                cd.lock()
+                    .unwrap()
+                    .get(&origin)
+                    .and_then(|caches| caches.get(&cache_name))
+                    .and_then(|cache| cache.get(&url))
+                    .map(|(_, meta, _)| meta.clone())
             }
         );
 
@@ -581,7 +615,7 @@ fn install_primitives(
                 let guard = cd.lock().unwrap();
                 let caches = guard.get(&origin)?;
                 for cache in caches.values() {
-                    if let Some(body) = cache.get(&url) {
+                    if let Some((_, _, body)) = cache.get(&url) {
                         return Some(body.clone());
                     }
                 }
@@ -591,12 +625,30 @@ fn install_primitives(
 
         let cd = Arc::clone(&cache_data);
         reg!(
+            "_lumen_cache_match_any_info",
+            move |origin: String, url: String| -> Option<String> {
+                let guard = cd.lock().unwrap();
+                let caches = guard.get(&origin)?;
+                for cache in caches.values() {
+                    if let Some((_, meta, _)) = cache.get(&url) {
+                        return Some(meta.clone());
+                    }
+                }
+                None
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
             "_lumen_cache_delete",
-            move |origin: String, cache_name: String, url: String| {
-                if let Some(caches) = cd.lock().unwrap().get_mut(&origin)
+            move |origin: String, cache_name: String, url: String| -> bool {
+                let mut guard = cd.lock().unwrap();
+                if let Some(caches) = guard.get_mut(&origin)
                     && let Some(cache) = caches.get_mut(&cache_name)
                 {
-                    cache.remove(&url);
+                    cache.remove(&url).is_some()
+                } else {
+                    false
                 }
             }
         );
@@ -616,6 +668,26 @@ fn install_primitives(
 
         let cd = Arc::clone(&cache_data);
         reg!(
+            "_lumen_cache_keys_full",
+            move |origin: String, cache_name: String| -> String {
+                let guard = cd.lock().unwrap();
+                match guard.get(&origin).and_then(|c| c.get(&cache_name)) {
+                    None => "[]".to_string(),
+                    Some(cache) => {
+                        let items: Vec<String> = cache
+                            .iter()
+                            .map(|(url, (method, _, _))| {
+                                format!(r#"{{"url":"{url}","method":"{method}"}}"#)
+                            })
+                            .collect();
+                        format!("[{}]", items.join(","))
+                    }
+                }
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
             "_lumen_cache_has",
             move |origin: String, cache_name: String| -> bool {
                 cd.lock()
@@ -629,9 +701,11 @@ fn install_primitives(
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_delete_cache",
-            move |origin: String, cache_name: String| {
+            move |origin: String, cache_name: String| -> bool {
                 if let Some(caches) = cd.lock().unwrap().get_mut(&origin) {
-                    caches.remove(&cache_name);
+                    caches.remove(&cache_name).is_some()
+                } else {
+                    false
                 }
             }
         );
@@ -3308,38 +3382,85 @@ var location = {
 
 // ── Service Worker API ────────────────────────────────────────────────────────
 
+function _lumen_req_url(r) {
+    return (typeof r === 'string') ? r : (r && r.url ? r.url : String(r));
+}
+function _lumen_req_method(r) {
+    return (typeof r === 'string') ? 'GET' : ((r && r.method) ? r.method.toUpperCase() : 'GET');
+}
+function _lumen_build_response(body, infoJson) {
+    var opts = { status: 200, statusText: 'OK', headers: {} };
+    if (infoJson) {
+        try {
+            var m = JSON.parse(infoJson);
+            opts.status = m.status || 200;
+            opts.statusText = m.statusText || 'OK';
+            opts.headers = m.headers || {};
+        } catch(e) {}
+    }
+    return new Response(body, opts);
+}
+
 function _lumen_build_cache_object(origin, cacheName) {
     return {
         put: function(request, response) {
-            var url = (typeof request === 'string') ? request : request.url;
+            var url = _lumen_req_url(request);
+            var method = _lumen_req_method(request);
+            var status = response.status || 200;
+            var statusText = response.statusText || 'OK';
+            var hdrs = {};
+            if (response.headers && typeof response.headers.forEach === 'function') {
+                response.headers.forEach(function(v, k) { hdrs[k] = v; });
+            }
+            var metaJson = JSON.stringify({ method: method, status: status, statusText: statusText, headers: hdrs });
             return response.arrayBuffer().then(function(buf) {
-                _lumen_cache_put(origin, cacheName, url, new Uint8Array(buf));
+                _lumen_cache_put(origin, cacheName, url, metaJson, new Uint8Array(buf));
                 return undefined;
             });
         },
-        match: function(request) {
-            var url = (typeof request === 'string') ? request : request.url;
+        match: function(request, options) {
+            var url = _lumen_req_url(request);
             var body = _lumen_cache_match(origin, cacheName, url);
             if (body === undefined || body === null) return Promise.resolve(undefined);
-            return Promise.resolve(new Response(body));
+            return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_info(origin, cacheName, url)));
         },
-        delete: function(request) {
-            var url = (typeof request === 'string') ? request : request.url;
-            _lumen_cache_delete(origin, cacheName, url);
-            return Promise.resolve(true);
+        matchAll: function(request, options) {
+            if (request === undefined) {
+                var urls = _lumen_cache_keys(origin, cacheName);
+                return Promise.resolve(urls.map(function(u) {
+                    return _lumen_build_response(
+                        _lumen_cache_match(origin, cacheName, u),
+                        _lumen_cache_match_info(origin, cacheName, u)
+                    );
+                }));
+            }
+            var url = _lumen_req_url(request);
+            var body = _lumen_cache_match(origin, cacheName, url);
+            if (body === undefined || body === null) return Promise.resolve([]);
+            return Promise.resolve([_lumen_build_response(body, _lumen_cache_match_info(origin, cacheName, url))]);
         },
-        keys: function() {
-            return Promise.resolve(
-                _lumen_cache_keys(origin, cacheName).map(function(u) { return new Request(u); })
-            );
+        delete: function(request, options) {
+            var url = _lumen_req_url(request);
+            return Promise.resolve(_lumen_cache_delete(origin, cacheName, url));
         },
-        addAll: function(urls) {
-            return Promise.all(urls.map(function(u) {
-                return fetch(u).then(function(r) {
-                    _lumen_cache_put(origin, cacheName, u, []);
-                    return r;
-                });
+        keys: function(request, options) {
+            var entries = JSON.parse(_lumen_cache_keys_full(origin, cacheName));
+            if (request !== undefined) {
+                var filterUrl = _lumen_req_url(request);
+                entries = entries.filter(function(e) { return e.url === filterUrl; });
+            }
+            return Promise.resolve(entries.map(function(e) {
+                return new Request(e.url, { method: e.method });
             }));
+        },
+        add: function(request) {
+            var url = _lumen_req_url(request);
+            var self = this;
+            return fetch(url).then(function(r) { return self.put(new Request(url), r); });
+        },
+        addAll: function(requests) {
+            var self = this;
+            return Promise.all(requests.map(function(r) { return self.add(r); }));
         },
     };
 }
@@ -3350,18 +3471,17 @@ var caches = {
     open: function(name) {
         return Promise.resolve(_lumen_build_cache_object(_sw_origin, String(name)));
     },
-    match: function(request) {
-        var url = (typeof request === 'string') ? request : request.url;
+    match: function(request, options) {
+        var url = _lumen_req_url(request);
         var body = _lumen_cache_match_any(_sw_origin, url);
         if (body === undefined || body === null) return Promise.resolve(undefined);
-        return Promise.resolve(new Response(body));
+        return Promise.resolve(_lumen_build_response(body, _lumen_cache_match_any_info(_sw_origin, url)));
     },
     has: function(name) {
         return Promise.resolve(_lumen_cache_has(_sw_origin, String(name)));
     },
     delete: function(name) {
-        _lumen_cache_delete_cache(_sw_origin, String(name));
-        return Promise.resolve(true);
+        return Promise.resolve(_lumen_cache_delete_cache(_sw_origin, String(name)));
     },
     keys: function() {
         return Promise.resolve(_lumen_cache_names(_sw_origin));
@@ -8219,23 +8339,64 @@ mod tests {
         assert_eq!(result, lumen_core::JsValue::Bool(false));
     }
 
+    // helper: put a minimal GET 200 cache entry via the native binding
+    fn cache_put_test(rt: &QuickJsRuntime, origin: &str, name: &str, url: &str) {
+        rt.eval(&format!(
+            r#"_lumen_cache_put('{origin}', '{name}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72, 101, 108, 108, 111]);"#
+        ))
+        .unwrap();
+    }
+
     #[test]
     fn cache_put_and_match_roundtrip() {
         let rt = runtime_with_dom(make_doc());
-        // Put raw bytes via primitive, then match.
-        rt.eval("_lumen_cache_put('', 'v1', 'https://x.com/a', [72, 101, 108, 108, 111]);")
-            .unwrap();
-        let result = rt
-            .eval("_lumen_cache_has('', 'v1')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
+        cache_put_test(&rt, "", "v1", "https://x.com/a");
+        assert_eq!(
+            rt.eval("_lumen_cache_has('', 'v1')").unwrap(),
+            lumen_core::JsValue::Bool(true)
+        );
         let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
         assert_eq!(
             keys,
-            lumen_core::JsValue::Array(vec![lumen_core::JsValue::String(
-                "https://x.com/a".into()
-            )])
+            lumen_core::JsValue::Array(vec![lumen_core::JsValue::String("https://x.com/a".into())])
         );
+    }
+
+    #[test]
+    fn cache_match_returns_body_bytes() {
+        let rt = runtime_with_dom(make_doc());
+        cache_put_test(&rt, "", "v1", "https://x.com/a");
+        // _lumen_cache_match returns a Uint8Array-like value (body bytes)
+        let len = rt
+            .eval("_lumen_cache_match('', 'v1', 'https://x.com/a').length")
+            .unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(5.0)); // "Hello" = 5 bytes
+    }
+
+    #[test]
+    fn cache_match_info_returns_json_metadata() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"_lumen_cache_put('', 'v1', 'https://x.com/css', '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"content-type":"text/css"}}', []);"#)
+            .unwrap();
+        let info_str = rt
+            .eval("_lumen_cache_match_info('', 'v1', 'https://x.com/css')")
+            .unwrap();
+        if let lumen_core::JsValue::String(s) = info_str {
+            assert!(s.contains("304"));
+            assert!(s.contains("Not Modified"));
+            assert!(s.contains("content-type"));
+        } else {
+            panic!("expected String from _lumen_cache_match_info");
+        }
+    }
+
+    #[test]
+    fn cache_match_info_returns_none_on_miss() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("_lumen_cache_match_info('', 'v1', 'https://x.com/missing') === undefined")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
     #[test]
@@ -8248,38 +8409,157 @@ mod tests {
     }
 
     #[test]
-    fn cache_delete_removes_entry() {
+    fn cache_match_any_info_finds_across_caches() {
         let rt = runtime_with_dom(make_doc());
-        rt.eval("_lumen_cache_put('', 'v1', 'https://x.com/b', []);")
+        rt.eval(r#"_lumen_cache_put('', 'static', 'https://x.com/style.css', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);"#)
             .unwrap();
-        rt.eval("_lumen_cache_delete('', 'v1', 'https://x.com/b');")
+        let r = rt
+            .eval("_lumen_cache_match_any_info('', 'https://x.com/style.css') !== undefined")
             .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cache_delete_returns_true_when_found() {
+        let rt = runtime_with_dom(make_doc());
+        cache_put_test(&rt, "", "v1", "https://x.com/b");
+        let r = rt
+            .eval("_lumen_cache_delete('', 'v1', 'https://x.com/b')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
         let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
         assert_eq!(keys, lumen_core::JsValue::Array(vec![]));
     }
 
     #[test]
+    fn cache_delete_returns_false_on_miss() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("_lumen_cache_delete('', 'v1', 'https://x.com/nonexistent')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn cache_keys_full_returns_method() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"_lumen_cache_put('', 'v1', 'https://x.com/api', '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
+            .unwrap();
+        let r = rt
+            .eval("_lumen_cache_keys_full('', 'v1').indexOf('POST') >= 0")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cache_delete_cache_returns_true_when_found() {
+        let rt = runtime_with_dom(make_doc());
+        cache_put_test(&rt, "", "v1", "https://x.com/r");
+        let r = rt
+            .eval("_lumen_cache_delete_cache('', 'v1')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("_lumen_cache_has('', 'v1')").unwrap(),
+            lumen_core::JsValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn cache_delete_cache_returns_false_when_missing() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("_lumen_cache_delete_cache('', 'nonexistent')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
     fn cache_names_lists_opened_caches() {
         let rt = runtime_with_dom(make_doc());
-        rt.eval("_lumen_cache_put('', 'alpha', 'https://x.com/r', []);")
-            .unwrap();
-        rt.eval("_lumen_cache_put('', 'beta', 'https://x.com/s', []);")
-            .unwrap();
+        cache_put_test(&rt, "", "alpha", "https://x.com/r");
+        cache_put_test(&rt, "", "beta", "https://x.com/s");
         let mut names = match rt.eval("_lumen_cache_names('')").unwrap() {
             lumen_core::JsValue::Array(a) => a
                 .into_iter()
                 .filter_map(|v| {
-                    if let lumen_core::JsValue::String(s) = v {
-                        Some(s)
-                    } else {
-                        None
-                    }
+                    if let lumen_core::JsValue::String(s) = v { Some(s) } else { None }
                 })
                 .collect::<Vec<_>>(),
             _ => vec![],
         };
         names.sort();
         assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
+    }
+
+    #[test]
+    fn caches_open_returns_cache_with_match() {
+        let rt = runtime_with_dom(make_doc());
+        // Open cache first to obtain handle, then put with same _sw_origin, then match.
+        let r = rt.eval(r#"
+            var _cache_oc = null;
+            caches.open('my-cache').then(function(c) { _cache_oc = c; });
+            _lumen_drain_microtasks();
+            _lumen_cache_put(_sw_origin, 'my-cache', 'https://x.com/data',
+                '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1,2,3]);
+            var _result_oc;
+            _cache_oc.match('https://x.com/data').then(function(r) { _result_oc = r !== undefined; });
+            _lumen_drain_microtasks();
+            _result_oc
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn caches_has_returns_true_after_put() {
+        let rt = runtime_with_dom(make_doc());
+        cache_put_test(&rt, "", "my-cache", "https://x.com/x");
+        let r = rt
+            .eval("_lumen_cache_has('', 'my-cache')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn caches_delete_returns_true_when_found() {
+        let rt = runtime_with_dom(make_doc());
+        cache_put_test(&rt, "", "old-cache", "https://x.com/z");
+        // caches.delete returns a Promise<bool>; verify via native binding
+        let had = rt.eval("_lumen_cache_delete_cache('', 'old-cache')").unwrap();
+        assert_eq!(had, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cache_matchall_returns_all_entries() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(r#"
+            var _cache_ma = null;
+            caches.open('v1-ma').then(function(c) { _cache_ma = c; });
+            _lumen_drain_microtasks();
+            _lumen_cache_put(_sw_origin, 'v1-ma', 'https://x.com/a', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1]);
+            _lumen_cache_put(_sw_origin, 'v1-ma', 'https://x.com/b', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [2]);
+            var _all;
+            _cache_ma.matchAll().then(function(arr) { _all = arr.length; });
+            _lumen_drain_microtasks();
+            _all
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn cache_keys_returns_request_objects() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(r#"
+            var _cache_kr = null;
+            caches.open('v1-kr').then(function(c) { _cache_kr = c; });
+            _lumen_drain_microtasks();
+            _lumen_cache_put(_sw_origin, 'v1-kr', 'https://x.com/page', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);
+            var _url_kr;
+            _cache_kr.keys().then(function(reqs) { _url_kr = reqs[0] && reqs[0].url; });
+            _lumen_drain_microtasks();
+            _url_kr
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("https://x.com/page".into()));
     }
 
     #[test]
