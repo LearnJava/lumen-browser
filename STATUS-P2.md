@@ -6,8 +6,7 @@
 
 ## In progress
 
-Tree-style tabs (7A.2)  branch: p2-tree-tabs
-Next step: Add opener_id to TabEntry, create tabs/tree.rs + panels/tree_tabs.rs  crates/shell/src/tabs/strip.rs:52
+_(нет)_
 
 ---
 
@@ -43,6 +42,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-tree-tabs** ✅ 2026-06-01 — Tree-style tabs (7A.2). `TabEntry.opener_id: Option<usize>` + `TabStrip::push_with_opener`. `tabs/tree.rs`: `depth_of`/`children_of`/`subtree_ids`/`visible_order`/`VisibleRow`. `panels/tree_tabs.rs`: `TreeTabsPanel { visible, collapsed: HashSet }`, `hit_test` (Arrow/Tab/Close/Empty), `build_panel` — отступ depth×8px + ▶/▼ стрелки + lifecycle-бейджи. Ctrl+Shift+B toggle; Ctrl+T в tree-mode = дочерняя вкладка. Arrow-клик чистит stale collapsed entries через `subtree_ids`. 443 тестов lumen-shell.
 - **p2-vertical-tabs** ✅ 2026-06-01 — Вертикальная панель вкладок (7A.1). `VerticalTabsPanel` в `shell/src/panels/vertical_tabs.rs`: боковая панель 200px слева, `Ctrl+B` toggle. Список вкладок: favicon-circle + title + close-кнопка, lifecycle-бейджи (BackgroundOld→amber, Hibernated→grey). PushTransform сдвигает контент страницы на PANEL_WIDTH вправо. `page_content_width_css()` для scroll-clamping. Hit-test с X-коррекцией для кликов по странице. 17 unit-тестов.
 - **p2-split-view** ✅ 2026-06-01 — Multi-viewport split view (7A.4). `SplitPane` + `SplitView` + `SplitFocus` в `shell/src/panels/split_view.rs`. `build_combined_dl()` — clips left/right panes, bakes scroll into PushTransform, adds 1px divider. Keybindings: `Ctrl+\` toggle split, `Ctrl+M` switch focus. Right pane populated from background or hibernated tabs; fallback `build_split_placeholder(url)` для hibernated. Click routing: right-pane clicks set focus only. `scroll_active_pane()` / `scroll_active_pane_to()` — unified scroll for both panes. 10 unit-тестов SplitView + 373 lumen-shell итого.
 - **p2-tab-snapshot-restore** ✅ 2026-06-01 — T3 tab hibernation + restore (ADR-008 §10J). `lumen-storage::TabSnapshotStore` (SQLite WAL) + `HibernatedTabData` (dom_blob, css_source, url, title, scroll_x/y). `tab_lifecycle::TabMetadata` — 200 B RAM stub per hibernated tab (url + title для быстрого отображения). `Lumen`: поля `hibernated_tabs/tab_snapshots/lifecycle_mgr/lifecycle_last_tick`; методы `hibernate_bg_tab` (Document::to_bytes → SQLite), `restore_hibernated_tab` (SQLite → Document::from_bytes → relayout), `tick_lifecycle` (1 Hz poll tick_idle + lru_evict). Интеграция в open/close/switch_tab + about_to_wait. 9 unit-тестов storage, 364 итого lumen-shell.

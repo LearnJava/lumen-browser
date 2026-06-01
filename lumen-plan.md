@@ -271,7 +271,7 @@
 | 6+ | ⬜ **`[P3]` knowledge / Profiles / Focus / IME / WebSockets / SW / V8 / AI** (Phase 2-3) | — | — |
 | 7A | ⬜ **`[P3]` Tab UX** (§12.13, Phase 2) | Современная модель вкладок | `shell/src/tabs/` |
 | 7A.1 | ⬜ Vertical tabs panel (toggle, drag-reorder, collapse) | `shell/src/tabs/vertical.rs` | — |
-| 7A.2 | ⬜ Tree-style tabs (parent-child) | `shell/src/tabs/tree.rs` | — |
+| 7A.2 | ✅ Tree-style tabs (parent-child) | `shell/src/tabs/tree.rs`, `shell/src/panels/tree_tabs.rs` | — |
 | 7A.3 | ⬜ Workspaces (изолированные группы) | `shell` + `storage/src/workspaces.rs` | — |
 | 7A.4 | ⬜ **`[P3+P2]` Split view** (2-4 viewport на окно) | `shell` + `paint` multi-viewport | требует координации с P2 |
 | 7A.5 | ⬜ Tab auto-archive (UX-фича: убрать вкладки старше 12 ч из tab strip в @archive) | `shell/src/tabs/archive.rs` | **семантика отделена от трека 10**: 7A.5 — UI-скрытие, **трек 10** — RAM-выгрузка по tier'ам |
