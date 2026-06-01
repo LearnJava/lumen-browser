@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+In progress: `<audio>` element stub (task 12)  branch: p1-audio-element
+Next step: commit, then lumen-task-finish
 
 ---
 
