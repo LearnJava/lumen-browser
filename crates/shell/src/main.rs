@@ -26,6 +26,7 @@ mod find;
 mod forms;
 mod gc_tick;
 mod hints;
+mod memory_poll;
 mod input;
 mod links;
 mod momentum_anim;
@@ -329,6 +330,8 @@ fn run_window_mode(
         read_later: Vec::new(),
         cookie_banner_dismiss: true,
         gc_tick: gc_tick::GcTick::new(),
+        memory_poll: memory_poll::MemoryPollTick::new(memory_poll::platform_source()),
+        cache_registry: lumen_core::ext::CacheRegistry::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -2948,6 +2951,18 @@ struct Lumen {
     /// Idle GC tick: drains dead DOM node IDs every 30 s and purges JS-side
     /// per-node caches (`_lumen_listeners`, `_input_values`) via `_lumen_gc_collect`.
     gc_tick: gc_tick::GcTick,
+    /// Throttled OS memory pressure poller (ADR-008 §10H).
+    ///
+    /// Polled every 5 s in `about_to_wait`.  On `Medium` or `High` pressure,
+    /// [`CacheRegistry::broadcast_pressure`] is called on `cache_registry`, and
+    /// owned caches (`image_cache`, renderer `layer_cache`) are evicted directly.
+    memory_poll: memory_poll::MemoryPollTick,
+    /// Registry of cross-session shared caches (ADR-008 §10D.3).
+    ///
+    /// Caches registered here receive `on_memory_pressure` broadcasts from the
+    /// poll loop.  Owned per-page caches (`image_cache`, layer cache) are evicted
+    /// directly rather than through the registry to avoid shared-ownership overhead.
+    cache_registry: lumen_core::ext::CacheRegistry,
 }
 
 impl Lumen {
@@ -3774,6 +3789,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // Tab lifecycle: advance tier timers, trigger hibernation for overdue tabs.
         self.tick_lifecycle();
+
+        // Memory pressure: poll OS every 5 s; evict caches on Medium+ pressure.
+        if let Some(level) = self.memory_poll.tick(&mut self.cache_registry) {
+            self.image_cache.on_memory_pressure(level);
+            if let Some(renderer) = &mut self.renderer {
+                renderer.layer_cache_mut().on_memory_pressure(level);
+            }
+        }
 
         // Пост-дренажный check: reload, запланированный через queue_task
         // (UserInteraction source), исполняется после microtask checkpoint.
