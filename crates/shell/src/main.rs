@@ -323,6 +323,7 @@ fn run_window_mode(
             .expect("omnibox_aliases init"),
         notes: Vec::new(),
         read_later: Vec::new(),
+        cookie_banner_dismiss: true,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -384,6 +385,7 @@ fn do_print_to_pdf(
         None,
         None,
         &NullHyphenationProvider,
+        false, // headless PDF mode: no interactive JS needed
     )?;
 
     let ctx = PaginationContext {
@@ -506,13 +508,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -1056,7 +1058,7 @@ impl PageSource {
         }
     }
 
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load(
         &self,
         sink: Arc<dyn EventSink>,
@@ -1065,13 +1067,14 @@ impl PageSource {
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
         hp: &dyn HyphenationProvider,
+        cookie_banner_dismiss: bool,
     ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty) {
             return Ok((LoadedPage::empty(), None, None));
         }
         let raw = self.load_bytes(sink.clone())?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1275,6 +1278,8 @@ enum KeyCommand {
     ToggleWorkspaces,
     /// Показать/скрыть панель Shields (Ctrl+Shift+S).
     ToggleShields,
+    /// Включить/выключить авто-закрытие cookie-баннеров (Ctrl+Shift+K, 7C.3).
+    ToggleCookieBannerDismiss,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1345,6 +1350,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+S — toggle shields panel
         KeyCode::KeyS if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleShields)
+        }
+        // Ctrl+Shift+K — toggle cookie-banner auto-dismiss (7C.3)
+        KeyCode::KeyK if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleCookieBannerDismiss)
         }
         _ => None,
     }
@@ -1782,6 +1791,7 @@ fn parse_and_layout(
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
+    cookie_banner_dismiss: bool,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -1828,6 +1838,7 @@ fn parse_and_layout(
         ls_store,
         idb_backend,
         sw_backend,
+        cookie_banner_dismiss,
     );
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
@@ -2198,8 +2209,9 @@ fn render_bytes(
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
+    cookie_banner_dismiss: bool,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -2417,6 +2429,7 @@ fn run_scripts_with_dom(
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
+    cookie_banner_dismiss: bool,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts);
@@ -2439,6 +2452,7 @@ fn run_scripts_with_dom(
         use lumen_core::ext::JsRuntime as _;
         match lumen_js::QuickJsRuntime::new() {
             Ok(rt) => {
+                rt.set_cookie_banner_dismiss(cookie_banner_dismiss);
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store, idb_backend, sw_backend) {
                     eprintln!("JS DOM init failed: {e}");
                 }
@@ -2859,6 +2873,12 @@ struct Lumen {
     /// Each entry is a URL string.  Persisted in-memory; future task wires this
     /// to the bookmarks backend with a `read-later` tag.
     read_later: Vec<String>,
+    /// Cookie-banner auto-dismiss preference (7C.3).
+    ///
+    /// When `true` (default) the JS shim in `lumen-js` auto-clicks consent-banner
+    /// accept buttons on every page load. When `false` banners are shown normally.
+    /// Toggle via `Ctrl+Shift+K` or a future settings UI.
+    cookie_banner_dismiss: bool,
 }
 
 impl Lumen {
@@ -3094,7 +3114,7 @@ impl Lumen {
                 Arc::new(lumen_storage::SwStore::new(Arc::clone(&self.sw_backend), o))
                     as Arc<dyn lumen_core::ext::SwBackend>
             });
-            self.source.load(self.event_sink.clone(), viewport, ls_store, idb_backend, sw_backend, &self.hyp_provider)
+            self.source.load(self.event_sink.clone(), viewport, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss)
         };
 
         match load_result {
@@ -3502,7 +3522,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                     }
@@ -4965,6 +4985,10 @@ impl Lumen {
             KeyCommand::ToggleShields => {
                 self.shields.toggle();
                 self.request_redraw();
+            }
+            KeyCommand::ToggleCookieBannerDismiss => {
+                self.cookie_banner_dismiss = !self.cookie_banner_dismiss;
+                // Preference takes effect on the next page load.
             }
         }
     }

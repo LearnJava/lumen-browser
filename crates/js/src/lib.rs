@@ -1,6 +1,7 @@
 pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
+pub mod cookie_banner;
 pub mod dom;
 pub mod geolocation;
 pub mod navigator_bindings;
@@ -74,6 +75,12 @@ pub struct QuickJsRuntime {
     worker_messages: worker::WorkerMessageQueue,
     /// Monotonically increasing counter used to assign unique IDs to new workers.
     worker_next_id: Arc<Mutex<u32>>,
+    /// Whether to auto-dismiss cookie consent banners on each page load (7C.3).
+    ///
+    /// Defaults to `true`. Shell sets this from the user's `cookie_banner_dismiss`
+    /// preference before calling `install_dom`. When `false` the cookie-banner
+    /// shim is not injected and banners are displayed normally.
+    cookie_banner_dismiss: AtomicBool,
 }
 
 struct Inner {
@@ -107,6 +114,7 @@ impl QuickJsRuntime {
             workers: Arc::new(Mutex::new(HashMap::new())),
             worker_messages: Arc::new(Mutex::new(Vec::new())),
             worker_next_id: Arc::new(Mutex::new(1)),
+            cookie_banner_dismiss: AtomicBool::new(true),
         })
     }
 
@@ -227,8 +235,23 @@ impl QuickJsRuntime {
                 eprintln!("Worker bindings init failed: {}", e);
             }
 
+            // Install cookie-banner auto-dismiss shim (7C.3) — last, after full DOM.
+            let cb_enabled = self.cookie_banner_dismiss.load(Ordering::Relaxed);
+            if let Err(e) = cookie_banner::install(&ctx, cb_enabled) {
+                eprintln!("Cookie-banner bindings init failed: {}", e);
+            }
+
             Ok(())
         })
+    }
+
+    /// Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls.
+    ///
+    /// Default: `true` (banners are auto-dismissed). Set to `false` to let the user
+    /// interact with consent dialogs normally. Shell reads this from the user's
+    /// `cookie_banner_dismiss` preference stored in settings.
+    pub fn set_cookie_banner_dismiss(&self, enabled: bool) {
+        self.cookie_banner_dismiss.store(enabled, Ordering::Relaxed);
     }
 
     /// Deliver messages posted by worker threads to their `Worker` JS instances.
