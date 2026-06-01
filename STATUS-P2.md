@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Sidebar web panels (7D.3)  branch: p2-sidebar-panel
+Next step: create sidebar_panel.rs, wire into main.rs  crates/shell/src/panels/sidebar_panel.rs
 
 ---
 
