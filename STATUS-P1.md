@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**DOM GC shell integration** (task #14)  branch: p1-dom-gc-shell
+Next step: добавить `_lumen_gc_collect` в WEB_API_SHIM, `gc_tick.rs`, wiring в `about_to_wait`  `crates/js/src/dom.rs:7355`, `crates/shell/src/main.rs:3629`
 
 ---
 
