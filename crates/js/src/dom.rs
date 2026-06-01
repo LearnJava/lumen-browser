@@ -956,6 +956,20 @@ fn install_primitives(
         }
     }
 
+    // ── Clipboard API ─────────────────────────────────────────────────────────
+    // _lumen_clipboard_read()      → String (system clipboard plain text, "" if none)
+    // _lumen_clipboard_write(text) → void   (replace system clipboard text)
+    //
+    // Both forward to the process-global clipboard provider installed by the shell
+    // (`lumen_js::set_clipboard_provider`). With no provider (tests, dump modes)
+    // read returns "" and write is a no-op, so navigator.clipboard still resolves.
+    reg!("_lumen_clipboard_read", || -> String {
+        crate::clipboard::read_text()
+    });
+    reg!("_lumen_clipboard_write", |text: String| {
+        crate::clipboard::write_text(&text);
+    });
+
     // ── WebSocket API ─────────────────────────────────────────────────────────
     // Phase 0 model: synchronous connect, background recv thread, JS polls.
     // _lumen_ws_connect(url)  → handle u32 (0 = error)
