@@ -176,8 +176,9 @@ pub fn install_dom_api(
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
+    console_messages: Arc<Mutex<Vec<(u8, String)>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -239,6 +240,7 @@ fn install_primitives(
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
+    console_messages: Arc<Mutex<Vec<(u8, String)>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -249,14 +251,20 @@ fn install_primitives(
 
     // ── console ──────────────────────────────────────────────────────────────
     {
-        reg!("_lumen_console_log", |msg: String| {
+        let buf_log = Arc::clone(&console_messages);
+        reg!("_lumen_console_log", move |msg: String| {
             eprintln!("[JS] {msg}");
+            buf_log.lock().unwrap().push((0, msg));
         });
-        reg!("_lumen_console_warn", |msg: String| {
+        let buf_warn = Arc::clone(&console_messages);
+        reg!("_lumen_console_warn", move |msg: String| {
             eprintln!("[JS warn] {msg}");
+            buf_warn.lock().unwrap().push((1, msg));
         });
-        reg!("_lumen_console_error", |msg: String| {
+        let buf_err = Arc::clone(&console_messages);
+        reg!("_lumen_console_error", move |msg: String| {
             eprintln!("[JS error] {msg}");
+            buf_err.lock().unwrap().push((2, msg));
         });
     }
 

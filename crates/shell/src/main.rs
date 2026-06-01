@@ -22,6 +22,7 @@
 mod address_bar;
 mod animation_scheduler;
 mod deterministic;
+mod devtools;
 mod download;
 mod find;
 mod forms;
@@ -337,6 +338,7 @@ fn run_window_mode(
         memory_poll: memory_poll::MemoryPollTick::new(memory_poll::platform_source()),
         cache_registry: lumen_core::ext::CacheRegistry::new(),
         deterministic,
+        devtools_console: devtools::console_panel::ConsolePanel::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -901,6 +903,13 @@ trait PersistentJs {
     /// `window.open()` calls.
     #[allow(dead_code)]
     fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32)>;
+    /// Drain `console.log/warn/error` messages buffered in the JS runtime.
+    ///
+    /// Each entry is `(level, text)` where level is 0=log, 1=warn, 2=error.
+    /// Called by the shell in `about_to_wait` to feed the DevTools console panel.
+    /// Returns an empty vec when no console calls have been made since last drain.
+    #[allow(dead_code)]
+    fn take_console_messages(&self) -> Vec<(u8, String)>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -1020,6 +1029,9 @@ impl PersistentJs for QuickPersistentJs {
             .into_iter()
             .map(|r| (r.url, r.target, r.width, r.height))
             .collect()
+    }
+    fn take_console_messages(&self) -> Vec<(u8, String)> {
+        self.rt.take_console_messages()
     }
 }
 
@@ -1347,6 +1359,8 @@ enum KeyCommand {
     ToggleCookieBannerDismiss,
     /// Показать/скрыть правую боковую панель (Ctrl+Shift+A, 7D.3).
     ToggleSidebar,
+    /// Показать/скрыть DevTools JS-консоль (F12, §7E.5).
+    DevConsole,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1438,6 +1452,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyA if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleSidebar)
         }
+        // F12 — toggle DevTools JS console (§7E.5)
+        KeyCode::F12 if no_mods => Some(KeyCommand::DevConsole),
         _ => None,
     }
 }
@@ -3011,6 +3027,11 @@ struct Lumen {
     /// `requestAnimationFrame` callbacks receive a 0 ms timestamp.
     /// Intended for snapshot testing and reproducible output.
     deterministic: bool,
+    /// DevTools JS console panel (§7E.5).
+    ///
+    /// Captures `console.log/warn/error` output from the active page's JS runtime.
+    /// Visible as a bottom overlay; toggled with `F12`.
+    devtools_console: devtools::console_panel::ConsolePanel,
 }
 
 impl Lumen {
@@ -3799,6 +3820,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     url
                 };
                 self.navigate_to(PageSource::Url(url));
+            }
+        }
+
+        // DevTools console: drain JS console.log/warn/error messages into the panel.
+        if let Some(js) = &self.js_ctx {
+            let msgs = js.take_console_messages();
+            if !msgs.is_empty() {
+                self.devtools_console.push_batch(msgs);
+                if self.devtools_console.visible {
+                    self.request_redraw();
+                }
             }
         }
 
@@ -4649,6 +4681,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut dl_cmds);
                 }
 
+                // DevTools JS console panel: bottom overlay, toggled by F12.
+                if self.devtools_console.visible {
+                    let con_win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let mut con_cmds = devtools::console_panel::build_console_panel(
+                        &self.devtools_console,
+                        con_win_size,
+                    );
+                    overlay_buf.append(&mut con_cmds);
+                }
+
                 // Vertical tab panel: docked left sidebar, below the tab bar.
                 // Rendered before the tab bar so tab bar draws on top.
                 if self.vertical_tabs.visible {
@@ -5316,6 +5361,10 @@ impl Lumen {
             KeyCommand::SetTabContainer(container) => {
                 let idx = self.tab_strip.active;
                 self.set_tab_container(idx, container);
+            }
+            KeyCommand::DevConsole => {
+                self.devtools_console.toggle();
+                self.request_redraw();
             }
         }
     }
