@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+Memory pressure poll loop (задача #16)  branch: p1-memory-pressure-poll
+Next step: создать memory_poll.rs, добавить поля в Lumen, wire в about_to_wait  shell/src/memory_poll.rs
 
 ---
 
