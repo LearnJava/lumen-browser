@@ -6,8 +6,7 @@
 
 ## In progress
 
-Custom omnibox aliases (§7B.4)  branch: p1-omnibox-aliases
-Next step: storage/src/omnibox_aliases.rs → shell/src/omnibox/mod.rs → main.rs wiring
+(none)
 
 ---
 
@@ -41,6 +40,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-omnibox-aliases** ✅ 2026-06-01 — Custom omnibox aliases (§7B.4): `lumen-storage::OmniboxAliases` — SQLite-таблица bang-алиасов (!g→Google, !gh→GitHub), set/get/list_all/delete, 9 тестов, итого lumen-storage: 493. `shell/src/omnibox/mod.rs` — `resolve(input, aliases)→Option<AliasAction>` (Navigate/CreateNote/SaveReadLater), URL-encode RFC 3986, 21 тест. Wiring: `handle_omnibox_commit` перехватывает commit перед navigate_to, обрабатывает bang и @-команды. Поля в Lumen: `omnibox_aliases`, `notes`, `read_later`. Shell tests: 459/459.
 - **p1-mouse-gesture** ✅ 2026-06-01 — Mouse gesture recognizer (§7B.3): `input/gesture.rs` `GestureRecognizer` — отслеживает drag ПКМ, классифицирует L/R/U/D/LD/RD, маппирует на действие через конфигурируемый `GestureMap`. Дефолт: Left=Back, Right=Forward, LeftDown=CloseTab, RightDown=NewTab. Минимальный порог 30px. Wiring: CursorMoved→track, CursorLeft→cancel, Right Press→begin, Right Release→finish→execute_gesture_action. 28 unit-тестов, итого lumen-shell: 427.
 - **p1-vim-keybindings** ✅ 2026-06-01 — Vim keybindings (§7B.1): `input/vim.rs` VimMode state machine (Normal/Insert), j/k scroll, d/u half-page, gg top, G bottom, f/t/F hints, / find, yy copy URL, H/L history. Ctrl+Alt+V toggles mode. Escape в Normal — swallow (not close). 27 unit-тестов, итого lumen-shell: 399.
 - **p1-geolocation-api** ✅ 2026-06-01 — Geolocation API stub (W3C Geolocation L2 §5): `navigator.geolocation.getCurrentPosition/watchPosition/clearWatch`; по умолчанию `PERMISSION_DENIED`; opt-in fake coords через `FakeCoords { latitude, longitude, accuracy }` в `install_geolocation_bindings`. Вызов добавлен в `QuickJsRuntime::install_dom`. `GeolocationPositionError` с константами PERMISSION_DENIED/POSITION_UNAVAILABLE/TIMEOUT. 17 unit-тестов, итого lumen-js: 647.
