@@ -24,6 +24,7 @@ mod animation_scheduler;
 mod download;
 mod find;
 mod forms;
+mod gc_tick;
 mod hints;
 mod input;
 mod links;
@@ -326,6 +327,7 @@ fn run_window_mode(
         notes: Vec::new(),
         read_later: Vec::new(),
         cookie_banner_dismiss: true,
+        gc_tick: gc_tick::GcTick::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -874,6 +876,14 @@ trait PersistentJs {
     /// notifications were created since the last drain.
     #[allow(dead_code)]
     fn take_notification_requests(&self) -> Vec<(String, String)>;
+    /// Purge JS-side per-node caches for nodes that have been detached from
+    /// the DOM and have zero live JS references.
+    ///
+    /// Calls `_lumen_gc_collect(nids)` in QuickJS, which removes event-listener
+    /// and input-value entries from `_lumen_listeners` / `_input_values` for
+    /// the supplied node IDs.  Called by the shell's idle GC tick.
+    #[allow(dead_code)]
+    fn gc_collect(&self, dead_nids: &[u32]);
 }
 
 #[cfg(feature = "quickjs")]
@@ -973,6 +983,19 @@ impl PersistentJs for QuickPersistentJs {
             .into_iter()
             .map(|r| (r.title, r.body))
             .collect()
+    }
+    fn gc_collect(&self, dead_nids: &[u32]) {
+        if dead_nids.is_empty() {
+            return;
+        }
+        let arr = dead_nids
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        self.eval_js(&format!(
+            "if(typeof _lumen_gc_collect==='function')_lumen_gc_collect([{arr}]);"
+        ));
     }
 }
 
@@ -2908,6 +2931,9 @@ struct Lumen {
     /// accept buttons on every page load. When `false` banners are shown normally.
     /// Toggle via `Ctrl+Shift+K` or a future settings UI.
     cookie_banner_dismiss: bool,
+    /// Idle GC tick: drains dead DOM node IDs every 30 s and purges JS-side
+    /// per-node caches (`_lumen_listeners`, `_input_values`) via `_lumen_gc_collect`.
+    gc_tick: gc_tick::GcTick,
 }
 
 impl Lumen {
@@ -3672,6 +3698,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(js) = &self.js_ctx {
             for (title, body) in js.take_notification_requests() {
                 notification::show_os_notification(&title, &body);
+            }
+        }
+
+        // DOM GC idle tick: drain dead node IDs and purge JS-side per-node caches.
+        // Runs every 30 s to free _lumen_listeners / _input_values entries for
+        // nodes that were detached from the tree and have no live JS references.
+        if let (Some(ls), Some(js)) = (self.layout_source.as_ref(), self.js_ctx.as_ref()) {
+            let dead = {
+                let doc = ls.document.lock().unwrap();
+                self.gc_tick.poll(&doc)
+            };
+            if let Some(dead_nids) = dead {
+                let ids: Vec<u32> = dead_nids
+                    .iter()
+                    .map(|n| n.index() as u32)
+                    .collect();
+                js.gc_collect(&ids);
             }
         }
 

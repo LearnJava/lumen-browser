@@ -7353,6 +7353,27 @@ document.addEventListener('keydown', function(evt) {
         _lumen_dispatch(lastNid, closeEvt);
     }
 });
+
+// ── DOM GC collect (idle shell tick) ─────────────────────────────────────────
+// Called by the shell's GcTick every 30 s with an array of node IDs that
+// have been detached from the document and have zero live JS references.
+// Purges JS-side per-node caches so dead nodes don't retain memory through maps:
+//   - _lumen_listeners  keyed by 'nid:eventtype'
+//   - _input_values     keyed by nid
+// The arena itself is append-only in Phase 1; physical compaction is Phase 3.
+function _lumen_gc_collect(nids) {
+    for (var i = 0; i < nids.length; i++) {
+        var nid = nids[i];
+        var prefix = String(nid) + ':';
+        var plen   = prefix.length;
+        for (var key in _lumen_listeners) {
+            if (key.length > plen && key.substring(0, plen) === prefix) {
+                delete _lumen_listeners[key];
+            }
+        }
+        delete _input_values[nid];
+    }
+}
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -14213,5 +14234,68 @@ mod tests {
         rt.pump_workers();
         let result = rt.eval("res").unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(11.0));
+    }
+
+    // ── _lumen_gc_collect tests ────────────────────────────────────────────────
+
+    #[test]
+    fn gc_collect_removes_listener_entries() {
+        let rt = runtime_with_dom(make_doc());
+        // Register two listeners on nid=42 and one on nid=99.
+        rt.eval("_lumen_add_listener(42,'click',function(){}); \
+                 _lumen_add_listener(42,'mouseover',function(){}); \
+                 _lumen_add_listener(99,'click',function(){});")
+            .unwrap();
+        // Verify target listeners are present before collect.
+        let has42click = rt.eval("'42:click' in _lumen_listeners").unwrap();
+        assert_eq!(has42click, lumen_core::JsValue::Bool(true));
+        let has42over = rt.eval("'42:mouseover' in _lumen_listeners").unwrap();
+        assert_eq!(has42over, lumen_core::JsValue::Bool(true));
+
+        // Collect nid=42 → its entries should be deleted; nid=99 must survive.
+        rt.eval("_lumen_gc_collect([42]);").unwrap();
+
+        let gone42click = rt.eval("'42:click' in _lumen_listeners").unwrap();
+        assert_eq!(gone42click, lumen_core::JsValue::Bool(false));
+        let gone42over = rt.eval("'42:mouseover' in _lumen_listeners").unwrap();
+        assert_eq!(gone42over, lumen_core::JsValue::Bool(false));
+        // nid=99 must survive.
+        let has99 = rt.eval("'99:click' in _lumen_listeners").unwrap();
+        assert_eq!(has99, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn gc_collect_removes_input_value_entry() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_input_values[7] = 'hello'; _input_values[8] = 'world';")
+            .unwrap();
+        rt.eval("_lumen_gc_collect([7]);").unwrap();
+
+        // Deleted property → undefined → JsValue::Null (from_rq maps both).
+        let v7 = rt.eval("_input_values[7]").unwrap();
+        assert_eq!(v7, lumen_core::JsValue::Null);
+
+        let v8 = rt.eval("_input_values[8]").unwrap();
+        assert_eq!(v8, lumen_core::JsValue::String("world".into()));
+    }
+
+    #[test]
+    fn gc_collect_empty_array_is_noop() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_lumen_add_listener(5,'click',function(){});").unwrap();
+        rt.eval("_lumen_gc_collect([]);").unwrap();
+        // nid=5 listener must still be there.
+        let has5 = rt.eval("'5:click' in _lumen_listeners").unwrap();
+        assert_eq!(has5, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn gc_collect_unknown_nid_is_noop() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_lumen_add_listener(3,'focus',function(){});").unwrap();
+        rt.eval("_lumen_gc_collect([9999]);").unwrap();
+        // nid=3 listener must still be there.
+        let has3 = rt.eval("'3:focus' in _lumen_listeners").unwrap();
+        assert_eq!(has3, lumen_core::JsValue::Bool(true));
     }
 }
