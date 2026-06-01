@@ -6,8 +6,7 @@
 
 ## In progress
 
-DevTools JS console (7E.5)  branch: p1-devtools-console
-Next step: cargo check + tests  crates/shell/src/devtools/console_panel.rs
+_(нет)_
 
 ---
 
@@ -19,7 +18,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 |---|------|----------|--------|---------|
 | 8 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #2 |
 | 17 | **Tab auto-archive (10E.5)** — на `TabState::Hibernated`: `Document::to_bytes()`, drop `PersistentJs`, store bytes в tab slot; restore на switch через `Document::from_bytes()` + new `PersistentJs`. `shell/src/tab_lifecycle/hibernate.rs`. See `lumen-plan.md §10E.5` | `lumen-shell` | M | #2 |
-| 24 | **DevTools JS console (7E.5)** — `ConsolePanel: Panel` в `shell/src/devtools/console_panel.rs`; captures `console.log/warn/error` из `QuickJsRuntime::console_log_buffer`; scrollable `DrawText` list; `F12` toggle. See `lumen-plan.md §7E.5` | `lumen-shell` | M | none |
 | 25 | **Broadcast Channel API** — `new BroadcastChannel(name)`, `postMessage`, `onmessage`; same-origin channels share messages через global `HashMap<String, Vec<Sender>>`; `close()`. `lumen-js/src/broadcast_channel.rs` | `lumen-js` | S | none |
 | 26 | **`navigator.clipboard` shell binding** — shell регистрирует `_lumen_clipboard_read/_write` → platform clipboard (Windows: `GetClipboardData/SetClipboardData`; cross-platform: `arboard` crate). `shell/src/platform/clipboard.rs`. Completes `navigator.clipboard` ✅ | `lumen-shell` | S | none |
 | 27 | **SharedWorker stub** — `new SharedWorker(url)`: single shared `QuickJsRuntime` per name+origin; `port.postMessage/onmessage`; `connect` event on registration. `lumen-js/src/shared_worker.rs` | `lumen-js` | M | #5 |
@@ -29,6 +27,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-devtools-console** ✅ 2026-06-02 — DevTools JS console panel (задача #24, §7E.5): `devtools::console_panel::ConsolePanel` viewport-locked нижний overlay. `QuickJsRuntime::console_messages` буфер + `take_console_messages()`. F12 → `KeyCommand::DevConsole`. `about_to_wait` дренирует в `push_batch()`. Цветовая подсветка log/warn/error, скролл-индикатор, cap 500 сообщений. 13 unit-тестов. lumen-shell: 632 тестов. lumen-js: 738 тестов.
 - **p1-window-open** ✅ 2026-06-02 — `window.open()` popup handling (задача #23): `PopupRequest { url, target, width, height }` в `lumen-js/src/dom.rs`; биндинг `_lumen_window_open` разбирает features-строку; WEB_API_SHIM: `window.open()` → stub WindowProxy + `window.opener=null`; `PersistentJs::take_window_open_requests() -> Vec<(String,String,u32,u32)>`; shell дренирует в `about_to_wait` → `open_new_tab() + navigate_to(url)`. 9 unit-тестов, clippy чист. lumen-js: 738 тестов.
 - **p1-ci-bench-gate** ✅ 2026-06-01 — CI bench gate (9G.3): `bench/src/ci_gate.rs` + `bench/src/util.rs` — `--ci` флаг запускает 3 итерации полного pipeline на `samples/heavy.html`, проверяет mean total < 200 ms и peak RSS < 512 MB, выходит с кодом 1 при регрессии. 6 unit-тестов. Clippy чист.
 - **p1-webrtc-stub** ✅ 2026-06-01 — WebRTC mDNS-only stub (9D.5): `lumen-js/src/webrtc_stub.rs` — `RTCPeerConnection` + `RTCSessionDescription` + `RTCIceCandidate`. `onicecandidate` фаерит один UUID.local кандидат (mDNS, без утечки реального IP), затем null (end-of-gathering). `createOffer/createAnswer` → `Promise<RTCSessionDescription>`, `setLocalDescription/setRemoteDescription/addIceCandidate` → stub-Promise. `addEventListener/removeEventListener/dispatchEvent` поддержаны. 17 тестов, clippy чист. lumen-js: 748.
