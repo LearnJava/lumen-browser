@@ -13,6 +13,7 @@
 //! (`None` и `Some("")` — один namespace) и реализуют тот же trait.
 
 pub mod autofill;
+pub mod omnibox_aliases;
 pub mod bfcache;
 pub mod bookmarks;
 pub mod broadcast_channels;
@@ -91,3 +92,4 @@ pub use tab_sessions::{SessionSnapshot, TabSession, TabSessions};
 pub use tab_snapshot::{HibernatedTabData, TabSnapshotStore};
 pub use web_manifest::{WebManifest, WebManifests};
 pub use workspaces::{Workspace, Workspaces};
+pub use omnibox_aliases::{OmniboxAlias, OmniboxAliases};
