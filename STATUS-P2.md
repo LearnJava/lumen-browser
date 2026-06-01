@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Workspaces UI (7A.3)**  branch: p2-workspaces-ui
+Next step: workspace_panel.rs — WorkspacePanel struct + build_panel + hit_test  `crates/shell/src/panels/workspace_panel.rs`
 
 ---
 

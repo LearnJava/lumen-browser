@@ -307,6 +307,9 @@ fn run_window_mode(
         vim_mode: None,
         vertical_tabs: panels::vertical_tabs::VerticalTabsPanel::new(),
         tree_tabs: panels::tree_tabs::TreeTabsPanel::new(),
+        workspace_panel: panels::workspace_panel::WorkspacePanel::new(),
+        workspaces: lumen_storage::Workspaces::open_in_memory()
+            .expect("workspaces in-memory"),
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1260,6 +1263,8 @@ enum KeyCommand {
     ToggleVerticalTabs,
     /// Показать/скрыть tree-style панель вкладок (Ctrl+Shift+B).
     ToggleTreeTabs,
+    /// Показать/скрыть панель воркспейсов (Ctrl+Shift+W).
+    ToggleWorkspaces,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1322,6 +1327,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+B — toggle tree-style tab sidebar
         KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleTreeTabs)
+        }
+        // Ctrl+Shift+W — toggle workspace switcher bar
+        KeyCode::KeyW if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleWorkspaces)
         }
         _ => None,
     }
@@ -2798,6 +2807,15 @@ struct Lumen {
     /// `panels::tree_tabs::build_panel`. Currently initialised alongside
     /// `vertical_tabs`; future toggle key will switch between flat/tree views.
     tree_tabs: panels::tree_tabs::TreeTabsPanel,
+    /// Workspace switcher panel state (7A.3).
+    ///
+    /// Bottom-docked 32px bar showing named workspaces as coloured chips.
+    /// `Ctrl+Shift+W` toggles.  When visible, `viewport_height_css()` subtracts
+    /// `SWITCHER_HEIGHT` so the page layout does not overlap the bar.
+    workspace_panel: panels::workspace_panel::WorkspacePanel,
+    /// Persistent workspace storage — SQLite in-memory during testing; wired to
+    /// a disk path in production via `Workspaces::open(path)`.
+    workspaces: lumen_storage::Workspaces,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -3776,6 +3794,62 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // Workspace switcher bar (7A.3): clicks in the bottom bar area.
+                    if self.workspace_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css()
+                            + tabs::strip::TAB_BAR_HEIGHT
+                            + panels::workspace_panel::SWITCHER_HEIGHT;
+                        if let Some(hit) = panels::workspace_panel::hit_test(
+                            &self.workspace_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        ) {
+                            match hit {
+                                panels::workspace_panel::WorkspaceHit::SwitchTo(id) => {
+                                    self.workspace_panel.set_active(Some(id));
+                                    self.request_redraw();
+                                }
+                                panels::workspace_panel::WorkspaceHit::DeleteWorkspace(id) => {
+                                    // Never delete the last workspace — require at least one.
+                                    if self.workspace_panel.workspaces.len() > 1 {
+                                        let _ = self.workspaces.delete(id);
+                                        self.refresh_workspaces();
+                                        // If the deleted workspace was active, switch to first.
+                                        if self.workspace_panel.active_id == Some(id) {
+                                            let first_id = self
+                                                .workspace_panel
+                                                .workspaces
+                                                .first()
+                                                .map(|w| w.id);
+                                            self.workspace_panel.set_active(first_id);
+                                        }
+                                        self.request_redraw();
+                                    }
+                                }
+                                panels::workspace_panel::WorkspaceHit::NewWorkspace => {
+                                    let n = self.workspace_panel.workspaces.len() + 1;
+                                    let name = format!("Workspace {n}");
+                                    let now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs() as i64)
+                                        .unwrap_or(0);
+                                    if let Ok(id) =
+                                        self.workspaces.create(&name, "#6482dc", "", None, now)
+                                    {
+                                        self.refresh_workspaces();
+                                        self.workspace_panel.set_active(Some(id));
+                                    }
+                                    self.request_redraw();
+                                }
+                                panels::workspace_panel::WorkspaceHit::Empty => {}
+                            }
+                            return;
+                        }
+                    }
+
                     // Split-view focus routing: clicking in the right pane
                     // transfers focus there; clicking in the left pane transfers
                     // focus back. Right-pane clicks do not navigate (frozen pane).
@@ -4230,6 +4304,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         win_h,
                     );
                     overlay_buf.append(&mut tt_cmds);
+                }
+
+                // Workspace switcher bar (7A.3): bottom-docked horizontal strip.
+                // Rendered before the tab bar so tab bar always draws on top.
+                if self.workspace_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    // Full window height including tab bar — bar is docked at bottom.
+                    let win_h = self.viewport_height_css()
+                        + tabs::strip::TAB_BAR_HEIGHT
+                        + panels::workspace_panel::SWITCHER_HEIGHT;
+                    let mut ws_cmds = panels::workspace_panel::build_panel(
+                        &self.workspace_panel,
+                        win_w,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut ws_cmds);
                 }
 
                 // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
@@ -4791,6 +4881,12 @@ impl Lumen {
                 self.relayout();
                 self.request_redraw();
             }
+            KeyCommand::ToggleWorkspaces => {
+                self.workspace_panel.toggle();
+                // Viewport height changes — re-layout so content doesn't hide under bar.
+                self.relayout();
+                self.request_redraw();
+            }
         }
     }
 
@@ -5271,7 +5367,12 @@ impl Lumen {
             }
             _ => 720.0,
         };
-        (total - tabs::strip::TAB_BAR_HEIGHT).max(0.0)
+        let ws_bar = if self.workspace_panel.visible {
+            panels::workspace_panel::SWITCHER_HEIGHT
+        } else {
+            0.0
+        };
+        (total - tabs::strip::TAB_BAR_HEIGHT - ws_bar).max(0.0)
     }
 
     /// CSS px ширина viewport-а — полная ширина окна, нужна scrollbar-overlay-у
@@ -5300,6 +5401,28 @@ impl Lumen {
             0.0
         };
         (self.viewport_width_css() - panel_offset).max(0.0)
+    }
+
+    /// Reload workspace list from SQLite storage into the panel cache.
+    ///
+    /// Call this after every `Workspaces::create`, `rename`, or `delete` so
+    /// the panel renders up-to-date chips on the next redraw.
+    fn refresh_workspaces(&mut self) {
+        let entries = self
+            .workspaces
+            .list_all()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|w| {
+                let accent = panels::workspace_panel::parse_ws_color(&w.color);
+                panels::workspace_panel::WsEntry {
+                    id: w.id,
+                    name: w.name,
+                    accent,
+                }
+            })
+            .collect();
+        self.workspace_panel.set_workspaces(entries);
     }
 
     /// Максимальный валидный scroll_y: ничего не скроллим, если контент

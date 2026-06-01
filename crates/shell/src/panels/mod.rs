@@ -4,3 +4,4 @@
 pub mod split_view;
 pub mod tree_tabs;
 pub mod vertical_tabs;
+pub mod workspace_panel;
