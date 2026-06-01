@@ -1,4 +1,5 @@
 pub mod audio_bindings;
+pub mod audio_element;
 pub mod battery_bindings;
 pub mod dom;
 pub mod geolocation;
@@ -196,6 +197,11 @@ impl QuickJsRuntime {
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
             if let Err(e) = video_bindings::install_video_bindings(&ctx) {
                 eprintln!("Video bindings init failed: {}", e);
+            }
+
+            // Install HTMLAudioElement stubs (HTML spec §4.8.10) — after DOM/video.
+            if let Err(e) = audio_element::install_audio_element_bindings(&ctx) {
+                eprintln!("Audio element bindings init failed: {}", e);
             }
 
             // Install Geolocation API stub (W3C Geolocation L2, §7.7) — after DOM/navigator.

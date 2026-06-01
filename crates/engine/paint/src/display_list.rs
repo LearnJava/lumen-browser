@@ -2877,6 +2877,15 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             });
             emit_outline(b, out);
         }
+        BoxKind::Audio { controls, .. } => {
+            if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
+                return;
+            }
+            // Phase 0: render a grey bar representing the audio controls UI.
+            let grey = Color { r: 200, g: 200, b: 200, a: 255 };
+            out.push(DisplayCommand::FillRect { rect: b.rect, color: grey });
+            emit_outline(b, out);
+        }
         // SVG elements: second-pass self-paint not needed (handled in walk).
         BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => {}
     }
@@ -3366,6 +3375,15 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
+            emit_outline(b, out);
+        }
+        BoxKind::Audio { controls, .. } => {
+            if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
+                return;
+            }
+            // Phase 0: grey bar for audio controls UI.
+            let grey = Color { r: 200, g: 200, b: 200, a: 255 };
+            out.push(DisplayCommand::FillRect { rect: b.rect, color: grey });
             emit_outline(b, out);
         }
         BoxKind::SvgRoot { .. } => {
@@ -4759,6 +4777,69 @@ mod tests {
         if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
             assert!((rect.width - 640.0).abs() < 0.1, "width={}", rect.width);
             assert!((rect.height - 360.0).abs() < 0.1, "height={}", rect.height);
+        }
+    }
+
+    // ── Тесты <audio> ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn audio_without_controls_emits_nothing() {
+        // <audio> without controls → 0×0 box → no FillRect emitted.
+        let dl = build(r#"<audio src="song.mp3"></audio>"#, "");
+        let fills: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { .. }))
+            .collect();
+        assert!(
+            fills.is_empty(),
+            "audio without controls should emit no FillRect, got {} commands",
+            fills.len()
+        );
+    }
+
+    #[test]
+    fn audio_with_controls_emits_fill_rect() {
+        // <audio controls> → 40px grey bar → at least one FillRect.
+        let dl = build(r#"<audio src="song.mp3" controls></audio>"#, "");
+        let fills: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { .. }))
+            .collect();
+        assert!(!fills.is_empty(), "audio with controls should emit a FillRect");
+    }
+
+    #[test]
+    fn audio_with_controls_ua_default_height_40() {
+        // UA default for <audio controls>: height = 40px.
+        let dl = build(r#"<audio src="song.mp3" controls></audio>"#, "");
+        let fill = dl
+            .iter()
+            .find(|c| matches!(c, DisplayCommand::FillRect { .. }));
+        if let Some(DisplayCommand::FillRect { rect, .. }) = fill {
+            assert!(
+                (rect.height - 40.0).abs() < 0.1,
+                "audio controls height should be 40px, got {}",
+                rect.height
+            );
+        }
+    }
+
+    #[test]
+    fn audio_with_controls_css_height_override() {
+        // Explicit CSS height overrides UA default.
+        let dl = build(
+            r#"<audio src="song.mp3" controls></audio>"#,
+            "audio { height: 60px; }",
+        );
+        let fill = dl
+            .iter()
+            .find(|c| matches!(c, DisplayCommand::FillRect { .. }));
+        if let Some(DisplayCommand::FillRect { rect, .. }) = fill {
+            assert!(
+                (rect.height - 60.0).abs() < 0.1,
+                "CSS height should override UA default, got {}",
+                rect.height
+            );
         }
     }
 

@@ -48,6 +48,14 @@ fn is_video_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// HTML-имя `<audio>` для распознавания media replaced-боксов в layout.
+fn is_audio_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "audio"
+    )
+}
+
 /// HTML-имя `<picture>` — обёртка над `<source>`-кандидатами и одним
 /// `<img>`-fallback-ом. Сам по себе пиктур ничего не рендерит, его
 /// единственная роль — переадресовать source-selection на inner `<img>`.
@@ -1061,6 +1069,17 @@ pub enum BoxKind {
         /// Poster image URL (`poster` attribute), may be empty.
         poster: String,
     },
+    /// Replaced element: HTML `<audio>` element (HTML spec §4.8.10).
+    ///
+    /// Phase 0: no audio playback. Without `controls` attribute: 0×0 (invisible).
+    /// With `controls` attribute: full-width × 40px grey bar (UA default per spec).
+    /// `src` is the primary audio source URL.
+    Audio {
+        /// Primary audio source URL (`src` attribute), may be empty.
+        src: String,
+        /// Whether the `controls` attribute is present (shows a 40px control bar).
+        controls: bool,
+    },
     /// Replaced element: HTML form control (`<input>`, `<button>`, `<select>`,
     /// `<textarea>`). Phase 0: block-level replaced. Размеры берутся из
     /// `style.width`/`style.height` (UA defaults из `apply_ua_form_controls`).
@@ -1859,6 +1878,21 @@ fn build_box(
                     style.height = Some(Length::Px(150.0));
                 }
                 BoxKind::Video { src, poster }
+            } else if is_audio_element(doc, id) {
+                let node = doc.get(id);
+                let src = node.get_attr("src").unwrap_or("").to_string();
+                let controls = node.get_attr("controls").is_some();
+                // HTML spec §4.8.10: without controls, <audio> has no box (0×0).
+                // With controls, UA must render a control interface; we use 40px height.
+                if controls {
+                    if style.height.is_none() {
+                        style.height = Some(Length::Px(40.0));
+                    }
+                } else {
+                    style.width = Some(Length::Px(0.0));
+                    style.height = Some(Length::Px(0.0));
+                }
+                BoxKind::Audio { src, controls }
             } else if is_form_control_element(doc, id) {
                 let kind = {
                     let node = doc.get(id);
@@ -2687,7 +2721,7 @@ fn lay_out(
     let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
-        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::FormControl { .. } => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Audio { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(
