@@ -5,6 +5,7 @@ pub mod navigator_bindings;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod webgl_bindings;
+pub mod worker;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -62,6 +63,15 @@ pub struct QuickJsRuntime {
     /// Maps NodeId index (u32) → CSS property name → resolved CSS value string.
     /// Read by `_lumen_get_computed_style(nid, prop)` from JS (`getComputedStyle`).
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    /// Live Web Worker threads spawned by `new Worker(url)` on this page.
+    /// Maps worker ID → `WorkerHandle` (sender channel + join handle).
+    /// Shared with the native bindings installed by `worker::install_worker_bindings`.
+    workers: worker::WorkerRegistry,
+    /// Outbound message queue: (worker_id, json) pairs posted by worker threads.
+    /// Drained by `pump_workers()` and delivered to the matching JS `Worker` instance.
+    worker_messages: worker::WorkerMessageQueue,
+    /// Monotonically increasing counter used to assign unique IDs to new workers.
+    worker_next_id: Arc<Mutex<u32>>,
 }
 
 struct Inner {
@@ -92,6 +102,9 @@ impl QuickJsRuntime {
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
+            workers: Arc::new(Mutex::new(HashMap::new())),
+            worker_messages: Arc::new(Mutex::new(Vec::new())),
+            worker_next_id: Arc::new(Mutex::new(1)),
         })
     }
 
@@ -189,8 +202,43 @@ impl QuickJsRuntime {
                 eprintln!("Surface API protection init failed: {}", e);
             }
 
+            // Install Web Worker bindings (WHATWG Web Workers §4) — after DOM so
+            // TextDecoder and _object_url_store are available for blob-URL resolution.
+            if let Err(e) = worker::install_worker_bindings(
+                &ctx,
+                &self.workers,
+                &self.worker_messages,
+                &self.worker_next_id,
+            ) {
+                eprintln!("Worker bindings init failed: {}", e);
+            }
+
             Ok(())
         })
+    }
+
+    /// Deliver messages posted by worker threads to their `Worker` JS instances.
+    ///
+    /// Drains the outbound worker message queue and calls
+    /// `_lumen_deliver_worker_messages(msgs)` in the main JS context so that
+    /// `onmessage` / `addEventListener('message', fn)` handlers fire.
+    ///
+    /// Shell must call this on every event-loop tick (alongside `tick_timers()`)
+    /// so that worker replies are delivered promptly.
+    pub fn pump_workers(&self) {
+        let messages = worker::drain_messages(&self.worker_messages);
+        if messages.is_empty() {
+            return;
+        }
+        let json = build_worker_messages_json(&messages);
+        let script = format!(
+            "if(typeof _lumen_deliver_worker_messages==='function')\
+             _lumen_deliver_worker_messages({json})"
+        );
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>(script.as_str()).ok();
+        });
     }
 
     /// Consume any navigation request that JS placed via `location.href =` etc.
@@ -394,6 +442,18 @@ impl JsRuntime for QuickJsRuntime {
         // BUG-023: QuickJS heap snapshots not yet implemented (ADR-008 T2→T3 restore).
         Err(JsError::Runtime("QuickJS resume not implemented".into()))
     }
+}
+
+/// Build a JSON array of `{ id, json }` objects from the drained worker message list.
+///
+/// Each element is `{"id":<worker_id>,"json":<raw_json_value>}` so that
+/// `_lumen_deliver_worker_messages` can parse the payload without double-JSON-encoding.
+fn build_worker_messages_json(messages: &[(u32, String)]) -> String {
+    let items: Vec<String> = messages
+        .iter()
+        .map(|(id, json)| format!("{{\"id\":{id},\"json\":{json}}}"))
+        .collect();
+    format!("[{}]", items.join(","))
 }
 
 fn rq_err(ctx: &Ctx<'_>, err: rquickjs::Error) -> JsError {
