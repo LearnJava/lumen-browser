@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Tree-style tabs (7A.2)  branch: p2-tree-tabs
+Next step: Add opener_id to TabEntry, create tabs/tree.rs + panels/tree_tabs.rs  crates/shell/src/tabs/strip.rs:52
 
 ---
 

@@ -61,6 +61,13 @@ pub struct TabEntry {
     /// `Hibernated` — grey badge (disk): DOM snapshot on disk, minimal RAM.
     /// Other tiers — no badge rendered.
     pub tab_state: TabState,
+    /// ID of the tab that opened this one, or `None` for root (top-level) tabs.
+    ///
+    /// Forms the parent-child tree used by tree-style tabs (7A.2).
+    /// Depth is computed by walking this chain upward. Cycles are impossible
+    /// because `opener_id` is set once at creation and always points to an
+    /// already-existing tab.
+    pub opener_id: Option<usize>,
 }
 
 /// State of the tab strip (tab list + active index).
@@ -81,6 +88,7 @@ impl TabStrip {
                 id: 0,
                 title: "Новая вкладка".to_owned(),
                 tab_state: TabState::Active,
+                opener_id: None,
             }],
             active: 0,
             next_id: 1,
@@ -100,6 +108,23 @@ impl TabStrip {
             id,
             title: "Новая вкладка".to_owned(),
             tab_state: TabState::Active,
+            opener_id: None,
+        });
+        self.tabs.len() - 1
+    }
+
+    /// Append a new blank child tab opened by the tab with `opener_id`.
+    ///
+    /// Sets `TabEntry::opener_id` so tree-style tab rendering can indent and
+    /// group this tab under its parent. Returns the new tab's strip index.
+    pub fn push_with_opener(&mut self, opener_id: usize) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.tabs.push(TabEntry {
+            id,
+            title: "Новая вкладка".to_owned(),
+            tab_state: TabState::Active,
+            opener_id: Some(opener_id),
         });
         self.tabs.len() - 1
     }

@@ -305,6 +305,7 @@ fn run_window_mode(
         split_view: None,
         vim_mode: None,
         vertical_tabs: panels::vertical_tabs::VerticalTabsPanel::new(),
+        tree_tabs: panels::tree_tabs::TreeTabsPanel::new(),
         gesture: input::gesture::GestureRecognizer::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
@@ -1252,6 +1253,8 @@ enum KeyCommand {
     VimModeToggle,
     /// Показать/скрыть вертикальную панель вкладок (Ctrl+B).
     ToggleVerticalTabs,
+    /// Показать/скрыть tree-style панель вкладок (Ctrl+Shift+B).
+    ToggleTreeTabs,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1311,6 +1314,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         }
         // Ctrl+B — toggle vertical tab sidebar
         KeyCode::KeyB if ctrl_only => Some(KeyCommand::ToggleVerticalTabs),
+        // Ctrl+Shift+B — toggle tree-style tab sidebar
+        KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleTreeTabs)
+        }
         _ => None,
     }
 }
@@ -2780,6 +2787,12 @@ struct Lumen {
     /// When visible, the left `PANEL_WIDTH` CSS px of the window are occupied by
     /// the tab list and the page viewport shifts right accordingly.
     vertical_tabs: panels::vertical_tabs::VerticalTabsPanel,
+    /// Tree-style tab panel state (7A.2): collapse/expand subtrees.
+    ///
+    /// Stores which subtrees are collapsed. Rendering delegate: see
+    /// `panels::tree_tabs::build_panel`. Currently initialised alongside
+    /// `vertical_tabs`; future toggle key will switch between flat/tree views.
+    tree_tabs: panels::tree_tabs::TreeTabsPanel,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -3702,6 +3715,47 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // Tree-style tab panel: intercept clicks in x < PANEL_WIDTH area.
+                    if self.tree_tabs.visible
+                        && x_css < panels::tree_tabs::PANEL_WIDTH
+                    {
+                        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                        match panels::tree_tabs::hit_test(
+                            &self.tab_strip,
+                            &self.tree_tabs,
+                            x_css,
+                            y_css,
+                            tabs::strip::TAB_BAR_HEIGHT,
+                            win_h,
+                        ) {
+                            Some(panels::tree_tabs::TreeTabHit::Tab(idx)) => {
+                                self.switch_tab(idx);
+                            }
+                            Some(panels::tree_tabs::TreeTabHit::Close(idx)) => {
+                                self.close_tab(idx, event_loop);
+                            }
+                            Some(panels::tree_tabs::TreeTabHit::Arrow(tab_id)) => {
+                                let expanding = self.tree_tabs.collapsed.contains(&tab_id);
+                                self.tree_tabs.toggle_collapsed(tab_id);
+                                if expanding {
+                                    // Purge stale collapse entries for tabs that were closed
+                                    // while their parent subtree was hidden.
+                                    let subtree = tabs::tree::subtree_ids(
+                                        &self.tab_strip.tabs, tab_id,
+                                    );
+                                    let valid: std::collections::HashSet<usize> =
+                                        self.tab_strip.tabs.iter().map(|t| t.id).collect();
+                                    self.tree_tabs.collapsed.retain(|id| {
+                                        valid.contains(id) || !subtree.contains(id)
+                                    });
+                                }
+                                self.request_redraw();
+                            }
+                            Some(panels::tree_tabs::TreeTabHit::Empty) | None => {}
+                        }
+                        return;
+                    }
+
                     // Split-view focus routing: clicking in the right pane
                     // transfers focus there; clicking in the left pane transfers
                     // focus back. Right-pane clicks do not navigate (frozen pane).
@@ -4144,6 +4198,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut vt_cmds);
                 }
 
+                // Tree-style tab panel (7A.2): same slot as vertical_tabs, but with
+                // parent-child indentation and collapse/expand arrows.
+                // Toggle via Ctrl+Shift+B; occupies the same PANEL_WIDTH as vertical_tabs.
+                if self.tree_tabs.visible {
+                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let mut tt_cmds = panels::tree_tabs::build_panel(
+                        &self.tab_strip,
+                        &self.tree_tabs,
+                        tabs::strip::TAB_BAR_HEIGHT,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut tt_cmds);
+                }
+
                 // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
                 // Rendered last → always on top of all other overlays.
                 {
@@ -4195,6 +4263,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             Vec::with_capacity(base.len() + 2);
                         let page_x_offset = if self.vertical_tabs.visible {
                             panels::vertical_tabs::PANEL_WIDTH
+                        } else if self.tree_tabs.visible {
+                            panels::tree_tabs::PANEL_WIDTH
                         } else {
                             0.0
                         };
@@ -4236,6 +4306,8 @@ impl Lumen {
     fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
         let panel_x_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
+        } else if self.tree_tabs.visible {
+            panels::tree_tabs::PANEL_WIDTH
         } else {
             0.0
         };
@@ -4304,10 +4376,12 @@ impl Lumen {
 
         // ── Form control + link click ────────────────────
         // Single hit test shared by form dispatch and link navigation.
-        // When the vertical tabs panel is visible, page content is shifted right
-        // by PANEL_WIDTH, so we subtract that offset to convert to page coords.
+        // When the vertical/tree tabs panel is visible, page content is shifted
+        // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
         let panel_x_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
+        } else if self.tree_tabs.visible {
+            panels::tree_tabs::PANEL_WIDTH
         } else {
             0.0
         };
@@ -4688,6 +4762,12 @@ impl Lumen {
             KeyCommand::ToggleVerticalTabs => {
                 self.vertical_tabs.toggle();
                 // Viewport width changes — re-layout the current page.
+                self.relayout();
+                self.request_redraw();
+            }
+            KeyCommand::ToggleTreeTabs => {
+                self.tree_tabs.toggle();
+                // Viewport width changes when switching to/from tree view.
                 self.relayout();
                 self.request_redraw();
             }
@@ -5170,6 +5250,8 @@ impl Lumen {
     fn page_content_width_css(&self) -> f32 {
         let panel_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
+        } else if self.tree_tabs.visible {
+            panels::tree_tabs::PANEL_WIDTH
         } else {
             0.0
         };
@@ -5796,7 +5878,14 @@ impl Lumen {
 
     /// Open a new blank tab.
     fn open_new_tab(&mut self) {
-        let new_idx = self.tab_strip.push_blank();
+        // In tree-style tab mode, new tabs become children of the active tab,
+        // building the parent-child tree automatically.
+        let new_idx = if self.tree_tabs.visible {
+            let opener_id = self.tab_strip.tabs[self.tab_strip.active].id;
+            self.tab_strip.push_with_opener(opener_id)
+        } else {
+            self.tab_strip.push_blank()
+        };
         let new_id = self.tab_strip.tabs[new_idx].id;
         // Save current page into bg_tabs under the old active tab's id.
         let old_active = self.tab_strip.active;
