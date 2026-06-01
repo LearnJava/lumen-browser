@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(nothing in progress)_
+**Tab snapshot restore (10J)** — branch: `p2-tab-snapshot-restore`
+Next step: `crates/storage/src/tab_snapshot.rs:1` — TabSnapshotStore + HibernatedTabData
 
 ---
 
