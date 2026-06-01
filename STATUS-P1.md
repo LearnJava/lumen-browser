@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**`window.open()` popup handling** — branch: p1-window-open
+Next step: добавить `PopupRequest` в `dom.rs`, `window_open_requests` в `QuickJsRuntime`, биндинг `_lumen_window_open`, шим `window.open()` + `window.opener`; дренаж в `shell/src/main.rs:about_to_wait`
 
 ---
 

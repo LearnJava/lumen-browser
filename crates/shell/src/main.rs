@@ -894,6 +894,13 @@ trait PersistentJs {
     /// the supplied node IDs.  Called by the shell's idle GC tick.
     #[allow(dead_code)]
     fn gc_collect(&self, dead_nids: &[u32]);
+    /// Drain popup window requests queued by JS `window.open(...)`.
+    ///
+    /// Returns `(url, target, width_px, height_px)` tuples. Shell opens a new
+    /// tab navigated to `url` for each entry. Returns an empty vec between
+    /// `window.open()` calls.
+    #[allow(dead_code)]
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32)>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -1006,6 +1013,13 @@ impl PersistentJs for QuickPersistentJs {
         self.eval_js(&format!(
             "if(typeof _lumen_gc_collect==='function')_lumen_gc_collect([{arr}]);"
         ));
+    }
+    fn take_window_open_requests(&self) -> Vec<(String, String, u32, u32)> {
+        self.rt
+            .take_window_open_requests()
+            .into_iter()
+            .map(|r| (r.url, r.target, r.width, r.height))
+            .collect()
     }
 }
 
@@ -3769,6 +3783,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(js) = &self.js_ctx {
             for (title, body) in js.take_notification_requests() {
                 notification::show_os_notification(&title, &body);
+            }
+        }
+
+        // window.open() popup requests: each entry opens a new tab and navigates it
+        // to the requested URL.  Executed after the page render so the current tab
+        // stays visible while the new tab loads.
+        if let Some(js) = &self.js_ctx {
+            let popups = js.take_window_open_requests();
+            for (url, _target, _width, _height) in popups {
+                self.open_new_tab();
+                let url = if url.is_empty() {
+                    "about:blank".to_owned()
+                } else {
+                    url
+                };
+                self.navigate_to(PageSource::Url(url));
             }
         }
 
