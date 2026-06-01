@@ -130,6 +130,9 @@ pub enum NavigateRequest {
 /// `viewport_size` — shared `[width, height]` updated by the shell on resize.
 /// `lazy_img_requests` — queue written by `_lumen_request_lazy_image_load`; drained by shell.
 /// `cookie_jar` — optional cookie store for `document.cookie` get/set.
+/// `deterministic_seed` — when `Some(seed)`: freeze `Date.now()` at 0 and override
+///   `Math.random` with a seeded xorshift32 PRNG so output is reproducible (8F).
+///   The seed is typically derived from the URL hash via `shell::deterministic::seed_from_url`.
 /// Pass `None` for providers in sandboxed contexts or tests.
 #[allow(clippy::too_many_arguments)]
 pub fn install_dom_api(
@@ -153,12 +156,27 @@ pub fn install_dom_api(
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    deterministic_seed: Option<u64>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, deterministic_seed)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
     ctx.eval::<(), _>(WEB_API_SHIM)?;
+    // In deterministic mode (8F): override Math.random with a seeded xorshift32 PRNG
+    // and freeze Date.now() at 0 (QuickJS native Date.now() uses the system clock).
+    // Must run AFTER WEB_API_SHIM so Date and Math are fully set up.
+    if let Some(seed) = deterministic_seed {
+        let seed32 = u32::try_from(seed & 0xffff_ffff).unwrap_or(1);
+        let seed32 = if seed32 == 0 { 1 } else { seed32 };
+        let js = format!(
+            "(function(){{var s={seed32};\
+             Math.random=function(){{s^=s<<13;s^=s>>>17;s^=s<<5;return (s>>>0)/4294967296;}};\
+             Date.now=function(){{return 0;}};\
+             }})()"
+        );
+        ctx.eval::<(), _>(js.as_str())?;
+    }
     Ok(())
 }
 
@@ -200,6 +218,7 @@ fn install_primitives(
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    deterministic_seed: Option<u64>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -1093,11 +1112,18 @@ fn install_primitives(
     // ── performance.now() — high-resolution timestamp ────────────────────────
     // Returns milliseconds since Unix epoch as f64; JS shim subtracts
     // the time-origin captured at install_dom_api time to give DOMHighResTimeStamp.
-    reg!("_lumen_now_ms", || -> f64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64() * 1000.0)
-            .unwrap_or(0.0)
+    // In deterministic mode (8F) always returns 0 so Date.now()/performance.now()
+    // are frozen at the epoch, making rendering output independent of wall-clock time.
+    let det_time = deterministic_seed.is_some();
+    reg!("_lumen_now_ms", move || -> f64 {
+        if det_time {
+            0.0
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0)
+        }
     });
 
     // ── timer wakeup notification ─────────────────────────────────────────────
@@ -14297,5 +14323,71 @@ mod tests {
         // nid=3 listener must still be there.
         let has3 = rt.eval("'3:focus' in _lumen_listeners").unwrap();
         assert_eq!(has3, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── deterministic render mode (8F) tests ─────────────────────────────────
+
+    fn runtime_deterministic(doc: Arc<Mutex<Document>>, url: &str) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.set_deterministic_mode();
+        rt.install_dom(doc, url, None, None, None, None, None).unwrap();
+        rt
+    }
+
+    #[test]
+    fn deterministic_date_now_returns_zero() {
+        let rt = runtime_deterministic(make_doc(), "http://x.com/#test");
+        let v = rt.eval("Date.now()").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(0.0), "Date.now() must be 0 in deterministic mode");
+    }
+
+    #[test]
+    fn deterministic_performance_now_returns_zero() {
+        let rt = runtime_deterministic(make_doc(), "http://x.com/");
+        let v = rt.eval("performance.now()").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(0.0), "performance.now() must be 0 in deterministic mode");
+    }
+
+    #[test]
+    fn deterministic_math_random_reproducible() {
+        // Two runtimes with same URL fragment must produce identical random sequences.
+        let rt_a = runtime_deterministic(make_doc(), "http://x.com/#seed42");
+        let rt_b = runtime_deterministic(make_doc(), "http://y.org/other#seed42");
+        let seq_a: Vec<_> = (0..5).map(|_| rt_a.eval("Math.random()").unwrap()).collect();
+        let seq_b: Vec<_> = (0..5).map(|_| rt_b.eval("Math.random()").unwrap()).collect();
+        assert_eq!(seq_a, seq_b, "same fragment → same random sequence");
+    }
+
+    #[test]
+    fn deterministic_math_random_different_seeds() {
+        // Different fragments must produce different sequences.
+        let rt_a = runtime_deterministic(make_doc(), "http://x.com/#foo");
+        let rt_b = runtime_deterministic(make_doc(), "http://x.com/#bar");
+        let r_a = rt_a.eval("Math.random()").unwrap();
+        let r_b = rt_b.eval("Math.random()").unwrap();
+        assert_ne!(r_a, r_b, "different fragments → different random values");
+    }
+
+    #[test]
+    fn deterministic_math_random_in_range() {
+        let rt = runtime_deterministic(make_doc(), "http://x.com/#test");
+        for _ in 0..20 {
+            if let lumen_core::JsValue::Number(v) = rt.eval("Math.random()").unwrap() {
+                assert!((0.0..1.0).contains(&v), "Math.random() must be in [0, 1): got {v}");
+            } else {
+                panic!("Math.random() must return a number");
+            }
+        }
+    }
+
+    #[test]
+    fn normal_mode_date_now_nonzero() {
+        // In non-deterministic mode Date.now() must return a positive value (wall clock).
+        let rt = runtime_with_dom(make_doc());
+        if let lumen_core::JsValue::Number(v) = rt.eval("Date.now()").unwrap() {
+            assert!(v > 0.0, "Date.now() must be positive in normal mode");
+        } else {
+            panic!("Date.now() must return a number");
+        }
     }
 }

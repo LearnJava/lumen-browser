@@ -23,6 +23,21 @@ use std::sync::{
 pub use dom::NavigateRequest;
 pub use lumen_core::WebStorage;
 
+/// Compute a deterministic u64 seed from a URL for deterministic render mode (8F).
+///
+/// Uses the URL fragment (`#...`) if present; otherwise the full URL string.
+/// FNV-1a 64-bit hash guarantees the same seed across platforms and Rust versions.
+/// Result is guaranteed non-zero (xorshift32 must not start at 0).
+pub fn deterministic_seed_from_url(url: &str) -> u64 {
+    let src = if let Some(pos) = url.rfind('#') { &url[pos + 1..] } else { url };
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in src.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    if h == 0 { 1 } else { h }
+}
+
 /// QuickJS-based JS runtime via `rquickjs`.
 ///
 /// QuickJS is single-threaded; `Mutex` provides the exclusive access needed
@@ -85,6 +100,10 @@ pub struct QuickJsRuntime {
     /// Pending OS notification requests queued by `new Notification(...)` in JS.
     /// Drained by the shell in `about_to_wait` via `take_notification_requests()`.
     pending_notifications: notifications_bindings::NotificationQueue,
+    /// Deterministic render mode (8F): when `true`, `Date.now()` is frozen at 0
+    /// and `Math.random` is replaced with a seeded PRNG derived from the page URL.
+    /// Set via `set_deterministic_mode()` before calling `install_dom`.
+    deterministic: AtomicBool,
 }
 
 struct Inner {
@@ -120,6 +139,7 @@ impl QuickJsRuntime {
             worker_next_id: Arc::new(Mutex::new(1)),
             cookie_banner_dismiss: AtomicBool::new(true),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
+            deterministic: AtomicBool::new(false),
         })
     }
 
@@ -156,6 +176,12 @@ impl QuickJsRuntime {
     ) -> JsResult<()> {
         let ls = ls_store.unwrap_or_else(|| Arc::new(Mutex::new(WebStorage::default())));
         let ss = Arc::new(Mutex::new(WebStorage::default()));
+        // Compute deterministic seed from URL hash when deterministic mode is active (8F).
+        let deterministic_seed = if self.deterministic.load(Ordering::Relaxed) {
+            Some(crate::deterministic_seed_from_url(page_url))
+        } else {
+            None
+        };
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
             // Install WebGL fingerprint bindings (ADR-007 Layer 4).
@@ -194,6 +220,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.scroll_states),
                 Arc::clone(&self.pending_scrolls),
                 Arc::clone(&self.computed_styles),
+                deterministic_seed,
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
@@ -268,6 +295,15 @@ impl QuickJsRuntime {
     /// `cookie_banner_dismiss` preference stored in settings.
     pub fn set_cookie_banner_dismiss(&self, enabled: bool) {
         self.cookie_banner_dismiss.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Enable deterministic render mode (8F).
+    ///
+    /// Must be called before `install_dom`. When set, `Date.now()` is frozen at 0
+    /// and `Math.random` is replaced with a seeded xorshift32 PRNG derived from the
+    /// page URL hash, making JS rendering output independent of wall-clock time.
+    pub fn set_deterministic_mode(&self) {
+        self.deterministic.store(true, Ordering::Relaxed);
     }
 
     /// Deliver messages posted by worker threads to their `Worker` JS instances.
