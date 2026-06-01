@@ -6,8 +6,7 @@
 
 ## In progress
 
-**DOM inspector panel (7E.1)**  branch: `p2-dom-inspector`
-Next step: merge — `crates/shell/src/devtools/inspector.rs`
+_(нет)_
 
 ---
 
@@ -34,6 +33,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-dom-inspector** ✅ 2026-06-02 — DOM inspector panel (7E.1). `DomInspectorPanel` в `shell/src/devtools/inspector.rs`: `Ctrl+Shift+I` toggle (F12 занят JS-консолью). Hover → `BoxModelOverlay` (margin/border/padding/content) подсветка бокса под курсором; click → «пинит» узел и показывает DOM-лейбл (`div#id.class`), `NodeId` и карту computed-style в правой 300px панели. `box_model_rects()` восстанавливает 4 rect из border-box `lb.rect` + resolved padding/border/margin. `build_box_overlay()` эмитит в page-слой (внутри page-transform → корректный скролл + pixel-align с отрисованным боксом); `build_inspector_panel()` — viewport-locked side panel со scroll. Hover/click через общий `Lumen::page_point()` (согласован с `handle_click_at`). 15 unit-тестов; итого lumen-shell: 647 тестов.
 - **p2-avif-decoder** ✅ 2026-06-01 — AVIF image decoder (lumen-image #13). `avif::is_avif(bytes)` — чистый Rust ISOBMFF ftyp-детект (major brand avif/avis). `avif::decode_avif(bytes) → Result<(u32,u32,Vec<u8>), AvifError>` — RGBA8 через `image = "0.25"` feature "avif" (cmake + nasm opt-in); без feature — graceful AvifError::Decode. `AvifImageDecoder: lumen_core::ext::ImageDecoder`. `ImageError::Avif` + From impl в диспетчере `decode()`. `supported_mime_types()` += "image/avif". 20 новых unit-тестов; итого lumen-image: 141 тест.
 - **p2-tab-containers** ✅ 2026-06-01 — Tab containers (7D.2). `ContainerKind { None, Personal, Work, Finance, Shopping, Custom(r,g,b) }` с фиксированными цветами (violet/blue/green/orange). `ContainerStore` — `(origin, ContainerKind) → store_id: u32` для будущей cookie-изоляции. `TabEntry.container: ContainerKind` (default None). `build_tab_bar` рендерит 3px `FillRect` border-top для вкладок с контейнером. `TabStrip::set_tab_container(idx, kind)`. `KeyCommand::SetTabContainer(ContainerKind)` + `Lumen::set_tab_container`. 29 новых unit-тестов; итого lumen-shell: 608 тестов.
 - **p2-sidebar-panel** ✅ 2026-06-01 — Sidebar web panels (7D.3). `SidebarPanel` right-docked 300 CSS px slot. Ctrl+Shift+A toggle; `sidebar:<url>` in omnibox открывает страницу через `open_sidebar_page` (HTML parse → inline CSS → relayout_page при ширине 300px). `ToggleSidebar` KeyCommand. `page_content_width_css()` вычитает PANEL_WIDTH. `close()` через клик ×. Placeholder "Loading…" до загрузки DL. `hit_test()` (Close/Header/Content). `build_panel()`: left border, header bg, title, × button, PushClipRect+PushTransform контент. 17 unit-тестов; итого lumen-shell: 578 тестов.
