@@ -6,8 +6,7 @@
 
 ## In progress
 
-- **Tab containers (7D.2)** branch: `p2-tab-containers`
-  Next step: реализовать `ContainerKind` + `ContainerStore` в `crates/shell/src/tabs/containers.rs`, добавить поле `container` в `TabEntry` и border-top рендер в `build_tab_bar` (`crates/shell/src/tabs/strip.rs`).
+_(нет)_
 
 ---
 
@@ -17,9 +16,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 11 | **Sidebar web panels (7D.3)** — `SidebarPanel: Panel` в right `Surface::Docked` slot: embeds second `Lumen` viewport; `Command::OpenSidebar(url)` / `CloseSidebar`. `shell/src/panels/sidebar_panel.rs`. See `lumen-plan.md §7D.3` | `lumen-shell` | L | none |
-| 11 | **Sidebar web panels (7D.3)** — `SidebarPanel: Panel` в right `Surface::Docked` slot: embeds second `Lumen` viewport; `Command::OpenSidebar(url)` / `CloseSidebar`. `shell/src/panels/sidebar_panel.rs`. See `lumen-plan.md §7D.3` | `lumen-shell` | L | none |
-| 12 | **Tab containers (7D.2)** — `ContainerKind { Personal, Work, Finance, Shopping, Custom(color) }` на `TabEntry`; border-top color в strip; container-keyed cookie/storage isolation. `shell/src/tabs/containers.rs`. See `lumen-plan.md §7D.2` | `lumen-shell` | M | none |
 | 13 | **AVIF image decoder** — `decode_avif(bytes) → Result<Image, ImageError>` в `lumen-image/src/avif.rs` через provisional `libavif-image` crate; register в `ImageDecoder` dispatch. See `lumen-plan.md §6.6` | `lumen-image` | M | none |
 | 14 | **DOM inspector panel (7E.1)** — `DomInspectorPanel: Panel` в `shell/src/devtools/inspector.rs`; hover → emit `BoxModelOverlay` (✅); click → show `NodeId` + computed style map; `F12` toggle. See `lumen-plan.md §7E.1` | `lumen-shell` | M | none |
 | 15 | **Network panel live log (7E.4)** — `NetworkPanel: Panel` в `shell/src/devtools/network_panel.rs`; слушает `NetworkEvent` channel; рендерит URL + method + status + timing; `F12` toggle. See `lumen-plan.md §7E.4` | `lumen-shell` | M | none |
@@ -39,6 +35,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-tab-containers** ✅ 2026-06-01 — Tab containers (7D.2). `ContainerKind { None, Personal, Work, Finance, Shopping, Custom(r,g,b) }` с фиксированными цветами (violet/blue/green/orange). `ContainerStore` — `(origin, ContainerKind) → store_id: u32` для будущей cookie-изоляции. `TabEntry.container: ContainerKind` (default None). `build_tab_bar` рендерит 3px `FillRect` border-top для вкладок с контейнером. `TabStrip::set_tab_container(idx, kind)`. `KeyCommand::SetTabContainer(ContainerKind)` + `Lumen::set_tab_container`. 29 новых unit-тестов; итого lumen-shell: 608 тестов.
 - **p2-sidebar-panel** ✅ 2026-06-01 — Sidebar web panels (7D.3). `SidebarPanel` right-docked 300 CSS px slot. Ctrl+Shift+A toggle; `sidebar:<url>` in omnibox открывает страницу через `open_sidebar_page` (HTML parse → inline CSS → relayout_page при ширине 300px). `ToggleSidebar` KeyCommand. `page_content_width_css()` вычитает PANEL_WIDTH. `close()` через клик ×. Placeholder "Loading…" до загрузки DL. `hit_test()` (Close/Header/Content). `build_panel()`: left border, header bg, title, × button, PushClipRect+PushTransform контент. 17 unit-тестов; итого lumen-shell: 578 тестов.
 - **p2-permission-panel** ✅ 2026-06-01 — Per-site permission popover (7C.2). `PermissionPanel` floating top-left overlay (240×164px), Ctrl+Shift+P toggle. `PermissionKind { Camera, Microphone, Notifications, Clipboard }` + `PermissionState { Ask, Allow, Deny }` с циклом Ask→Allow→Deny→Ask. Хранение в `HashMap<(origin, kind), state>`. Origin = scheme+host (https://example.com), обновляется в `apply_loaded_page`. Цветовое кодирование: Allow=зелёный, Deny=красный, Ask=жёлтый. `hit_test()`: Close/Toggle(kind)/Empty зоны. Поле `Lumen.permission` + `TogglePermissions` KeyCommand. 22 unit-тестов; итого lumen-shell: 552 теста.
 - **p2-cookie-banner-dismiss** ✅ 2026-06-01 — Cookie-banner auto-dismiss (7C.3). `cookie_banner.rs` в `lumen-js`: MutationObserver + setInterval 500ms + DOMContentLoaded скан. 30+ EasyList consent-selector-ов (OneTrust, Cookiebot, Didomi, TrustArc и др.). `dispatchEvent(MouseEvent('click', {bubbles:true}))` на первом видимом совпадении — single-shot per page. `Lumen.cookie_banner_dismiss: bool` (default: true), toggle Ctrl+Shift+K. `QuickJsRuntime::set_cookie_banner_dismiss()` + `AtomicBool`. Пробрасывается через `parse_and_layout` → `run_scripts_with_dom`. 15 unit-тестов (disabled noop, match/click, hidden-skip, cleanup, observer, interval, selector-coverage, multiple-selectors, no-MO fallback); итого lumen-js: 700 тестов.
