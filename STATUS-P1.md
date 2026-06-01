@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+DevTools JS console (7E.5)  branch: p1-devtools-console
+Next step: cargo check + tests  crates/shell/src/devtools/console_panel.rs
 
 ---
 

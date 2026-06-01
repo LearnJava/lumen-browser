@@ -109,6 +109,11 @@ pub struct QuickJsRuntime {
     /// Drained by the shell in `about_to_wait` via `take_window_open_requests()`.
     /// Each entry causes the shell to open a new tab navigated to the requested URL.
     window_open_requests: Arc<Mutex<Vec<dom::PopupRequest>>>,
+    /// Console messages queued by `console.log/warn/error` calls in JS.
+    ///
+    /// Each entry is `(level, text)` where level is 0=log, 1=warn, 2=error.
+    /// Drained by the shell's DevTools console panel via `take_console_messages()`.
+    console_messages: Arc<Mutex<Vec<(u8, String)>>>,
 }
 
 struct Inner {
@@ -146,6 +151,7 @@ impl QuickJsRuntime {
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             deterministic: AtomicBool::new(false),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
+            console_messages: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -228,6 +234,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.computed_styles),
                 Arc::clone(&self.window_open_requests),
                 deterministic_seed,
+                Arc::clone(&self.console_messages),
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
@@ -441,6 +448,15 @@ impl QuickJsRuntime {
     /// `window.open()` calls have been made since the last drain.
     pub fn take_window_open_requests(&self) -> Vec<dom::PopupRequest> {
         std::mem::take(&mut self.window_open_requests.lock().unwrap())
+    }
+
+    /// Drain all `console.log/warn/error` messages queued since the last call.
+    ///
+    /// Each entry is `(level, text)` where level is 0=log, 1=warn, 2=error.
+    /// Called by the shell's DevTools console panel in `about_to_wait`.
+    /// Returns an empty vec when no console calls have been made since the last drain.
+    pub fn take_console_messages(&self) -> Vec<(u8, String)> {
+        std::mem::take(&mut self.console_messages.lock().unwrap())
     }
 
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
