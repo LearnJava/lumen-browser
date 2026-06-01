@@ -121,8 +121,16 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - `install_dom()` calls `new_session_seed()` + `install_audio_bindings()` after WebGL bindings.
   - 14 unit tests (`install_succeeds`, `audio_context_is_defined`, `webkit_audio_context_alias`, `offline_audio_context_is_defined`, `audio_buffer_is_defined`, `audio_buffer_get_channel_data_length`, `audio_buffer_noise_is_tiny`, `different_seeds_produce_different_noise`, `audio_context_state_transitions`, `analyser_frequency_data_length`, `offline_audio_context_start_rendering_returns_thenable`, `offline_audio_context_length_matches_constructor`, `session_seeds_are_unique`, `session_seeds_monotonically_increase`). **280 JS tests total** (14 new audio + 266 previously passing).
 
+- **Functional WebGL context** (`crates/js/src/webgl_canvas.rs`, §7F, task #28). 2026-06-02.
+  - `install_webgl_canvas(ctx, &GpuFingerprint)` — registers `_lumen_webgl_*` natives + a JS shim that intercepts `document.createElement('canvas')` so `canvas.getContext('webgl'/'webgl2'/'experimental-webgl')` returns a *functional* context backed by `lumen_paint::SoftwareWebGl` (replaces the fingerprint-only `webgl_bindings` shim in `install_dom`).
+  - Forwards the full documented surface: `createBuffer`/`bindBuffer`/`bufferData`, `createShader`/`shaderSource`/`compileShader`, `createProgram`/`attachShader`/`linkProgram`/`useProgram`, `getAttribLocation`/`getUniformLocation`, `enableVertexAttribArray`/`vertexAttribPointer`, `uniform4f`/`uniform4fv`/`uniform3f`, `clearColor`/`clear`, `viewport`, `drawArrays`, `readPixels` (WebGL bottom-left origin, crops + Y-flips the backend's top-left framebuffer), `getParameter`/`getExtension`/`getSupportedExtensions`. Texture calls accepted as no-ops (flat-shaded path).
+  - Per-thread `SoftwareWebGl` registry keyed by opaque context id (`thread_local`), giving correct per-runtime isolation across Web Worker threads. GL objects are opaque `{__wid}` / `{__loc}` wrappers; methods unwrap either a wrapper or a raw number.
+  - Preserves ADR-007 Layer 4: `getParameter(UNMASKED_VENDOR/RENDERER_WEBGL)` + `getParameter(VENDOR/RENDERER)` return normalized `GpuFingerprint` strings; `toDataURL`/`toBlob` stay blank.
+  - 10 unit tests (functional object, 2d→null, context caching, fingerprint normalization, blank toDataURL, clear→readPixels roundtrip, full compile→buffer→draw→readback pipeline, attrib location, non-canvas, lose-context extension). The 19 `no_automation_markers.rs` integration tests still pass.
+
 ## Deferred
 
+- WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
 - querySelector compound selectors (e.g. `div.class`, `#id > p`).
 - `rusty_v8` backend (v1.0+).

@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**`<canvas>` WebGL context wiring (задача #28, §7F)**  branch: `p1-webgl-canvas`
+Next step: merge — `lumen-paint::SoftwareWebGl` + `lumen-js::webgl_canvas` готовы, тесты зелёные.
 
 ---
 
@@ -18,7 +19,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 |---|------|----------|--------|---------|
 | 17 | **Tab auto-archive (10E.5)** — на `TabState::Hibernated`: `Document::to_bytes()`, drop `PersistentJs`, store bytes в tab slot; restore на switch через `Document::from_bytes()` + new `PersistentJs`. `shell/src/tab_lifecycle/hibernate.rs`. See `lumen-plan.md §10E.5` | `lumen-shell` | M | #2 |
 | 27 | **SharedWorker stub** — `new SharedWorker(url)`: single shared `QuickJsRuntime` per name+origin; `port.postMessage/onmessage`; `connect` event on registration. `lumen-js/src/shared_worker.rs` | `lumen-js` | M | #5 |
-| 28 | **`<canvas>` WebGL context wiring** — `canvas.getContext('webgl')` proxy → `lumen-paint` GPU pipeline; `createBuffer/bindBuffer/bufferData`, `createShader/compileShader/createProgram/drawArrays`. `lumen-js/src/webgl_canvas.rs` + `lumen-paint/src/webgl.rs`. See `lumen-plan.md §7F` | `lumen-js`, `lumen-paint` | L | none |
 
 ---
 

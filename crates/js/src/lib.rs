@@ -11,6 +11,7 @@ pub mod notifications_bindings;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod webgl_bindings;
+pub mod webgl_canvas;
 pub mod webrtc_stub;
 pub mod worker;
 
@@ -206,12 +207,14 @@ impl QuickJsRuntime {
         };
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
-            // Install WebGL fingerprint bindings (ADR-007 Layer 4).
+            // Install functional WebGL bindings backed by the software
+            // rasterizer (task #28, §7F). Preserves the ADR-007 Layer 4
+            // fingerprint normalization of the old `webgl_bindings` shim.
             let fingerprint = lumen_paint::GpuFingerprint {
                 vendor: "WebKit".to_string(),
                 renderer: "Generic GPU".to_string(),
             };
-            if let Err(e) = webgl_bindings::install_webgl_bindings(&ctx, &fingerprint) {
+            if let Err(e) = webgl_canvas::install_webgl_canvas(&ctx, &fingerprint) {
                 eprintln!("WebGL bindings init failed: {}", e);
             }
 
