@@ -105,10 +105,10 @@ impl EventSink for ShieldCountSink {
         // Forward to the underlying sink first (preserves stderr network log).
         self.inner.emit(event);
 
-        if let Event::RequestBlocked { url, .. } = event {
-            if let Ok(mut guard) = self.log.lock() {
-                guard.record(url.as_str());
-            }
+        if let Event::RequestBlocked { url, .. } = event
+            && let Ok(mut guard) = self.log.lock()
+        {
+            guard.record(url.as_str());
         }
     }
 }
@@ -213,7 +213,7 @@ pub enum ShieldsHit {
 /// Returns `None` when the click is outside the panel.
 /// `tab_bar_h` is the height of the tab bar (panel is anchored below it).
 pub fn hit_test(
-    panel: &ShieldsPanel,
+    _panel: &ShieldsPanel,
     x: f32,
     y: f32,
     window_w: f32,
@@ -405,13 +405,9 @@ fn truncate_label(s: &str, max_chars: usize) -> String {
 ///
 /// Returns `None` for non-HTTP/HTTPS schemes and malformed URLs.
 fn extract_host(url: &str) -> Option<String> {
-    let rest = if let Some(r) = url.strip_prefix("https://") {
-        r
-    } else if let Some(r) = url.strip_prefix("http://") {
-        r
-    } else {
-        return None;
-    };
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
     // Path starts at the first '/', query at '?', fragment at '#'.
     let host_end = rest
         .find(['/', '?', '#'])
@@ -659,8 +655,7 @@ mod tests {
             inner: Arc::new(NullSink),
             log: Arc::clone(&log),
         };
-        let url: lumen_core::Url = "https://tracker.example.com/pixel.gif"
-            .parse()
+        let url = lumen_core::Url::parse("https://tracker.example.com/pixel.gif")
             .expect("valid URL");
         sink.emit(&Event::RequestBlocked {
             tab_id: TabId(0),
