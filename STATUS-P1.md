@@ -6,8 +6,7 @@
 
 ## In progress
 
-JS scroll requests drain  branch: p1-js-scroll-drain
-Next step: drain take_scroll_requests() in about_to_wait, apply via set_scroll_position, repaint  crates/shell/src/main.rs:3702
+(none)
 
 ---
 
@@ -18,8 +17,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
 | 8 | **Tab session persist (10I)** — serialize open tabs (URL + scroll + DOM via `Document::to_bytes`) to SQLite `sessions` table on close; restore on next launch. `shell/src/session_persist.rs`. See `lumen-plan.md §10I` | `lumen-shell`, `lumen-storage` | M | #2 |
-| 14 | **DOM GC shell integration** — idle-tick в shell event loop: `document.dead_node_ids()` → release QuickJS class instances via `_lumen_gc_collect(nids)`. `shell/src/gc_tick.rs`. Requires `p1-dom-gc-hooks` ✅ | `lumen-shell` | S | none |
-| 15 | **JS scroll requests drain** — в `about_to_wait`: `runtime.take_scroll_requests()` → `shell::set_scroll_position(nid, x, y)` → re-layout + redraw. `shell/src/event_loop.rs`. Requires `p1-clickable-iterator` ✅ | `lumen-shell` | S | none |
 | 16 | **Memory pressure poll loop** — shell создаёт платформенный `MemoryPressureSource`, polling каждые 5s; на Medium+ → `CacheRegistry::broadcast_pressure(level)`. `shell/src/memory_poll.rs`. Requires `MemoryPressureSource` ✅ + `CacheRegistry` ✅ | `lumen-shell` | S | none |
 | 17 | **Tab auto-archive (10E.5)** — на `TabState::Hibernated`: `Document::to_bytes()`, drop `PersistentJs`, store bytes в tab slot; restore на switch через `Document::from_bytes()` + new `PersistentJs`. `shell/src/tab_lifecycle/hibernate.rs`. See `lumen-plan.md §10E.5` | `lumen-shell` | M | #2 |
 | 18 | **Deterministic render mode (8F)** — `--deterministic` CLI флаг: freeze `Date.now()` в t=0, seed `Math.random` из URL hash, suppress RAF jitter, fixed viewport 1280×800. `shell/src/deterministic.rs`. See `lumen-plan.md §8F` | `lumen-shell`, `lumen-js` | M | none |
@@ -38,6 +35,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-js-scroll-drain** ✅ 2026-06-01 — JS scroll requests drain (задача #15): дренирование `take_scroll_requests()` в `about_to_wait` — `set_scroll_position()` per entry → `paint_ordered()` (без CSS re-computation) → `update_scroll_states()` → redraw. Также `update_scroll_states` после каждого `relayout()` — scrollTop/scrollLeft корректны сразу. lumen-shell: 558.
 - **p1-dom-gc-shell** ✅ 2026-06-01 — DOM GC shell integration (задача #14): `gc_tick.rs` — `GcTick` (throttle 30 с, `poll(&doc) → Option<Vec<NodeId>>`); JS-шим `_lumen_gc_collect(nids)` — чистит `_lumen_listeners` и `_input_values` для dead nodes; `PersistentJs::gc_collect(&[u32])` + `QuickPersistentJs` impl; поле `gc_tick` в `Lumen`; drain в `about_to_wait` после notifications. 10 unit-тестов (6 gc_tick + 4 js). lumen-shell: 536.
 - **p1-web-notifications** ✅ 2026-06-01 — Web Notifications API (W3C Notifications API Level 1): `notifications_bindings.rs` — `Notification` конструктор (title + option bag: body/icon/tag/data/requireInteraction/silent и др.); `Notification.permission`/"granted"/"denied"/"default"; `Notification.requestPermission([cb])` → Promise; `close()`; `onclick/onclose/onerror/onshow` handlers; `addEventListener/removeEventListener/dispatchEvent`. `NotificationQueue` + `drain_notifications()`. Shell: `notification.rs` — `show_os_notification(title, body)` — Windows PowerShell System.Windows.Forms balloon tip (env-var передача текста без injection), Linux `notify-send`, background thread. `PersistentJs::take_notification_requests()` + drain в `about_to_wait`. 21 unit-тест. lumen-js: 686.
 - **p1-audio-element** ✅ 2026-06-01 — `<audio>` element stub (HTML spec §4.8.10): `BoxKind::Audio { src, controls }` в layout — 0×0 без controls, full-width×40px с controls; серый FillRect в paint для controls bar. JS: `audio_element.rs` — HTMLAudioElement шим: `play()→Promise`, `pause()`, `src` setter (fires `loadedmetadata`+`canplay` немедленно), `currentTime`/`duration`/`volume`/`muted`/`controls`, `readyState=4`, `canPlayType()→''`, `networkState`/`error`/`buffered`/`seekable` стабы. 4 paint + 18 JS тестов. lumen-js: 665, lumen-layout: 2107, lumen-paint: 441.
