@@ -3,3 +3,4 @@
 
 pub mod console_panel;
 pub mod inspector;
+pub mod network_panel;
