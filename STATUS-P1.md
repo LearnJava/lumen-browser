@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: T3 hibernation DOM blob compression (задача 10J.1)  branch: p1-hibernate-compress
+Next step: прозрачное deflate-сжатие dom_blob в TabSnapshotStore::store/fetch  crates/storage/src/tab_snapshot.rs:94
 
 ---
 
