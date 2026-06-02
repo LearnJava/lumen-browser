@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: roadmap-audit network fundamentals  branch: p1-roadmap-audit-net
+Next step: синхронизировать stale-маркер Phase 2 "Browser fundamentals" (Range/pool/Brotli уже готовы)  lumen-plan.md:2258
 
 ---
 
