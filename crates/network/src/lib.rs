@@ -25,7 +25,7 @@ use rustls::ClientConnection;
 use rustls::pki_types::ServerName;
 
 use lumen_core::error::{Error, Result};
-use lumen_core::event::{Event, TabId};
+use lumen_core::event::{Event, RequestStage, TabId};
 use lumen_core::ext::{
     ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
     HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsWebSocketProvider,
@@ -555,7 +555,12 @@ fn connect(
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
 ) -> Result<Connection> {
-    let addrs = resolver.resolve(host, port)?;
+    // Префикс `resolve ` на всех DNS-ошибках (включая ошибку самого
+    // resolver-а) — чтобы `classify_failure_stage` надёжно отнёс их к
+    // `RequestStage::Dns` без знания внутреннего формата resolver-сообщения.
+    let addrs = resolver
+        .resolve(host, port)
+        .map_err(|e| Error::Network(format!("resolve {host}:{port}: {e}")))?;
     if addrs.is_empty() {
         return Err(Error::Network(format!(
             "resolve {host}:{port}: no addresses"
@@ -907,6 +912,56 @@ fn emit_cors_blocked(
     Error::Network(format!("blocked: {reason}"))
 }
 
+/// Классифицировать стадию сетевого сбоя по тексту `Error::Network`.
+///
+/// Ошибки в этом крейте стрингово-типизированы (`Error::Network(String)`),
+/// но сообщения имеют стабильные префиксы по точке возникновения:
+/// `resolve …` (DNS), `connect …` (TCP), `TLS handshake …` / `invalid
+/// hostname …` / `unexpected ALPN …` (TLS); всё остальное (`read …`,
+/// `write …`, `EOF …`, `chunked …`) — стадия обмена данными `Read`.
+/// Сопоставление по префиксу, а не подстроке, чтобы случайное вхождение
+/// слова в URL/заголовке не сбило классификацию.
+fn classify_failure_stage(reason: &str) -> RequestStage {
+    if reason.starts_with("resolve ") {
+        RequestStage::Dns
+    } else if reason.starts_with("connect ") {
+        RequestStage::Tcp
+    } else if reason.starts_with("TLS handshake")
+        || reason.starts_with("invalid hostname")
+        || reason.starts_with("unexpected ALPN")
+    {
+        RequestStage::Tls
+    } else {
+        RequestStage::Read
+    }
+}
+
+/// Эмит `RequestFailed` для сетевого сбоя `fetch_single` и возврат той же
+/// ошибки наверх. Поддерживает инвариант «один `RequestStarted` → ровно один
+/// терминальный event»: вызывается симметрично с `RequestStarted`, когда
+/// `fetch_single` вернул `Err` до получения HTTP-статуса. Стадия выводится из
+/// текста ошибки через [`classify_failure_stage`].
+fn emit_request_failed(
+    sink: Option<&dyn EventSink>,
+    tab_id: TabId,
+    url: &Url,
+    err: Error,
+) -> Error {
+    if let Some(s) = sink {
+        let reason = match &err {
+            Error::Network(msg) => msg.clone(),
+            other => other.to_string(),
+        };
+        s.emit(&Event::RequestFailed {
+            tab_id,
+            url: url.clone(),
+            stage: classify_failure_stage(&reason),
+            reason,
+        });
+    }
+    err
+}
+
 /// Собрать значение `extra_headers` для actual cross-origin запроса:
 /// `Origin` (RFC 6454 / Fetch §3.5) + author-headers, кроме тех, что мы и так
 /// формируем в `write_request` (Host / Connection / User-Agent / Accept /
@@ -1086,7 +1141,7 @@ fn fetch_with_redirect(
                 });
             }
             let preflight_extra = build_preflight_extra_headers(&cors_req);
-            let preflight_resp = fetch_single(
+            let preflight_resp = match fetch_single(
                 pool,
                 h2_pool,
                 resolver,
@@ -1103,7 +1158,10 @@ fn fetch_with_redirect(
                 None,
                 None,
                 &preflight_extra,
-            )?;
+            ) {
+                Ok(r) => r,
+                Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
+            };
             if let Some(s) = sink {
                 s.emit(&Event::RequestCompleted {
                     tab_id,
@@ -1184,7 +1242,7 @@ fn fetch_with_redirect(
             });
         }
 
-        let mut resp = fetch_single(
+        let mut resp = match fetch_single(
             pool,
             h2_pool,
             resolver,
@@ -1201,7 +1259,10 @@ fn fetch_with_redirect(
             authorization.as_deref(),
             accept_encoding,
             &actual_extra_headers,
-        )?;
+        ) {
+            Ok(r) => r,
+            Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
+        };
 
         // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
         // server прислал Strict-Transport-Security. RFC 6797 §8.1 — STS на
@@ -3201,6 +3262,88 @@ mod tests {
         assert!(
             !events.iter().any(|e| matches!(e, Event::RequestCompleted { .. })),
             "RequestCompleted не должен прозвучать — connect не состоялся: {events:?}"
+        );
+        // Инвариант «Started без Completed = failure»: терминальное событие —
+        // RequestFailed со стадией Dns (resolver вернул ошибку).
+        match events.last() {
+            Some(Event::RequestFailed { stage, reason, .. }) => {
+                assert_eq!(*stage, RequestStage::Dns, "DNS-сбой → стадия Dns");
+                assert!(reason.contains("mock NXDOMAIN"), "reason несёт текст ошибки: {reason}");
+            }
+            other => panic!("expected RequestFailed(Dns) terminal event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_failure_stage_maps_message_prefixes() {
+        // Сообщения Error::Network имеют стабильные префиксы по точке отказа —
+        // classify_failure_stage относит каждый к своей стадии.
+        assert_eq!(
+            classify_failure_stage("resolve example.com:443: no addresses"),
+            RequestStage::Dns
+        );
+        assert_eq!(
+            classify_failure_stage("resolve host:80: mock NXDOMAIN"),
+            RequestStage::Dns
+        );
+        assert_eq!(
+            classify_failure_stage("connect 127.0.0.1:9: Connection refused (os error 111)"),
+            RequestStage::Tcp
+        );
+        assert_eq!(
+            classify_failure_stage("TLS handshake: invalid peer certificate"),
+            RequestStage::Tls
+        );
+        assert_eq!(
+            classify_failure_stage("invalid hostname '::1': not a valid DNS name"),
+            RequestStage::Tls
+        );
+        assert_eq!(
+            classify_failure_stage("unexpected ALPN protocol: \"spdy\""),
+            RequestStage::Tls
+        );
+        // Всё, что не относится к connect-фазе, — обмен данными (Read).
+        assert_eq!(classify_failure_stage("read status: UnexpectedEof"), RequestStage::Read);
+        assert_eq!(classify_failure_stage("EOF before status line"), RequestStage::Read);
+        assert_eq!(classify_failure_stage("chunked size: invalid digit"), RequestStage::Read);
+        assert_eq!(classify_failure_stage("write request: BrokenPipe"), RequestStage::Read);
+    }
+
+    #[test]
+    fn request_stage_as_str_tags() {
+        assert_eq!(RequestStage::Dns.as_str(), "dns");
+        assert_eq!(RequestStage::Tcp.as_str(), "tcp");
+        assert_eq!(RequestStage::Tls.as_str(), "tls");
+        assert_eq!(RequestStage::Read.as_str(), "read");
+    }
+
+    #[test]
+    fn fetch_connection_refused_emits_request_failed_tcp() {
+        // Bind→port→drop освобождает порт, на котором никто не слушает: connect
+        // получает refused. Терминальное событие — RequestFailed(Tcp), а не
+        // зависший RequestStarted.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone()).with_tab(TabId(3));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+
+        assert!(client.fetch(&url).is_err());
+
+        let events = sink.events();
+        assert!(matches!(events.first(), Some(Event::RequestStarted { .. })));
+        match events.last() {
+            Some(Event::RequestFailed { tab_id, stage, .. }) => {
+                assert_eq!(*tab_id, TabId(3));
+                assert_eq!(*stage, RequestStage::Tcp, "refused connect → стадия Tcp");
+            }
+            other => panic!("expected RequestFailed(Tcp), got {other:?}"),
+        }
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::RequestCompleted { .. })),
+            "сбой connect не должен давать RequestCompleted"
         );
     }
 
