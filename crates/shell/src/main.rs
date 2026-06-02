@@ -122,6 +122,9 @@ impl EventSink for StdoutEventSink {
             Event::RequestStarted { url, .. } => eprintln!("→ GET {url}"),
             Event::RequestCompleted { url, status, .. } => eprintln!("← {status} {url}"),
             Event::RequestBlocked { url, reason, .. } => eprintln!("✗ {url} ({reason})"),
+            Event::RequestFailed { url, stage, reason, .. } => {
+                eprintln!("✗ {url} ({}: {reason})", stage.as_str());
+            }
             Event::SubresourceHintFound { url, kind, priority } => {
                 let label = match kind {
                     SubresourceKind::Stylesheet => "css",
