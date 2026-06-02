@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: p1-motion-path  branch: p1-motion-path
-Next step: commit motion_path.rs + update docs  crates/engine/layout/src/motion_path.rs:1
+_(нет)_
 
 ---
 
@@ -18,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-motion-path** ✅ 2026-06-02 — CSS Motion Path L1 алгоритм-stub (`offset-path`, задача #44). Новый модуль `crates/engine/layout/src/motion_path.rs`: SVG path-парсер (все команды M/L/H/V/C/S/Q/T/A/Z, relative+absolute, Arc→3×cubic Bézier через W3C endpoint→center), `point_at_distance()` с адаптивной De Casteljau-бисекцией + 5-point Gauss-Legendre для длины кривой, `resolve_motion_transform(path_str, offset_distance_px, OffsetRotate) -> Option<MotionTransform>`. CSS-поля `offset_path/distance/rotate` уже были в ComputedStyle — новый парсинг не добавлялся. Handoff P4: `property_trees.rs:802` комментарий + полная инструкция в STATUS-P4 "Needs wiring". 15 unit-тестов. lumen-layout: 2136 тестов (без BUG-055). CSS-SPECS.md Motion Path L1 → 🟡 с пометкой «algorithm stub ready». SYMBOLS.md обновлён. Clippy чист. Без новых зависимостей.
 
 - **p1-eventsource** ✅ 2026-06-02 — EventSource API (Server-Sent Events, HTML LS §9.2). JS `EventSource` был мёртвой заглушкой; SSE-транспорт `lumen-network::sse.rs` (608 строк) уже работал, но не был подключён. Новые трейты `JsSseEvent` / `JsSseSession` / `JsSseProvider` в `lumen-core::ext` (зеркало JsWebSocketProvider). `JsSseSessionImpl` в `lumen-network` — фоновый поток дренирует блокирующий `SseSession::next_event()` в `VecDeque<JsSseEvent>`, `poll()` неблокирующий. Нативные биндинги `_lumen_sse_connect/_poll/_close` в `lumen-js/src/dom.rs` + функция `json_str` для RFC 8259-экранирования. JS `EventSource` переписан: CONNECTING(0)/OPEN(1)/CLOSED(2), `withCredentials`, `onopen`/`onmessage`/`onerror`, `addEventListener` для именованных событий, `lastEventId`, `MessageEvent.origin`, `_lumen_pump_sse()`. `PersistentJs::pump_sse()` в shell вызывается в `about_to_wait` рядом с `pump_websockets()`. Обновлены все call-sites `install_dom` (5 файлов). 9 новых тестов; lumen-js: 846 тестов. Clippy чист. Без новых зависимостей.
 
