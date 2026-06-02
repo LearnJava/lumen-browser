@@ -2103,6 +2103,12 @@ pub struct ComputedStyle {
     /// CSS Transforms L2 §4 — `perspective: <length> | none`.
     /// `None` = no perspective; `Some(px)` = distance to camera.
     pub perspective: Option<f32>,
+    /// CSS Transforms L2 §4 — `perspective-origin: <x> <y>`.
+    /// Default `50% 50%`. Resolved at display-list time against border-box.
+    pub perspective_origin: (PositionComponent, PositionComponent),
+    /// CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
+    /// `Preserve3d` makes children participate in 3D rendering context.
+    pub transform_style: TransformStyle,
     /// CSS Lists L3 §2.1 — `list-style-type`.
     pub list_style_type: ListStyleType,
     /// CSS Lists L3 §2.3 — `list-style-position`.
@@ -3877,21 +3883,51 @@ pub enum ClipPath {
 
 /// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
 /// translate/translateX/translateY, rotate, scale/scaleX/scaleY,
-/// skew/skewX/skewY, matrix. 3D-варианты (translate3d, rotate3d,
-/// и т.д.) отложены.
+/// CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
+/// `Flat` = children are flattened into the parent plane (default).
+/// `Preserve3d` = children participate in the parent 3D rendering context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransformStyle {
+    #[default]
+    Flat,
+    Preserve3d,
+}
+
+/// CSS transform functions — translate/scale/rotate/skew/skewX/skewY/matrix
+/// and all 3D variants (CSS Transforms L2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransformFn {
     Translate(f32, f32),
     TranslateX(f32),
     TranslateY(f32),
+    /// `translateZ(<length>)` — translate along Z axis in px.
+    TranslateZ(f32),
+    /// `translate3d(<tx>, <ty>, <tz>)` — all three axes in px.
+    Translate3d(f32, f32, f32),
     /// Угол в радианах (нормализован парсером из deg/rad/turn/grad).
     Rotate(f32),
+    /// `rotateX(<angle>)` — angle in radians.
+    RotateX(f32),
+    /// `rotateY(<angle>)` — angle in radians.
+    RotateY(f32),
+    /// `rotateZ(<angle>)` — alias for 2D rotate, angle in radians.
+    RotateZ(f32),
+    /// `rotate3d(<x>, <y>, <z>, <angle>)` — arbitrary axis rotation.
+    Rotate3d(f32, f32, f32, f32),
     Scale(f32, f32),
     ScaleX(f32),
     ScaleY(f32),
+    /// `scaleZ(<s>)` — scale along Z axis.
+    ScaleZ(f32),
+    /// `scale3d(<sx>, <sy>, <sz>)` — all three axes.
+    Scale3d(f32, f32, f32),
     SkewX(f32),
     SkewY(f32),
     Matrix([f32; 6]),
+    /// `matrix3d(<16 values>)` — column-major 4×4 matrix.
+    Matrix3d([f32; 16]),
+    /// `perspective(<length>)` — perspective distance in px (> 0).
+    Perspective(f32),
 }
 
 /// CSS Filter Effects L1 §3 — функции `filter`. Phase 0 поддерживает
@@ -4119,6 +4155,8 @@ impl ComputedStyle {
             hyphens: Hyphens::Manual,
             transform_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5), 0.0),
             perspective: None,
+            perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
+            transform_style: TransformStyle::Flat,
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
             list_style_image: None,
@@ -4369,9 +4407,11 @@ pub fn compute_style(
         word_break: inherited.word_break,
         line_break: inherited.line_break,
         hyphens: inherited.hyphens,
-        // CSS Transforms transform-origin + perspective — не наследуются.
+        // CSS Transforms — не наследуются.
         transform_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5), 0.0),
         perspective: None,
+        perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
+        transform_style: TransformStyle::Flat,
         // CSS Lists — list-style-* наследуются.
         list_style_type: inherited.list_style_type,
         list_style_position: inherited.list_style_position,
@@ -10390,6 +10430,26 @@ fn apply_declaration(
                 style.perspective = if px > 0.0 { Some(px) } else { None };
             }
         }
+        "perspective-origin" => {
+            // CSS Transforms L2 §4 — `perspective-origin: <x> <y>`.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let x = parts.first()
+                .and_then(|s| parse_position_component(s, em_basis, viewport, false))
+                .unwrap_or(PositionComponent::Percent(0.5));
+            let y = parts.get(1)
+                .and_then(|s| parse_position_component(s, em_basis, viewport, true))
+                .unwrap_or(PositionComponent::Percent(0.5));
+            style.perspective_origin = (x, y);
+        }
+        "transform-style" => {
+            // CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
+            let trimmed = val.trim();
+            style.transform_style = if trimmed.eq_ignore_ascii_case("preserve-3d") {
+                TransformStyle::Preserve3d
+            } else {
+                TransformStyle::Flat
+            };
+        }
         "list-style-type" => {
             if let Some(v) = ListStyleType::parse(val) {
                 style.list_style_type = v;
@@ -12729,7 +12789,27 @@ fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
         }
         "translatex" => parse_length_px(parts.first()?).map(TransformFn::TranslateX),
         "translatey" => parse_length_px(parts.first()?).map(TransformFn::TranslateY),
+        "translatez" => parse_length_px(parts.first()?).map(TransformFn::TranslateZ),
+        "translate3d" => {
+            let x = parse_length_px(parts.first()?)?;
+            let y = parse_length_px(parts.get(1)?)?;
+            let z = parts.get(2).and_then(|s| parse_length_px(s)).unwrap_or(0.0);
+            Some(TransformFn::Translate3d(x, y, z))
+        }
         "rotate" => parse_angle_to_radians(parts.first()?).map(TransformFn::Rotate),
+        "rotatex" => parse_angle_to_radians(parts.first()?).map(TransformFn::RotateX),
+        "rotatey" => parse_angle_to_radians(parts.first()?).map(TransformFn::RotateY),
+        "rotatez" => parse_angle_to_radians(parts.first()?).map(TransformFn::RotateZ),
+        "rotate3d" => {
+            if parts.len() < 4 {
+                return None;
+            }
+            let x = parts[0].parse::<f32>().ok()?;
+            let y = parts[1].parse::<f32>().ok()?;
+            let z = parts[2].parse::<f32>().ok()?;
+            let angle = parse_angle_to_radians(parts[3])?;
+            Some(TransformFn::Rotate3d(x, y, z, angle))
+        }
         "scale" => {
             let x = parts.first()?.parse::<f32>().ok()?;
             let y = parts
@@ -12740,6 +12820,13 @@ fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
         }
         "scalex" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleX),
         "scaley" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleY),
+        "scalez" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleZ),
+        "scale3d" => {
+            let x = parts.first()?.parse::<f32>().ok()?;
+            let y = parts.get(1)?.parse::<f32>().ok()?;
+            let z = parts.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(1.0);
+            Some(TransformFn::Scale3d(x, y, z))
+        }
         "skewx" => parse_angle_to_radians(parts.first()?).map(TransformFn::SkewX),
         "skewy" => parse_angle_to_radians(parts.first()?).map(TransformFn::SkewY),
         "skew" => {
@@ -12755,6 +12842,21 @@ fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
                 m[i] = p.parse::<f32>().ok()?;
             }
             Some(TransformFn::Matrix(m))
+        }
+        "matrix3d" => {
+            if parts.len() != 16 {
+                return None;
+            }
+            let mut m = [0.0f32; 16];
+            for (i, p) in parts.iter().enumerate() {
+                m[i] = p.parse::<f32>().ok()?;
+            }
+            Some(TransformFn::Matrix3d(m))
+        }
+        "perspective" => {
+            parse_length_px(parts.first()?).and_then(|px| {
+                if px > 0.0 { Some(TransformFn::Perspective(px)) } else { None }
+            })
         }
         _ => None,
     }
@@ -19155,6 +19257,15 @@ mod tests {
         assert_eq!(tokens[2], "b");
     }
 
+    /// Helper: apply a single CSS property to a fresh ComputedStyle.
+    fn ts_prop(prop: &str, val: &str) -> ComputedStyle {
+        let mut s = ComputedStyle::root();
+        let decl = Declaration { property: prop.to_string(), value: val.to_string(), important: false };
+        let vp = Size::new(800.0, 600.0);
+        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), false);
+        s
+    }
+
     // === transition shorthand parsing (CSS Transitions L1 §3) ===
 
     fn ts(val: &str) -> ComputedStyle {
@@ -22451,5 +22562,111 @@ mod tests {
         assert_eq!(style.color.r, 255, "light mode: @media light should apply");
         assert_eq!(style.color.g, 0);
         assert_eq!(style.color.b, 0);
+    }
+
+    // --- CSS 3D transforms: TransformFn variants ---
+
+    #[test]
+    fn parse_transform_translatez() {
+        let t = parse_transform_list("translateZ(50px)");
+        assert_eq!(t, vec![TransformFn::TranslateZ(50.0)]);
+    }
+
+    #[test]
+    fn parse_transform_translate3d() {
+        let t = parse_transform_list("translate3d(10px, 20px, 30px)");
+        assert_eq!(t, vec![TransformFn::Translate3d(10.0, 20.0, 30.0)]);
+    }
+
+    #[test]
+    fn parse_transform_rotatex() {
+        let t = parse_transform_list("rotateX(45deg)");
+        assert!(matches!(t[..], [TransformFn::RotateX(_)]));
+        if let TransformFn::RotateX(a) = t[0] {
+            assert!((a - std::f32::consts::FRAC_PI_4).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn parse_transform_rotatey() {
+        let t = parse_transform_list("rotateY(90deg)");
+        assert!(matches!(t[..], [TransformFn::RotateY(_)]));
+    }
+
+    #[test]
+    fn parse_transform_rotatez() {
+        let t = parse_transform_list("rotateZ(180deg)");
+        assert!(matches!(t[..], [TransformFn::RotateZ(_)]));
+    }
+
+    #[test]
+    fn parse_transform_rotate3d() {
+        let t = parse_transform_list("rotate3d(1, 0, 0, 45deg)");
+        assert!(matches!(t[..], [TransformFn::Rotate3d(_, _, _, _)]));
+        if let TransformFn::Rotate3d(x, y, z, _) = t[0] {
+            assert_eq!((x, y, z), (1.0, 0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn parse_transform_scale3d() {
+        let t = parse_transform_list("scale3d(2, 3, 4)");
+        assert_eq!(t, vec![TransformFn::Scale3d(2.0, 3.0, 4.0)]);
+    }
+
+    #[test]
+    fn parse_transform_scalez() {
+        let t = parse_transform_list("scaleZ(0.5)");
+        assert_eq!(t, vec![TransformFn::ScaleZ(0.5)]);
+    }
+
+    #[test]
+    fn parse_transform_matrix3d() {
+        // identity matrix3d
+        let t = parse_transform_list(
+            "matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1)"
+        );
+        assert!(matches!(t[..], [TransformFn::Matrix3d(_)]));
+    }
+
+    #[test]
+    fn parse_transform_perspective_fn() {
+        let t = parse_transform_list("perspective(800px)");
+        assert_eq!(t, vec![TransformFn::Perspective(800.0)]);
+    }
+
+    #[test]
+    fn parse_transform_style_flat_default() {
+        let s = ts_prop("transform-style", "flat");
+        assert_eq!(s.transform_style, TransformStyle::Flat);
+    }
+
+    #[test]
+    fn parse_transform_style_preserve_3d() {
+        let s = ts_prop("transform-style", "preserve-3d");
+        assert_eq!(s.transform_style, TransformStyle::Preserve3d);
+    }
+
+    #[test]
+    fn parse_perspective_origin_default() {
+        let s = ComputedStyle::root();
+        assert_eq!(
+            s.perspective_origin,
+            (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5))
+        );
+    }
+
+    #[test]
+    fn parse_perspective_origin_keywords() {
+        let s = ts_prop("perspective-origin", "left top");
+        assert_eq!(s.perspective_origin.0, PositionComponent::Percent(0.0));
+        assert_eq!(s.perspective_origin.1, PositionComponent::Percent(0.0));
+    }
+
+    #[test]
+    fn parse_perspective_origin_percent() {
+        let s = ts_prop("perspective-origin", "25% 75%");
+        assert_eq!(s.perspective_origin.0, PositionComponent::Percent(0.25));
+        assert_eq!(s.perspective_origin.1, PositionComponent::Percent(0.75));
     }
 }

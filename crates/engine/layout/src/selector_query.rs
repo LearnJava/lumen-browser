@@ -459,6 +459,10 @@ fn transform_fn_to_css(f: &TransformFn) -> String {
         TransformFn::Translate(x, y) => format!("translate({}, {})", px_str(*x), px_str(*y)),
         TransformFn::TranslateX(x) => format!("translateX({})", px_str(*x)),
         TransformFn::TranslateY(y) => format!("translateY({})", px_str(*y)),
+        TransformFn::TranslateZ(z) => format!("translateZ({})", px_str(*z)),
+        TransformFn::Translate3d(x, y, z) => {
+            format!("translate3d({}, {}, {})", px_str(*x), px_str(*y), px_str(*z))
+        }
         TransformFn::Rotate(a) => {
             let deg = a.to_degrees();
             if deg.fract() == 0.0 {
@@ -467,15 +471,29 @@ fn transform_fn_to_css(f: &TransformFn) -> String {
                 format!("rotate({}deg)", deg)
             }
         }
+        TransformFn::RotateX(a) => format!("rotateX({}deg)", a.to_degrees()),
+        TransformFn::RotateY(a) => format!("rotateY({}deg)", a.to_degrees()),
+        TransformFn::RotateZ(a) => format!("rotateZ({}deg)", a.to_degrees()),
+        TransformFn::Rotate3d(x, y, z, a) => {
+            format!("rotate3d({}, {}, {}, {}deg)", x, y, z, a.to_degrees())
+        }
         TransformFn::Scale(sx, sy) => format!("scale({}, {})", sx, sy),
         TransformFn::ScaleX(sx) => format!("scaleX({})", sx),
         TransformFn::ScaleY(sy) => format!("scaleY({})", sy),
+        TransformFn::ScaleZ(sz) => format!("scaleZ({})", sz),
+        TransformFn::Scale3d(sx, sy, sz) => format!("scale3d({}, {}, {})", sx, sy, sz),
         TransformFn::SkewX(a) => format!("skewX({}deg)", a.to_degrees()),
         TransformFn::SkewY(a) => format!("skewY({}deg)", a.to_degrees()),
         TransformFn::Matrix(m) => format!(
             "matrix({}, {}, {}, {}, {}, {})",
             m[0], m[1], m[2], m[3], m[4], m[5]
         ),
+        TransformFn::Matrix3d(m) => format!(
+            "matrix3d({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+            m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
+        ),
+        TransformFn::Perspective(d) => format!("perspective({})", px_str(*d)),
     }
 }
 

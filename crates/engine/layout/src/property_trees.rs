@@ -618,13 +618,23 @@ pub fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> 
             TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
             TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+            TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
+            TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+            TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
+            TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
+            TransformFn::RotateZ(theta) => Mat4::rotate_z(theta),
+            TransformFn::Rotate3d(x, y, z, theta) => Mat4::rotate_3d(x, y, z, theta),
             TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
             TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
             TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+            TransformFn::ScaleZ(sz) => Mat4::scale_3d(1.0, 1.0, sz),
+            TransformFn::Scale3d(sx, sy, sz) => Mat4::scale_3d(sx, sy, sz),
             TransformFn::SkewX(a) => Mat4::skew_x(a),
             TransformFn::SkewY(a) => Mat4::skew_y(a),
             TransformFn::Matrix([a, b, c, d, e, f]) => Mat4::from_2d_affine(a, b, c, d, e, f),
+            TransformFn::Matrix3d(vals) => Mat4::from_3d(vals),
+            TransformFn::Perspective(d) => Mat4::perspective(d),
         };
         m = m.multiply(&step);
     }
@@ -679,19 +689,23 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
             TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
             TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+            TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
+            TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+            TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
+            TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
+            TransformFn::RotateZ(theta) => Mat4::rotate_z(theta),
+            TransformFn::Rotate3d(x, y, z, theta) => Mat4::rotate_3d(x, y, z, theta),
             TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
             TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
             TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+            TransformFn::ScaleZ(sz) => Mat4::scale_3d(1.0, 1.0, sz),
+            TransformFn::Scale3d(sx, sy, sz) => Mat4::scale_3d(sx, sy, sz),
             TransformFn::SkewX(a) => Mat4::skew_x(a),
             TransformFn::SkewY(a) => Mat4::skew_y(a),
             TransformFn::Matrix([a, b_, c, d, e, f]) => Mat4::from_2d_affine(a, b_, c, d, e, f),
-            // CSS: rotateX/rotateY/rotateZ/rotate3d/translateZ/translate3d/
-            // scaleZ/scale3d/perspective()/matrix3d — P4 adds these TransformFn
-            // variants + their parsing, then maps each to the matching Mat4 3D
-            // constructor (Mat4::rotate_x/rotate_y/rotate_z/rotate_3d/
-            // translate_3d/scale_3d/perspective/from_3d). The renderer already
-            // projects any non-2D-affine matrix perspective-correctly.
+            TransformFn::Matrix3d(vals) => Mat4::from_3d(vals),
+            TransformFn::Perspective(d) => Mat4::perspective(d),
         };
         m = m.multiply(&step);
     }
@@ -722,13 +736,23 @@ pub fn transform_fns_to_matrix(fns: &[TransformFn], pivot_x: f32, pivot_y: f32) 
             TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
             TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+            TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
+            TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+            TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
+            TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
+            TransformFn::RotateZ(theta) => Mat4::rotate_z(theta),
+            TransformFn::Rotate3d(x, y, z, theta) => Mat4::rotate_3d(x, y, z, theta),
             TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
             TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
             TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+            TransformFn::ScaleZ(sz) => Mat4::scale_3d(1.0, 1.0, sz),
+            TransformFn::Scale3d(sx, sy, sz) => Mat4::scale_3d(sx, sy, sz),
             TransformFn::SkewX(a) => Mat4::skew_x(a),
             TransformFn::SkewY(a) => Mat4::skew_y(a),
             TransformFn::Matrix([a, b, c, d, e, f_]) => Mat4::from_2d_affine(a, b, c, d, e, f_),
+            TransformFn::Matrix3d(vals) => Mat4::from_3d(vals),
+            TransformFn::Perspective(d) => Mat4::perspective(d),
         };
         m = m.multiply(&step);
     }

@@ -88,7 +88,8 @@ pub use style::{
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
     ScrollbarWidth, StepPosition, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
-    TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn, UserSelect, Visibility,
+    TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn, TransformStyle,
+    UserSelect, Visibility,
     WhiteSpace, WordBreak,
 };
 

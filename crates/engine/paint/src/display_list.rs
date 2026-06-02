@@ -26,6 +26,7 @@ use lumen_layout::{
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow,
+    TransformStyle,
     Visibility,
 };
 
@@ -3302,15 +3303,8 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 /// being flattened to z=0 individually and painted in document order.
 ///
 /// A box establishes a 3D rendering context iff `transform-style: preserve-3d`.
-//
-// CSS: transform-style — P4 wires `ComputedStyle.transform_style`
-// (`TransformStyle { Flat, Preserve3d }`, see STATUS-P4 task #5 item 4). Once
-// the field lands, the body becomes:
-//   `b.style.transform_style == TransformStyle::Preserve3d`
-// Until then this returns `false` (flat compositing, unchanged behaviour); the
-// depth-sort path below is exercised directly by unit tests.
-fn establishes_3d_rendering_context(_b: &LayoutBox) -> bool {
-    false
+fn establishes_3d_rendering_context(b: &LayoutBox) -> bool {
+    b.style.transform_style == TransformStyle::Preserve3d
 }
 
 /// Transformed depth of a box's center within its parent's 3D rendering
