@@ -1453,6 +1453,162 @@ pub trait ClipboardProvider: Send + Sync {
     fn write_text(&self, text: &str);
 }
 
+/// Failure reason from a [`CredentialProvider`] operation.
+///
+/// Each variant maps to the `DOMException` name the WebAuthn spec mandates the
+/// browser reject the `navigator.credentials.create()` / `.get()` promise with.
+/// `lumen-js` translates the variant into a `DOMException` of the matching name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebAuthnError {
+    /// User (or platform) declined / no usable authenticator — `NotAllowedError`.
+    /// This is the privacy-preserving default when no authenticator is wired in:
+    /// the relying party cannot distinguish "user said no" from "device absent".
+    NotAllowed,
+    /// A credential in `exclude_credentials` is already registered, or the
+    /// requested `allow_credentials` set matched nothing — `InvalidStateError`.
+    InvalidState,
+    /// A requested option could not be satisfied (e.g. no acceptable COSE
+    /// algorithm in `pub_key_algs`) — `ConstraintError`.
+    Constraint,
+    /// The request is structurally unsupported (e.g. empty algorithm list) —
+    /// `NotSupportedError`.
+    NotSupported,
+}
+
+impl WebAuthnError {
+    /// The `DOMException` name `lumen-js` should reject the promise with.
+    pub fn dom_exception_name(&self) -> &'static str {
+        match self {
+            Self::NotAllowed => "NotAllowedError",
+            Self::InvalidState => "InvalidStateError",
+            Self::Constraint => "ConstraintError",
+            Self::NotSupported => "NotSupportedError",
+        }
+    }
+}
+
+/// A WebAuthn credential-creation (registration) request.
+///
+/// The relevant subset of `PublicKeyCredentialCreationOptions` (W3C WebAuthn L2
+/// §5.4) after the browser has resolved defaults. All byte fields are raw
+/// (already base64url-decoded at the JS boundary).
+#[derive(Debug, Clone)]
+pub struct WebAuthnCreateRequest {
+    /// Relying-party identifier (effective domain, e.g. `"example.com"`).
+    pub rp_id: String,
+    /// Human-readable relying-party name (for display / attestation).
+    pub rp_name: String,
+    /// Opaque user handle bytes (`user.id`), echoed back on assertion.
+    pub user_id: Vec<u8>,
+    /// User account name (e.g. an email).
+    pub user_name: String,
+    /// Human-readable user display name.
+    pub user_display_name: String,
+    /// Server-supplied challenge bytes, signed into `clientDataJSON`.
+    pub challenge: Vec<u8>,
+    /// Caller origin (`scheme://host[:port]`), embedded in `clientDataJSON`.
+    pub origin: String,
+    /// Accepted COSE algorithm identifiers in preference order
+    /// (e.g. `-7` = ES256). The provider picks the first it supports.
+    pub pub_key_algs: Vec<i64>,
+    /// Whether the relying party requires user verification (UV flag).
+    pub require_user_verification: bool,
+    /// Credential IDs already registered for this user — creation must fail with
+    /// [`WebAuthnError::InvalidState`] if the authenticator already holds one.
+    pub exclude_credentials: Vec<Vec<u8>>,
+}
+
+/// The result of a successful [`CredentialProvider::create`].
+///
+/// Mirrors `AuthenticatorAttestationResponse` (W3C WebAuthn L2 §5.2.1). Byte
+/// fields are raw; the JS boundary base64url-encodes them back into ArrayBuffers.
+#[derive(Debug, Clone)]
+pub struct WebAuthnCreateResponse {
+    /// The new credential's ID (raw bytes; becomes `PublicKeyCredential.rawId`).
+    pub credential_id: Vec<u8>,
+    /// CBOR attestation object (`fmt` + `attStmt` + `authData`).
+    pub attestation_object: Vec<u8>,
+    /// The exact `clientDataJSON` bytes the provider serialised (and hashed).
+    pub client_data_json: Vec<u8>,
+    /// Raw authenticator data (returned by `getAuthenticatorData()`).
+    pub authenticator_data: Vec<u8>,
+    /// COSE algorithm identifier of the generated key (e.g. `-7` = ES256).
+    pub public_key_alg: i64,
+    /// SubjectPublicKeyInfo DER of the public key, if the algorithm has a known
+    /// DER encoding (`getPublicKey()`); `None` otherwise.
+    pub public_key_der: Option<Vec<u8>>,
+    /// Transport hints (e.g. `["internal"]`).
+    pub transports: Vec<String>,
+}
+
+/// A WebAuthn assertion (authentication) request.
+///
+/// The relevant subset of `PublicKeyCredentialRequestOptions` (W3C WebAuthn L2
+/// §5.5) after default resolution.
+#[derive(Debug, Clone)]
+pub struct WebAuthnGetRequest {
+    /// Relying-party identifier the assertion is scoped to.
+    pub rp_id: String,
+    /// Server-supplied challenge bytes to be signed.
+    pub challenge: Vec<u8>,
+    /// Caller origin embedded in `clientDataJSON`.
+    pub origin: String,
+    /// Acceptable credential IDs; empty means "any credential for this rp_id".
+    pub allow_credentials: Vec<Vec<u8>>,
+    /// Whether the relying party requires user verification (UV flag).
+    pub require_user_verification: bool,
+}
+
+/// The result of a successful [`CredentialProvider::get`].
+///
+/// Mirrors `AuthenticatorAssertionResponse` (W3C WebAuthn L2 §5.2.2).
+#[derive(Debug, Clone)]
+pub struct WebAuthnGetResponse {
+    /// The credential ID that produced the assertion (raw bytes).
+    pub credential_id: Vec<u8>,
+    /// Authenticator data signed over (rpIdHash + flags + signCount).
+    pub authenticator_data: Vec<u8>,
+    /// The signature over `authenticator_data || SHA-256(client_data_json)`.
+    pub signature: Vec<u8>,
+    /// The exact `clientDataJSON` bytes the provider serialised (and hashed).
+    pub client_data_json: Vec<u8>,
+    /// User handle (`user.id`) associated with the credential, if any.
+    pub user_handle: Option<Vec<u8>>,
+}
+
+/// Provider of WebAuthn / passkey credentials, backing `navigator.credentials`.
+///
+/// Bridges the `lumen-js` `navigator.credentials.create()` / `.get()` shim to a
+/// host authenticator without `lumen-js` depending on `lumen-network`
+/// (acyclic graph, mirrors [`JsFetchProvider`]). Installed process-globally by
+/// the shell via `lumen_js::set_credential_provider`.
+///
+/// Implementations:
+/// - `lumen_network::VirtualAuthenticator` — software passkey store (real
+///   ES256 keys, deterministic RFC 6979 signatures); used for tests, automation,
+///   and as the default platform authenticator until a hardware CTAP2 client
+///   lands.
+/// - future: a platform-authenticator bridge (Windows Hello / Touch ID) and a
+///   roaming CTAP2-over-USB client.
+///
+/// When no provider is installed, `lumen-js` rejects both operations with
+/// `NotAllowedError` — the privacy-preserving "no authenticator" default.
+pub trait CredentialProvider: Send + Sync {
+    /// Create (register) a new credential. Returns an attestation response or a
+    /// [`WebAuthnError`] the JS layer maps to a `DOMException`.
+    fn create(&self, req: &WebAuthnCreateRequest) -> std::result::Result<WebAuthnCreateResponse, WebAuthnError>;
+
+    /// Produce an assertion (sign the challenge) with an existing credential.
+    fn get(&self, req: &WebAuthnGetRequest) -> std::result::Result<WebAuthnGetResponse, WebAuthnError>;
+
+    /// Whether a user-verifying platform authenticator is available
+    /// (`PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`).
+    /// Defaults to `true` for providers that always offer a platform key.
+    fn is_user_verifying_platform_authenticator_available(&self) -> bool {
+        true
+    }
+}
+
 /// A single queued event from a WebSocket connection, ready for delivery to JS.
 ///
 /// Produced by the background recv thread; consumed by `JsWebSocketSession::poll`.
