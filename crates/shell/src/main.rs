@@ -391,7 +391,10 @@ fn run_window_mode(
         deterministic,
         devtools_console: devtools::console_panel::ConsolePanel::new(),
         dom_inspector: devtools::inspector::DomInspectorPanel::new(),
-        network_panel: devtools::network_panel::NetworkPanel::new(network_log),
+        network_panel: devtools::network_panel::NetworkPanel::new(std::sync::Arc::clone(
+            &network_log,
+        )),
+        privacy: panels::privacy_panel::PrivacyPanel::new(network_log),
         fallbacks_preloaded: false,
     };
     // Restore the previous session only when launched without an explicit page
@@ -1495,6 +1498,8 @@ enum KeyCommand {
     DevInspector,
     /// Показать/скрыть DevTools панель сети (Ctrl+Shift+E, §7E.4).
     DevNetwork,
+    /// Показать/скрыть privacy-панель сети (Ctrl+Shift+Y, V5).
+    TogglePrivacy,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1607,6 +1612,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+E — toggle DevTools network panel (§7E.4)
         KeyCode::KeyE if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::DevNetwork)
+        }
+        // Ctrl+Shift+Y — toggle privacy network panel (V5)
+        KeyCode::KeyY if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::TogglePrivacy)
         }
         _ => None,
     }
@@ -3235,6 +3244,15 @@ struct Lumen {
     /// fed by `NetworkLogSink` from the engine's `EventSink`. Bottom overlay,
     /// toggled with `Ctrl+Shift+E`.
     network_panel: devtools::network_panel::NetworkPanel,
+    /// Privacy network panel (V5).
+    ///
+    /// A privacy-focused, right-docked overlay sharing the same `NetworkLog` as
+    /// [`network_panel`]: it presents the request stream as a newest-first log of
+    /// tracker domains with blocked/allowed status and the matched filter rule,
+    /// plus a blocked/allowed summary. Toggled with `Ctrl+Shift+Y`.
+    ///
+    /// [`network_panel`]: Lumen::network_panel
+    privacy: panels::privacy_panel::PrivacyPanel,
     /// Whether the curated system-font fallback chain has been preloaded into
     /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
     ///
@@ -4480,6 +4498,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // Privacy network panel (V5): right-docked overlay.
+                    if self.privacy.visible {
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css() + tab_h;
+                        match panels::privacy_panel::hit_test(
+                            &self.privacy,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                            tab_h,
+                        ) {
+                            panels::privacy_panel::PrivacyHit::Close => {
+                                self.privacy.visible = false;
+                                self.request_redraw();
+                                return;
+                            }
+                            // Swallow clicks inside the panel so they don't reach
+                            // the page underneath.
+                            panels::privacy_panel::PrivacyHit::Inside => return,
+                            panels::privacy_panel::PrivacyHit::Outside => {}
+                        }
+                    }
+
                     // Permission popover (7C.2): top-left overlay below tab bar.
                     if self.permission.visible {
                         let tab_h = tabs::strip::TAB_BAR_HEIGHT;
@@ -4697,6 +4740,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
+                // Privacy network panel intercepts the wheel while visible:
+                // scroll the request list instead of the page.
+                if self.privacy.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + tab_h;
+                    let body_h = panels::privacy_panel::list_body_height(win_h, tab_h);
+                    if lines > 0.0 {
+                        self.privacy.scroll_up(lines.abs().ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.privacy.scroll_down(lines.abs().ceil() as usize, body_h);
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // DevTools network panel intercepts the wheel while visible:
                 // scroll the request list instead of the page.
                 if self.network_panel.visible {
@@ -5126,6 +5187,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         net_win_size,
                     );
                     overlay_buf.append(&mut net_cmds);
+                }
+
+                // Privacy network panel (V5): right-docked overlay, Ctrl+Shift+Y.
+                if self.privacy.visible {
+                    self.privacy.refresh();
+                    let priv_win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let mut priv_cmds = panels::privacy_panel::build_privacy_panel(
+                        &self.privacy,
+                        priv_win_size,
+                        tabs::strip::TAB_BAR_HEIGHT,
+                    );
+                    overlay_buf.append(&mut priv_cmds);
                 }
 
                 // DevTools DOM inspector: right-docked computed-style side panel.
@@ -5998,6 +6074,10 @@ impl Lumen {
             }
             KeyCommand::DevNetwork => {
                 self.network_panel.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::TogglePrivacy => {
+                self.privacy.toggle();
                 self.request_redraw();
             }
         }
