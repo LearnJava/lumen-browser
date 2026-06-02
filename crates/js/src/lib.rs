@@ -2,6 +2,7 @@ pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
 pub mod broadcast_channel;
+pub mod canvas2d;
 pub mod clipboard;
 pub mod cookie_banner;
 pub mod credentials;
@@ -254,6 +255,13 @@ impl QuickJsRuntime {
                 eprintln!("WebGL bindings init failed: {}", e);
             }
 
+            // Install Canvas 2D native bindings (HTML LS §4.12.4). The JS-side
+            // getContext('2d') shim lives in dom.rs::_lumen_make_element and
+            // calls these `_lumen_canvas2d_*` functions keyed by node index.
+            if let Err(e) = canvas2d::install_canvas2d_bindings(&ctx) {
+                eprintln!("Canvas 2D bindings init failed: {}", e);
+            }
+
             // Install AudioContext stub with per-session fingerprint noise (ADR-007 Layer 4, 9D.3).
             let audio_seed = audio_bindings::new_session_seed();
             if let Err(e) = audio_bindings::install_audio_bindings(&ctx, audio_seed) {
@@ -430,6 +438,20 @@ impl QuickJsRuntime {
         guard.ctx.with(|ctx| {
             ctx.eval::<(), _>(script.as_str()).ok();
         });
+    }
+
+    /// Drain dirty Canvas 2D buffers for upload to the renderer.
+    ///
+    /// Returns `(node_index, width, height, rgba)` for every `<canvas>` whose
+    /// 2D context was drawn to since the last call. The shell uploads each as
+    /// `Renderer::register_image("canvas:{nid}", ...)` and requests a repaint.
+    ///
+    /// Acquires the runtime lock so the thread-local canvas registry is read on
+    /// the same thread that executes the JS context. Shell must call this on
+    /// every event-loop tick (alongside `pump_workers()`).
+    pub fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|_ctx| canvas2d::flush_dirty())
     }
 
     /// Deliver messages posted to this page's `BroadcastChannel` instances.

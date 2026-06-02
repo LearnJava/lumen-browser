@@ -894,7 +894,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-js  (81 symbols)
+## lumen-js  (84 symbols)
 
 `crates/js/src/audio_bindings.rs:25` **fn** `new_session_seed` — Generate a unique per-session noise seed
 `crates/js/src/audio_bindings.rs:37` **fn** `install_audio_bindings` — Install AudioContext stub with fingerprint noise into the JS context
@@ -907,6 +907,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/broadcast_channel.rs:119` **fn** `close` — Remove the channel instance `id` from the global hub and this runtime
 `crates/js/src/broadcast_channel.rs:135` **fn** `drain` — Drain all pending messages addressed to this runtime's channels
 `crates/js/src/broadcast_channel.rs:150` **fn** `install_broadcast_channel_bindings` — Install the `_lumen_bc_*` native bindings and the `BroadcastChannel` JS class
+`crates/js/src/canvas2d.rs:66` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
+`crates/js/src/canvas2d.rs:93` **fn** `install_canvas2d_bindings` — Register the `_lumen_canvas2d_*` native functions on `globals`
 `crates/js/src/clipboard.rs:33` **fn** `set_clipboard_provider` — Install the host clipboard provider backing `navigator.clipboard`
 `crates/js/src/cookie_banner.rs:30` **fn** `install_cookie_banner_bindings` — Install cookie-banner auto-dismiss shim into the JS context
 `crates/js/src/cookie_banner.rs:160` **fn** `install_with_selectors` — Build the `_LUMEN_CONSENT_SELECTORS` global value and inject the shim
@@ -922,32 +924,33 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/heap_snapshot.rs:74` **fn** `compress_heap` — Compress a raw heap payload into a [`SuspendedHeap`]
 `crates/js/src/heap_snapshot.rs:97` **fn** `decompress_heap` — Inverse of [`compress_heap`]: strip the [`HEAP_MAGIC`] prefix and inflate
 `crates/js/src/intl_bindings.rs:42` **fn** `install_intl_bindings` — Install the `Intl` shim into the JS context
-`crates/js/src/lib.rs:42` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:56` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:160` **fn** `new`
-`crates/js/src/lib.rs:225` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:398` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:407` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:419` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:444` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:469` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:488` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:498` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:506` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:515` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:524` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:533` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:541` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:550` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:562` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:571` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:580` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:591` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:600` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:609` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:619` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:637` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:649` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:43` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:57` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:161` **fn** `new`
+`crates/js/src/lib.rs:226` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:406` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:415` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:427` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:452` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
+`crates/js/src/lib.rs:466` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:491` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:510` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:520` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:528` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:537` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:546` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:555` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:563` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:572` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:584` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:593` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:602` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:613` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:622` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:631` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:641` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:659` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:671` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
 `crates/js/src/navigator_bindings.rs:36` **struct** `NavigatorProfile` — High-entropy `navigator` / `screen` / timezone values exposed to JavaScript
 `crates/js/src/navigator_bindings.rs:86` **fn** `set_navigator_profile` — Install a process-wide navigator profile (9F.1). Subsequent calls to the
 `crates/js/src/navigator_bindings.rs:93` **fn** `current_navigator_profile` — Return the currently configured profile, or the default if none was set
@@ -1062,30 +1065,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/animation.rs:1103` **fn** `sync` — Detect value changes between `old` and `new` style for properties listed
 `crates/engine/layout/src/animation.rs:1186` **fn** `remove_node` — Remove all transition state for `node` (called when node leaves DOM)
 `crates/engine/layout/src/animation.rs:1219` **fn** `tick` — Compute interpolated style overrides for the current frame
-`crates/engine/layout/src/box_tree.rs:72` **struct** `ViewBox` — SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
-`crates/engine/layout/src/box_tree.rs:87` **struct** `PreserveAspectRatio` — SVG `preserveAspectRatio` attribute for aspect-ratio preservation
-`crates/engine/layout/src/box_tree.rs:98` **enum** `SvgAlignX` — SVG preserveAspectRatio horizontal alignment
-`crates/engine/layout/src/box_tree.rs:109` **enum** `SvgAlignY` — SVG preserveAspectRatio vertical alignment
-`crates/engine/layout/src/box_tree.rs:120` **enum** `SvgMeetOrSlice` — SVG preserveAspectRatio meet-or-slice mode
-`crates/engine/layout/src/box_tree.rs:130` **struct** `SvgTransform` — SVG transformation data from the `transform` presentation attribute
-`crates/engine/layout/src/box_tree.rs:138` **fn** `identity` — Creates an identity transform (no transformation)
-`crates/engine/layout/src/box_tree.rs:143` **fn** `compose` — Multiplies this transform by another, composing them
-`crates/engine/layout/src/box_tree.rs:158` **fn** `transform_point` — Applies this transform to a point (x, y)
-`crates/engine/layout/src/box_tree.rs:167` **enum** `SvgShapeKind` — Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling)
-`crates/engine/layout/src/box_tree.rs:184` **enum** `FormControlKind` — Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
-`crates/engine/layout/src/box_tree.rs:785` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
-`crates/engine/layout/src/box_tree.rs:800` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
-`crates/engine/layout/src/box_tree.rs:820` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
-`crates/engine/layout/src/box_tree.rs:920` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:947` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:985` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:1003` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:1035` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:1153` **fn** `layout`
-`crates/engine/layout/src/box_tree.rs:1167` **fn** `layout_measured`
-`crates/engine/layout/src/box_tree.rs:1178` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:4754` **fn** `measure_text_w`
-`crates/engine/layout/src/box_tree.rs:5619` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:80` **struct** `ViewBox` — SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
+`crates/engine/layout/src/box_tree.rs:95` **struct** `PreserveAspectRatio` — SVG `preserveAspectRatio` attribute for aspect-ratio preservation
+`crates/engine/layout/src/box_tree.rs:106` **enum** `SvgAlignX` — SVG preserveAspectRatio horizontal alignment
+`crates/engine/layout/src/box_tree.rs:117` **enum** `SvgAlignY` — SVG preserveAspectRatio vertical alignment
+`crates/engine/layout/src/box_tree.rs:128` **enum** `SvgMeetOrSlice` — SVG preserveAspectRatio meet-or-slice mode
+`crates/engine/layout/src/box_tree.rs:138` **struct** `SvgTransform` — SVG transformation data from the `transform` presentation attribute
+`crates/engine/layout/src/box_tree.rs:146` **fn** `identity` — Creates an identity transform (no transformation)
+`crates/engine/layout/src/box_tree.rs:151` **fn** `compose` — Multiplies this transform by another, composing them
+`crates/engine/layout/src/box_tree.rs:166` **fn** `transform_point` — Applies this transform to a point (x, y)
+`crates/engine/layout/src/box_tree.rs:175` **enum** `SvgShapeKind` — Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling)
+`crates/engine/layout/src/box_tree.rs:192` **enum** `FormControlKind` — Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
+`crates/engine/layout/src/box_tree.rs:793` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
+`crates/engine/layout/src/box_tree.rs:808` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
+`crates/engine/layout/src/box_tree.rs:828` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+`crates/engine/layout/src/box_tree.rs:928` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree.rs:955` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:993` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:1011` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:1043` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:1174` **fn** `layout`
+`crates/engine/layout/src/box_tree.rs:1188` **fn** `layout_measured`
+`crates/engine/layout/src/box_tree.rs:1199` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:4796` **fn** `measure_text_w`
+`crates/engine/layout/src/box_tree.rs:5661` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/counters.rs:33` **type** `CounterSnapshot` — Per-element counter stacks snapshot
 `crates/engine/layout/src/counters.rs:37` **type** `CounterMap` — Maps each element `NodeId` to its counter snapshot (after own reset/increment,
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
@@ -2866,4 +2869,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2801 symbols in 20 crates*
+*Total: 2804 symbols in 20 crates*

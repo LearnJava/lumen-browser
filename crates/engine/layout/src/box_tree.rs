@@ -48,6 +48,14 @@ fn is_video_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// HTML-имя `<canvas>` для распознавания replaced-боксов рисовалки в layout.
+fn is_canvas_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "canvas"
+    )
+}
+
 /// HTML-имя `<audio>` для распознавания media replaced-боксов в layout.
 fn is_audio_element(doc: &Document, id: NodeId) -> bool {
     matches!(
@@ -1069,6 +1077,19 @@ pub enum BoxKind {
         /// Poster image URL (`poster` attribute), may be empty.
         poster: String,
     },
+    /// Replaced element: HTML `<canvas>` element — CPU-rasterized drawing surface
+    /// (HTML Living Standard §4.12.4).
+    ///
+    /// Phase 0: the pixel buffer is produced by JS Canvas 2D drawing operations
+    /// (`canvas.getContext('2d')`) and rendered via a `DrawImage` command keyed by
+    /// `canvas:{node_id}`. Intrinsic size comes from the `width`/`height` content
+    /// attributes; UA defaults are 300×150 CSS px (HTML LS §4.12.4).
+    Canvas {
+        /// Canvas bitmap width in CSS pixels (from `width` attribute, default 300).
+        width: u32,
+        /// Canvas bitmap height in CSS pixels (from `height` attribute, default 150).
+        height: u32,
+    },
     /// Replaced element: HTML `<audio>` element (HTML spec §4.8.10).
     ///
     /// Phase 0: no audio playback. Without `controls` attribute: 0×0 (invisible).
@@ -1878,6 +1899,27 @@ fn build_box(
                     style.height = Some(Length::Px(150.0));
                 }
                 BoxKind::Video { src, poster }
+            } else if is_canvas_element(doc, id) {
+                let node = doc.get(id);
+                // HTML LS §4.12.4: width/height content attributes are
+                // non-negative integers; defaults are 300×150 CSS px.
+                let cw = node
+                    .get_attr("width")
+                    .and_then(|v| v.trim().parse::<u32>().ok())
+                    .unwrap_or(300);
+                let ch = node
+                    .get_attr("height")
+                    .and_then(|v| v.trim().parse::<u32>().ok())
+                    .unwrap_or(150);
+                // The bitmap dimensions act as intrinsic size; explicit CSS
+                // width/height (or presentational hints) win if already set.
+                if style.width.is_none() {
+                    style.width = Some(Length::Px(cw as f32));
+                }
+                if style.height.is_none() {
+                    style.height = Some(Length::Px(ch as f32));
+                }
+                BoxKind::Canvas { width: cw, height: ch }
             } else if is_audio_element(doc, id) {
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
@@ -2508,7 +2550,7 @@ fn lay_out(
     // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
-    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::FormControl { .. });
+    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::FormControl { .. });
     b.rect.width = if is_replaced {
         0.0
     } else {
@@ -2721,7 +2763,7 @@ fn lay_out(
     let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
-        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Audio { .. } | BoxKind::FormControl { .. } => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(

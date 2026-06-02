@@ -131,6 +131,7 @@ const PAGES: &[&str] = &[
     "47-svg-basic",
     "55-text-rendering",
     "56-mix-blend-mode",
+    "57-canvas-2d",
     "15-box-shadow",
     "52-text-shadow-blur",
     "30-css-filter",

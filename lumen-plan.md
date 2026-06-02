@@ -226,6 +226,7 @@
 | 4.5.2 | ✅ forward_box_transform публичный из layout | `layout/src/property_trees.rs` | 2026-05-20 |
 | 4.5.3 | ✅ transform_stack + CPU-side vertex transformation | `paint/src/renderer.rs` | 2026-05-20 |
 | 5A | ✅ **Canvas 2D basic context** — CPU rasterizer, `CanvasRenderingContext2D` Phase 0 | `engine/canvas/` | 2026-05-22 |
+| 5A.2 | ✅ **Canvas 2D JS bindings** — `canvas.getContext('2d')` → `lumen_canvas::Context2D`; `BoxKind::Canvas` replaced element; `DrawImage` keyed `canvas:{nid}`; dirty-buffer flush to renderer | `js/src/canvas2d.rs` + `layout/box_tree.rs` + `paint/display_list.rs` + `shell` | 2026-06-02 |
 | 5B | ✅ **WOFF2/WOFF1 decoder** — brotli + zlib, glyf transform, sfnt rebuild | `engine/font/src/woff2.rs` | 2026-05-22 |
 | 5+ | ✅ **GPU linear/radial gradient pipeline** — WGSL шейдер + CPU uniform + DrawOp::Gradient | `paint/src/renderer.rs` | 2026-05-22 |
 | 5++ | ✅ **Extras**: object-fit ✅, variable fonts ✅, Print PDF Phase 1 (✅ pagination module) | `layout/src/pagination.rs` | 2026-05-28 |
