@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: Web Animations API JS runtime (задача #31)  branch: p1-web-animations
+Next step: реализовать KeyframeEffect + Animation + element.animate() в crates/js/src/dom.rs
 
 ---
 
