@@ -1867,7 +1867,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
 `crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
-## lumen-shell  (444 symbols)
+## lumen-shell  (463 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2119,6 +2119,25 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/command_palette.rs:430` **enum** `PaletteHit` — Result of a click inside the modal palette
 `crates/shell/src/panels/command_palette.rs:454` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the modal palette in a
 `crates/shell/src/panels/command_palette.rs:477` **fn** `build_panel` — Build the display list for the modal palette over a `viewport_w`×`viewport_h`
+`crates/shell/src/panels/focus_panel.rs:72` **struct** `PomodoroTimer` — Wall-clock-driven countdown timer
+`crates/shell/src/panels/focus_panel.rs:88` **fn** `new` — Create a running timer of `duration_min` minutes with zero elapsed time
+`crates/shell/src/panels/focus_panel.rs:100` **fn** `tick` — Advance the timer to wall-clock `now_ms`.  Adds the delta since the last
+`crates/shell/src/panels/focus_panel.rs:111` **fn** `remaining_ms` — Remaining time in milliseconds, clamped to `>= 0`
+`crates/shell/src/panels/focus_panel.rs:116` **fn** `progress` — Elapsed fraction in `[0, 1]`.  Returns `1.0` for a zero-length duration
+`crates/shell/src/panels/focus_panel.rs:124` **fn** `is_finished` — `true` once the full duration has elapsed
+`crates/shell/src/panels/focus_panel.rs:129` **fn** `pause` — Pause counting.  Clears the tick baseline so the paused span is excluded
+`crates/shell/src/panels/focus_panel.rs:136` **fn** `resume` — Resume counting.  Clears the tick baseline so the gap before the next
+`crates/shell/src/panels/focus_panel.rs:142` **fn** `toggle_pause` — Flip between paused and running
+`crates/shell/src/panels/focus_panel.rs:151` **fn** `label` — Remaining time formatted as `MM:SS` (rounded up to whole seconds)
+`crates/shell/src/panels/focus_panel.rs:162` **struct** `FocusModePanel` — Focus-mode panel state: the active flag plus the embedded [`PomodoroTimer`]
+`crates/shell/src/panels/focus_panel.rs:171` **fn** `new` — Create an inactive panel with a default-length (paused-at-zero) timer
+`crates/shell/src/panels/focus_panel.rs:179` **fn** `enter` — Enter focus mode with a fresh `duration_min`-minute timer
+`crates/shell/src/panels/focus_panel.rs:185` **fn** `exit` — Leave focus mode (the timer state is kept but no longer ticked)
+`crates/shell/src/panels/focus_panel.rs:190` **fn** `toggle` — Toggle focus mode: enter with `duration_min` when off, else exit
+`crates/shell/src/panels/focus_panel.rs:199` **fn** `tick` — Advance the embedded timer to `now_ms` when active (no-op otherwise)
+`crates/shell/src/panels/focus_panel.rs:216` **enum** `FocusHit` — Result of a click inside the focus widget card
+`crates/shell/src/panels/focus_panel.rs:232` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the focus widget card
+`crates/shell/src/panels/focus_panel.rs:254` **fn** `build_panel` — Build the display list for the focus widget overlay
 `crates/shell/src/panels/permission_panel.rs:58` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
 `crates/shell/src/panels/permission_panel.rs:79` **fn** `label` — Short display name for the permission row label
 `crates/shell/src/panels/permission_panel.rs:89` **fn** `icon` — Emoji icon shown to the left of the label
@@ -2720,4 +2739,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2654 symbols in 20 crates*
+*Total: 2674 symbols in 20 crates*

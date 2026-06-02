@@ -378,6 +378,7 @@ fn run_window_mode(
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
         command_palette: panels::command_palette::CommandPalette::new(),
+        focus: panels::focus_panel::FocusModePanel::new(),
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1484,6 +1485,8 @@ enum KeyCommand {
     ToggleBookmarks,
     /// Показать/скрыть командную палитру (Ctrl+K, §7E.2, task #23).
     ToggleCommandPalette,
+    /// Войти/выйти из focus mode + Pomodoro (Ctrl+Shift+F, task #25, V4).
+    ToggleFocusMode,
     /// Добавить текущую страницу в закладки (Ctrl+D).
     BookmarkCurrentPage,
     /// Показать/скрыть DevTools JS-консоль (F12, §7E.5).
@@ -1586,6 +1589,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+O — toggle bookmark manager panel (task #22)
         KeyCode::KeyO if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleBookmarks)
+        }
+        // Ctrl+Shift+F — toggle focus mode + Pomodoro timer (task #25, V4)
+        KeyCode::KeyF if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleFocusMode)
         }
         // Ctrl+K — toggle the command palette (§7E.2)
         KeyCode::KeyK if ctrl_only => Some(KeyCommand::ToggleCommandPalette),
@@ -3154,6 +3161,13 @@ struct Lumen {
     /// bookmarks and history. While visible it captures all keyboard and pointer
     /// input; `↑/↓` move the selection, `Enter` activates, `Esc` closes.
     command_palette: panels::command_palette::CommandPalette,
+    /// Focus mode + Pomodoro timer panel (task #25, V4).
+    ///
+    /// `Ctrl+Shift+F` enters a distraction-free focus mode: the tab bar is
+    /// hidden and a compact Pomodoro countdown widget with an arc progress ring
+    /// floats in the top-right corner. `Esc` exits focus mode (instead of
+    /// quitting). The embedded `PomodoroTimer` is ticked from `about_to_wait`.
+    focus: panels::focus_panel::FocusModePanel,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -4115,6 +4129,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Tab lifecycle: advance tier timers, trigger hibernation for overdue tabs.
         self.tick_lifecycle();
 
+        // Focus mode (task #25): advance the Pomodoro countdown and keep
+        // redrawing while the ring animates (only while active and running).
+        if self.focus.active {
+            self.focus.tick(now_ms);
+            if self.focus.timer.running {
+                self.request_redraw();
+            }
+        }
+
         // Memory pressure: poll OS every 5 s; evict caches on Medium+ pressure.
         if let Some(level) = self.memory_poll.tick(&mut self.cache_registry) {
             self.image_cache.on_memory_pressure(level);
@@ -4329,6 +4352,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                         self.request_redraw();
                         return;
+                    }
+
+                    // Focus mode widget (task #25): floating top-right card. A
+                    // click on the ring pauses/resumes; the `×` corner exits.
+                    if self.focus.active {
+                        let win_w = self.viewport_width_css();
+                        if let Some(hit) =
+                            panels::focus_panel::hit_test(&self.focus, x_css, y_css, win_w)
+                        {
+                            match hit {
+                                panels::focus_panel::FocusHit::TogglePause => {
+                                    self.focus.timer.toggle_pause();
+                                    if self.focus.timer.running {
+                                        let now_ms =
+                                            self.epoch.elapsed().as_secs_f64() * 1000.0;
+                                        self.focus.tick(now_ms);
+                                    }
+                                }
+                                panels::focus_panel::FocusHit::Exit => self.focus.exit(),
+                            }
+                            self.request_redraw();
+                            return;
+                        }
                     }
 
                     // Tab bar occupies y = 0..TAB_BAR_HEIGHT — dispatch first.
@@ -5199,7 +5245,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
                 // Rendered last → always on top of all other overlays.
-                {
+                // Hidden in focus mode (task #25) for a distraction-free view;
+                // the page transform offset is left unchanged so toggling focus
+                // mode never reflows content (the strip shows page background).
+                if !self.focus.active {
                     let win_w = self.viewport_width_css();
                     let mut tab_cmds =
                         tabs::strip::build_tab_bar(&self.tab_strip, win_w);
@@ -5218,6 +5267,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         win_h,
                     );
                     overlay_buf.append(&mut cp_cmds);
+                }
+
+                // Focus mode widget (task #25): floating Pomodoro card with an
+                // arc progress ring, drawn on top of everything (including where
+                // the now-hidden tab bar was).
+                if self.focus.active {
+                    let win_w = self.viewport_width_css();
+                    let mut focus_cmds =
+                        panels::focus_panel::build_panel(&self.focus, win_w);
+                    overlay_buf.append(&mut focus_cmds);
                 }
 
                 // Build the split-view combined DL before borrowing renderer,
@@ -5739,6 +5798,19 @@ impl Lumen {
             }
         }
 
+        // Focus mode (task #25): while active, Escape exits focus mode instead of
+        // quitting the app. Ctrl+Shift+F falls through to the keybinding table so
+        // it can toggle focus mode off.
+        if self.focus.active
+            && code == KeyCode::Escape
+            && self.modifiers.is_empty()
+            && !key_event.repeat
+        {
+            self.focus.exit();
+            self.request_redraw();
+            return;
+        }
+
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };
@@ -5895,6 +5967,16 @@ impl Lumen {
                 self.command_palette.toggle();
                 if self.command_palette.visible {
                     self.refresh_palette_items();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleFocusMode => {
+                // Enter with a default-length Pomodoro; re-baseline the timer so
+                // the elapsed gap before the panel opened is not counted.
+                self.focus.toggle(panels::focus_panel::DEFAULT_POMODORO_MIN);
+                if self.focus.active {
+                    let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                    self.focus.tick(now_ms);
                 }
                 self.request_redraw();
             }
