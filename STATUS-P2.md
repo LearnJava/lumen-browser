@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+C3: **CSS 3D transforms — `perspective()` + `transform-style: preserve-3d`**  branch: p2-css-3d-wiring
+Next step: Add TransformFn 3D variants + TransformStyle enum + perspective_origin  layout/src/style.rs:3883
 
 ---
 

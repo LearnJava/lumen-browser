@@ -614,7 +614,7 @@ fn affine_of(fn_: &TransformFn) -> Affine {
         TransformFn::Translate(x, y) => [1.0, 0.0, 0.0, 1.0, *x, *y],
         TransformFn::TranslateX(x) => [1.0, 0.0, 0.0, 1.0, *x, 0.0],
         TransformFn::TranslateY(y) => [1.0, 0.0, 0.0, 1.0, 0.0, *y],
-        TransformFn::Rotate(theta) => {
+        TransformFn::Rotate(theta) | TransformFn::RotateZ(theta) => {
             let c = theta.cos();
             let s = theta.sin();
             [c, s, -s, c, 0.0, 0.0]
@@ -625,6 +625,9 @@ fn affine_of(fn_: &TransformFn) -> Affine {
         TransformFn::SkewX(a) => [1.0, 0.0, a.tan(), 1.0, 0.0, 0.0],
         TransformFn::SkewY(a) => [1.0, a.tan(), 0.0, 1.0, 0.0, 0.0],
         TransformFn::Matrix(m) => *m,
+        // 3D functions have no 2D affine equivalent — use identity for
+        // the legacy 2D animation path; the full Mat4 path handles them.
+        _ => IDENTITY,
     }
 }
 
