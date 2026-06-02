@@ -54,6 +54,14 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
+### CSS `image-set()` background image (P2 feature p2-css-image-set)
+- **Status:** Paint-side resolution ready. `lumen-paint::select_image_set_url(value, dpr) -> &str` (`display_list.rs`) parses `image-set( <url-or-string> [<resolution>]# )` (units `x`/`dppx`/`dpi`/`dpcm`, default `1x`) and returns the URL closest to `dpr` (tie → higher resolution). `is_image_set(value)` detects the function (incl. `-webkit-image-set(`). `emit_background_layer` already calls them for `BackgroundImage::Url` values — if the stored string is an `image-set(…)` expression it resolves to a single URL before emitting `DrawBackgroundImage` (marked `// CSS: image-set`). DPR is threaded purely (no globals): `build_display_list_ordered_dpr` / `build_display_list_ordered_with_anim_dpr` take a `dpr` arg; the non-`_dpr` builders default to `1.0`.
+- **P4 task:**
+  1. In `style.rs` background-image parsing (`parse_single_bg_layer`, near the `url(...)` / gradient branches, ~line 13345) detect `image-set(` / `-webkit-image-set(` tokens and store the **raw function string** in `BackgroundImage::Url(...)` (do **not** pre-resolve — paint picks per-DPR). Same for `background` shorthand layer parsing.
+  2. (Optional, sharper) Shell/P3: pass the real window scale factor into `build_display_list_ordered_dpr` instead of the default `1.0` so HiDPI screens select 2× assets. Currently shell uses `build_display_list_ordered` (dpr = 1.0).
+- **Entry points:** `lumen-layout/src/style.rs` `parse_single_bg_layer` (background-image token loop); paint resolution is already wired in `lumen-paint/src/display_list.rs` `emit_background_layer`.
+- **CSS comment location:** `display_list.rs` `emit_background_layer` `// CSS: image-set`.
+
 ### CSS 3D transforms — `perspective()` + 3D functions (P2 feature p2-css-3d-transforms)
 - **Status:** GPU/matrix primitive ready. `Mat4` has 3D constructors (`perspective(d)`, `rotate_x/rotate_y/rotate_z/rotate_3d`, `translate_3d`, `scale_3d`, `from_3d` for `matrix3d`, `project_point` for 4×4 + perspective divide, `is_2d_affine` fast-path flag) in `lumen-layout/src/property_trees.rs`. The renderer (`paint/src/renderer.rs`, `apply_affine_to_verts` / `apply_affine_to_rrect_verts`) now projects any **non-2D-affine** `PushTransform` matrix perspective-correctly (w-divide), so 3D matrices render as a flattened projection. Existing 2D output is bit-identical (fast path).
 - **P4 task:**
