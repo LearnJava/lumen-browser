@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**panel-system** — ADR-009 Shell Panel/Surface system  branch: `p2-panel-system`
+Next step: подключить `mod surface;` в `main.rs`, реализовать `SurfaceManager` (layout tree + composite + event routing)
+Files: `crates/shell/src/surface/` — types/ctx/theme/manager stub уже закоммичены
 
 ---
 
