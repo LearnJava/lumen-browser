@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-iframe-placeholder** — HTML `<iframe>` placeholder layout + JS stubs (HTML spec §4.8.5).
+branch: `p1-iframe-placeholder`
+Next step: clippy + full test suite + graphic test + SYMBOLS.md + commit
 
 ---
 
