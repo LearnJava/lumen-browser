@@ -20,6 +20,10 @@ _(никто ничего не зарезервировал)_
 
 При падении `cargo test -p lumen-paint` или `cargo test -p lumen-layout` — исправить немедленно.
 
+### 3. Shell wiring (handoff от P1)
+
+- **`Event::RequestFailed` → network-panel** (от p1-request-failed-event). Новый событийный вариант `Event::RequestFailed { tab_id, url, stage: RequestStage, reason }` уже эмитится в `lumen-network` симметрично `RequestStarted` (DNS/TCP/TLS/Read-сбои до получения HTTP-статуса). Сейчас `crates/shell/src/devtools/network_panel.rs:202` ловит его в `_ => {}` — запись в логе остаётся «висящей» как started. Wiring: добавить arm `Event::RequestFailed { url, stage, .. } => guard.record_failed(url.as_str(), stage)` + метод `record_failed` (по аналогии с `record_blocked`), показать `stage.as_str()` + reason в строке лога. Аналогично `main.rs:119` eprintln-логгер (`✗ {url} ({stage}: {reason})`).
+
 ### Постоянно
 
 - `cargo test -p lumen-paint` и `cargo test -p lumen-layout` держать зелёными. Если parallel-сессии (P1/P2/P4) мерджат и ломают тесты — это твой приоритет №0 (как было с BUG-043/044/045 29.05).

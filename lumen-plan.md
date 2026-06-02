@@ -1469,7 +1469,7 @@ Anti-detection покрывает **шесть слоёв**, потому что
 - Если потом упрёмся в необходимость span-trace для перформанса — пересмотрим, возможно tracing как exception #5.
 
 **Дополнения к `EventSink` (см. §9.6):**
-- ⬜ **`RequestFailed { tab_id, url, stage, reason }`** — событие для DNS / connect / TLS-ошибок **до** `RequestCompleted`. Сейчас invariant «Started без Completed = failure» неявный — observer не знает, где именно споткнулось. Добавление stage (`Dns` / `Tcp` / `Tls` / `Read`) сразу даёт user-facing объяснение в network log: «не удалось подключиться» vs «сертификат недействителен».
+- ✅ **`RequestFailed { tab_id, url, stage, reason }`** — событие для DNS / connect / TLS-ошибок **до** `RequestCompleted`. Делает явным invariant «Started без Completed = failure»: ровно один из `RequestCompleted` / `RequestFailed` / `RequestBlocked` следует за каждым `RequestStarted`. `RequestStage` (`Dns` / `Tcp` / `Tls` / `Read`) в `lumen-core::event`, классификация по префиксу `Error::Network`-сообщения (`classify_failure_stage` в `lumen-network`), эмит симметрично `RequestStarted` на обоих `fetch_single` call-site (preflight + actual). Shell network-panel wiring (`record_failed`) — handoff P3.
 - ⬜ **Crash hook на `EventSink`** — последние 50 событий буферизуются in-memory; при panic-е дамп сохраняется в crash dump до завершения процесса.
 
 **Чего НЕ делаем:**

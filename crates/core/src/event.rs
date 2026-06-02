@@ -8,6 +8,44 @@ use crate::url::Url;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(pub u32);
 
+/// Стадия сетевого запроса, на которой произошёл сбой.
+///
+/// Используется в [`Event::RequestFailed`], чтобы наблюдатель (network log UI)
+/// мог дать пользователю осмысленное объяснение вместо общего «не удалось
+/// загрузить»: на каком именно этапе соединение споткнулось. Порядок вариантов
+/// соответствует последовательности установки соединения.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RequestStage {
+    /// Резолв hostname → IP не удался (NXDOMAIN, таймаут DNS, пустой ответ).
+    /// User-facing: «не удалось найти сервер».
+    Dns,
+    /// TCP-соединение к резолвленному адресу не установилось
+    /// (connection refused, сеть недоступна, таймаут connect).
+    /// User-facing: «не удалось подключиться к серверу».
+    Tcp,
+    /// TLS-рукопожатие провалилось (недействительный сертификат, несовпадение
+    /// hostname, ошибка ALPN, неподдерживаемый протокол).
+    /// User-facing: «защищённое соединение не установлено».
+    Tls,
+    /// Соединение установлено, но обмен HTTP-данными прервался
+    /// (EOF до статуса, ошибка чтения тела, битый chunked-стрим, ошибка записи).
+    /// User-facing: «соединение прервано во время загрузки».
+    Read,
+}
+
+impl RequestStage {
+    /// Машинно-читаемый тег стадии для логов и сериализации (`"dns"`/`"tcp"`/
+    /// `"tls"`/`"read"`). Не локализуется — это идентификатор, не UI-строка.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RequestStage::Dns => "dns",
+            RequestStage::Tcp => "tcp",
+            RequestStage::Tls => "tls",
+            RequestStage::Read => "read",
+        }
+    }
+}
+
 /// Тип subresource-ресурса, найденного preload-сканером.
 /// Используется в [`Event::SubresourceHintFound`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +96,13 @@ pub enum Event {
     RequestStarted { tab_id: TabId, url: Url },
     RequestCompleted { tab_id: TabId, url: Url, status: u16 },
     RequestBlocked { tab_id: TabId, url: Url, reason: String },
+    /// Запрос не дошёл до ответа: сбой произошёл на сетевом уровне (DNS / TCP /
+    /// TLS / чтение) **до** получения HTTP-статуса. Делает явным инвариант
+    /// «RequestStarted без RequestCompleted = сбой»: ровно один из
+    /// `RequestCompleted` / `RequestFailed` / `RequestBlocked` следует за
+    /// каждым `RequestStarted`. `stage` локализует точку отказа для UI,
+    /// `reason` — техническое сообщение (`Error::Network`-текст) для network log.
+    RequestFailed { tab_id: TabId, url: Url, stage: RequestStage, reason: String },
     /// Preload-сканер обнаружил subresource-ссылку до DOM-парсинга
     /// (HTML LS §13.2.6.4.7). `url` — абсолютный URL (резолвится 4B.3).
     /// `priority` — рекомендованный fetch-приоритет (Fetch Standard §2.2).
