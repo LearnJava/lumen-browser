@@ -1870,6 +1870,68 @@ fn install_primitives(
                 }
             }
         );
+
+        // Compress `data` using the named format.
+        // `format`: "deflate-raw" (raw DEFLATE, RFC 1951), "deflate" (zlib, RFC 1950), "gzip".
+        // Returns empty Vec on unknown format or I/O error.
+        reg!(
+            "_lumen_compress_bytes",
+            |data: Vec<u8>, format: String| -> Vec<u8> {
+                use flate2::Compression;
+                use std::io::Write as _;
+                match format.as_str() {
+                    "deflate-raw" => {
+                        let mut enc =
+                            flate2::write::DeflateEncoder::new(Vec::new(), Compression::default());
+                        enc.write_all(&data).ok();
+                        enc.finish().unwrap_or_default()
+                    }
+                    "deflate" => {
+                        let mut enc =
+                            flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
+                        enc.write_all(&data).ok();
+                        enc.finish().unwrap_or_default()
+                    }
+                    "gzip" => {
+                        let mut enc =
+                            flate2::write::GzEncoder::new(Vec::new(), Compression::default());
+                        enc.write_all(&data).ok();
+                        enc.finish().unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                }
+            }
+        );
+
+        // Decompress `data` using the named format.
+        // `format`: "deflate-raw", "deflate", "gzip". Returns empty Vec on error.
+        reg!(
+            "_lumen_decompress_bytes",
+            |data: Vec<u8>, format: String| -> Vec<u8> {
+                use std::io::Read as _;
+                match format.as_str() {
+                    "deflate-raw" => {
+                        let mut dec = flate2::read::DeflateDecoder::new(data.as_slice());
+                        let mut out = Vec::new();
+                        dec.read_to_end(&mut out).ok();
+                        out
+                    }
+                    "deflate" => {
+                        let mut dec = flate2::read::ZlibDecoder::new(data.as_slice());
+                        let mut out = Vec::new();
+                        dec.read_to_end(&mut out).ok();
+                        out
+                    }
+                    "gzip" => {
+                        let mut dec = flate2::read::GzDecoder::new(data.as_slice());
+                        let mut out = Vec::new();
+                        dec.read_to_end(&mut out).ok();
+                        out
+                    }
+                    _ => Vec::new(),
+                }
+            }
+        );
     }
 
     Ok(())
@@ -4927,6 +4989,61 @@ function TextEncoderStream() {
 TextEncoderStream.prototype = Object.create(TransformStream.prototype);
 TextEncoderStream.prototype.constructor = TextEncoderStream;
 
+// ── CompressionStream / DecompressionStream (WHATWG Compression Streams) ─────
+// https://compression.spec.whatwg.org/
+// Formats: 'deflate-raw' (raw DEFLATE RFC 1951), 'deflate' (zlib RFC 1950), 'gzip'.
+// Buffer-then-flush model: accumulates all input chunks, compresses atomically at
+// flush (TransformStream.writable.close()). Emits a single Uint8Array output chunk.
+var _COMPRESSION_FORMATS = ['deflate-raw', 'deflate', 'gzip'];
+
+function _csConcat(chunks) {
+    var total = 0;
+    for (var i = 0; i < chunks.length; i++) total += chunks[i].length;
+    var out = new Uint8Array(total), off = 0;
+    for (var i = 0; i < chunks.length; i++) { out.set(chunks[i], off); off += chunks[i].length; }
+    return out;
+}
+function _csToU8(chunk) {
+    if (chunk instanceof Uint8Array) return chunk;
+    if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
+    if (chunk && ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    return new Uint8Array(0);
+}
+
+function CompressionStream(format) {
+    if (_COMPRESSION_FORMATS.indexOf(format) === -1)
+        throw new TypeError('CompressionStream: unsupported format: ' + format);
+    var buf = [], fmt = format;
+    TransformStream.call(this, {
+        transform: function(chunk, _c) { buf.push(_csToU8(chunk)); },
+        flush: function(c) {
+            var result = _lumen_compress_bytes(Array.from(_csConcat(buf)), fmt);
+            if (result && result.length > 0) c.enqueue(new Uint8Array(result));
+            c.terminate();
+        }
+    });
+    this.format = format;
+}
+CompressionStream.prototype = Object.create(TransformStream.prototype);
+CompressionStream.prototype.constructor = CompressionStream;
+
+function DecompressionStream(format) {
+    if (_COMPRESSION_FORMATS.indexOf(format) === -1)
+        throw new TypeError('DecompressionStream: unsupported format: ' + format);
+    var buf = [], fmt = format;
+    TransformStream.call(this, {
+        transform: function(chunk, _c) { buf.push(_csToU8(chunk)); },
+        flush: function(c) {
+            var result = _lumen_decompress_bytes(Array.from(_csConcat(buf)), fmt);
+            if (result && result.length > 0) c.enqueue(new Uint8Array(result));
+            c.terminate();
+        }
+    });
+    this.format = format;
+}
+DecompressionStream.prototype = Object.create(TransformStream.prototype);
+DecompressionStream.prototype.constructor = DecompressionStream;
+
 // ── ByteLengthQueuingStrategy / CountQueuingStrategy §6 ──────────────────────
 function ByteLengthQueuingStrategy(init) {
     this.highWaterMark = (init && typeof init.highWaterMark === 'number') ? init.highWaterMark : 1;
@@ -5897,6 +6014,8 @@ var window = {
     WritableStreamDefaultWriter: WritableStreamDefaultWriter,
     TextDecoderStream: TextDecoderStream,
     TextEncoderStream: TextEncoderStream,
+    CompressionStream: CompressionStream,
+    DecompressionStream: DecompressionStream,
     ByteLengthQueuingStrategy: ByteLengthQueuingStrategy,
     CountQueuingStrategy: CountQueuingStrategy,
     FormData: FormData,
@@ -16367,5 +16486,168 @@ mod tests {
         ).unwrap();
         // opacity at progress=0 should be '0'
         assert_eq!(r, lumen_core::JsValue::String("0".into()));
+    }
+
+    // ── CompressionStream / DecompressionStream (WHATWG Compression Streams) ──
+
+    #[test]
+    fn compression_stream_constructor_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "typeof CompressionStream === 'function' && \
+                 typeof DecompressionStream === 'function'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_stream_invalid_format_throws() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var threw = false; \
+                 try { new CompressionStream('lz4'); } catch(e) { threw = e instanceof TypeError; } \
+                 threw",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn decompression_stream_invalid_format_throws() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var threw = false; \
+                 try { new DecompressionStream('lz4'); } catch(e) { threw = e instanceof TypeError; } \
+                 threw",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_stream_has_readable_writable() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var cs = new CompressionStream('gzip'); \
+                 cs.readable instanceof ReadableStream && cs.writable instanceof WritableStream",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_stream_is_transform_stream() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("new CompressionStream('deflate') instanceof TransformStream")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_stream_gzip_produces_nonempty_output() {
+        let rt = runtime_with_dom(make_doc());
+        // Write [72,101,108,108,111] = "Hello", close, read compressed chunk.
+        let r = rt
+            .eval(
+                "var cs = new CompressionStream('gzip'); \
+                 var writer = cs.writable.getWriter(); \
+                 var reader = cs.readable.getReader(); \
+                 writer.write(new Uint8Array([72,101,108,108,111])); \
+                 writer.close(); \
+                 _lumen_drain_microtasks(); \
+                 var chunk = null; \
+                 reader.read().then(function(r) { chunk = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 chunk instanceof Uint8Array && chunk.length > 0",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_stream_gzip_round_trip() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var input = new Uint8Array([72,101,108,108,111]); \
+                 var cs = new CompressionStream('gzip'); \
+                 var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
+                 cw.write(input); cw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var compressed = null; \
+                 cr.read().then(function(r) { compressed = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 var ds = new DecompressionStream('gzip'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 dw.write(compressed); dw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var result = null; \
+                 dr.read().then(function(r) { result = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 result instanceof Uint8Array && result.length === 5 && \
+                 result[0] === 72 && result[4] === 111",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_stream_deflate_round_trip() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var input = new Uint8Array([65,66,67]); \
+                 var cs = new CompressionStream('deflate'); \
+                 var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
+                 cw.write(input); cw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var compressed = null; \
+                 cr.read().then(function(r) { compressed = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 var ds = new DecompressionStream('deflate'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 dw.write(compressed); dw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var result = null; \
+                 dr.read().then(function(r) { result = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 result instanceof Uint8Array && result.length === 3 && \
+                 result[0] === 65 && result[2] === 67",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn compression_stream_deflate_raw_round_trip() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var input = new Uint8Array([1,2,3,4,5]); \
+                 var cs = new CompressionStream('deflate-raw'); \
+                 var cw = cs.writable.getWriter(); var cr = cs.readable.getReader(); \
+                 cw.write(input); cw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var compressed = null; \
+                 cr.read().then(function(r) { compressed = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 var ds = new DecompressionStream('deflate-raw'); \
+                 var dw = ds.writable.getWriter(); var dr = ds.readable.getReader(); \
+                 dw.write(compressed); dw.close(); \
+                 _lumen_drain_microtasks(); \
+                 var result = null; \
+                 dr.read().then(function(r) { result = r.value; }); \
+                 _lumen_drain_microtasks(); \
+                 result instanceof Uint8Array && result.length === 5 && \
+                 result[0] === 1 && result[4] === 5",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
