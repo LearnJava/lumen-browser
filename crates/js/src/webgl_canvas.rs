@@ -167,6 +167,31 @@ pub fn install_webgl_canvas(
     reg!("_lumen_webgl_uniform4f", |id: u32, loc: i32, x: f64, y: f64, z: f64, w: f64| {
         with_ctx(id, (), |gl| gl.uniform4f(loc, x as f32, y as f32, z as f32, w as f32));
     });
+    reg!("_lumen_webgl_uniform3f", |id: u32, loc: i32, x: f64, y: f64, z: f64| {
+        with_ctx(id, (), |gl| gl.uniform3f(loc, x as f32, y as f32, z as f32));
+    });
+    reg!("_lumen_webgl_uniform2f", |id: u32, loc: i32, x: f64, y: f64| {
+        with_ctx(id, (), |gl| gl.uniform2f(loc, x as f32, y as f32));
+    });
+    reg!("_lumen_webgl_uniform1f", |id: u32, loc: i32, x: f64| {
+        with_ctx(id, (), |gl| gl.uniform1f(loc, x as f32));
+    });
+    reg!("_lumen_webgl_uniform1i", |id: u32, loc: i32, v: i32| {
+        with_ctx(id, (), |gl| gl.uniform1i(loc, v));
+    });
+    reg!("_lumen_webgl_uniform_mat4fv", |id: u32, loc: i32, data: Vec<f64>| {
+        let fs: Vec<f32> = data.into_iter().map(|v| v as f32).collect();
+        with_ctx(id, (), |gl| gl.uniform_matrix4fv(loc, &fs));
+    });
+    reg!("_lumen_webgl_active_texture", |id: u32, unit: u32| {
+        with_ctx(id, (), |gl| gl.active_texture(unit));
+    });
+    reg!("_lumen_webgl_bind_texture", |id: u32, target: u32, tex_id: u32| {
+        with_ctx(id, (), |gl| gl.bind_texture(target, tex_id));
+    });
+    reg!("_lumen_webgl_tex_image_2d", |id: u32, tex_id: u32, w: u32, h: u32, data: Vec<u8>| {
+        with_ctx(id, (), |gl| gl.tex_image_2d_rgba(tex_id, w, h, &data));
+    });
 
     reg!("_lumen_webgl_draw_arrays", |id: u32, mode: u32, first: i32, count: i32| {
         with_ctx(id, (), |gl| gl.draw_arrays(mode, first, count));
@@ -316,12 +341,20 @@ const WEBGL_SHIM: &str = r#"(function() {
     };
     gl.uniform4f = function(location, x, y, z, w) { _lumen_webgl_uniform4f(cid, _locVal(location), +x, +y, +z, +w); };
     gl.uniform4fv = function(location, v) { _lumen_webgl_uniform4f(cid, _locVal(location), +v[0], +v[1], +v[2], +v[3]); };
-    gl.uniform3f = function(location, x, y, z) { _lumen_webgl_uniform4f(cid, _locVal(location), +x, +y, +z, 1.0); };
-    gl.uniform1f = function() {};
-    gl.uniform1i = function() {};
-    gl.uniform2f = function() {};
-    gl.uniformMatrix4fv = function() {};
-    gl.uniformMatrix3fv = function() {};
+    gl.uniform3f = function(location, x, y, z) { _lumen_webgl_uniform3f(cid, _locVal(location), +x, +y, +z); };
+    gl.uniform3fv = function(location, v) { _lumen_webgl_uniform3f(cid, _locVal(location), +v[0], +v[1], +v[2]); };
+    gl.uniform2f = function(location, x, y) { _lumen_webgl_uniform2f(cid, _locVal(location), +x, +y); };
+    gl.uniform2fv = function(location, v) { _lumen_webgl_uniform2f(cid, _locVal(location), +v[0], +v[1]); };
+    gl.uniform1f = function(location, x) { _lumen_webgl_uniform1f(cid, _locVal(location), +x); };
+    gl.uniform1fv = function(location, v) { _lumen_webgl_uniform1f(cid, _locVal(location), +v[0]); };
+    gl.uniform1i = function(location, v) { _lumen_webgl_uniform1i(cid, _locVal(location), v|0); };
+    gl.uniform1iv = function(location, v) { _lumen_webgl_uniform1i(cid, _locVal(location), (v[0])|0); };
+    gl.uniformMatrix4fv = function(location, transpose, data) {
+      var arr = [];
+      for (var mi = 0; mi < 16; mi++) arr.push(+(data[mi] || 0));
+      _lumen_webgl_uniform_mat4fv(cid, _locVal(location), arr);
+    };
+    gl.uniformMatrix3fv = function() {}; // mat3 not tracked
 
     // ── Draw ──
     gl.drawArrays = function(mode, first, count) { _lumen_webgl_draw_arrays(cid, mode>>>0, first|0, count|0); };
@@ -382,14 +415,29 @@ const WEBGL_SHIM: &str = r#"(function() {
       return ['WEBGL_debug_renderer_info', 'WEBGL_lose_context'];
     };
 
-    // ── Textures (accepted, no-op — software path is flat-shaded) ──
-    gl.createTexture = function() { return _wrap(1); };
+    // ── Textures ──────────────────────────────────────────────────────────
+    var _nextTexId = 1;
+    var _boundTex2D = 0; // currently bound TEXTURE_2D id
+    gl.createTexture = function() { var id = _nextTexId++; return _wrap(id); };
     gl.deleteTexture = function() {};
-    gl.bindTexture = function() {};
-    gl.texImage2D = function() {};
+    gl.bindTexture = function(target, tex) {
+      var tid = _unwrap(tex);
+      if ((target>>>0) === 0x0DE1) _boundTex2D = tid; // GL_TEXTURE_2D
+      _lumen_webgl_bind_texture(cid, target>>>0, tid);
+    };
+    gl.activeTexture = function(unit) { _lumen_webgl_active_texture(cid, unit>>>0); };
     gl.texParameteri = function() {};
-    gl.activeTexture = function() {};
     gl.generateMipmap = function() {};
+    gl.texImage2D = function(target, level, internalformat, width, height, border, format, type, pixels) {
+      if (pixels == null || _boundTex2D === 0) return;
+      var w = width|0, h = height|0;
+      var arr = [];
+      if (pixels && typeof pixels.length === 'number') {
+        var expected = w * h * 4;
+        for (var pi = 0; pi < expected && pi < pixels.length; pi++) arr.push(pixels[pi] & 0xFF);
+      }
+      _lumen_webgl_tex_image_2d(cid, _boundTex2D, w, h, arr);
+    };
 
     return gl;
   }
