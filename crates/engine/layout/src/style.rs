@@ -22410,6 +22410,44 @@ mod tests {
         assert_eq!(oy, Overflow::Auto);
     }
 
+    // ── CSS Overflow L3 §2 — apply_declaration parsing ──
+
+    #[test]
+    fn overflow_scroll_single_value_sets_both_axes() {
+        let s = ts_prop("overflow", "scroll");
+        assert_eq!(s.overflow_x, Overflow::Scroll);
+        assert_eq!(s.overflow_y, Overflow::Scroll);
+    }
+
+    #[test]
+    fn overflow_auto_single_value_sets_both_axes() {
+        let s = ts_prop("overflow", "auto");
+        assert_eq!(s.overflow_x, Overflow::Auto);
+        assert_eq!(s.overflow_y, Overflow::Auto);
+    }
+
+    #[test]
+    fn overflow_two_value_scroll_auto() {
+        // CSS Overflow L3: two-value form — first token = x, second = y.
+        let s = ts_prop("overflow", "scroll auto");
+        assert_eq!(s.overflow_x, Overflow::Scroll);
+        assert_eq!(s.overflow_y, Overflow::Auto);
+    }
+
+    #[test]
+    fn overflow_x_scroll_only_sets_x_axis() {
+        let s = ts_prop("overflow-x", "scroll");
+        assert_eq!(s.overflow_x, Overflow::Scroll);
+        assert_eq!(s.overflow_y, Overflow::Visible);
+    }
+
+    #[test]
+    fn overflow_y_auto_only_sets_y_axis() {
+        let s = ts_prop("overflow-y", "auto");
+        assert_eq!(s.overflow_x, Overflow::Visible);
+        assert_eq!(s.overflow_y, Overflow::Auto);
+    }
+
     // ── CSS Compositing L1 §8.3 — background-blend-mode ──
 
     #[test]
