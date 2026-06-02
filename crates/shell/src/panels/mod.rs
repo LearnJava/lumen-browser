@@ -3,6 +3,7 @@
 
 pub mod bookmark_panel;
 pub mod command_palette;
+pub mod focus_panel;
 pub mod permission_panel;
 pub mod shields_panel;
 pub mod sidebar_panel;
