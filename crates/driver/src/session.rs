@@ -163,6 +163,23 @@ impl InProcessSession {
         self.pending_js_microtasks = count;
     }
 
+    /// Build an [`HttpClient`] configured with this session's per-context
+    /// fingerprint profile (task 9F.2).
+    ///
+    /// Applies the HTTP fingerprint profile (header order + Client Hints) and
+    /// the derived TLS profile (cipher order, kx_groups, ALPN) so that
+    /// [`set_fingerprint_profile`](BrowserSession::set_fingerprint_profile)
+    /// actually changes the outgoing request signature — not just the stored
+    /// value.
+    ///
+    /// [`HttpClient`]: lumen_network::HttpClient
+    fn build_http_client(&self) -> lumen_network::HttpClient {
+        lumen_network::HttpClient::new()
+            .with_sink(Arc::new(NoopEventSink))
+            .with_content_decoder(Arc::new(lumen_network::BrotliContentDecoder::new()))
+            .with_fingerprint_profile(self.context.fingerprint_profile().to_http_profile())
+    }
+
     /// Загрузить HTML-строку без навигации по URL. Используется для тестов.
     pub fn navigate_html(&mut self, html: &str) -> Result<()> {
         self.run_pipeline(html.as_bytes(), Some("text/html"), "about:blank".to_owned())
@@ -345,10 +362,7 @@ impl BrowserSession for InProcessSession {
             use lumen_core::ext::NetworkTransport;
             let lumen_url = lumen_core::url::Url::parse(url)
                 .map_err(|e| Error::InvalidUrl(format!("{url}: {e}")))?;
-            let sink = Arc::new(NoopEventSink);
-            let client = lumen_network::HttpClient::new()
-                .with_sink(sink)
-                .with_content_decoder(Arc::new(lumen_network::BrotliContentDecoder::new()));
+            let client = self.build_http_client();
             self.active_network_requests += 1;
             let result = client.fetch(&lumen_url);
             self.active_network_requests = self.active_network_requests.saturating_sub(1);
@@ -1293,5 +1307,41 @@ mod tests {
         let (w, h) = lumen_core::ext::BrowserSession::viewport(&s);
         assert_eq!(w, 800);
         assert_eq!(h, 600);
+    }
+
+    // ── 9F.2: per-context fingerprint profile applied to the HTTP client ──────
+
+    #[test]
+    fn http_client_reflects_fingerprint_profile() {
+        let mut s = InProcessSession::new();
+        // Default (Standard) → Chrome HTTP + Standard TLS.
+        let c = s.build_http_client();
+        assert_eq!(c.fingerprint_profile(), lumen_network::HttpProfile::Chrome);
+        assert_eq!(c.tls_profile(), lumen_network::TlsProfile::Standard);
+
+        // Strict → Strict HTTP + Strict TLS (TLS profile is derived).
+        BrowserSession::set_fingerprint_profile(&mut s, FingerprintProfile::Strict).unwrap();
+        let c = s.build_http_client();
+        assert_eq!(c.fingerprint_profile(), lumen_network::HttpProfile::Strict);
+        assert_eq!(c.tls_profile(), lumen_network::TlsProfile::Strict);
+
+        // Tor → TorBrowser HTTP + Tor TLS.
+        BrowserSession::set_fingerprint_profile(&mut s, FingerprintProfile::Tor).unwrap();
+        let c = s.build_http_client();
+        assert_eq!(c.fingerprint_profile(), lumen_network::HttpProfile::TorBrowser);
+        assert_eq!(c.tls_profile(), lumen_network::TlsProfile::Tor);
+    }
+
+    #[test]
+    fn frozen_fingerprint_keeps_client_profile() {
+        let mut s = InProcessSession::new();
+        BrowserSession::set_fingerprint_profile(&mut s, FingerprintProfile::Strict).unwrap();
+        s.context.freeze_fingerprint();
+        // A change after freeze is rejected; the built client keeps Strict.
+        assert!(BrowserSession::set_fingerprint_profile(&mut s, FingerprintProfile::Standard).is_err());
+        assert_eq!(
+            s.build_http_client().fingerprint_profile(),
+            lumen_network::HttpProfile::Strict
+        );
     }
 }

@@ -280,3 +280,25 @@ pub enum FingerprintProfile {
     /// Tor Browser профиль: pinned JA3 + UA + screen + fonts (Phase 3+).
     Tor,
 }
+
+impl FingerprintProfile {
+    /// Map this session-level profile to the network [`HttpProfile`] that drives
+    /// HTTP/1.1 header order, Client Hints handling, and HTTP/2 SETTINGS.
+    ///
+    /// The TLS profile is derived from the HTTP profile by
+    /// [`HttpClient::with_fingerprint_profile`], so callers only need this
+    /// single mapping to apply the full fingerprint (task 9F.2):
+    /// - `Standard` → `Chrome` (TLS Standard) — current stable Chrome.
+    /// - `Strict` → `Strict` (TLS 1.3-only, Client Hints disabled).
+    /// - `Tor` → `TorBrowser` (TLS Tor, no HTTP/2 ALPN).
+    ///
+    /// [`HttpProfile`]: lumen_network::HttpProfile
+    /// [`HttpClient::with_fingerprint_profile`]: lumen_network::HttpClient::with_fingerprint_profile
+    pub fn to_http_profile(self) -> lumen_network::HttpProfile {
+        match self {
+            FingerprintProfile::Standard => lumen_network::HttpProfile::Chrome,
+            FingerprintProfile::Strict => lumen_network::HttpProfile::Strict,
+            FingerprintProfile::Tor => lumen_network::HttpProfile::TorBrowser,
+        }
+    }
+}
