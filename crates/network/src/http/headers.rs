@@ -192,17 +192,40 @@ pub fn build_request_headers(
             headers.add("Sec-Fetch-Dest", "document");
         }
         HttpProfile::TorBrowser => {
-            // Tor Browser — minimal header set to avoid fingerprinting
+            // Tor Browser request signature, matching current Tor Browser
+            // stable (Firefox ESR 128). The goal is NOT a minimal header set —
+            // a minimal set is itself a unique fingerprint — but a byte-for-byte
+            // match with genuine Tor Browser navigation requests so a Lumen
+            // "Tor mode" user blends into the Tor Browser population.
+            //
+            // Firefox/Tor Browser HTTP/1.1 header order for a top-level
+            // document navigation: Host, User-Agent, Accept, Accept-Language,
+            // Accept-Encoding, Connection, Upgrade-Insecure-Requests,
+            // Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site, Sec-Fetch-User,
+            // Priority. The UA is pinned to Windows for every host OS (see
+            // `TOR_BROWSER_USER_AGENT`).
             headers.add("Host", host);
-            headers.add("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0");
-            headers.add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+            headers.add("User-Agent", super::TOR_BROWSER_USER_AGENT);
+            headers.add("Accept", super::TOR_BROWSER_ACCEPT);
+            headers.add("Accept-Language", super::TOR_BROWSER_ACCEPT_LANGUAGE);
 
             if !accept_encoding.is_empty() {
                 headers.add("Accept-Encoding", accept_encoding);
             }
 
-            headers.add("Accept-Language", "en-US,en;q=0.5");
             headers.add("Connection", "keep-alive");
+            headers.add("Upgrade-Insecure-Requests", "1");
+
+            // Sec-Fetch metadata — Firefox ESR 128 (and thus Tor Browser)
+            // sends these on navigations; their absence would single Lumen out.
+            headers.add("Sec-Fetch-Dest", "document");
+            headers.add("Sec-Fetch-Mode", "navigate");
+            headers.add("Sec-Fetch-Site", "none");
+            headers.add("Sec-Fetch-User", "?1");
+
+            // Firefox 128 sends an RFC 9218 Priority header on the initial
+            // document request.
+            headers.add("Priority", "u=0, i");
         }
         HttpProfile::Lumen => {
             // Lumen-native — own fingerprint (not impersonating any browser)
@@ -286,11 +309,69 @@ mod tests {
     }
 
     #[test]
-    fn test_tor_browser_profile_minimal() {
+    fn test_tor_browser_profile_pins_windows_firefox_ua() {
+        // Tor Browser pins a Windows UA for every host OS (uniform population),
+        // based on Firefox ESR 128 — no `Win64`/arch token, no `X11; Linux`.
         let headers = build_request_headers("example.com", "", "", HttpProfile::TorBrowser);
-        assert!(headers.contains("User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0"));
-        assert!(!headers.contains("Sec-Fetch-Site"));
+        assert!(headers.contains(
+            "User-Agent: Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0"
+        ));
+        assert!(!headers.contains("X11; Linux"), "must not leak the real Linux host OS");
+        assert!(!headers.contains("Win64"), "Tor Browser UA omits the architecture token");
+        // Tor Browser does not send the DNT header (privacy.donottrackheader off).
         assert!(!headers.contains("DNT:"));
+    }
+
+    #[test]
+    fn test_tor_browser_profile_sends_firefox_sec_fetch() {
+        // Modern Tor Browser (Firefox ESR 128) DOES send Sec-Fetch-* and
+        // Upgrade-Insecure-Requests on navigations; their absence (the old
+        // "minimal" behaviour) would make Lumen's Tor mode trivially distinct.
+        let headers = build_request_headers("example.com", "", "", HttpProfile::TorBrowser);
+        assert!(headers.contains("Upgrade-Insecure-Requests: 1"));
+        assert!(headers.contains("Sec-Fetch-Dest: document"));
+        assert!(headers.contains("Sec-Fetch-Mode: navigate"));
+        assert!(headers.contains("Sec-Fetch-Site: none"));
+        assert!(headers.contains("Sec-Fetch-User: ?1"));
+        assert!(headers.contains("Priority: u=0, i"));
+    }
+
+    #[test]
+    fn test_tor_browser_profile_pinned_accept_and_locale() {
+        let headers = build_request_headers("example.com", "gzip, deflate, br", "", HttpProfile::TorBrowser);
+        assert!(headers.contains(
+            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        ));
+        // Locale is pinned to the Tor Browser default, never the real locale.
+        assert!(headers.contains("Accept-Language: en-US,en;q=0.5"));
+        assert!(headers.contains("Accept-Encoding: gzip, deflate, br"));
+    }
+
+    #[test]
+    fn test_tor_browser_header_order_matches_firefox() {
+        // Header order is part of the fingerprint: it must follow Firefox's
+        // navigation order exactly.
+        let headers = build_request_headers("example.com", "gzip, deflate, br", "", HttpProfile::TorBrowser);
+        let order = [
+            "Host:",
+            "User-Agent:",
+            "Accept:",
+            "Accept-Language:",
+            "Accept-Encoding:",
+            "Connection:",
+            "Upgrade-Insecure-Requests:",
+            "Sec-Fetch-Dest:",
+            "Sec-Fetch-Mode:",
+            "Sec-Fetch-Site:",
+            "Sec-Fetch-User:",
+            "Priority:",
+        ];
+        let mut last = 0usize;
+        for name in order {
+            let pos = headers.find(name).unwrap_or_else(|| panic!("missing header {name}"));
+            assert!(pos >= last, "header {name} is out of Firefox order");
+            last = pos;
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! - HttpClient.with_fingerprint_profile() correctly configures profile
 //! - build_request_headers() produces Chrome-matching header order
 //! - Accept-Language is `en-US,en;q=0.9` (does not leak real locale)
-//! - Sec-Fetch-* headers present in Chrome/Edge, absent in Firefox/TorBrowser
+//! - Sec-Fetch-* headers present in Chrome/Edge/TorBrowser, absent in Firefox
 //! - Client Hints disabled for Strict/TorBrowser profiles
 //! - H2 SETTINGS wire format matches per-profile values
 
@@ -160,9 +160,15 @@ mod tests {
     }
 
     #[test]
-    fn tor_no_sec_fetch_no_dnt() {
+    fn tor_sends_firefox_sec_fetch_but_no_dnt() {
+        // Tor Browser (Firefox ESR 128) DOES send Sec-Fetch-* on navigations —
+        // matching real Tor Browser traffic — but does not send DNT (9F.3).
         let h = build_request_headers("example.com", "", "", HttpProfile::TorBrowser);
-        assert!(!h.contains("Sec-Fetch-Site"), "TorBrowser must NOT send Sec-Fetch-Site");
+        assert!(h.contains("Sec-Fetch-Site: none"), "TorBrowser must send Sec-Fetch-Site: none");
+        assert!(h.contains("Sec-Fetch-Mode: navigate"), "TorBrowser must send Sec-Fetch-Mode: navigate");
+        assert!(h.contains("Sec-Fetch-Dest: document"), "TorBrowser must send Sec-Fetch-Dest: document");
+        assert!(h.contains("Sec-Fetch-User: ?1"), "TorBrowser must send Sec-Fetch-User: ?1");
+        assert!(h.contains("Upgrade-Insecure-Requests: 1"), "TorBrowser must send Upgrade-Insecure-Requests");
         assert!(!h.contains("DNT:"), "TorBrowser must NOT send DNT");
     }
 

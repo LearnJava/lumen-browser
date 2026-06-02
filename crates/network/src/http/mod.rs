@@ -11,7 +11,9 @@
 //! Per-profile HTTP configs:
 //! - Standard: general use, Chrome-matching header order and values
 //! - Strict: private/HSTS mode, Client Hints disabled
-//! - Tor: minimized header fingerprint, tor-browser-compatible configuration
+//! - Tor: request signature pinned to current Tor Browser (Firefox ESR 128,
+//!   Windows-uniform UA), so a Lumen "Tor mode" request matches genuine Tor
+//!   Browser traffic instead of presenting a unique minimal fingerprint
 
 pub mod headers;
 pub mod h2_settings;
@@ -26,3 +28,25 @@ pub const DEFAULT_USER_AGENT: &str = "Lumen/0.0.1";
 
 /// Default Accept-Language header (does not leak real locale).
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
+
+/// Tor Browser User-Agent — pinned uniformly across **all** host platforms
+/// (Windows NT 10.0, no `Win64`/architecture token), based on the current
+/// Tor Browser stable (Firefox ESR 128).
+///
+/// Tor Browser deliberately reports the same UA for every user regardless of
+/// the real OS so that the entire Tor Browser population shares one signature
+/// (anti-fingerprinting). Lumen's Tor profile pins the identical string so a
+/// Lumen "Tor mode" request is indistinguishable from a genuine Tor Browser
+/// request at the HTTP layer (ADR-007 §6, task 9F.3).
+pub const TOR_BROWSER_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0";
+
+/// Tor Browser `Accept` header for top-level document navigations —
+/// the Firefox ESR 128 default. Matched verbatim so the Tor profile does not
+/// stand out from real Tor Browser traffic.
+pub const TOR_BROWSER_ACCEPT: &str =
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+
+/// Tor Browser `Accept-Language` — pinned to the Tor Browser default locale
+/// (`en-US,en;q=0.5`); never reflects the user's real locale.
+pub const TOR_BROWSER_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.5";
