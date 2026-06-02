@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**C2: `@media (prefers-color-scheme: dark)` визуальный каскад**  branch: p2-dark-mode-visual  
+Next step: thread `dark_mode: bool` через `layout_measured_hyp` → `compute_style` → `media_context_from_viewport`  
+Entry: `crates/engine/layout/src/style.rs:13956`
 
 ---
 
