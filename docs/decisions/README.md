@@ -20,3 +20,4 @@ For new decisions use [TEMPLATE.md](TEMPLATE.md). Numbering is sequential; do no
 | [ADR-006](ADR-006-automation-api.md) | Automation API as a first-class engine surface (BrowserSession trait, in-process + MCP + WebDriver BiDi) | Accepted | 2026-05-27 |
 | [ADR-007](ADR-007-anti-detection-stack.md) | Anti-detection as a privacy stack, not a circumvention tool (TLS/HTTP/surface fingerprint defaults; no CAPTCHA-solver, no IP rotation) | Accepted | 2026-05-27 |
 | [ADR-008](ADR-008-tab-lifecycle-memory-tiers.md) | Tab lifecycle and memory tiers (T0–T4 model; DOM arena / JS suspend / pure layout invariants; per-tier RAM budgets and restore SLOs) | Accepted | 2026-05-27 |
+| [ADR-009](ADR-009-shell-panel-system.md) | Shell UI — Panel/Surface system (retained display list, no external GUI framework) | Accepted | 2026-05-31 |
