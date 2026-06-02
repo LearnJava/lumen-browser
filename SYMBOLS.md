@@ -1816,7 +1816,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
 `crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
-## lumen-shell  (370 symbols)
+## lumen-shell  (389 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1871,6 +1871,25 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/devtools/inspector.rs:245` **fn** `element_label` — Build a human-readable DOM label for `node`, e.g. `div#main.card`, `#text`,
 `crates/shell/src/devtools/inspector.rs:276` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
 `crates/shell/src/devtools/inspector.rs:373` **fn** `build_inspector_panel` — Build the right-docked computed-style side panel
+`crates/shell/src/devtools/network_panel.rs:73` **struct** `NetworkEntry` — A single recorded HTTP request and its lifecycle state
+`crates/shell/src/devtools/network_panel.rs:96` **struct** `NetworkLog` — Shared, append-only log of HTTP requests for the network panel
+`crates/shell/src/devtools/network_panel.rs:103` **fn** `record_started` — Record a newly started request: appends a pending entry
+`crates/shell/src/devtools/network_panel.rs:118` **fn** `record_completed` — Record a completed request: fills the most recent matching pending entry
+`crates/shell/src/devtools/network_panel.rs:141` **fn** `record_blocked` — Record a request blocked by the content filter
+`crates/shell/src/devtools/network_panel.rs:154` **fn** `clear` — Clear all recorded requests (call on every top-level navigation)
+`crates/shell/src/devtools/network_panel.rs:160` **fn** `len` — Number of recorded requests
+`crates/shell/src/devtools/network_panel.rs:166` **fn** `is_empty` — `true` when no requests have been recorded
+`crates/shell/src/devtools/network_panel.rs:187` **struct** `NetworkLogSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND records
+`crates/shell/src/devtools/network_panel.rs:219` **struct** `NetworkPanel` — DevTools network log panel (§7E.4)
+`crates/shell/src/devtools/network_panel.rs:234` **fn** `new` — Create a new hidden panel backed by the given shared `log`
+`crates/shell/src/devtools/network_panel.rs:244` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/devtools/network_panel.rs:250` **fn** `refresh` — Pull the latest entries from the shared [`NetworkLog`] into the panel
+`crates/shell/src/devtools/network_panel.rs:257` **fn** `clear_log` — Clear the shared log (call on every top-level navigation)
+`crates/shell/src/devtools/network_panel.rs:267` **fn** `len` — Number of entries in the current snapshot
+`crates/shell/src/devtools/network_panel.rs:273` **fn** `is_empty` — `true` when the current snapshot has no entries
+`crates/shell/src/devtools/network_panel.rs:278` **fn** `scroll_up` — Scroll up by `n` rows (towards older requests)
+`crates/shell/src/devtools/network_panel.rs:284` **fn** `scroll_down` — Scroll down by `n` rows (towards newer requests)
+`crates/shell/src/devtools/network_panel.rs:296` **fn** `build_network_panel` — Build the viewport-locked network panel overlay
 `crates/shell/src/download.rs:45` **struct** `DownloadId` — Opaque identifier for a single download entry
 `crates/shell/src/download.rs:50` **enum** `DownloadStatus` — Current state of a download entry
 `crates/shell/src/download.rs:71` **struct** `DownloadEntry` — A single download: source URL, destination path, and current status
@@ -2593,4 +2612,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2528 symbols in 20 crates*
+*Total: 2547 symbols in 20 crates*
