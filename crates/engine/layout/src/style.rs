@@ -3013,16 +3013,29 @@ pub enum ParsedGradient {
     Unknown(String),
 }
 
-/// CSS Backgrounds L3 §3.1 — `background-image` value.
+/// CSS Backgrounds L3 §3.1 / CSS Images L4 §4 — `background-image` value.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum BackgroundImage {
     #[default]
     None,
-    /// `url("path")` — внешний image-ресурс. Хранится без resolve
-    /// относительно base-href.
+    /// `url("path")` or raw `image-set(…)` / `-webkit-image-set(…)` string.
+    ///
+    /// `image-set()` strings are stored verbatim — paint resolves them to the
+    /// best URL for the current DPR via `select_image_set_url` (CSS Images L4 §5).
     Url(String),
     /// Parsed gradient. Phase 0 renders linear / radial / conic.
     Gradient(ParsedGradient),
+    /// CSS Images L4 §4 — `cross-fade(<image-a>, <image-b>, <percentage>)`.
+    ///
+    /// `t` is the blend factor in `[0.0, 1.0]`: `0.0` = fully `a`, `1.0` = fully `b`.
+    CrossFade {
+        /// First image (`t = 0.0`).
+        a: Box<BackgroundImage>,
+        /// Second image (`t = 1.0`).
+        b: Box<BackgroundImage>,
+        /// Blend factor clamped to `[0.0, 1.0]`.
+        t: f32,
+    },
 }
 
 /// CSS Backgrounds L3 §3.4 — `background-repeat`.
@@ -9833,6 +9846,11 @@ fn apply_declaration(
                 let s = s.trim();
                 let image = if s.eq_ignore_ascii_case("none") {
                     BackgroundImage::None
+                } else if is_image_set_value(s) {
+                    // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
+                    BackgroundImage::Url(s.to_string())
+                } else if let Some((a, b, t)) = parse_cross_fade(s) {
+                    BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }
                 } else if let Some(url) = parse_url_value(s) {
                     BackgroundImage::Url(url)
                 } else if is_gradient_function(s) {
@@ -13251,6 +13269,60 @@ fn is_gradient_function(s: &str) -> bool {
         || s.starts_with("repeating-conic-gradient(")
 }
 
+/// CSS Images L4 §5 — is `s` an `image-set()` / `-webkit-image-set()` expression?
+fn is_image_set_value(s: &str) -> bool {
+    let v = s.trim().to_ascii_lowercase();
+    v.starts_with("image-set(") || v.starts_with("-webkit-image-set(")
+}
+
+/// Parse one image value into a `BackgroundImage` (used by `parse_cross_fade`).
+fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("none") {
+        return Some(BackgroundImage::None);
+    }
+    if is_image_set_value(s) {
+        return Some(BackgroundImage::Url(s.to_string()));
+    }
+    if let Some(url) = parse_url_value(s) {
+        return Some(BackgroundImage::Url(url));
+    }
+    if is_gradient_function(s) {
+        return Some(BackgroundImage::Gradient(parse_background_gradient(s)));
+    }
+    None
+}
+
+/// CSS Images L4 §4 — parse `cross-fade(<image-a>, <image-b>, <percentage>)`.
+///
+/// Supports both `cross-fade(…)` and `-webkit-cross-fade(…)` syntax.
+/// Returns `None` if `s` does not start with the function prefix or has an
+/// unexpected argument count.
+fn parse_cross_fade(s: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    let inner = if lower.starts_with("cross-fade(") && s.ends_with(')') {
+        &s["cross-fade(".len()..s.len() - 1]
+    } else if lower.starts_with("-webkit-cross-fade(") && s.ends_with(')') {
+        &s["-webkit-cross-fade(".len()..s.len() - 1]
+    } else {
+        return None;
+    };
+    let parts = split_top_level_commas(inner);
+    if parts.len() != 3 {
+        return None;
+    }
+    let a = parse_bg_image_value(parts[0].trim())?;
+    let b = parse_bg_image_value(parts[1].trim())?;
+    let t_str = parts[2].trim();
+    let t = if let Some(pct) = t_str.strip_suffix('%') {
+        pct.trim().parse::<f32>().ok()? / 100.0
+    } else {
+        t_str.parse::<f32>().ok()?
+    };
+    Some((a, b, t.clamp(0.0, 1.0)))
+}
+
 /// CSS Backgrounds L3 §3 — разбить строку одного слоя на токены.
 ///
 /// Делит по пробелам и `/` только на depth=0 (не трогает содержимое функций
@@ -13349,6 +13421,17 @@ fn parse_single_bg_layer(
         }
         if is_gradient_function(t) {
             layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            idx += 1;
+            continue;
+        }
+        if is_image_set_value(t) {
+            // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
+            layer.image = BackgroundImage::Url(t.to_string());
+            idx += 1;
+            continue;
+        }
+        if let Some((a, b, cf_t)) = parse_cross_fade(t) {
+            layer.image = BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t: cf_t };
             idx += 1;
             continue;
         }
@@ -18021,6 +18104,85 @@ mod tests {
         );
         assert_eq!(s.background_layers.len(), 1);
         assert_eq!(s.background_layers[0].image, BackgroundImage::Url("c.png".into()));
+    }
+
+    // ── CSS Images L4 §5 — image-set() / §4 — cross-fade() ──
+
+    #[test]
+    fn image_set_stored_as_raw_url_string() {
+        // CSS Images L4 §5: image-set() stored verbatim so paint can resolve per-DPR.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: image-set("a.png" 1x, "a@2x.png" 2x); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::Url(u) if u.contains("image-set(")),
+            "image-set() should be stored as Url containing the raw function string"
+        );
+    }
+
+    #[test]
+    fn webkit_image_set_stored_as_raw_url_string() {
+        // -webkit-image-set() vendor prefix handled identically.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: -webkit-image-set(url("x.png") 1x); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::Url(u) if u.contains("image-set(")),
+            "-webkit-image-set() should be stored as Url containing the raw function string"
+        );
+    }
+
+    #[test]
+    fn cross_fade_two_urls_parsed() {
+        // CSS Images L4 §4: cross-fade(<image-a>, <image-b>, <pct>) → CrossFade variant.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 30%); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        match &s.background_layers[0].image {
+            BackgroundImage::CrossFade { a, b, t } => {
+                assert_eq!(a.as_ref(), &BackgroundImage::Url("a.png".into()));
+                assert_eq!(b.as_ref(), &BackgroundImage::Url("b.png".into()));
+                assert!((t - 0.30).abs() < 0.001, "t should be 0.30, got {t}");
+            }
+            other => panic!("expected CrossFade, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webkit_cross_fade_parsed() {
+        // -webkit-cross-fade() vendor prefix.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: -webkit-cross-fade(url("x.png"), url("y.png"), 50%); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::CrossFade { t, .. } if (t - 0.5).abs() < 0.001),
+            "expected CrossFade with t≈0.5"
+        );
+    }
+
+    #[test]
+    fn cross_fade_t_clamped_to_unit_interval() {
+        // t > 1.0 should be clamped to 1.0.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 150%); }"#,
+            &[0],
+        );
+        if let BackgroundImage::CrossFade { t, .. } = &s.background_layers[0].image {
+            assert!(*t <= 1.0, "t should be clamped to ≤ 1.0, got {t}");
+        }
     }
 
     // ── CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style / text-wrap ──

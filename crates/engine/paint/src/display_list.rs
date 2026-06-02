@@ -2392,6 +2392,32 @@ fn emit_background_layer(
                 repeating: *repeating,
             });
         }
+        BackgroundImage::CrossFade { a, b, t } => {
+            // CSS Images L4 §4 — emit DrawCrossFade for two-URL cross-fade.
+            // Gradient sides are not composited via DrawCrossFade (Phase 0 scope).
+            if let (BackgroundImage::Url(url_a), BackgroundImage::Url(url_b)) =
+                (a.as_ref(), b.as_ref())
+            {
+                let src_a = if is_image_set(url_a) {
+                    select_image_set_url(url_a, dpr).to_string()
+                } else {
+                    url_a.clone()
+                };
+                let src_b = if is_image_set(url_b) {
+                    select_image_set_url(url_b, dpr).to_string()
+                } else {
+                    url_b.clone()
+                };
+                if !src_a.is_empty() && !src_b.is_empty() {
+                    out.push(DisplayCommand::DrawCrossFade {
+                        dest: clip,
+                        src_a,
+                        src_b,
+                        progress: *t,
+                    });
+                }
+            }
+        }
         _ => {}
     }
     if use_blend {

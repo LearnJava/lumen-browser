@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`image-set()` / `cross-fade()` — CSS Images L4  branch: p4-image-set
+Next step: add CrossFade variant to BackgroundImage, parse in apply_declaration + parse_single_bg_layer, emit DrawCrossFade  style.rs:3018
 
 ## Workflow
 
@@ -31,22 +32,20 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 
 | # | Property / Feature | Effort | Blocker |
 |---|-------------------|--------|---------|
-| 1 | `::first-letter` / `::first-line` wiring | M | none (stubs ready — see "Needs wiring") |
-| 2 | `overflow: scroll` scrollable containers | L | shell scroll event |
-| 3 | `image-set()` / `cross-fade()` — CSS Images L4 | M | none |
-| 4 | `text-align-last` | S | none |
-| 5 | `perspective()` + `transform-style: preserve-3d` (3D Transforms L2) | L | none (P2 matrix primitive ready — see "Needs wiring") |
-| 6 | `@counter-style` custom counter definitions | M | none |
-| 7 | `justify-items` / `justify-self` for grid (Box Alignment L3) | S | none |
-| 8 | `column-rule` rendering + `column-span` + `column-fill` | S | none |
-| 9 | Scroll snap shell integration (`scroll-snap-type` / `scroll-snap-align`) | M | shell scroll |
-| 10 | `::selection` pseudo-element | S | none |
-| 11 | `::marker` rendering | S | none |
-| 12 | `cq*` container query units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`) | M | none |
-| 13 | `attr()` with type (CSS Values L4) | M | none |
-| 14 | `mask-image` CSS wiring | L | P2 GPU compositing pass |
-| 15 | `writing-mode: vertical-*` axis swap | L | ~~layout engine~~ **stub ready** (P1 2026-05-31, `vertical.rs`) |
-| 16 | `subgrid` track inheritance | XL | grid engine |
+| 1 | `overflow: scroll` scrollable containers | L | shell scroll event |
+| 2 | `text-align-last` | S | none |
+| 3 | `perspective()` + `transform-style: preserve-3d` (3D Transforms L2) | L | none (P2 matrix primitive ready — see "Needs wiring") |
+| 4 | `@counter-style` custom counter definitions | M | none |
+| 5 | `justify-items` / `justify-self` for grid (Box Alignment L3) | S | none |
+| 6 | `column-rule` rendering + `column-span` + `column-fill` | S | none |
+| 7 | Scroll snap shell integration (`scroll-snap-type` / `scroll-snap-align`) | M | shell scroll |
+| 8 | `::selection` pseudo-element | S | none |
+| 9 | `::marker` rendering | S | none |
+| 10 | `cq*` container query units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`) | M | none |
+| 11 | `attr()` with type (CSS Values L4) | M | none |
+| 12 | `mask-image` CSS wiring | L | P2 GPU compositing pass |
+| 13 | `writing-mode: vertical-*` axis swap | L | ~~layout engine~~ **stub ready** (P1 2026-05-31, `vertical.rs`) |
+| 14 | `subgrid` track inheritance | XL | grid engine |
 
 ---
 
