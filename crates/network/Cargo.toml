@@ -15,3 +15,13 @@ webpki-roots = "0.26"
 # Trait-anchor — `ContentDecoder` в lumen-core::ext. Graduation criterion: edge-case
 # в формате (RFC 7932 стабилен, реалистично — никогда). Pure-Rust, без unsafe-в-логике.
 brotli-decompressor = "5"
+# Exception #3 (§5): crypto. ECDSA P-256 (COSE ES256, alg -7) для WebAuthn passkey
+# подписей в VirtualAuthenticator (trait-anchor: lumen-core::ext::CredentialProvider).
+# Pure-Rust RustCrypto, детерминированные RFC 6979 подписи (RNG не нужен для sign).
+# Своя реализация ECDSA — security antipattern.
+p256 = { version = "0.13", features = ["ecdsa"] }
+# SHA-256 для clientDataHash и rpIdHash в WebAuthn (W3C WebAuthn L2 §6.1).
+sha2 = "0.10"
+# Permanent: OS CSPRNG для генерации passkey-ключей и credential ID в
+# VirtualAuthenticator. Delegates directly to OS (как в lumen-js Web Crypto).
+getrandom = "0.2"
