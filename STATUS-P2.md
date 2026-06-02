@@ -14,12 +14,7 @@ _(нет)_
 
 Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
 
-| # | Task | Crate(s) | Effort | Roadmap |
-|---|------|----------|--------|---------|
-| 27 | **Print PDF inline content rendering.** Сейчас `--print-to-pdf` рендерит геометрию страниц, но содержимое margin-box'ов (@page headers/footers) не печатается — 6.5 помечен «P2 inline content rendering pending». Дотянуть `build_print_display_list` (`paint/src/display_list.rs`) до эмиссии реального текста/inline-контента margin-box'ов в print-DL. | `lumen-paint`, `lumen-shell` | M | lumen-plan.md:192 (задача 6.5) |
-| 28 | **WebGL GLSL shader execution.** `SoftwareWebGl` (`paint/src/webgl.rs`) сейчас заливает фрагмент плоским цветом из последнего `uniform4f` — GLSL не исполняется. Добавить минимальный интерпретатор GLSL ES (vertex: позиция/varyings; fragment: цвет из varyings+uniforms+texture sample), чтобы реальные шейдеры давали корректный результат. | `lumen-paint`, `lumen-js` | L | Phase 4 §7F (сейчас flat color) |
-| 29 | **ICC profile extraction в lumen-image (decode-side).** Paint-сторона color management (Display-P3/Rec2020) помечена ✅ (3A), но `lumen-image` всегда отдаёт `icc_profile: None` — профиль не извлекается из PNG (`iCCP`) / JPEG (`APP2` multi-segment), поэтому P3-фото рендерятся как sRGB. Извлекать ICC и прокидывать в существующий paint color-management путь. | `lumen-image`, `lumen-paint` | L | lumen-plan.md:2298 / :518 (Color management ICC, P2) |
-| 30 | **`Event::RequestFailed` → network-panel wiring** (переназначено от P3, исходный handoff от p1-request-failed-event). Событие `Event::RequestFailed { tab_id, url, stage: RequestStage, reason }` уже эмитится в `lumen-network` симметрично `RequestStarted` (DNS/TCP/TLS/Read-сбои до HTTP-статуса), но `network_panel.rs:202` ловит его в `_ => {}` — запись остаётся «висящей» как started. Добавить arm `Event::RequestFailed { url, stage, .. } => guard.record_failed(url.as_str(), stage)` + метод `record_failed` (по аналогии с `record_blocked`), показать `stage.as_str()` + reason в строке лога; аналогично eprintln-логгер `main.rs:119` (`✗ {url} ({stage}: {reason})`). **P2 владеет `devtools/network_panel.rs`** (p2-network-panel). | `lumen-shell` | S | lumen-plan.md §9.6:1472 |
+_(нет — все задачи P2 переданы P1 2026-06-02, задачи #33–36 в STATUS-P1.md)_
 
 ---
 
