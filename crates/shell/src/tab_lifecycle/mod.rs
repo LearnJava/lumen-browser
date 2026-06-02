@@ -10,6 +10,7 @@
 /// 3. Poll `tick_idle(pressure)` once per second — collect returned transitions
 ///    and hibernate / restore resources accordingly.
 /// 4. Call `lru_evict()` after `tick_idle` to enforce the background-tab budget.
+pub mod hibernate;
 pub mod manager;
 pub mod restore;
 pub mod state;

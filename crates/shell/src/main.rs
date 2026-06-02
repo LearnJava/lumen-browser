@@ -787,7 +787,7 @@ enum JsNavigateRequest {
 /// renders. The JS DOM closures hold a reference to the same
 /// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
 /// mutations are visible to the next relayout without a full page reload.
-trait PersistentJs {
+pub(crate) trait PersistentJs {
     /// Evaluate a JS script (event handler dispatch, rAF tick, etc.).
     fn eval_js(&self, script: &str);
     /// Consume any navigation request placed by JS during the last `eval_js`.
@@ -1526,7 +1526,7 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
 
 /// Откуда загружена страница — нужно для разрешения относительных URL в `<link>`.
 #[derive(Clone)]
-enum ResourceBase {
+pub(crate) enum ResourceBase {
     /// Страница загружена из файла. `href` разрешается относительно директории файла.
     File(PathBuf),
     /// Страница загружена по URL. `href` разрешается относительно этого URL.
@@ -6685,11 +6685,29 @@ impl Lumen {
         let css = if data.css_source.is_empty() {
             extract_style_blocks(&doc)
         } else {
-            data.css_source
+            data.css_source.clone()
         };
         let stylesheet = lumen_css_parser::parse(&css);
 
-        let document_arc = Arc::new(Mutex::new(doc));
+        // Rebuild a fresh PersistentJs runtime. The JS heap cannot be
+        // serialised, so the page's inline <script> blocks are re-run against
+        // the restored DOM. The runtime shares the returned Arc<Mutex<Document>>
+        // with the layout tree so both observe the same document.
+        self.js_ctx = None;
+        let event_sink = self.event_sink.clone();
+        let cookie_banner_dismiss = self.cookie_banner_dismiss;
+        let deterministic = self.deterministic;
+        let (document_arc, js_ctx) = tab_lifecycle::hibernate::restore_js_context(
+            &data.url,
+            doc,
+            event_sink,
+            &mut self.ls_storage,
+            &self.idb_backend,
+            &self.sw_backend,
+            cookie_banner_dismiss,
+            deterministic,
+        );
+
         let layout_source = LayoutSource {
             document: Arc::clone(&document_arc),
             stylesheet,
@@ -6711,10 +6729,20 @@ impl Lumen {
         self.title = Some(data.title);
         self.layout_source = Some(layout_source);
         self.layout_box = Some(lb);
+        self.js_ctx = js_ctx;
         self.scroll_x = data.scroll_x;
         self.scroll_y = data.scroll_y;
         self.content_height = content_height_of(&self.display_list);
         self.content_width = content_width_of(&self.display_list);
+
+        // Seed the restored runtime with layout geometry + viewport so JS can
+        // query bounding rects immediately (mirrors the fresh-load path).
+        #[cfg(feature = "quickjs")]
+        if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
+            js.update_layout_rects(collect_layout_rects(lb_ref));
+            js.update_computed_styles(collect_computed_styles(lb_ref));
+            js.update_viewport_size(viewport.width, viewport.height);
+        }
 
         // Remove the SQLite entry — it is no longer needed.
         let _ = self.tab_snapshots.delete(tab_id as i64);
