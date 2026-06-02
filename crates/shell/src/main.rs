@@ -405,6 +405,7 @@ fn run_window_mode(
         zoom_factor: zoom::ZOOM_DEFAULT,
         display_url: None,
         current_history_state_json: String::from("null"),
+        fullscreen_nid: None,
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -1116,6 +1117,15 @@ pub(crate) trait PersistentJs {
     /// Returns an empty vec when no canvas was drawn (HTML LS §4.12.4).
     #[allow(dead_code)]
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)>;
+    /// Drain fullscreen requests queued by `element.requestFullscreen()` and
+    /// `document.exitFullscreen()` (WHATWG Fullscreen §4).
+    ///
+    /// Each entry is `(enter, nid)`: `enter = true` means enter OS fullscreen
+    /// for the element with the given node index; `false` means exit fullscreen
+    /// (`nid` is ignored). Shell calls `window.set_fullscreen(Borderless)` /
+    /// `window.set_fullscreen(None)` accordingly.
+    #[allow(dead_code)]
+    fn take_fullscreen_requests(&self) -> Vec<(bool, u32)>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -1276,6 +1286,16 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
         self.rt.flush_canvas_updates()
+    }
+    fn take_fullscreen_requests(&self) -> Vec<(bool, u32)> {
+        self.rt
+            .take_fullscreen_requests()
+            .into_iter()
+            .map(|r| match r {
+                lumen_js::FullscreenRequest::Enter { nid } => (true, nid),
+                lumen_js::FullscreenRequest::Exit => (false, 0),
+            })
+            .collect()
     }
 }
 
@@ -3482,6 +3502,12 @@ struct Lumen {
     /// so the shell can populate `NavEntry::same_doc_state_json` on pushState.
     /// `"null"` until a `pushState`/`replaceState` call updates it.
     current_history_state_json: String,
+    /// Node ID of the currently fullscreen element, or `None` if not fullscreen.
+    ///
+    /// Set when `requestFullscreen()` is called in JS and cleared when
+    /// `document.exitFullscreen()` or `Escape` exits fullscreen.  Used to deliver
+    /// `_lumen_notify_fullscreen_exit()` when the OS exits fullscreen externally.
+    fullscreen_nid: Option<u32>,
 }
 
 impl Lumen {
@@ -4371,6 +4397,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     url
                 };
                 self.navigate_to(PageSource::Url(url));
+            }
+        }
+
+        // Fullscreen API: apply OS fullscreen on requestFullscreen() / exitFullscreen().
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            for (enter, nid) in js.take_fullscreen_requests() {
+                if enter {
+                    self.fullscreen_nid = Some(nid);
+                    if let Some(w) = self.window.as_ref() {
+                        w.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                    }
+                } else {
+                    self.fullscreen_nid = None;
+                    if let Some(w) = self.window.as_ref() {
+                        w.set_fullscreen(None);
+                    }
+                }
             }
         }
 
@@ -6210,6 +6254,26 @@ impl Lumen {
                     return;
                 }
             }
+        }
+
+        // Fullscreen API (WHATWG Fullscreen §4.6): Escape always exits fullscreen first.
+        // If we are fullscreen and the user presses Escape (no repeat, no mods), exit
+        // fullscreen before processing any other shortcut.
+        if self.fullscreen_nid.is_some()
+            && code == KeyCode::Escape
+            && self.modifiers.is_empty()
+            && !key_event.repeat
+        {
+            self.fullscreen_nid = None;
+            if let Some(w) = self.window.as_ref() {
+                w.set_fullscreen(None);
+            }
+            // Notify JS so fullscreenchange fires and document.fullscreenElement clears.
+            #[cfg(feature = "quickjs")]
+            if let Some(js) = &self.js_ctx {
+                js.eval_js("if(typeof _lumen_notify_fullscreen_exit==='function')_lumen_notify_fullscreen_exit()");
+            }
+            return;
         }
 
         // Focus mode (task #25): while active, Escape exits focus mode instead of

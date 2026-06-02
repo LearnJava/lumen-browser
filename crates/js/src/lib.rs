@@ -31,7 +31,7 @@ use std::sync::{
 
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
-pub use dom::{HistoryUrlUpdate, NavigateRequest};
+pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest};
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use lumen_core::WebStorage;
 
@@ -143,6 +143,13 @@ pub struct QuickJsRuntime {
     /// entry here.  The shell drains via `take_history_url_updates()` and updates
     /// the address-bar display URL and navigation stack accordingly.
     pending_history_url_updates: Arc<Mutex<Vec<dom::HistoryUrlUpdate>>>,
+    /// Fullscreen requests emitted by `element.requestFullscreen()` and
+    /// `document.exitFullscreen()`.
+    ///
+    /// Drained by the shell in `about_to_wait` via `take_fullscreen_requests()`.
+    /// Each `Enter` causes the shell to call `window.set_fullscreen(Borderless)`;
+    /// each `Exit` calls `window.set_fullscreen(None)`.
+    fullscreen_requests: Arc<Mutex<Vec<dom::FullscreenRequest>>>,
 }
 
 struct Inner {
@@ -184,6 +191,7 @@ impl QuickJsRuntime {
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
+            fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -294,6 +302,7 @@ impl QuickJsRuntime {
                 deterministic_seed,
                 Arc::clone(&self.console_messages),
                 Arc::clone(&self.pending_history_url_updates),
+                Arc::clone(&self.fullscreen_requests),
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
@@ -519,6 +528,17 @@ impl QuickJsRuntime {
     /// and the same-document navigation stack.
     pub fn take_history_url_updates(&self) -> Vec<dom::HistoryUrlUpdate> {
         std::mem::take(&mut *self.pending_history_url_updates.lock().unwrap())
+    }
+
+    /// Drain all fullscreen requests queued by `element.requestFullscreen()` and
+    /// `document.exitFullscreen()`.
+    ///
+    /// Called by the shell in `about_to_wait`. Each `Enter { nid }` causes the
+    /// shell to call `window.set_fullscreen(Some(Fullscreen::Borderless(None)))`;
+    /// each `Exit` causes `window.set_fullscreen(None)`.
+    /// Returns an empty vec when no fullscreen state changes occurred since the last drain.
+    pub fn take_fullscreen_requests(&self) -> Vec<dom::FullscreenRequest> {
+        std::mem::take(&mut *self.fullscreen_requests.lock().unwrap())
     }
 
     /// Returns `true` if JS mutated the DOM since the last call, clearing the flag.

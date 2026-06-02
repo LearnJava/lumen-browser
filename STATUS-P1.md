@@ -6,18 +6,19 @@
 
 ## In progress
 
-**Fullscreen API** (WHATWG Fullscreen Standard)  branch: p1-fullscreen-api
-Next step: JS shim + native bindings в `crates/js/src/dom.rs` + shell wiring
+_(нет)_
 
 ---
 
 ## Next
 
-_(нет — после завершения текущей задачи)_
+_(нет — все задачи выполнены)_
 
 ---
 
 ## Recent merges
+
+- **p1-fullscreen-api** ✅ 2026-06-03 — Fullscreen API (WHATWG Fullscreen Standard §4). `element.requestFullscreen()` → Promise: устанавливает `data-lumen-fullscreen` sentinel-атрибут + очередь `FullscreenRequest::Enter` в Rust-очередь; `document.exitFullscreen()` → Promise: убирает атрибут + очередь Exit. `document.fullscreenElement` (getter из `_fs_nid`), `document.fullscreenEnabled=true`, `onfullscreenchange`/`onfullscreenerror` на element и document. `fullscreenchange` event пробрасывается bubbles:true на element → document. Shell wiring: `PersistentJs::take_fullscreen_requests() -> Vec<(bool, u32)>` — дренируется в `about_to_wait`, вызывает `window.set_fullscreen(Borderless(None))` / `set_fullscreen(None)`. Escape-key handler: при `fullscreen_nid.is_some()` выходит из fullscreen и вызывает `_lumen_notify_fullscreen_exit()` в JS. `_lumen_notify_fullscreen_exit()` — синхронный хелпер для shell-вызова при внешнем выходе. Поле `fullscreen_nid: Option<u32>` в `Lumen`. **P4 handoff:** `PseudoClass::Fullscreen` в `style.rs:5477` — wire к `data-lumen-fullscreen` (инструкция добавлена в STATUS-P4.md). lumen-js: 902 тестов (+11). Clippy чист. Без новых зависимостей.
 
 - **p1-compression-stream** ✅ 2026-06-03 — CompressionStream/DecompressionStream (WHATWG Compression Streams Standard). Нативные биндинги `_lumen_compress_bytes`/`_lumen_decompress_bytes` поверх уже завендоренного `flate2` (без новых зависимостей). Форматы: `deflate-raw` (raw DEFLATE RFC 1951), `deflate` (zlib RFC 1950), `gzip`. JS-шим: оба класса наследуют `TransformStream`, используют buffer-then-flush стратегию (накапливают чанки в `transform()`, сжимают/декомпрессируют атомарно в `flush()`). `window.CompressionStream`/`window.DecompressionStream` экспортированы. 9 unit-тестов: constructor exists, invalid format throws TypeError (×2), has readable/writable, instanceof TransformStream, gzip/deflate/deflate-raw round-trip. lumen-js: 891 lib. Clippy чист.
 

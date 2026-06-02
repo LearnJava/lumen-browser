@@ -52,6 +52,14 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
+### `:fullscreen` CSS pseudo-class (P1 feature p1-fullscreen-api)
+- **Status:** JS Fullscreen API implemented. `element.requestFullscreen()` sets `data-lumen-fullscreen` sentinel attribute on the element; `document.exitFullscreen()` / `_lumen_notify_fullscreen_exit()` removes it. `document.fullscreenElement` tracks the active nid. Shell wired to winit `set_fullscreen(Borderless)` / `set_fullscreen(None)`. CSS parser already has `PseudoClass::Fullscreen` (always `false` for now — see `style.rs:5477`).
+- **P4 task:**
+  1. In `style.rs` `matches_pseudo_class` at `PseudoClass::Fullscreen => false` (line ~5477): replace `false` with a check for the `data-lumen-fullscreen` attribute on the element, similar to how `:popover-open` is done for popovers. Pattern: `doc.get_attr(node.id, "data-lumen-fullscreen").is_some()`.
+  2. Similarly wire `PseudoClass::PopoverOpen` (line ~5488) to check `data-lumen-popover-open` sentinel (separate task, same pattern).
+- **Entry points:** `lumen-layout/src/style.rs` at `PseudoClass::Fullscreen => false` (search `// CSS: :fullscreen` comment).
+- **CSS comment location:** `style.rs` at the `PseudoClass::Fullscreen => false` line.
+
 ### CSS `image-set()` background image (P2 feature p2-css-image-set)
 - **Status:** Paint-side resolution ready. `lumen-paint::select_image_set_url(value, dpr) -> &str` (`display_list.rs`) parses `image-set( <url-or-string> [<resolution>]# )` (units `x`/`dppx`/`dpi`/`dpcm`, default `1x`) and returns the URL closest to `dpr` (tie → higher resolution). `is_image_set(value)` detects the function (incl. `-webkit-image-set(`). `emit_background_layer` already calls them for `BackgroundImage::Url` values — if the stored string is an `image-set(…)` expression it resolves to a single URL before emitting `DrawBackgroundImage` (marked `// CSS: image-set`). DPR is threaded purely (no globals): `build_display_list_ordered_dpr` / `build_display_list_ordered_with_anim_dpr` take a `dpr` arg; the non-`_dpr` builders default to `1.0`.
 - **P4 task:**
