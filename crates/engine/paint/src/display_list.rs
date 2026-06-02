@@ -22,7 +22,7 @@ use lumen_layout::{
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
     FormControlKind, SvgShapeKind,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
-    InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
+    InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow,
@@ -1365,8 +1365,13 @@ pub fn build_display_list_ordered_with_anim_dpr(
 /// `PushTransform` / `PopTransform`. Pages are separated by `PageBreak` markers.
 /// Use `split_at_page_breaks` to get per-page command slices for rendering.
 ///
+/// If a page has `page_box` set, margin-box text fragments (@page headers, footers,
+/// page numbers) are emitted as `DrawText` commands positioned at absolute page
+/// coordinates (not inside the content-area transform).
+///
 /// Coordinate convention: page origin = (0, 0) at top-left of content area.
 /// Fragment y-offset is relative to the content area, not the page box.
+/// Margin-box positions are relative to the page box origin (top-left of full page).
 pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
     let mut cmds: DisplayList = Vec::new();
     for (page_idx, page) in pages.iter().enumerate() {
@@ -1381,8 +1386,46 @@ pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
             walk(&frag.layout_box, &mut cmds, 1.0);
             cmds.push(DisplayCommand::PopTransform);
         }
+        // Emit margin-box text content (headers, footers, page numbers).
+        if let Some(page_box) = &page.page_box {
+            for margin_box in page_box.margin_boxes.values() {
+                emit_margin_box_text(margin_box, &mut cmds);
+            }
+        }
     }
     cmds
+}
+
+/// Emits `DrawText` commands for each text fragment in a margin-box.
+///
+/// Positions are absolute page coordinates: `margin_box.x + fragment.x` and
+/// `margin_box.y + fragment.y`. Text uses the page default: 10px black,
+/// no explicit font family (renderer falls back to bundled Inter).
+fn emit_margin_box_text(margin_box: &MarginBox, cmds: &mut DisplayList) {
+    let default_font_size = 10.0_f32;
+    let text_color = Color { r: 0, g: 0, b: 0, a: 255 };
+    for frag in &margin_box.text_fragments {
+        if frag.text.is_empty() {
+            continue;
+        }
+        let rect = Rect {
+            x: margin_box.x + frag.x,
+            y: margin_box.y + frag.y,
+            width: frag.width,
+            height: frag.height,
+        };
+        cmds.push(DisplayCommand::DrawText {
+            rect,
+            text: frag.text.clone(),
+            font_size: default_font_size,
+            color: text_color,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            tab_size: 0.0,
+        });
+    }
 }
 
 /// Splits a print display list at `PageBreak` markers.
@@ -8263,6 +8306,133 @@ mod tests {
         let cmds = build_print_display_list(&pages);
         let breaks = cmds.iter().filter(|c| matches!(c, DisplayCommand::PageBreak)).count();
         assert_eq!(breaks, pages.len() - 1, "N pages → N-1 PageBreaks");
+    }
+
+    // ── Tests for build_print_display_list margin-box rendering ──────────
+
+    /// Page without page_box emits no margin-box DrawText commands.
+    #[test]
+    fn print_dl_no_page_box_no_margin_text() {
+        use lumen_layout::{paginate, PaginationContext};
+
+        let doc = lumen_html_parser::parse("<div style='height:100px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(400.0, 600.0));
+        let ctx = PaginationContext {
+            page_width: 400.0,
+            page_height: 600.0,
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            margin_left: 0.0,
+            margin_right: 0.0,
+        };
+        let pages = paginate(&tree, &ctx);
+        assert!(!pages.is_empty());
+        // No page_box — no DrawText from margin boxes
+        let cmds = build_print_display_list(&pages);
+        let text_cmds: Vec<_> = cmds.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).collect();
+        assert!(text_cmds.is_empty(), "no margin-box DrawText without page_box");
+    }
+
+    /// Page with a page_box containing bottom-center text emits a DrawText command.
+    #[test]
+    fn print_dl_page_box_bottom_center_emits_draw_text() {
+        use lumen_layout::{
+            paginate, MarginBoxPosition, PageBox, PageProperties, PaginationContext, TextMeasurer,
+        };
+
+        struct Fixed8;
+        impl TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        let doc = lumen_html_parser::parse("<div style='height:100px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(400.0, 600.0));
+        let ctx = PaginationContext {
+            page_width: 400.0,
+            page_height: 600.0,
+            margin_top: 40.0,
+            margin_bottom: 40.0,
+            margin_left: 40.0,
+            margin_right: 40.0,
+        };
+        let mut pages = paginate(&tree, &ctx);
+        assert!(!pages.is_empty());
+
+        let props = PageProperties {
+            width: 400.0, height: 600.0,
+            orientation: "portrait".to_string(),
+            margin_top: 40.0, margin_bottom: 40.0,
+            margin_left: 40.0, margin_right: 40.0,
+        };
+        let mut page_box = PageBox::new(0, props);
+        page_box.layout_margin_boxes();
+        let label = "1 / 1";
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::BottomCenter) {
+            mb.content = Some(label.to_string());
+            mb.layout_text(label, 10.0, 15.0, &Fixed8);
+        }
+        pages[0].page_box = Some(page_box);
+
+        let cmds = build_print_display_list(&pages);
+        let texts: Vec<&str> = cmds.iter().filter_map(|c| {
+            if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
+        }).collect();
+        assert!(texts.iter().any(|&t| t == "1 / 1"), "expected '1 / 1' in DrawText, got: {:?}", texts);
+    }
+
+    /// Margin-box DrawText positioned at page-box coordinates (not inside content transform).
+    #[test]
+    fn print_dl_margin_box_text_absolute_position() {
+        use lumen_layout::{
+            paginate, MarginBoxPosition, PageBox, PageProperties, PaginationContext, TextMeasurer,
+        };
+
+        struct Fixed8;
+        impl TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        let doc = lumen_html_parser::parse("<div style='height:50px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(200.0, 300.0));
+        let ctx = PaginationContext {
+            page_width: 200.0,
+            page_height: 300.0,
+            margin_top: 30.0,
+            margin_bottom: 30.0,
+            margin_left: 30.0,
+            margin_right: 30.0,
+        };
+        let mut pages = paginate(&tree, &ctx);
+
+        let props = PageProperties {
+            width: 200.0, height: 300.0,
+            orientation: "portrait".to_string(),
+            margin_top: 30.0, margin_bottom: 30.0,
+            margin_left: 30.0, margin_right: 30.0,
+        };
+        let mut page_box = PageBox::new(0, props);
+        page_box.layout_margin_boxes();
+        let label = "PG1";
+        // Use top-left-corner so we can predict coordinates: x=0, y=0
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::TopLeftCorner) {
+            mb.content = Some(label.to_string());
+            mb.layout_text(label, 10.0, 15.0, &Fixed8);
+        }
+        pages[0].page_box = Some(page_box);
+
+        let cmds = build_print_display_list(&pages);
+        let pg1_rect = cmds.iter().find_map(|c| {
+            if let DisplayCommand::DrawText { text, rect, .. } = c {
+                if text == "PG1" { Some(*rect) } else { None }
+            } else { None }
+        });
+        let rect = pg1_rect.expect("DrawText 'PG1' not found");
+        // TopLeftCorner is at page origin (0,0); fragment offset is 0,0 inside box
+        assert!(rect.x >= 0.0 && rect.x < 10.0, "x should be at page origin, got {}", rect.x);
+        assert!(rect.y >= 0.0 && rect.y < 10.0, "y should be at page origin, got {}", rect.y);
     }
 
     // ── Tests for DrawCrossFade ────────────────────────────────────────────

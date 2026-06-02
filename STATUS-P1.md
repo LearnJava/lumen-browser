@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**#33 Print PDF inline content rendering** — branch: `p1-print-pdf-margin-boxes`
+Next step: Add `page_box: Option<PageBox>` to `Page` struct, update `build_print_display_list` to emit `DrawText` for margin boxes, wire page numbers in `do_print_to_pdf`.
 
 ---
 
