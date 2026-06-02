@@ -5532,10 +5532,9 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // registry, проверка станет `built-in || registry.has(name)`.
         PseudoClass::Defined => matches_defined(doc, node),
         // Fullscreen API §4.2 `:fullscreen` — runtime-only: top-layer
-        // элементов, поднятых через `Element.requestFullscreen()`. Phase 0
-        // без Fullscreen API в shell — всегда `false` (privacy-/UX-safe
-        // default: страница не может имитировать fullscreen-стили
-        // вне реального fullscreen-режима).
+        // элементов, поднятых через `Element.requestFullscreen()`. JS API
+        // реализован (p1-fullscreen-api); sentinel — `data-lumen-fullscreen`.
+        // CSS: :fullscreen — P4: check doc.get_attr(node.id,"data-lumen-fullscreen").is_some()
         PseudoClass::Fullscreen => false,
         // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` после
         // `dialog.showModal()` (но не `dialog.show()` non-modal) или
