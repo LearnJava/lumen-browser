@@ -6,18 +6,19 @@
 
 ## In progress
 
-**ICC profile extraction в lumen-image (decode-side)** — задача #35  branch: p1-icc-profile
-Next step: parse_jpeg_icc_profile (APP2 multi-segment) + IccGamut detection + pixel correction + renderer.rs wiring
+_(нет)_
 
 ---
 
 ## Next
 
-_(нет — задача #35 в работе)_
+_(нет — все задачи выполнены)_
 
 ---
 
 ## Recent merges
+
+- **p1-icc-profile** ✅ 2026-06-02 — ICC profile extraction — JPEG APP2 multi-segment + paint wiring (задача #35). `parse_jpeg_icc_profile` читает APP2 multi-segment ICC (JFIF-ICC, ISO 15076-1); `IccGamut` enum + `IccProfile::detect_gamut()` сканирует ASCII/UTF-16BE описание (Display P3/DCI-P3 → P3, Rec.2020/BT.2020 → Rec2020, sRGB/IEC 61966 → Srgb, остальное → Unknown); `correct_rgba_pixels` — per-pixel конвертация P3→sRGB / Rec2020→sRGB с sRGB/Rec2020 gamma en/decode и CSS Color L4 §10.9 матрицами. lumen-paint `register_image` + `ensure_image_gpu_key` применяют ICC-коррекцию перед GPU upload — P3/Rec2020 фото корректно рендерятся на sRGB-мониторах. 7 тестов JPEG ICC, 13 тестов IccGamut+correct_rgba. lumen-image: 163 lib. Clippy чист. Без новых зависимостей.
 
 - **p1-webgl-glsl-interp** ✅ 2026-06-02 — WebGL GLSL ES 1.0 интерпретатор (задача #34). Новый модуль `crates/engine/paint/src/glsl.rs`: лексер + рекурсивный парсер GLSL ES 1.0, runtime types (float/vec2/3/4/mat4/sampler2D), операторы ++/--, if/else/for/while, swizzle r/w, mat4×vec4/mat4, built-ins (texture2D, mix, clamp, normalize, dot, cross, тригонометрия, step/smoothstep, fract, reflect, ...). `SoftwareWebGl.draw_arrays` теперь исполняет vertex-shader на каждую вершину (gl_Position + varyings), растеризует с баrycentric-интерполяцией varyings, запускает fragment-shader per-pixel. Новые uniform-методы: uniform1/2/3f, uniform_matrix4fv, uniform1i; texture pipeline (active_texture/bind_texture/tex_image_2d_rgba, averaged-colour sampling). Seed gl_Position из attribute 0 как fallback для backward-compat. Flat-fill fallback при отсутствии program. lumen-paint: 507 lib. lumen-js: 837 тестов. Clippy чист. Без новых зависимостей.
 
