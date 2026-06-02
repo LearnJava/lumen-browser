@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Passkeys / WebAuthn (7D.1)**  branch: `p1-webauthn`
+Next step: trait `CredentialProvider` + WebAuthn типы в `crates/core/src/ext.rs`; `VirtualAuthenticator` (ECDSA P-256) в `crates/network/src/webauthn.rs`; JS `navigator.credentials` в `crates/js/src/credentials.rs` + bindings в `crates/js/src/dom.rs`.
 
 ---
 
