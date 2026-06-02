@@ -47,6 +47,7 @@ mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
 mod tabs;
+mod zoom;
 
 use crate::tab_lifecycle::state::TabState;
 use std::cell::Cell;
@@ -398,6 +399,7 @@ fn run_window_mode(
         )),
         privacy: panels::privacy_panel::PrivacyPanel::new(network_log),
         fallbacks_preloaded: false,
+        zoom_factor: zoom::ZOOM_DEFAULT,
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -1512,6 +1514,12 @@ enum KeyCommand {
     /// гасим dead_code-предупреждение, чтобы `cargo clippy -D warnings` прошёл.
     #[allow(dead_code)]
     SetTabContainer(tabs::containers::ContainerKind),
+    /// Увеличить масштаб страницы (Ctrl+=).
+    ZoomIn,
+    /// Уменьшить масштаб страницы (Ctrl+-).
+    ZoomOut,
+    /// Сбросить масштаб страницы к 100% (Ctrl+0).
+    ZoomReset,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1625,6 +1633,12 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyV if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::TogglePip)
         }
+        // Ctrl+= — zoom in
+        KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
+        // Ctrl+- — zoom out
+        KeyCode::Minus if ctrl_only => Some(KeyCommand::ZoomOut),
+        // Ctrl+0 — reset zoom
+        KeyCode::Digit0 if ctrl_only => Some(KeyCommand::ZoomReset),
         _ => None,
     }
 }
@@ -2049,6 +2063,8 @@ struct PageSnapshot {
     animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
     gif_last_frame: HashMap<String, usize>,
     image_cache: lumen_image::ImageDecodeCache,
+    /// Per-tab user zoom factor. Preserved when the tab goes to background.
+    zoom_factor: f32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2430,6 +2446,17 @@ fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvide
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
+}
+
+/// Extract `initial-scale` from the `<meta name=viewport>` of a page's document.
+///
+/// Returns `1.0` when the page has no viewport meta or omits `initial-scale`.
+fn meta_initial_scale(src: &LayoutSource) -> f32 {
+    src.document
+        .lock()
+        .ok()
+        .and_then(|doc| doc.viewport_meta().map(|m| m.initial_scale))
+        .unwrap_or(1.0)
 }
 
 /// Get-or-create the localStorage partition for the given `ResourceBase` origin.
@@ -2944,6 +2971,12 @@ struct Lumen {
     /// `deliver_media_query_changes(.., self.dark_mode)`. Default `false` (light)
     /// до создания окна и в headless/deterministic-режимах (стабильность snapshot-ов).
     dark_mode: bool,
+    /// Per-tab user zoom factor (100% = 1.0). Changed via Ctrl+= / Ctrl+- / Ctrl+0.
+    ///
+    /// Combined with `<meta viewport initial-scale>` to compute the effective CSS
+    /// layout viewport: `effective = physical / (meta_scale * zoom_factor)`.
+    /// Resets to 1.0 on tab switch (stored in `PageSnapshot` for background tabs).
+    zoom_factor: f32,
     /// Последняя известная позиция курсора в **physical** пикселях (от winit).
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
@@ -3309,7 +3342,11 @@ impl Lumen {
         if vp_size.width <= 0.0 || vp_size.height <= 0.0 {
             return;
         }
-        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
+        let meta_scale = meta_initial_scale(src);
+        let (css_w, css_h) =
+            zoom::effective_viewport(vp_size.width as f32, vp_size.height as f32, meta_scale, self.zoom_factor);
+        let viewport = Size::new(css_w, css_h);
         let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider);
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
@@ -3899,6 +3936,14 @@ impl Lumen {
         #[cfg(feature = "quickjs")]
         if let Some(js) = &self.js_ctx {
             js.notify_window_loaded();
+        }
+
+        // If zoom or <meta viewport initial-scale> is active, relayout with the
+        // correct effective viewport. The initial load used the raw physical size.
+        let zoom = self.zoom_factor;
+        let meta_scale = self.layout_source.as_ref().map(meta_initial_scale).unwrap_or(1.0);
+        if (zoom - 1.0).abs() > 0.001 || (meta_scale - 1.0).abs() > 0.001 {
+            self.relayout();
         }
     }
 }
@@ -6163,6 +6208,18 @@ impl Lumen {
                 self.toggle_pip();
                 self.request_redraw();
             }
+            KeyCommand::ZoomIn => {
+                self.zoom_factor = zoom::zoom_in(self.zoom_factor);
+                self.relayout();
+            }
+            KeyCommand::ZoomOut => {
+                self.zoom_factor = zoom::zoom_out(self.zoom_factor);
+                self.relayout();
+            }
+            KeyCommand::ZoomReset => {
+                self.zoom_factor = zoom::zoom_reset();
+                self.relayout();
+            }
         }
     }
 
@@ -7610,14 +7667,17 @@ impl Lumen {
             html_source: None,
         };
 
-        // Re-run layout+paint with the current viewport.
-        let viewport = self.renderer.as_ref().map_or_else(
-            || lumen_core::geom::Size::new(1024.0, 720.0),
+        // Re-run layout+paint with the current viewport (including zoom).
+        let phys = self.renderer.as_ref().map_or_else(
+            || (1024.0_f32, 720.0_f32),
             |r| {
                 let s = r.viewport_size();
-                lumen_core::geom::Size::new(s.width as f32, s.height as f32)
+                (s.width as f32, s.height as f32)
             },
         );
+        let meta_scale = meta_initial_scale(&layout_source);
+        let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, meta_scale, self.zoom_factor);
+        let viewport = lumen_core::geom::Size::new(css_w, css_h);
         let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider);
 
         // Install into the active slot.
@@ -7743,6 +7803,7 @@ impl Lumen {
                 &mut self.image_cache,
                 lumen_image::ImageDecodeCache::new(),
             ),
+            zoom_factor: self.zoom_factor,
         }
     }
 
@@ -7789,6 +7850,7 @@ impl Lumen {
         self.animated_gifs = snap.animated_gifs;
         self.gif_last_frame = snap.gif_last_frame;
         self.image_cache = snap.image_cache;
+        self.zoom_factor = snap.zoom_factor;
     }
 
     /// Reset all per-page fields to blank-tab defaults.
@@ -7839,6 +7901,7 @@ impl Lumen {
         self.animated_gifs = HashMap::new();
         self.gif_last_frame = HashMap::new();
         self.image_cache = lumen_image::ImageDecodeCache::new();
+        self.zoom_factor = zoom::ZOOM_DEFAULT;
         // Cancel in-flight scroll animations.
         self.scroll_anim = None;
         self.momentum_anim = None;

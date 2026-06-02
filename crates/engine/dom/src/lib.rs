@@ -20,6 +20,36 @@ pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
 pub mod contenteditable;
 pub use contenteditable::{CommandHistory, DomCommand, DragData, PasteData, drop_into, paste_into};
 
+/// Width dimension of a `<meta name=viewport>` tag.
+///
+/// `DeviceWidth` means `width=device-width` — match the physical viewport.
+/// `Pixels(f32)` is an explicit CSS px width (e.g. `width=375`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ViewportWidth {
+    /// `width=device-width` — layout viewport equals the physical viewport width.
+    DeviceWidth,
+    /// `width=<N>` — fixed CSS pixel width.
+    Pixels(f32),
+}
+
+/// Parsed `<meta name="viewport" content="…">` descriptor.
+///
+/// Extracted by the HTML parser; consumed by the shell to compute the effective
+/// CSS layout viewport and by layout for `@media` matching.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ViewportMeta {
+    /// `initial-scale` value. Default `1.0` when not specified.
+    pub initial_scale: f32,
+    /// `width` dimension. `None` if omitted.
+    pub width: Option<ViewportWidth>,
+}
+
+impl Default for ViewportMeta {
+    fn default() -> Self {
+        Self { initial_scale: 1.0, width: None }
+    }
+}
+
 /// Error returned by [`Document::to_bytes`] and [`Document::from_bytes`].
 #[derive(Debug)]
 pub enum DomSnapshotError {
@@ -909,6 +939,11 @@ pub struct Document {
     /// the JS heap is rebuilt from scratch and wrappers re-acquire refs.
     #[serde(skip)]
     js_refs: HashMap<NodeId, u32>,
+    /// Parsed `<meta name="viewport">` descriptor, if any.
+    ///
+    /// Set by the HTML parser when the viewport meta tag is encountered in `<head>`.
+    /// Used by the shell to compute the effective CSS layout viewport width/scale.
+    viewport_meta: Option<ViewportMeta>,
 }
 
 impl Default for Document {
@@ -937,6 +972,7 @@ impl Document {
             performance: PerformanceEntries::new(),
             timing_origin: 0.0,
             js_refs: HashMap::new(),
+            viewport_meta: None,
         }
     }
 
@@ -956,6 +992,17 @@ impl Document {
     /// документа — пользовательский код вызывает редко.
     pub fn set_mode(&mut self, mode: DocumentMode) {
         self.mode = mode;
+    }
+
+    /// Parsed `<meta name="viewport">` descriptor, if the page declared one.
+    pub fn viewport_meta(&self) -> Option<&ViewportMeta> {
+        self.viewport_meta.as_ref()
+    }
+
+    /// Set the viewport meta descriptor. Called by the HTML parser when it
+    /// encounters `<meta name="viewport" content="…">`.
+    pub fn set_viewport_meta(&mut self, meta: ViewportMeta) {
+        self.viewport_meta = Some(meta);
     }
 
     /// Current selection. The shell updates this on mouse events; JS reads it
