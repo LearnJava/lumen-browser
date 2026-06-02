@@ -906,6 +906,13 @@ trait PersistentJs {
     /// another context (tab/worker) broadcasts on a shared channel name.
     #[allow(dead_code)]
     fn pump_broadcast_channels(&self);
+    /// Deliver messages posted by `SharedWorker` threads to this page's ports.
+    ///
+    /// Must be called on every event-loop tick alongside `pump_workers()` so that
+    /// each client `port`'s `onmessage` / `addEventListener('message', fn)` fires
+    /// when a shared worker replies (WHATWG HTML §10.2).
+    #[allow(dead_code)]
+    fn pump_shared_workers(&self);
     /// Drain OS notification requests queued by `new Notification(...)` in JS.
     ///
     /// Shell calls this in `about_to_wait` and forwards each entry to
@@ -1044,6 +1051,9 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn pump_broadcast_channels(&self) {
         self.rt.pump_broadcast_channels();
+    }
+    fn pump_shared_workers(&self) {
+        self.rt.pump_shared_workers();
     }
     fn take_notification_requests(&self) -> Vec<(String, String)> {
         self.rt
@@ -3824,6 +3834,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             js.pump_websockets();
             js.pump_workers();
             js.pump_broadcast_channels();
+            js.pump_shared_workers();
             if let Some(nav) = js.take_navigate_request() {
                 self.pending_js_navigate = Some(nav);
             }
