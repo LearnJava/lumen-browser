@@ -1466,6 +1466,17 @@ pub struct Renderer {
     /// (H: scratch → backdrop_layer; V: backdrop_layer → scratch), and color-filter
     /// target when compositing filtered backdrop back onto parent.
     backdrop_layer: Option<OffscreenLayer>,
+    /// CSS Filter Effects L1 §2 — `backdrop-filter` result cache (metadata).
+    /// Tracks, per backdrop element ordinal, the content hash of the inputs that
+    /// produced the cached filtered texture. Used to skip the blur passes when a
+    /// frame's backdrop inputs are unchanged from the previous frame.
+    backdrop_cache: crate::backdrop_cache::BackdropCache,
+    /// Cached filtered backdrop textures, keyed by the same ordinal as
+    /// [`Self::backdrop_cache`]. Each is a full parent-layer-sized snapshot of
+    /// the blurred (or, for filter-only backdrops, copied) backdrop region.
+    /// Reused across frames on a cache hit; the color-filter pass still runs at
+    /// blit time so only the expensive blur is skipped.
+    backdrop_cache_textures: HashMap<u32, OffscreenLayer>,
     /// CSS Images L3 §3.3 — linear/radial gradient pipeline.
     gradient_bgl: wgpu::BindGroupLayout,
     gradient_pipeline: wgpu::RenderPipeline,
@@ -2954,6 +2965,8 @@ impl Renderer {
             blur_uniform,
             backdrop_blit_pipeline,
             backdrop_layer: None,
+            backdrop_cache: crate::backdrop_cache::BackdropCache::new(),
+            backdrop_cache_textures: HashMap::new(),
             gradient_bgl,
             gradient_pipeline,
             scratch_layer: None,
@@ -3358,6 +3371,42 @@ impl Renderer {
         &self.layer_cache
     }
 
+    /// Enables or disables the `backdrop-filter` result cache (CSS Filter
+    /// Effects L1 §2). Enabled by default. Disabling frees all cached metadata;
+    /// the matching GPU textures are dropped lazily as backdrop elements are
+    /// re-rendered (or via [`Self::clear_backdrop_cache`]).
+    pub fn set_backdrop_cache_enabled(&mut self, enabled: bool) {
+        self.backdrop_cache.set_enabled(enabled);
+        if !enabled {
+            self.backdrop_cache_textures.clear();
+        }
+    }
+
+    /// Drops every cached `backdrop-filter` texture and its metadata. The next
+    /// frame recomputes each backdrop from scratch.
+    pub fn clear_backdrop_cache(&mut self) {
+        self.backdrop_cache.clear();
+        self.backdrop_cache_textures.clear();
+    }
+
+    /// Number of live cached `backdrop-filter` textures (for stats / tests).
+    #[must_use]
+    pub fn backdrop_cache_len(&self) -> usize {
+        self.backdrop_cache.len()
+    }
+
+    /// Forwards a memory-pressure signal to the `backdrop-filter` cache and
+    /// frees the GPU textures of any entries it evicts (ADR-008 §10D.3 /
+    /// §10H). Wire into the shell's `MemoryPressureSource` poll loop.
+    pub fn backdrop_cache_on_memory_pressure(
+        &mut self,
+        level: lumen_core::ext::MemoryPressureLevel,
+    ) {
+        for ord in self.backdrop_cache.on_memory_pressure(level) {
+            self.backdrop_cache_textures.remove(&ord);
+        }
+    }
+
     /// Получить мutable ссылку для прямого управления кэшем (advanced usage).
     pub fn layer_cache_mut(&mut self) -> &mut crate::layer_cache::LayerCache {
         &mut self.layer_cache
@@ -3585,6 +3634,48 @@ impl Renderer {
         }
     }
 
+    /// Ensures a cached backdrop texture of size `width`×`height` exists for
+    /// `ordinal`. Returns `true` if it was (re)created — the caller must then
+    /// invalidate the matching [`Self::backdrop_cache`] entry, since a resize
+    /// discards the previously cached pixels.
+    ///
+    /// Usage flags: `COPY_DST` (filter-only backdrops copy parent → cache
+    /// directly), `RENDER_ATTACHMENT` (blur V-pass writes into the cache), and
+    /// `TEXTURE_BINDING` (the blit reads the cache as its source).
+    fn ensure_backdrop_cache_texture(&mut self, ordinal: u32, width: u32, height: u32) -> bool {
+        let needs_create = self
+            .backdrop_cache_textures
+            .get(&ordinal)
+            .is_none_or(|l| l.width != width || l.height != height);
+        if !needs_create {
+            return false;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("backdrop-cache-layer"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("backdrop-cache-bg"),
+            layout: &self.composite_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+            ],
+        });
+        self.backdrop_cache_textures
+            .insert(ordinal, OffscreenLayer { texture, view, bind_group, width, height });
+        true
+    }
+
     fn ensure_layer_textures(&mut self, count: usize, width: u32, height: u32) {
         while self.layer_textures.len() < count {
             let t = self.create_layer_texture(width, height);
@@ -3613,6 +3704,23 @@ impl Renderer {
         scroll_y: f32,
         scroll_x: f32,
     ) -> Result<(), wgpu::SurfaceError> {
+        // CSS Filter Effects L1 §2 — backdrop-filter result cache.
+        // Compute one content hash per frame, but only when the display list
+        // actually contains a backdrop-filter (pages without one pay nothing).
+        // Two consecutive frames hashing identically guarantees every backdrop
+        // element's filtered output is identical, so the composite step can
+        // reuse the cached texture and skip the expensive blur passes.
+        let backdrop_frame_hash: Option<u64> = if self.backdrop_cache.is_enabled()
+            && crate::display_list::contains_backdrop_filter(content, overlay)
+        {
+            let (sw, sh) = self.surface_dims();
+            Some(crate::display_list::hash_display_list(
+                content, overlay, scroll_x, scroll_y, sw, sh,
+            ))
+        } else {
+            None
+        };
+
         // Pre-resolve primary face_id для каждой DrawText-команды +
         // lazy-загрузка новых face-ов до сбора вершин. Делается до парсинга
         // (resolve мутирует self.faces). Resolve бежит по обеим полосам
@@ -3751,6 +3859,9 @@ impl Renderer {
             filters: Vec<FilterFn>,
             comp_v_start: u32,
             bounds_v_start: u32,
+            /// Stable index among backdrop elements in this frame (paint order).
+            /// Cache key for [`Renderer::backdrop_cache`] and the matching texture.
+            ordinal: u32,
         }
         // CSS Masking L1 §5 — mask-layer composite plan.
         // `from_level`   = offscreen level where mask content was rendered.
@@ -3800,6 +3911,9 @@ impl Renderer {
         let mut filter_stack: Vec<Vec<FilterFn>> = Vec::new();
         // Stack for backdrop-filter: (filter_list, element_bounds_css_px).
         let mut backdrop_filter_stack: Vec<(Vec<FilterFn>, lumen_core::geom::Rect)> = Vec::new();
+        // Monotonic counter assigning a stable ordinal to each backdrop element
+        // (in paint/pop order) — the key into the backdrop-filter result cache.
+        let mut backdrop_ordinal: u32 = 0;
         let mut level_first: Vec<bool> = vec![true];
         let mut batch_start: usize = 0;
 
@@ -4816,12 +4930,15 @@ impl Renderer {
                             dpr_f32,
                             1.0,
                         );
+                        let ordinal = backdrop_ordinal;
+                        backdrop_ordinal += 1;
                         render_plan.push(RenderPlanItem::BackdropFilterComposite(
                             BackdropFilterCompositePlan {
                                 from_level: current_level,
                                 filters,
                                 comp_v_start,
                                 bounds_v_start,
+                                ordinal,
                             },
                         ));
                         current_level -= 1;
@@ -5872,90 +5989,127 @@ impl Renderer {
                     let parent_h = self.layer_textures[parent_idx].height;
                     self.ensure_scratch_layer(parent_w, parent_h);
                     self.ensure_backdrop_layer(parent_w, parent_h);
+                    // The per-ordinal cache texture is the blit source (always), and on a
+                    // cache hit it already holds the previous frame's filtered backdrop.
+                    if self.ensure_backdrop_cache_texture(plan.ordinal, parent_w, parent_h) {
+                        // A resize discarded the cached pixels — drop the stale hash so it
+                        // cannot produce a hit against the fresh (uninitialised) texture.
+                        self.backdrop_cache.invalidate(plan.ordinal);
+                    }
+                    // Cache HIT: the cached texture is unchanged → skip the copy + blur
+                    // passes entirely. Disabled cache (`backdrop_frame_hash == None`)
+                    // always misses, reproducing the original behaviour.
+                    let cache_hit = match backdrop_frame_hash {
+                        Some(fh) => self.backdrop_cache.lookup(plan.ordinal, fh),
+                        None => false,
+                    };
 
-                    // Step 1: copy parent layer → scratch (full-texture copy).
-                    // parent has COPY_SRC, scratch has COPY_DST.
-                    let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
-                    let scratch_copy = self.scratch_layer.as_ref().unwrap().texture.as_image_copy();
-                    encoder.copy_texture_to_texture(
-                        parent_copy,
-                        scratch_copy,
-                        wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
-                    );
-
-                    // Step 2: apply blur if present (H: scratch → backdrop_layer, V: backdrop_layer → scratch).
                     let blur_sigma = plan.filters.iter().find_map(|f| match f {
                         FilterFn::Blur(s) if *s > 0.0 => Some(*s),
                         _ => None,
                     });
-                    if let Some(sigma) = blur_sigma {
-                        // H pass: scratch → backdrop_layer (REPLACE).
-                        let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
-                        self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_h]));
-                        let scratch_view_h = &self.scratch_layer.as_ref().unwrap().view;
-                        let backdrop_view_h = &self.backdrop_layer.as_ref().unwrap().view;
-                        let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("backdrop-blur-h-bg"),
-                            layout: &self.blur_bgl,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_h) },
-                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
-                            ],
-                        });
-                        {
-                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("backdrop-blur-h-pass"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: backdrop_view_h,
-                                    resolve_target: None,
-                                    depth_slice: None,
-                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
+
+                    // Ordinals evicted by `store()` whose textures must be freed once the
+                    // current element's passes (which borrow the cache map) have ended.
+                    let mut evicted_ordinals: Vec<u32> = Vec::new();
+                    if !cache_hit {
+                        if let Some(sigma) = blur_sigma {
+                            // Step 1: copy parent layer → scratch (blur H-pass input).
+                            // parent has COPY_SRC, scratch has COPY_DST.
+                            let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                            let scratch_copy = self.scratch_layer.as_ref().unwrap().texture.as_image_copy();
+                            encoder.copy_texture_to_texture(
+                                parent_copy,
+                                scratch_copy,
+                                wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
+                            );
+
+                            // Step 2 H pass: scratch → backdrop_layer (REPLACE).
+                            let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
+                            self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_h]));
+                            let scratch_view_h = &self.scratch_layer.as_ref().unwrap().view;
+                            let backdrop_view_h = &self.backdrop_layer.as_ref().unwrap().view;
+                            let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("backdrop-blur-h-bg"),
+                                layout: &self.blur_bgl,
+                                entries: &[
+                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_h) },
+                                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                    wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                                ],
                             });
-                            pass.set_pipeline(&self.blur_pipeline);
-                            pass.set_bind_group(0, &blur_bg_h, &[]);
-                            pass.set_vertex_buffer(0, cvb.slice(..));
-                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                            {
+                                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("backdrop-blur-h-pass"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: backdrop_view_h,
+                                        resolve_target: None,
+                                        depth_slice: None,
+                                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                                    })],
+                                    depth_stencil_attachment: None,
+                                    timestamp_writes: None,
+                                    occlusion_query_set: None,
+                                });
+                                pass.set_pipeline(&self.blur_pipeline);
+                                pass.set_bind_group(0, &blur_bg_h, &[]);
+                                pass.set_vertex_buffer(0, cvb.slice(..));
+                                pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                            }
+                            // Step 2 V pass: backdrop_layer → CACHE texture (REPLACE).
+                            // The blurred result lands in the cache, ready for reuse next frame.
+                            let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
+                            self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_v]));
+                            let backdrop_view_v = &self.backdrop_layer.as_ref().unwrap().view;
+                            let cache_view_v = &self.backdrop_cache_textures[&plan.ordinal].view;
+                            let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("backdrop-blur-v-bg"),
+                                layout: &self.blur_bgl,
+                                entries: &[
+                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(backdrop_view_v) },
+                                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                    wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                                ],
+                            });
+                            {
+                                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("backdrop-blur-v-pass"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: cache_view_v,
+                                        resolve_target: None,
+                                        depth_slice: None,
+                                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                                    })],
+                                    depth_stencil_attachment: None,
+                                    timestamp_writes: None,
+                                    occlusion_query_set: None,
+                                });
+                                pass.set_pipeline(&self.blur_pipeline);
+                                pass.set_bind_group(0, &blur_bg_v, &[]);
+                                pass.set_vertex_buffer(0, cvb.slice(..));
+                                pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                            }
+                        } else {
+                            // Filter-only backdrop (no blur): copy parent → cache directly.
+                            // parent has COPY_SRC, cache has COPY_DST.
+                            let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                            let cache_copy = self.backdrop_cache_textures[&plan.ordinal].texture.as_image_copy();
+                            encoder.copy_texture_to_texture(
+                                parent_copy,
+                                cache_copy,
+                                wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
+                            );
                         }
-                        // V pass: backdrop_layer → scratch (REPLACE).
-                        let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
-                        self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_v]));
-                        let backdrop_view_v = &self.backdrop_layer.as_ref().unwrap().view;
-                        let scratch_view_v = &self.scratch_layer.as_ref().unwrap().view;
-                        let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("backdrop-blur-v-bg"),
-                            layout: &self.blur_bgl,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(backdrop_view_v) },
-                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
-                            ],
-                        });
-                        {
-                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("backdrop-blur-v-pass"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: scratch_view_v,
-                                    resolve_target: None,
-                                    depth_slice: None,
-                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                            });
-                            pass.set_pipeline(&self.blur_pipeline);
-                            pass.set_bind_group(0, &blur_bg_v, &[]);
-                            pass.set_vertex_buffer(0, cvb.slice(..));
-                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+
+                        // Record the freshly produced backdrop in the cache (skipped when
+                        // caching is disabled — `backdrop_frame_hash == None`).
+                        if let Some(fh) = backdrop_frame_hash {
+                            let bytes = parent_w as usize * parent_h as usize * 4;
+                            evicted_ordinals = self.backdrop_cache.store(plan.ordinal, fh, bytes);
                         }
                     }
 
-                    // Step 3: blit scratch → parent at element bounds (REPLACE blend).
+                    // Step 3: blit cache texture → parent at element bounds (REPLACE blend).
                     // Applies color filters (count > 0) or passthrough (count = 0).
                     // Bounded quad ensures only the element's bounds region is overwritten.
                     let mut bd_entries = [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8];
@@ -5972,12 +6126,14 @@ impl Renderer {
                     };
                     let bd_fp_buf = make_filter_param_buf(&self.device, &bd_filter_params);
                     let parent_dst_view = &self.layer_textures[parent_idx].view;
-                    let scratch_src_view = &self.scratch_layer.as_ref().unwrap().view;
+                    // Source is the cache texture — holds the blurred (or copied) backdrop,
+                    // whether freshly produced this frame or reused from a previous frame.
+                    let bd_src_view = &self.backdrop_cache_textures[&plan.ordinal].view;
                     let bd_blit_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("backdrop-blit-bg"),
                         layout: &self.filter_bgl,
                         entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_src_view) },
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(bd_src_view) },
                             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
                             wgpu::BindGroupEntry { binding: 2, resource: bd_fp_buf.as_entire_binding() },
                         ],
@@ -6038,6 +6194,12 @@ impl Renderer {
                         pass.set_bind_group(0, &elem_filter_bg, &[]);
                         pass.set_vertex_buffer(0, cvb.slice(..));
                         pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                    }
+
+                    // Free textures evicted by the cache's budget enforcement now that
+                    // the element's passes (which borrowed the cache map) have ended.
+                    for ord in evicted_ordinals {
+                        self.backdrop_cache_textures.remove(&ord);
                     }
                 }
 
