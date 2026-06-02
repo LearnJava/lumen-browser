@@ -14,7 +14,11 @@ _(нет)_
 
 Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
 
-_(все задачи из очереди завершены)_
+| # | Task | Crate(s) | Effort | Roadmap |
+|---|------|----------|--------|---------|
+| 30 | **`<meta viewport>` parsing + page zoom (Ctrl+= / Ctrl+- / Ctrl+0).** Парсить `<meta name=viewport content="width=device-width, initial-scale=…">` в layout viewport scale; в shell — keybindings масштаба (per-tab zoom factor, persist), relayout/repaint в масштабированных CSS px. Без этого мобильная вёрстка всегда «desktop» и нет ручного зума. Старт: `media_context_from_viewport` (`layout/src/style.rs:13868`) + новый `shell/src/zoom.rs`. | `lumen-html-parser`, `lumen-layout`, `lumen-shell` | M | lumen-plan.md:2250 (Phase 2 fundamentals) |
+| 31 | **Web Animations API JS runtime.** `element.animate(keyframes, options) → Animation`, `KeyframeEffect`, `Animation.play/pause/cancel/finish/reverse`, `getAnimations()`, `document.timeline`. Интерполяция значений в момент `t` поверх существующего `AnimationScheduler` (paint) для transform/opacity. P1 — value interpolation + JS-объекты; compositor offload (P2) и timeline scheduling (P4) — отдельно. | `lumen-js`, `lumen-shell` | L | lumen-plan.md:2293 / :513 (Web Animations API runtime, P1-доля) |
+| 32 | **History / Navigation API runtime completeness.** Дотянуть `history.pushState/replaceState` до обновления URL-бара shell; `popstate` на back/forward через session history; round-trip `history.state`; `history.length`. Типы `PopStateEvent` уже есть (`js/src/dom.rs:2050`) — нужно wiring со стеком навигации shell. | `lumen-js`, `lumen-shell` | M | lumen-plan.md (Phase 3, Navigation/History API runtime) |
 
 ---
 
