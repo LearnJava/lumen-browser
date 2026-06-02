@@ -87,16 +87,20 @@ impl CounterCtx {
 /// Each element's snapshot captures counter state after its own `counter-reset`
 /// and `counter-increment`, before any children are processed. This is the correct
 /// state for resolving `counter()` in `::before` content.
+/// Precomputes CSS counter values for the entire document tree.
+/// `dark_mode` is forwarded to `@media (prefers-color-scheme: dark)` matching
+/// during style computation so counter-related styles resolve correctly.
 pub fn precompute_counters(
     doc: &Document,
     sheet: &Stylesheet,
     viewport: Size,
     flat: &FlatTree,
+    dark_mode: bool,
 ) -> CounterMap {
     let root_style = ComputedStyle::root();
     let mut ctx = CounterCtx::default();
     let mut map = CounterMap::new();
-    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map);
+    walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode);
     map
 }
 
@@ -110,6 +114,7 @@ fn walk(
     flat: &FlatTree,
     ctx: &mut CounterCtx,
     map: &mut CounterMap,
+    dark_mode: bool,
 ) {
     match &doc.get(id).data {
         // Text / comment / doctype / fragment — no counter properties, no children.
@@ -119,7 +124,7 @@ fn walk(
         // Document node: has no style of its own; just recurse into children.
         NodeData::Document => {
             for &child_id in flat.children_of(doc, id) {
-                walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map);
+                walk(doc, sheet, child_id, inherited, viewport, flat, ctx, map, dark_mode);
             }
             return;
         }
@@ -127,7 +132,7 @@ fn walk(
         NodeData::Element { .. } => {} // handled below
     }
 
-    let style = compute_style(doc, id, sheet, inherited, viewport);
+    let style = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
 
     // CSS Lists L3 §6.4: counter-reset first, then counter-increment.
     ctx.apply_reset(&style.counter_reset);
@@ -136,7 +141,7 @@ fn walk(
     map.insert(id, ctx.snapshot());
 
     for &child_id in flat.children_of(doc, id) {
-        walk(doc, sheet, child_id, &style, viewport, flat, ctx, map);
+        walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode);
     }
 
     ctx.pop_reset(&style.counter_reset);

@@ -2404,7 +2404,7 @@ mod tests {
         let sheet = lumen_css_parser::parse(css);
         let root_style = ComputedStyle::root();
         let target = find_first_element(&doc, doc.root(), tag).expect("element not found");
-        compute_style(&doc, target, &sheet, &root_style, Size::new(800.0, 600.0)).color
+        compute_style(&doc, target, &sheet, &root_style, Size::new(800.0, 600.0), false).color
     }
 
     fn find_first_element(
@@ -2582,7 +2582,7 @@ mod tests {
         let sheet = lumen_css_parser::parse(css);
         let root_style = ComputedStyle::root();
         let target_node = find_first_element(&doc, doc.root(), tag).expect("element not found");
-        compute_style(&doc, target_node, &sheet, &root_style, Size::new(800.0, 600.0)).color
+        compute_style(&doc, target_node, &sheet, &root_style, Size::new(800.0, 600.0), false).color
     }
 
     #[test]
@@ -4525,6 +4525,7 @@ mod tests {
                 &lumen_css_parser::Stylesheet::default(),
                 &ComputedStyle::root(),
                 Size::new(800.0, 600.0),
+                false,
             );
             assert_eq!(style.font_style, FontStyle::Italic, "tag = {tag}");
         }
@@ -4587,6 +4588,7 @@ mod tests {
                 &lumen_css_parser::Stylesheet::default(),
                 &ComputedStyle::root(),
                 Size::new(800.0, 600.0),
+                false,
             );
             assert_eq!(style.font_weight, FontWeight::BOLD, "tag = {tag}");
         }
@@ -6236,6 +6238,7 @@ mod tests {
             &lumen_css_parser::parse("a a span { color: red; }"),
             &ComputedStyle::root(),
             Size::new(800.0, 600.0),
+            false,
         );
         assert_eq!(style.color.r, 255);
     }
@@ -6263,6 +6266,7 @@ mod tests {
             &sheet,
             &ComputedStyle::root(),
             Size::new(800.0, 600.0),
+            false,
         );
         assert_eq!(
             style.color.r, 255,
@@ -6510,9 +6514,9 @@ mod tests {
         let div2 = doc.get(body).children[1];
         let h2_b = doc.get(div2).children[0];
         let style_a = crate::style::compute_style(
-            &doc, h2_a, &sheet, &root_style, Size::new(800.0, 600.0));
+            &doc, h2_a, &sheet, &root_style, Size::new(800.0, 600.0), false);
         let style_b = crate::style::compute_style(
-            &doc, h2_b, &sheet, &root_style, Size::new(800.0, 600.0));
+            &doc, h2_b, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(style_a.color.r, 255, "h2 + p должен сматчить");
         assert_eq!(style_b.color.r, 0, "h2 без p после — нет");
     }
@@ -13618,7 +13622,7 @@ mod tests {
         let div_id = children.into_iter().find(|&id| {
             matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
         }).unwrap();
-        let div_style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp);
+        let div_style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp, false);
         assert!(
             matches!(div_style.width, Some(Length::MaxContent)),
             "expected MaxContent, got {:?}", div_style.width
@@ -13637,8 +13641,8 @@ mod tests {
         let mut it = children.into_iter().filter(|&id| matches!(&doc.get(id).data, lumen_dom::NodeData::Element { .. }));
         let a_id = it.next().unwrap();
         let b_id = it.next().unwrap();
-        let a_style = compute_style(&doc, a_id, &sheet, &root_style, vp);
-        let b_style = compute_style(&doc, b_id, &sheet, &root_style, vp);
+        let a_style = compute_style(&doc, a_id, &sheet, &root_style, vp, false);
+        let b_style = compute_style(&doc, b_id, &sheet, &root_style, vp, false);
         assert!(matches!(a_style.width, Some(Length::MinContent)), "got {:?}", a_style.width);
         assert!(matches!(b_style.width, Some(Length::FitContent(None))), "got {:?}", b_style.width);
     }
@@ -13654,7 +13658,7 @@ mod tests {
         let div_id = children.into_iter().find(|&id| {
             matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
         }).unwrap();
-        let style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp);
+        let style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp, false);
         assert!(
             matches!(style.width, Some(Length::FitContent(Some(_)))),
             "expected FitContent(Some(200px)), got {:?}", style.width

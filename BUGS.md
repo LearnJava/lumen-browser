@@ -619,3 +619,4 @@ CSS-фильтры `grayscale`, `sepia`, `brightness`, `invert`, `contrast`, `sa
 | `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 20.57% (bbox работает) |
 | `direction: rtl` alignment | Phase 1 | TEST-27: 9.76% |
 BUG-055 | OPEN | layout | collect_picture_unsupported_type_falls_back: <picture> type-attribute fallback выбирает avif источник вместо img src — picture/source с неподдерживаемым type не скипается | crates/engine/layout/src/lib.rs:12366
+BUG-056 | OPEN | shell | font_registry used after move in parse_and_layout: clippy E0382 на main — font_registry перемещён в Arc::new() но используется снова в for-loop ниже | crates/shell/src/main.rs:2316
