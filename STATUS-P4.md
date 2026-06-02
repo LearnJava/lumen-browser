@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`::first-letter` / `::first-line` wiring  branch: p4-first-letter-line
+Next step: extend BoxKind::InlineRun with first_line_style, fix compute_pseudo_element_style, wire in build_box/lay_out
 
 ## Workflow
 
