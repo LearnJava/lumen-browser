@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: #26 Privacy network panel (V5)  branch: p2-privacy-panel
+Next step: создать `shell/src/panels/privacy_panel.rs` — right-docked overlay с real-time request log (blocked/allowed, tracker-домен, matched filter), читает из общего `NetworkLog`.
 
 ---
 
