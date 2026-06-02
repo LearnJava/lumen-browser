@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: Intl API + ru-RU locale (§91 i18n)  branch: p1-intl-locale
+Next step: создать `crates/js/src/intl_bindings.rs` — JS-шим Intl.NumberFormat/DateTimeFormat/Collator/PluralRules для en-US + ru-RU, подключить в `crates/js/src/lib.rs:366` после credentials.
 
 ---
 

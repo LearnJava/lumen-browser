@@ -88,7 +88,7 @@
 - ✅ Encoding detection (cp1251, KOI8-R, CP866) — крейт `lumen-encoding`, подключён в shell
 - ⬜ Cyrillic font fallback в paint
 - ✅ Punycode/IDN — `lumen_core::punycode` (RFC 3492 encode) + `lumen_core::idn::domain_to_ascii`; `Url::host_ascii()` отдаёт ASCII-форму host для DNS/TLS/Host header — единственная точка вызова `idn::domain_to_ascii` среди потребителей
-- ⬜ Локаль ru-RU (дата/время/числа)
+- 🟡 Локаль ru-RU (дата/время/числа) — JS `Intl` шим (NumberFormat/DateTimeFormat/Collator/PluralRules для en-US + ru-RU) готов в `lumen-js::intl_bindings`; shell-UI форматирование (§10.4, icu) ещё нет
 - ⬜ UI-переводы (Fluent)
 
 ### Следующие шаги

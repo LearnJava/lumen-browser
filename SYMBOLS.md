@@ -884,7 +884,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-js  (78 symbols)
+## lumen-js  (79 symbols)
 
 `crates/js/src/audio_bindings.rs:25` **fn** `new_session_seed` — Generate a unique per-session noise seed
 `crates/js/src/audio_bindings.rs:37` **fn** `install_audio_bindings` — Install AudioContext stub with fingerprint noise into the JS context
@@ -910,31 +910,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/heap_snapshot.rs:40` **enum** `HeapSnapshotError` — Error from the heap-snapshot compression layer
 `crates/js/src/heap_snapshot.rs:74` **fn** `compress_heap` — Compress a raw heap payload into a [`SuspendedHeap`]
 `crates/js/src/heap_snapshot.rs:97` **fn** `decompress_heap` — Inverse of [`compress_heap`]: strip the [`HEAP_MAGIC`] prefix and inflate
-`crates/js/src/lib.rs:41` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:55` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:153` **fn** `new`
-`crates/js/src/lib.rs:216` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:379` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:388` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:400` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:425` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:450` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:469` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:477` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:486` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:495` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:504` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:512` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:521` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:533` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:542` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:551` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:562` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:571` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:580` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:590` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:608` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:620` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/intl_bindings.rs:42` **fn** `install_intl_bindings` — Install the `Intl` shim into the JS context
+`crates/js/src/lib.rs:42` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:56` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:154` **fn** `new`
+`crates/js/src/lib.rs:217` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:387` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:396` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:408` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:433` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:458` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:477` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:485` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:494` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:503` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:512` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:520` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:529` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:541` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:550` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:559` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:570` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:579` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:588` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:598` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:616` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:628` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
 `crates/js/src/navigator_bindings.rs:36` **struct** `NavigatorProfile` — High-entropy `navigator` / `screen` / timezone values exposed to JavaScript
 `crates/js/src/navigator_bindings.rs:86` **fn** `set_navigator_profile` — Install a process-wide navigator profile (9F.1). Subsequent calls to the
 `crates/js/src/navigator_bindings.rs:93` **fn** `current_navigator_profile` — Return the currently configured profile, or the default if none was set
@@ -2768,4 +2769,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2703 symbols in 20 crates*
+*Total: 2704 symbols in 20 crates*

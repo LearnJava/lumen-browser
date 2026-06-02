@@ -8,6 +8,7 @@ pub mod credentials;
 pub mod dom;
 pub mod geolocation;
 pub mod heap_snapshot;
+pub mod intl_bindings;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod shared_worker;
@@ -365,6 +366,13 @@ impl QuickJsRuntime {
             // after the _lumen_webauthn_* native bindings are registered.
             if let Err(e) = credentials::install_credentials_bindings(&ctx) {
                 eprintln!("Credentials bindings init failed: {}", e);
+            }
+
+            // Install the ECMA-402 Intl shim (§91 i18n) — last, after window so
+            // `window.Intl` can be re-exported. Defers to a native Intl if the
+            // host QuickJS build ever provides one.
+            if let Err(e) = intl_bindings::install_intl_bindings(&ctx) {
+                eprintln!("Intl bindings init failed: {}", e);
             }
 
             Ok(())
