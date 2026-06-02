@@ -12,6 +12,26 @@ _(нет)_
 
 ## Next
 
+### CSS wiring (приоритет — переданы от P4, 2026-06-02)
+
+Алгоритмы реализованы P1. P4 передал CSS-обвязку P1. Детали реализации — STATUS-P4.md «Needs wiring».
+
+| # | Task | Crate(s) | Effort |
+|---|------|----------|--------|
+| C2 | **`position: sticky` scroll offset.** После каждого relayout: `collect_sticky_boxes(root)`. При scroll: `compute_sticky_offset(sticky, sx, sy, vw, vh)` → применять `(dx, dy)` как TransformNode-смещение. Entry: `layout/src/lib.rs` `collect_sticky_boxes`. | `lumen-layout`, `lumen-shell` | M |
+| C3 | **CSS Scroll Snap wiring.** После relayout: `collect_snap_containers(root)`. При scroll: `find_snap_target(container, current, target)` per container → clamp/animate позицию скролла. Entry: `layout/src/lib.rs` `collect_snap_containers`. | `lumen-layout`, `lumen-shell` | M |
+| C4 | **CSS Scroll-Driven Animations L1.** Добавить в `ComputedStyle`: `scroll_timeline_name/axis`, `view_timeline_name/axis`, `animation_timeline`. В `AnimationScheduler`: resolve progress через `resolve_scroll_progress` / `resolve_view_progress` вместо wall-clock. Entry: `layout/src/scroll_timeline.rs`. | `lumen-layout` | M |
+| C5 | **`font-variation-settings` TextMeasurer wiring.** Поле `font_variation_settings: Vec<([u8;4],f32)>` в `ComputedStyle`; метод `char_width_varied` в `TextMeasurer` трейт; реализовать в `FontMeasurer` через `Font::advance_width_varied`. Entry: `layout/src/lib.rs:88`, `box_tree.rs:4606`. | `lumen-layout`, `lumen-paint` | M |
+| C6 | **`:host` / `::slotted()` Shadow DOM матчинг.** `:host` в `matches_complex()` (изнутри shadow tree); `::slotted()` псевдо-элемент; wire в `build_box()`. | `lumen-layout` | M |
+| C7 | **`text-align-last`.** `text_align_last: TextAlign` в `ComputedStyle`; parse `text-align-last`; применять к последней строке inline wrap. | `lumen-layout` | S |
+| C8 | **`justify-items` / `justify-self` для grid.** Поля + parse + wire в `lay_out_grid()`. | `lumen-layout` | S |
+| C9 | **`::selection` псевдо-элемент.** `compute_pseudo_element_style("::selection")`; применять color/background к выделенным диапазонам в display list. | `lumen-layout`, `lumen-paint` | S |
+| C10 | **`attr()` с типом (CSS Values L4).** Разрешать `attr(name <type>)` в каскаде, подставляя значения DOM-атрибутов. | `lumen-layout` | M |
+| C11 | **`writing-mode: sideways-rl/lr` варианты.** Расширить `WritingMode` enum; обработать в `lay_out_vertical_block`. Entry: `layout/src/vertical.rs`. | `lumen-layout` | S |
+| C12 | **`subgrid` наследование треков.** `grid-template: subgrid` наследует размеры треков родителя-грида. | `lumen-layout` | XL |
+
+### Roadmap (фичи, после CSS wiring)
+
 Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
 
 | # | Task | Crate(s) | Effort | Roadmap |
@@ -27,6 +47,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p1-first-letter-first-line** ✅ 2026-06-03 — C1: CSS `::first-letter` / `::first-line` wiring в `lumen-layout`. Исправлен `compute_pseudo_element_style`: теперь возвращает `Some(style)` для `first-letter`/`first-line` независимо от `content` (проверка `content` актуальна только для `::before`/`::after`). Добавлен `apply_first_letter_style`: находит сегмент `PseudoKind::FirstLetter` в `InlineRun` после `build_box`, разбивает на `[первый символ | остаток]` и применяет вычисленный стиль — `wrap_inline_run` считает ширину с правильным font-size для каждой части. Добавлен `apply_first_line_pseudo_styles`: обход дерева после `lay_out`, для каждого Block/FlowRoot-бокса с правилом `::first-line` переопределяет `style` у всех `InlineFrag.is_first_line == true`. Оба вызова в `layout()` и `layout_measured_hyp()`. 5 новых тестов (override+split, no-rule-no-split, single-char-no-split, `::first-line` override, `::first-line` no-rule). Clippy чист. 2116 тестов lumen-layout.
 
 - **p1-roadmap-audit-s16** ✅ 2026-06-02 — Синхронизация детального roadmap §16 (треки 7A–7E) с фактическим кодом. Очередь P1/P2 фич пуста — обнаружено при поиске следующей задачи: десятки `⬜`-маркеров в §16 давно реализованы и числятся в STATUS Recent, но маркеры не флипнуты. Проверено существование файла на диске перед каждым флипом. **Флип ⬜→✅ (12 подпунктов):** 7A.1 vertical tabs (`panels/vertical_tabs.rs`), 7A.3 workspaces (`panels/workspace_panel.rs`), 7A.4 split view (`panels/split_view.rs`), 7B.1 vim (`input/vim.rs`), 7B.3 mouse gestures (`input/gesture.rs`), 7B.4 omnibox aliases (`omnibox/mod.rs`), 7C.2 permission panel (`panels/permission_panel.rs`), 7C.3 cookie-banner (`js/cookie_banner.rs`), 7C.4 shields (`panels/shields_panel.rs`), 7D.2 tab containers (`tabs/containers.rs`), 7D.3 sidebar (`panels/sidebar_panel.rs`), 7E.5 JS console (`devtools/console_panel.rs`). **Parent-маркеры:** 7A→🟡 (остаток 7A.5 auto-archive), 7B→🟡 (7B.2 click-hint + 7B.5 regex find), 7C→✅ (все 4), 7D→🟡 (7D.1 WebAuthn), 7E→🟡 (7E.2 computed-styles panel, P4). **Header Implementation Status block** (Tab UX / Power-user / Privacy UX / Web platform baseline) + Cyrillic font fallback синхронизированы. Исправлены устаревшие file-pointers на несуществующие пути (`tabs/vertical.rs`→`panels/vertical_tabs.rs`, `input/gestures.rs`→`gesture.rs`, `site_settings/`→`panels/permission_panel.rs`, `cookies/banner.rs`→`js/cookie_banner.rs`, `toolbar/shields.rs`→`panels/shields_panel.rs`, `storage/partition.rs`→`tabs/containers.rs`, `sidebar/web_panel.rs`→`panels/sidebar_panel.rs`). Остаток открытыми (проверено — кода нет): 7A.5 (UI-archive), 7B.2 (click-hint overlay — vim лишь эмитит OpenHints, оверлея/итератора нет), 7E.2 (P4). Только документация, код не трогал.
 
