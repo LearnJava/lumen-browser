@@ -289,8 +289,8 @@ fn run_download(
     use lumen_core::ext::NetworkTransport as _;
     use lumen_network::{BrotliContentDecoder, HttpClient};
 
-    let client = HttpClient::new()
-        .with_content_decoder(Arc::new(BrotliContentDecoder::new()));
+    let client = crate::config::global()
+        .apply_http(HttpClient::new().with_content_decoder(Arc::new(BrotliContentDecoder::new())));
 
     let body = match client.fetch(&parsed) {
         Ok(b) => b,

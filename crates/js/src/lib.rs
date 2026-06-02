@@ -29,6 +29,7 @@ use std::sync::{
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
 pub use dom::NavigateRequest;
+pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use lumen_core::WebStorage;
 
 /// Compute a deterministic u64 seed from a URL for deterministic render mode (8F).

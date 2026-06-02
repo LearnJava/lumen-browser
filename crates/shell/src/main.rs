@@ -21,6 +21,7 @@
 
 mod address_bar;
 mod animation_scheduler;
+mod config;
 mod deterministic;
 mod devtools;
 mod download;
@@ -156,6 +157,10 @@ use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 fn main() -> ExitCode {
+    // Load the fingerprint profile (9F.1) once, before any network or JS setup.
+    // Absent config → engine defaults, so behaviour is unchanged out of the box.
+    config::init_global(config::load().unwrap_or_default());
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (devtools_port, rest_args) = match extract_devtools_port(&args) {
         Ok(r) => r,
@@ -237,6 +242,11 @@ fn run_window_mode(
     lumen_js::set_clipboard_provider(std::sync::Arc::new(
         platform::clipboard::PlatformClipboard,
     ));
+
+    // Apply the fingerprint profile's navigator/screen/timezone values (9F.1).
+    // Process-global; consumed by lumen_js when each page's JS context spins up.
+    #[cfg(feature = "quickjs")]
+    config::global().install_navigator();
 
     // Streaming pipeline: окно создаётся немедленно, загрузка стартует
     // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
@@ -1170,9 +1180,11 @@ impl PageSource {
                 use lumen_network::{BrotliContentDecoder, HttpClient};
 
                 let lumen_url = Url::parse(url)?;
-                let client = HttpClient::new()
-                    .with_sink(sink)
-                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+                let client = crate::config::global().apply_http(
+                    HttpClient::new()
+                        .with_sink(sink)
+                        .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new())),
+                );
                 let bytes = client.fetch(&lumen_url)?;
                 eprintln!("Получено {} байт", bytes.len());
                 Ok(RawPage {
@@ -1587,9 +1599,11 @@ impl ResourceBase {
         sink: Arc<dyn EventSink>,
     ) -> lumen_network::HttpClient {
         use lumen_network::{BrotliContentDecoder, HttpClient, MixedContentMode};
-        let client = HttpClient::new()
-            .with_sink(sink)
-            .with_content_decoder(Arc::new(BrotliContentDecoder::new()));
+        let client = crate::config::global().apply_http(
+            HttpClient::new()
+                .with_sink(sink)
+                .with_content_decoder(Arc::new(BrotliContentDecoder::new())),
+        );
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
         {

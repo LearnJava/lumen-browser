@@ -119,6 +119,13 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Shell wiring: `PersistentJs::pump_broadcast_channels()` called in `about_to_wait` alongside `pump_workers()`.
   - 14 unit tests (constructor/name stringify, missing-arg throw, same-name delivery, no-self-delivery, name isolation, addEventListener/removeEventListener, closed-channel stops receiving, post-on-closed throws, MessageEvent type, 3-way fan-out, structured-data round-trip, window-exposed). **752 JS tests total.**
 
+- **Configurable navigator profile** (`crates/js/src/navigator_bindings.rs`, ADR-007 Layer 4, 9D.6 / 9F.1). 2026-06-02.
+  - `NavigatorProfile` struct (hardware_concurrency / device_memory / platform / languages / screen_width / screen_height / color_depth / timezone_offset). `Default` reproduces the previous hardcoded mid-tier values (2 cores, 8 GiB, Win32, en-US/en, 1920×1080, depth 24, UTC), so behaviour is unchanged without a config.
+  - Process-global override: `set_navigator_profile(profile)` (shell calls it once at startup from `fingerprint.toml`); `current_navigator_profile()` reads it (default if unset). No-arg `install_navigator_bindings(ctx)` uses the global; `install_navigator_bindings_with(ctx, &profile)` ignores the global (used by tests + explicit callers).
+  - The JS shim is now built dynamically from the profile (`build_navigator_shim`): locales JSON-escaped (`json_string`), empty `languages` falls back to `["en-US"]`, `getTimezoneOffset()` returns the configured minutes.
+  - Wiring: `lib.rs` re-exports `NavigatorProfile` + `set_navigator_profile`; the shell's `config::FingerprintProfile::install_navigator()` builds and installs the profile.
+  - 11 unit tests (9 default-value assertions via `_with(default)` to stay isolated from the process-global + custom-profile-applies-all-fields, empty-languages-fallback, quote-escape-safety, default-matches-legacy, set/read global).
+
 - **AudioContext fingerprint noise** (`crates/js/src/audio_bindings.rs`, ADR-007 Layer 4, 9D.3). 2026-05-30.
   - New module `audio_bindings`: `install_audio_bindings(ctx, seed)` + `new_session_seed()`.
   - JS shim (IIFE): defines `globalThis.AudioContext`, `webkitAudioContext`, `OfflineAudioContext`, `AudioBuffer`.
