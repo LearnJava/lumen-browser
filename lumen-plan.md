@@ -287,7 +287,7 @@
 | 7C.3 | ⬜ Cookie-banner auto-dismiss | `shell/src/cookies/banner.rs` | использует `JsRuntime` |
 | 7C.4 | ⬜ Shields toolbar widget (счётчик блокировок) | `shell/src/toolbar/shields.rs` | — |
 | 7D | ⬜ **`[P3]` Web platform baseline** (§12.16, Phase 2-3) | Современная авторизация и изоляция | `lumen-network` + `shell` |
-| 7D.1 | ⬜ Passkeys / WebAuthn (CTAP2 client + navigator.credentials) | `network/src/webauthn.rs` + `js/src/credentials.rs` | новый trait `CredentialProvider` |
+| 7D.1 | 🟡 Passkeys / WebAuthn (CTAP2 client + navigator.credentials) — **`navigator.credentials` + software platform authenticator готовы** (trait `CredentialProvider`, `VirtualAuthenticator` ES256, full JS API); roaming CTAP2-over-USB транспорт — future | `network/src/webauthn.rs` + `js/src/credentials.rs` | новый trait `CredentialProvider` ✅ |
 | 7D.2 | ⬜ Tab containers (storage partitioning) | `storage/src/partition.rs` + `shell` | — |
 | 7D.3 | ⬜ Sidebar web panels (мини-страница в sidebar) | `shell/src/sidebar/web_panel.rs` | — |
 | 7E | ⬜ **`[P3]` DevTools полный** (§12.12, Phase 4+) | Поверх существующего CDP-минимума (5C) | `crates/devtools/` |
