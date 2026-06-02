@@ -1150,6 +1150,121 @@ pub enum BoxKind {
     },
 }
 
+/// CSS Pseudo-elements L4 §5.1 — split the `PseudoKind::FirstLetter` segment in
+/// `row_items` into `[first_grapheme | rest]` and apply `fl_style` to the first part.
+///
+/// The segment was already marked by `collect_inline_segments`; this function
+/// overrides its style and (when the text is longer than one char) splits it so
+/// `wrap_inline_run` applies the correct font metrics to each part independently.
+fn apply_first_letter_style(
+    row_items: &mut [LayoutBox],
+    fl_style: ComputedStyle,
+    inherited: &ComputedStyle,
+) {
+    for item in row_items.iter_mut() {
+        let BoxKind::InlineRun { segments, .. } = &mut item.kind else {
+            continue;
+        };
+        for i in 0..segments.len() {
+            if segments[i].pseudo_kind != PseudoKind::FirstLetter {
+                continue;
+            }
+            let text = segments[i].text.clone();
+            // Split at the first char boundary (CSS "typographic character unit").
+            let boundary = text.char_indices().nth(1).map(|(b, _)| b).unwrap_or(text.len());
+            if boundary < text.len() {
+                // Multi-char segment: split into first-letter + rest.
+                let rest_text = text[boundary..].to_string();
+                let first_text = text[..boundary].to_string();
+                let source_node = segments[i].source_node;
+                let forced_break = segments[i].forced_break;
+                let is_element_box = segments[i].is_element_box;
+                let img_src = segments[i].img_src.clone();
+                let img_width = segments[i].img_width;
+                segments[i].text = first_text;
+                segments[i].style = fl_style;
+                let rest = InlineSegment {
+                    text: rest_text,
+                    style: inherited.clone(),
+                    pre_space: 0.0,
+                    post_space: segments[i].post_space,
+                    is_element_box,
+                    img_src,
+                    img_width,
+                    forced_break,
+                    pseudo_kind: PseudoKind::None,
+                    source_node,
+                    source_char_offset: segments[i].source_char_offset + boundary as u32,
+                };
+                // Transfer post_space from first-letter to rest.
+                segments[i].post_space = 0.0;
+                segments.insert(i + 1, rest);
+            } else {
+                // Single-char or empty segment: just override style.
+                segments[i].style = fl_style;
+            }
+            return;
+        }
+    }
+}
+
+/// CSS Pseudo-elements L4 §3.1 — apply `::first-line` style overrides after layout.
+///
+/// Must be called after `lay_out` has populated `InlineRun.lines` with `InlineFrag`s.
+/// Walks the box tree; for each block-level box that has a `::first-line` rule on
+/// its DOM node, overrides the style of every frag on the first formatted line
+/// (`is_first_line == true`).
+pub(crate) fn apply_first_line_pseudo_styles(
+    b: &mut LayoutBox,
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+) {
+    for child in &mut b.children {
+        apply_first_line_pseudo_styles(child, doc, sheet, viewport);
+    }
+    if !matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+        return;
+    }
+    let Some(fl_style) = compute_pseudo_element_style(doc, b.node, "first-line", sheet, &b.style, viewport) else {
+        return;
+    };
+    // Find the first InlineRun child (or inside InlineBlockRow) and apply.
+    let mut applied = false;
+    'find: for child in &mut b.children {
+        match &mut child.kind {
+            BoxKind::InlineRun { lines, .. } => {
+                if let Some(first_line) = lines.first_mut() {
+                    for frag in first_line.iter_mut() {
+                        if frag.is_first_line {
+                            frag.style = fl_style.clone();
+                        }
+                    }
+                }
+                applied = true;
+                break 'find;
+            }
+            BoxKind::InlineBlockRow => {
+                for row_child in &mut child.children {
+                    if let BoxKind::InlineRun { lines, .. } = &mut row_child.kind {
+                        if let Some(first_line) = lines.first_mut() {
+                            for frag in first_line.iter_mut() {
+                                if frag.is_first_line {
+                                    frag.style = fl_style.clone();
+                                }
+                            }
+                        }
+                        applied = true;
+                        break 'find;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let _ = applied;
+}
+
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
@@ -1159,6 +1274,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb, &null_hp);
+    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport);
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
     apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp);
     root
@@ -1189,6 +1305,7 @@ pub fn layout_measured_hyp(
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
+    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport);
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp);
     root
 }
@@ -2062,6 +2179,16 @@ fn build_box(
                 }
                 if !pending.is_empty() {
                     row_items.push(anon_inline_run(id, &style, std::mem::take(&mut pending)));
+                }
+
+                // CSS Pseudo-elements L4 §5.1 — apply ::first-letter style.
+                // collect_inline_segments marks the first non-whitespace text segment
+                // with PseudoKind::FirstLetter; split it here so wrap_inline_run uses
+                // the override font metrics for both the letter and the remainder.
+                if let Some(fl_style) = compute_pseudo_element_style(
+                    doc, id, "first-letter", sheet, &style, viewport,
+                ) {
+                    apply_first_letter_style(&mut row_items, fl_style, &style);
                 }
 
                 match row_items.len() {
@@ -6575,6 +6702,139 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(200.0, 200.0));
         assert!(!root.children.is_empty());
+    }
+
+    // ── ::first-letter / ::first-line CSS wiring ─────────────────────────────
+
+    fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+        for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+        None
+    }
+
+    #[test]
+    fn first_letter_style_override_splits_segment() {
+        // p::first-letter { font-size: 3em } → segment "H" gets overridden style,
+        // "ello world" becomes a separate segment with normal style.
+        let css = "p::first-letter { font-size: 3em; }";
+        let root = super::layout(
+            &lumen_html_parser::parse("<p>Hello world</p>"),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert!(segments.len() >= 2, "expected split: got {} segment(s)", segments.len());
+            assert_eq!(segments[0].text, "H", "first segment must be the first letter");
+            assert_eq!(segments[0].pseudo_kind, super::PseudoKind::FirstLetter);
+            // font-size 3em on the root = 3 × 16px = 48px.
+            assert!(
+                (segments[0].style.font_size - 48.0).abs() < 1.0,
+                "first-letter font-size must be 3em, got {}", segments[0].style.font_size,
+            );
+            assert_eq!(segments[1].text, "ello world");
+            assert_eq!(segments[1].pseudo_kind, super::PseudoKind::None);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_letter_no_rule_leaves_segment_unsplit() {
+        // No ::first-letter rule → segment stays marked but style is unchanged.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p>Hello</p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert_eq!(segments.len(), 1, "no split without ::first-letter rule");
+            assert_eq!(segments[0].pseudo_kind, super::PseudoKind::FirstLetter);
+            assert_eq!(segments[0].text, "Hello");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_letter_single_char_no_split() {
+        // Single character: style override without splitting.
+        let css = "p::first-letter { font-weight: bold; }";
+        let root = super::layout(
+            &lumen_html_parser::parse("<p>X</p>"),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert_eq!(segments.len(), 1, "single char: no extra segment");
+            assert_eq!(segments[0].text, "X");
+            assert_eq!(segments[0].pseudo_kind, super::PseudoKind::FirstLetter);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_line_style_override_applied_to_first_line_frags() {
+        // p::first-line { color: #ff0000 } → frags on lines[0] get red color.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let css = "p::first-line { color: #ff0000; }";
+        // 60px wide → "one two" (56px) on line 0, "three" wraps to line 1.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(lines.len() >= 2, "expected wrapping");
+            for frag in &lines[0] {
+                assert!(
+                    frag.style.color.r > 200,
+                    "first-line frags must have red color (r={})", frag.style.color.r,
+                );
+            }
+            for line in lines.iter().skip(1) {
+                for frag in line {
+                    assert!(
+                        frag.style.color.r < 50,
+                        "non-first-line frags must NOT be red (r={})", frag.style.color.r,
+                    );
+                }
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_line_no_rule_leaves_frags_unstyled() {
+        // No ::first-line rule → is_first_line is true but style is unchanged.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(lines.len() >= 2, "expected wrapping");
+            // Verify is_first_line is still set (layout infrastructure works).
+            assert!(lines[0].iter().all(|f| f.is_first_line), "first line must be marked");
+            assert!(lines[1..].iter().flatten().all(|f| !f.is_first_line), "rest not marked");
+        } else {
+            panic!("expected InlineRun");
+        }
     }
 
 }
