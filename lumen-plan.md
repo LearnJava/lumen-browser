@@ -331,41 +331,41 @@
 | 8H.3 | ⬜ **Ship BiDi gaps** (см. ADR-006): response body, locale/timezone/offline, per-context UA, viewport-before-popup, preload per-context, download lifecycle, cookie change events, per-origin clear | `bidi/src/extensions.rs` | gap-mapping в `subsystems/lumen-bidi-server.md` |
 | 8H.4 | ✅ `lumen --bidi-port N` CLI flag | `shell/src/main.rs` (`extract_bidi_port` + `bidi::spawn`) | — |
 | 8I | ⬜ **`[P3]` `lumen-cdp-shim` крейт** (Phase 3+, **opt-in, по реальному запросу**) | Legacy Puppeteer-совместимость | `crates/cdp-shim/` |
-| 9 | 🟡 **`[P1]` Anti-detection privacy stack** (§9.5, [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md)) | Privacy by default; устойчивость к Cloudflare/DataDome/Akamai false-positive. 9A ✅ Layer 1 (P1 2026-05-31); 9B ✅ TLS fingerprint (P1 2026-05-31); 9C ✅ HTTP fingerprint (P1 2026-05-31); 9D ⬜ rendering fingerprint | `lumen-network`, `lumen-js`, `lumen-shell`, `lumen-paint` (минимально), `lumen-canvas` |
+| 9 | 🟡 **`[P1]` Anti-detection privacy stack** (§9.5, [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md)) | Privacy by default; устойчивость к Cloudflare/DataDome/Akamai false-positive. 9A ✅ Layer 1 (P1 2026-05-31); 9B ✅ TLS fingerprint (P1 2026-05-31); 9C ✅ HTTP fingerprint (P1 2026-05-31); 9D ✅ rendering fingerprint (P1 2026-06-02); 9E ✅ behavioral mimicry (P1 2026-06-01); остаток — 9F.3 Tor circuit | `lumen-network`, `lumen-js`, `lumen-shell`, `lumen-paint` (минимально), `lumen-canvas` |
 | 9A | ✅ **`[P1]` Layer 1: surface API без automation-маркеров** (Phase 1) | navigator.webdriver отсутствует; нет chrome.runtime/cdc_*/__playwright/etc.; event.isTrusted=true для native input; nav.appName/vendor/product/plugins/mimeTypes совместимы с Chrome | `lumen-js/src/surface_api.rs` P1 done 2026-05-31 |
 | 9A.1 | ✅ Audit JS bindings + `install_surface_api_protection` (hardening shim) | `js/src/surface_api.rs` (11 unit) + `js/tests/no_automation_markers.rs` (19 runtime) | — |
 | 9A.2 | ✅ Negative tests: `webdriver` absent, no automation globals, isTrusted, standard browser props | `js/tests/no_automation_markers.rs` (19 тестов); source audit — `driver/tests/antidetect_surface_api.rs` (7 тестов) | — |
-| 9B | ⬜ **`[P3]` Layer 2: TLS fingerprint Chrome-matching** (Phase 1) | JA3/JA4 как у current stable Chrome; per-profile override | `lumen-network` rustls config |
-| 9B.1 | ⬜ Cipher suite ordering matching Chrome | `network/src/tls/fingerprint.rs` | — |
-| 9B.2 | ⬜ Extension list + supported groups matching Chrome | `network/src/tls/fingerprint.rs` | — |
-| 9B.3 | ⬜ ALPN order `h2`, `http/1.1` matching Chrome | `network/src/tls/fingerprint.rs` | — |
-| 9B.4 | ⬜ JA3/JA4 snapshot test против известных Chrome JA3 | `network/tests/ja3_match.rs` | обновляется per Chrome major release |
-| 9B.5 | ⬜ Per-profile TLS config (Standard / Strict / Tor) | `network/src/tls/profiles.rs` | — |
+| 9B | ✅ **`[P1]` Layer 2: TLS fingerprint Chrome-matching** (Phase 1) | JA3/JA4 как у current stable Chrome; per-profile override | `lumen-network` rustls config (P1 done 2026-05-31) |
+| 9B.1 | ✅ Cipher suite ordering matching Chrome | `network/src/tls/fingerprint.rs` (Chrome 130 AEAD order) | — |
+| 9B.2 | ✅ Extension list + supported groups matching Chrome | `network/src/tls/fingerprint.rs` (kx X25519→secp256r1→secp384r1) | — |
+| 9B.3 | ✅ ALPN order `h2`, `http/1.1` matching Chrome | `network/src/tls/mod.rs` `build_client_config()` | — |
+| 9B.4 | ✅ JA3/JA4 snapshot test против известных Chrome JA3 | `network/tests/tls_integration.rs` (CHROME_130_JA3/JA4 snapshot) | обновляется per Chrome major release |
+| 9B.5 | ✅ Per-profile TLS config (Standard / Strict / Tor) | `network/src/tls/mod.rs` `TlsProfile` enum | — |
 | 9C | ✅ **`[P1]` Layer 3: HTTP fingerprint Chrome-matching** (Phase 1) | Header order + casing + HTTP/2 SETTINGS как у Chrome | `lumen-network` http/h2 P1 done 2026-05-31 |
 | 9C.1 | ✅ HTTP/1.1 header order + casing matching Chrome | `network/src/http/headers.rs` + wired into `write_request()` | — |
 | 9C.2 | ✅ HTTP/2 SETTINGS frame values matching Chrome | `network/src/h2/conn.rs` `connect_with_profile()` | — |
 | 9C.3 | ✅ HTTP/2 stream priority pattern matching Chrome | `network/src/http/h2_settings.rs` `H2StreamPriority` | — |
 | 9C.4 | ✅ Accept-Language default `en-US,en;q=0.9` (не палит реальную локаль) | `network/src/http/mod.rs` `DEFAULT_ACCEPT_LANGUAGE` | — |
 | 9C.5 | ✅ Client Hints handling (опционально, выключено на Strict) | `network/src/http/client_hints.rs` | — |
-| 9D | ⬜ **`[P3+P2]` Layer 4: rendering fingerprint** (Phase 2) | Canvas/WebGL/audio randomization, Battery API disable, WebRTC mDNS-only | `lumen-canvas`, `lumen-paint`, `lumen-js` |
+| 9D | ✅ **`[P1+P2]` Layer 4: rendering fingerprint** (Phase 2) | Canvas/WebGL/audio randomization, Battery API disable, WebRTC mDNS-only | `lumen-canvas`, `lumen-paint`, `lumen-js` |
 | 9D.1 | ✅ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
 | 9D.2 | ✅ WebGL renderer/vendor normalization | `js/src/webgl_canvas.rs` | GpuFingerprint normalization (paint/fingerprint.rs) wired into the functional WebGL context: `getParameter(UNMASKED_VENDOR/RENDERER_WEBGL)` + `getParameter(VENDOR/RENDERER)` return normalized strings; `toDataURL`/`toBlob` blank. 2026-06-02 |
 | 9D.3 | ✅ AudioContext fingerprint noise | `js/src/audio_bindings.rs` | 2026-05-30 |
 | 9D.4 | ✅ Battery API disable on Strict | `js/src/battery_bindings.rs` | 2026-05-30: navigator.getBattery() → rejected Promise, 4 unit-тестов |
-| 9D.5 | ⬜ WebRTC mDNS-only host candidates | `network/src/webrtc/candidates.rs` | при наличии WebRTC; иначе noop |
+| 9D.5 | ✅ WebRTC mDNS-only host candidates | `js/src/webrtc_stub.rs` | 2026-06-01: `RTCPeerConnection` фаерит один UUID.local mDNS-кандидат (без утечки реального IP), 17 тестов |
 | 9D.6 | ✅ Hardware concurrency / screen / timezone normalization per profile | `js/src/navigator_bindings.rs` | 2026-05-30: hardwareConcurrency=2, deviceMemory=8, platform=Win32, screen 1920×1080, getTimezoneOffset→0, 10 unit-тестов |
-| 9E | ⬜ **`[P3]` Layer 5: behavioral mimicry (opt-in)** (Phase 1, **для automation API**) | `InputMode::HumanLike` для тестировщиков | `shell/src/input/humanlike.rs` |
-| 9E.1 | ⬜ Bézier-curve mouse paths between coordinates | `shell/src/input/humanlike.rs` | — |
-| 9E.2 | ⬜ Variable inter-keystroke timing (Gaussian) | `shell/src/input/humanlike.rs` | — |
-| 9E.3 | ⬜ Pre-click dwell time | `shell/src/input/humanlike.rs` | — |
-| 9F | ⬜ **`[P3]` Layer 6: профили Standard/Strict/Tor** (Phase 2) | Per-profile config + per-context override через BrowserSession | `lumen-storage/src/profiles/fingerprint.rs` |
+| 9E | ✅ **`[P1]` Layer 5: behavioral mimicry (opt-in)** (Phase 1, **для automation API**) | `InputMode::HumanLike` для тестировщиков | `shell/src/input/humanlike.rs` (P1 done 2026-06-01) |
+| 9E.1 | ✅ Bézier-curve mouse paths between coordinates | `shell/src/input/humanlike.rs` (кубик Безье, 2 контр. точки) | — |
+| 9E.2 | ✅ Variable inter-keystroke timing (Gaussian) | `shell/src/input/humanlike.rs` (Box-Muller) | — |
+| 9E.3 | ✅ Pre-click dwell time | `shell/src/input/humanlike.rs` | — |
+| 9F | 🟡 **`[P1]` Layer 6: профили Standard/Strict/Tor** (Phase 2) | Per-profile config + per-context override через BrowserSession | `shell/src/config.rs` + `driver` (9F.1/9F.2 ✅; 9F.3 🟡) |
 | 9F.1 | ✅ Профильный конфиг fingerprint (объединяет слои 2/3/4): `fingerprint.toml` → `FingerprintProfile` (http+tls profile, navigator/screen/timezone), apply к `HttpClient` + process-global `NavigatorProfile` | `shell/src/config.rs` | — |
 | 9F.2 | ✅ `BrowserSession::set_fingerprint_profile(profile)` per-context override | `driver` + `core::ext` | 2026-06-02: `FingerprintProfile::to_http_profile()` (Standard→Chrome / Strict→Strict / Tor→TorBrowser); `InProcessSession::build_http_client()` + winit_session применяют профиль (HTTP header order + derived TLS) к исходящим запросам |
 | 9F.3 | 🟡 Tor-mode профиль (Tor circuit + Tor Browser JA3/UA/screen/fonts pinning + no persistent state) | `storage` + `network` + `shell` | 2026-06-02: **network-слой готов** — `HttpProfile::TorBrowser` запинен под Tor Browser stable (Firefox ESR 128): Windows-uniform UA (`TOR_BROWSER_USER_AGENT`, без Win64/Linux-токенов), Firefox-порядок заголовков + `Sec-Fetch-*` + `Upgrade-Insecure-Requests` + `Priority`, pinned Accept/Accept-Language; TLS Tor-профиль (TLS1.3-only, http/1.1 ALPN) и Client-Hints-off уже были. **Остаток (Phase 3):** Tor circuit (SOCKS5 к Tor-демону), screen/fonts pinning в navigator (shell), no-persistent-state (shell/storage) |
-| 9G | 🟡 **Red lines + perf gate — code-level enforcement** | Чтобы trigger-PR случайно не нарушил ADR-006 / ADR-007. 9G.1/9G.2/9G.4/9G.5 ✅; 9G.3 bench-gate workflow есть | — |
+| 9G | ✅ **Red lines + perf gate — code-level enforcement** | Чтобы trigger-PR случайно не нарушил ADR-006 / ADR-007. 9G.1–9G.5 ✅ | — |
 | 9G.1 | ✅ CI lint: запрет имён `*captcha*`, `*solver*`, `*ip_rotation*`, `*proxy_pool*` в crate-names | `scripts/check_crate_names.py` + `.github/workflows/red-lines.yml` | 2026-06-02: token-matcher (`resolver` не ложно-срабатывает), self-test, скан всех Cargo.toml |
 | 9G.2 | ✅ README / маркетинговые тексты не используют «scraping», «stealth», «bypass» — линтер в CI | `scripts/check_marketing_words.py` + `.github/workflows/red-lines.yml` | 2026-06-02: whole-word matcher, scope = README.md (техдоки/ADR легитимно обсуждают термины), self-test |
-| 9G.3 | ⬜ **CI bench gate**: `cargo run -p lumen-bench --release` + сравнение с `bench/baseline.json` (median, p95) → fail PR при регрессе >5% в default-сборке. Применяется к PR, затрагивающим `lumen-driver` / `lumen-mcp-server` / `lumen-bidi-server` / `lumen-network` / `lumen-canvas` / `lumen-js` / `lumen-storage::profiles` / `lumen-shell::input` | `.github/workflows/bench-gate.yml` + `bench/baseline.json` + `bench/compare.py` | binding по ADR-006 §«Performance gate» и ADR-007 §«Performance gate» |
+| 9G.3 | ✅ **CI bench gate**: `cargo run -p lumen-bench --release` + сравнение с `bench/baseline.json` (median, p95) → fail PR при регрессе >5% в default-сборке. Применяется к PR, затрагивающим `lumen-driver` / `lumen-mcp-server` / `lumen-bidi-server` / `lumen-network` / `lumen-canvas` / `lumen-js` / `lumen-storage::profiles` / `lumen-shell::input` | `.github/workflows/bench-gate.yml` + `bench/baseline.json` + `bench/compare.py` (все есть) | binding по ADR-006 §«Performance gate» и ADR-007 §«Performance gate» |
 | 9G.4 | ✅ **`bench/baseline.json` обновление-процедура**: разработчик руками `cargo run -p lumen-bench --release` затем обновляет JSON; коммит документирует архитектурное обоснование | `bench/UPDATE.md` | — |
 | 9G.5 | ✅ **`lumen-bench` RAM-axis расширение** (требование [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)): добавить замеры `peak_rss`, `steady_state_rss` к существующим time-метрикам; get_rss_bytes() cross-platform (libc::getrusage на Unix, GetProcessMemoryInfo на Windows); baseline.json + UPDATE.md документация | `bench/src/main.rs` + `baseline.json` + `UPDATE.md` | binding по ADR-008 §«Performance gate» |
 | 10 | ⬜ **`[P3]` Tab lifecycle: пятитайерная модель** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)) | Главный продуктовый дифференциатор по RAM: 50 вкладок ~400 MB vs Chrome 6-10 GB | `lumen-shell::tab_lifecycle`, `lumen-storage::tab_snapshot`, `lumen-core::ext::MemoryPressureSource` |
