@@ -376,6 +376,7 @@ fn run_window_mode(
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
+        command_palette: panels::command_palette::CommandPalette::new(),
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1480,6 +1481,8 @@ enum KeyCommand {
     ToggleSidebar,
     /// Показать/скрыть менеджер закладок (Ctrl+Shift+O, task #22).
     ToggleBookmarks,
+    /// Показать/скрыть командную палитру (Ctrl+K, §7E.2, task #23).
+    ToggleCommandPalette,
     /// Добавить текущую страницу в закладки (Ctrl+D).
     BookmarkCurrentPage,
     /// Показать/скрыть DevTools JS-консоль (F12, §7E.5).
@@ -1583,6 +1586,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyO if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleBookmarks)
         }
+        // Ctrl+K — toggle the command palette (§7E.2)
+        KeyCode::KeyK if ctrl_only => Some(KeyCommand::ToggleCommandPalette),
         // Ctrl+D — bookmark the current page
         KeyCode::KeyD if ctrl_only => Some(KeyCommand::BookmarkCurrentPage),
         // F12 — toggle DevTools JS console (§7E.5)
@@ -3136,6 +3141,12 @@ struct Lumen {
     /// visibility. Folder tree + bookmark list + search + drag-and-drop re-file
     /// (move bookmark to folder, persisted via `Bookmarks::set_folder`).
     bookmark_panel: panels::bookmark_panel::BookmarkPanel,
+    /// Command palette modal state (task #23, §7E.2).
+    ///
+    /// `Ctrl+K` toggles a centred modal that fuzzy-searches across commands,
+    /// bookmarks and history. While visible it captures all keyboard and pointer
+    /// input; `↑/↓` move the selection, `Enter` activates, `Esc` closes.
+    command_palette: panels::command_palette::CommandPalette,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -4265,6 +4276,32 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
 
+                    // Command palette (task #23): modal — captures every click.
+                    // A click on a row activates it; a click on the scrim closes.
+                    if self.command_palette.visible {
+                        let win_w = self.viewport_width_css();
+                        match panels::command_palette::hit_test(
+                            &self.command_palette,
+                            x_css,
+                            y_css,
+                            win_w,
+                        ) {
+                            panels::command_palette::PaletteHit::Row(filtered_idx) => {
+                                self.command_palette.selected = filtered_idx;
+                                if let Some(item) = self.command_palette.selected_item().cloned() {
+                                    self.command_palette.close();
+                                    self.activate_palette(&item, event_loop);
+                                }
+                            }
+                            panels::command_palette::PaletteHit::Dismiss => {
+                                self.command_palette.close();
+                            }
+                            panels::command_palette::PaletteHit::Inside => {}
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
                     // Tab bar occupies y = 0..TAB_BAR_HEIGHT — dispatch first.
                     if y_css < tabs::strip::TAB_BAR_HEIGHT {
                         let win_w = self.viewport_width_css();
@@ -5140,6 +5177,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut tab_cmds);
                 }
 
+                // Command palette (task #23): modal — drawn above everything,
+                // including the tab bar, with a full-window dimming scrim.
+                if self.command_palette.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h =
+                        self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let mut cp_cmds = panels::command_palette::build_panel(
+                        &self.command_palette,
+                        win_w,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut cp_cmds);
+                }
+
                 // Build the split-view combined DL before borrowing renderer,
                 // so the immutable borrow of self.split_view ends first.
                 let split_combined: Option<lumen_paint::DisplayList> = {
@@ -5537,6 +5588,16 @@ impl Lumen {
             return;
         };
 
+        // Командная палитра — модальный overlay: пока открыта, перехватывает все
+        // клавиши (Esc/Enter/↑/↓/Backspace/печать). Ctrl+K (toggle) пропускается
+        // в глобальный keybinding-путь ниже, чтобы закрыть палитру.
+        if self.command_palette.visible
+            && !(code == KeyCode::KeyK && self.modifiers == ModifiersState::CONTROL)
+            && self.handle_palette_key(code, key_event, event_loop)
+        {
+            return;
+        }
+
         // Адресная строка (Ctrl+L) перехватывает ввод первой: Esc=close,
         // Enter=navigate, Backspace=удалить символ, иначе — текст URL.
         if self.address_bar.is_open() {
@@ -5798,6 +5859,13 @@ impl Lumen {
                 self.bookmark_panel.toggle();
                 if self.bookmark_panel.visible {
                     self.refresh_bookmarks();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleCommandPalette => {
+                self.command_palette.toggle();
+                if self.command_palette.visible {
+                    self.refresh_palette_items();
                 }
                 self.request_redraw();
             }
@@ -6498,6 +6566,148 @@ impl Lumen {
             })
             .collect();
         self.bookmark_panel.set_data(entries);
+    }
+
+    /// Rebuild the command-palette item list: curated commands, every bookmark,
+    /// and — when the query is non-empty — matching history pages (FTS).
+    ///
+    /// History depends on the query (the FTS index has no "list all"), so this
+    /// is called both on open and on every query edit. Commands and bookmarks
+    /// are query-independent; the palette's own fuzzy filter ranks the union.
+    fn refresh_palette_items(&mut self) {
+        use panels::command_palette::{PaletteAction, PaletteItem};
+
+        let mut items: Vec<PaletteItem> =
+            PaletteAction::all().iter().copied().map(PaletteItem::command).collect();
+
+        // Bookmarks (query-independent — fuzzy-filtered in the palette).
+        for b in self.bookmarks.list_all().unwrap_or_default() {
+            items.push(PaletteItem::bookmark(b.title, b.url));
+        }
+
+        // History: FTS needs a query, so only add hits once the user types.
+        let query = self.command_palette.query.trim().to_owned();
+        if !query.is_empty()
+            && let Ok(hits) = self.history_fts.search(&query, 12)
+        {
+            for hit in hits {
+                items.push(PaletteItem::history(hit.title, hit.url));
+            }
+        }
+
+        self.command_palette.set_items(items);
+    }
+
+    /// Handle a key while the command palette modal is open.
+    ///
+    /// Always returns `true` (the modal swallows every key). `Esc` closes,
+    /// `Enter` activates the selected item, `↑/↓` move the selection,
+    /// `Backspace` edits the query, and printable characters extend it. Editing
+    /// the query refreshes history results.
+    fn handle_palette_key(
+        &mut self,
+        code: KeyCode,
+        key_event: &KeyEvent,
+        event_loop: &ActiveEventLoop,
+    ) -> bool {
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.command_palette.close();
+                self.request_redraw();
+            }
+            KeyCode::ArrowDown if !key_event.repeat => {
+                self.command_palette.select_next();
+                self.request_redraw();
+            }
+            KeyCode::ArrowUp if !key_event.repeat => {
+                self.command_palette.select_prev();
+                self.request_redraw();
+            }
+            KeyCode::Enter if !key_event.repeat => {
+                if let Some(item) = self.command_palette.selected_item().cloned() {
+                    self.command_palette.close();
+                    self.activate_palette(&item, event_loop);
+                }
+                self.request_redraw();
+            }
+            KeyCode::Backspace => {
+                self.command_palette.backspace();
+                self.refresh_palette_items();
+                self.request_redraw();
+            }
+            _ => {
+                // Ignore modified keys other than the toggle (handled globally).
+                if self.modifiers.control_key() || self.modifiers.super_key() {
+                    return false;
+                }
+                if let Some(text) = key_event.text.as_ref()
+                    && !text.is_empty()
+                    && !text.chars().any(char::is_control)
+                {
+                    self.command_palette.append(text);
+                    self.refresh_palette_items();
+                    self.request_redraw();
+                }
+            }
+        }
+        true
+    }
+
+    /// Execute the action behind a selected palette item: run the command, or
+    /// navigate to the bookmark / history URL.
+    fn activate_palette(
+        &mut self,
+        item: &panels::command_palette::PaletteItem,
+        event_loop: &ActiveEventLoop,
+    ) {
+        use panels::command_palette::{PaletteAction, PaletteKind};
+        match &item.kind {
+            PaletteKind::Bookmark | PaletteKind::History => {
+                if !item.url.is_empty() {
+                    self.navigate_to(PageSource::from_arg(Some(&item.url)));
+                }
+            }
+            PaletteKind::Command(action) => match action {
+                PaletteAction::NewTab => self.open_new_tab(),
+                PaletteAction::CloseTab => {
+                    let idx = self.tab_strip.active;
+                    self.close_tab(idx, event_loop);
+                }
+                PaletteAction::Reload => self.reload(),
+                PaletteAction::NavigateBack => self.navigate_back(),
+                PaletteAction::NavigateForward => self.navigate_forward(),
+                PaletteAction::FindOnPage => {
+                    self.hint.close();
+                    self.find.open();
+                }
+                PaletteAction::OpenAddressBar => {
+                    self.hint.close();
+                    let current = self.source.url_str().unwrap_or("").to_owned();
+                    self.address_bar.open(&current);
+                }
+                PaletteAction::ToggleBookmarks => {
+                    self.bookmark_panel.toggle();
+                    if self.bookmark_panel.visible {
+                        self.refresh_bookmarks();
+                    }
+                }
+                PaletteAction::BookmarkCurrentPage => self.bookmark_current_page(),
+                PaletteAction::ToggleVerticalTabs => {
+                    self.vertical_tabs.toggle();
+                    self.relayout();
+                }
+                PaletteAction::ToggleDevConsole => self.devtools_console.toggle(),
+                PaletteAction::ToggleShields => self.shields.toggle(),
+                PaletteAction::ToggleVimMode => {
+                    if self.vim_mode.is_some() {
+                        self.vim_mode = None;
+                    } else {
+                        self.vim_mode = Some(input::vim::VimMode::new());
+                    }
+                }
+            },
+        }
+        self.request_redraw();
     }
 
     /// Add the current page to bookmarks (Ctrl+D).

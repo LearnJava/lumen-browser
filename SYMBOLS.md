@@ -1849,7 +1849,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
 `crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
-## lumen-shell  (418 symbols)
+## lumen-shell  (443 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2076,6 +2076,31 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/bookmark_panel.rs:235` **enum** `BookmarkHit` — Result of a click inside the bookmark panel
 `crates/shell/src/panels/bookmark_panel.rs:252` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the panel anchored with its
 `crates/shell/src/panels/bookmark_panel.rs:309` **fn** `build_panel` — Build the display list for the panel anchored at `(ax, ay)` (top-left)
+`crates/shell/src/panels/command_palette.rs:83` **enum** `PaletteAction` — A built-in browser action invokable from the palette
+`crates/shell/src/panels/command_palette.rs:114` **fn** `label` — Human-readable label shown in the result row
+`crates/shell/src/panels/command_palette.rs:133` **fn** `shortcut` — Keyboard-shortcut hint rendered right-aligned in the row (`""` if none)
+`crates/shell/src/panels/command_palette.rs:153` **fn** `all` — The full curated command list, in display order (shown first when the
+`crates/shell/src/panels/command_palette.rs:177` **enum** `PaletteKind` — What kind of target a palette item represents (drives the row icon and the
+`crates/shell/src/panels/command_palette.rs:188` **struct** `PaletteItem` — A single searchable entry in the palette
+`crates/shell/src/panels/command_palette.rs:199` **fn** `command` — Build a command item
+`crates/shell/src/panels/command_palette.rs:208` **fn** `bookmark` — Build a bookmark item (falls back to the URL when the title is empty)
+`crates/shell/src/panels/command_palette.rs:214` **fn** `history` — Build a history item (falls back to the URL when the title is empty)
+`crates/shell/src/panels/command_palette.rs:233` **struct** `CommandPalette` — Command palette modal state
+`crates/shell/src/panels/command_palette.rs:250` **fn** `new` — Create a hidden palette with the curated command list pre-loaded
+`crates/shell/src/panels/command_palette.rs:256` **fn** `open` — Open the palette, resetting the query and selection
+`crates/shell/src/panels/command_palette.rs:264` **fn** `close` — Close the palette
+`crates/shell/src/panels/command_palette.rs:269` **fn** `toggle` — Toggle visibility; opening resets transient state
+`crates/shell/src/panels/command_palette.rs:280` **fn** `set_items` — Replace the item list (commands + bookmarks + history) and clamp the
+`crates/shell/src/panels/command_palette.rs:286` **fn** `append` — Append typed text to the query and reset the selection to the top
+`crates/shell/src/panels/command_palette.rs:293` **fn** `backspace` — Delete the last character of the query
+`crates/shell/src/panels/command_palette.rs:304` **fn** `filtered` — Indices into `items` matching the current query, best match first
+`crates/shell/src/panels/command_palette.rs:321` **fn** `select_next` — Move the selection down by one (clamped to the last result)
+`crates/shell/src/panels/command_palette.rs:331` **fn** `select_prev` — Move the selection up by one (clamped to the first result)
+`crates/shell/src/panels/command_palette.rs:339` **fn** `selected_item` — The currently highlighted item index into `items`, if any result exists
+`crates/shell/src/panels/command_palette.rs:380` **fn** `fuzzy_score` — Score `haystack` against `needle` as a case-insensitive subsequence match
+`crates/shell/src/panels/command_palette.rs:430` **enum** `PaletteHit` — Result of a click inside the modal palette
+`crates/shell/src/panels/command_palette.rs:454` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the modal palette in a
+`crates/shell/src/panels/command_palette.rs:477` **fn** `build_panel` — Build the display list for the modal palette over a `viewport_w`×`viewport_h`
 `crates/shell/src/panels/permission_panel.rs:58` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
 `crates/shell/src/panels/permission_panel.rs:79` **fn** `label` — Short display name for the permission row label
 `crates/shell/src/panels/permission_panel.rs:89` **fn** `icon` — Emoji icon shown to the left of the label
@@ -2676,4 +2701,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2611 symbols in 20 crates*
+*Total: 2636 symbols in 20 crates*
