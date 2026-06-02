@@ -99,6 +99,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('55', '55-video-placeholder.html', 0.5, '<video> replaced element — grey DrawImage placeholder; UA default 300×150; CSS/attr dimensions; border + border-radius'),
     ('56', '56-mix-blend-mode.html', 0.5, 'CSS Compositing L1 §5 — mix-blend-mode: normal/multiply/darken/color-burn/screen/lighten/color-dodge/overlay/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity + nesting'),
     ('57', '57-canvas-2d.html', 0.5, 'HTML LS §4.12.4 — <canvas> getContext("2d"): fillRect/strokeRect/arc/path fill; UA default 300×150; attr dimensions; CSS background + border + border-radius on the canvas element box'),
+    ('58', '58-first-letter-line.html', 2.0, 'CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter drop-cap (large yellow, float:left) + ::first-line green bold first line'),
 ]
 
 # --- PNG reader (stdlib only) ---

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 58 ::first-letter / ::first-line</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: content-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 32px; overflow: hidden; }
+
+    h3 { color: #e2e8f0; font: 700 13px/1.6 sans-serif; margin-bottom: 12px; }
+
+    /* ::first-letter demo */
+    .fl-demo {
+      width: 440px;
+      color: #e2e8f0;
+      font: 16px/1.8 sans-serif;
+      margin-bottom: 24px;
+      background: #2d3748;
+      padding: 12px;
+    }
+    .fl-demo::first-letter {
+      font-size: 48px;
+      font-weight: 700;
+      color: #f6e05e;
+      float: left;
+      line-height: 1;
+      margin-right: 4px;
+    }
+
+    /* ::first-line demo */
+    .fline-demo {
+      width: 440px;
+      color: #e2e8f0;
+      font: 16px/1.8 sans-serif;
+      background: #2d3748;
+      padding: 12px;
+    }
+    .fline-demo::first-line {
+      color: #68d391;
+      font-weight: 700;
+    }
+
+    .row { display: flex; gap: 32px; }
+    .col { width: 460px; }
+    .label { color: #a0aec0; font: 11px/1.5 monospace; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <h3>::first-letter (large drop-cap, yellow) and ::first-line (green bold first line)</h3>
+    <div class="row">
+      <div class="col">
+        <div class="fl-demo">
+          Once upon a time in a land far away, there lived a great
+          engine that rendered CSS in its own way.
+        </div>
+        <div class="label">::first-letter { font-size:48px; color:#f6e05e; float:left }</div>
+      </div>
+      <div class="col">
+        <div class="fline-demo">
+          The first line of this paragraph is green and bold thanks
+          to the first-line pseudo-element selector in CSS.
+        </div>
+        <div class="label">::first-line { color:#68d391; font-weight:700 }</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

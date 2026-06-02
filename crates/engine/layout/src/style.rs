@@ -4954,9 +4954,14 @@ pub fn compute_pseudo_element_style(
         apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, parent, is_quirks);
     }
 
-    match &style.content {
-        Content::Items(_) => Some(style),
-        _ => None,
+    // ::before/::after require content: to render; ::first-letter/::first-line do not.
+    if pseudo.eq_ignore_ascii_case("first-letter") || pseudo.eq_ignore_ascii_case("first-line") {
+        Some(style)
+    } else {
+        match &style.content {
+            Content::Items(_) => Some(style),
+            _ => None,
+        }
     }
 }
 
