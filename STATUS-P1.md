@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: p1-roadmap-audit-7b  branch: p1-roadmap-audit-7b
-Next step: обновить stale-маркеры 7B.2/7B.5 в lumen-plan.md  lumen-plan.md:278
+_(нет)_
 
 ---
 
@@ -18,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-roadmap-audit-7b** ✅ 2026-06-02 — Синхронизация stale-маркеров 7B.2 и 7B.5 в lumen-plan.md. 7B.2 (click-hint overlay: `collect_clickable_elements` P1 + vimium F-overlay P3) и 7B.5 (find-in-page regex: `collect_visible_text` P1 + Ctrl+R UI P3) давно реализованы, но висели ⬜/🟡. Трек 7B → ✅ целиком.
 
 - **p1-motion-path** ✅ 2026-06-02 — CSS Motion Path L1 алгоритм-stub (`offset-path`, задача #44). Новый модуль `crates/engine/layout/src/motion_path.rs`: SVG path-парсер (все команды M/L/H/V/C/S/Q/T/A/Z, relative+absolute, Arc→3×cubic Bézier через W3C endpoint→center), `point_at_distance()` с адаптивной De Casteljau-бисекцией + 5-point Gauss-Legendre для длины кривой, `resolve_motion_transform(path_str, offset_distance_px, OffsetRotate) -> Option<MotionTransform>`. CSS-поля `offset_path/distance/rotate` уже были в ComputedStyle — новый парсинг не добавлялся. Handoff P4: `property_trees.rs:802` комментарий + полная инструкция в STATUS-P4 "Needs wiring". 15 unit-тестов. lumen-layout: 2136 тестов (без BUG-055). CSS-SPECS.md Motion Path L1 → 🟡 с пометкой «algorithm stub ready». SYMBOLS.md обновлён. Clippy чист. Без новых зависимостей.
 
