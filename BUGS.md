@@ -617,3 +617,4 @@ CSS-фильтры `grayscale`, `sepia`, `brightness`, `invert`, `contrast`, `sa
 | Form controls UA styles | Phase 1 | TEST-34: 6.89% |
 | `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 20.57% (bbox работает) |
 | `direction: rtl` alignment | Phase 1 | TEST-27: 9.76% |
+BUG-055 | OPEN | layout | collect_picture_unsupported_type_falls_back: <picture> type-attribute fallback выбирает avif источник вместо img src — picture/source с неподдерживаемым type не скипается | crates/engine/layout/src/lib.rs:12366

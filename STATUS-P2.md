@@ -6,15 +6,41 @@
 
 ## In progress
 
-_(нет)_
+**C1: CSS `image-set()` / `cross-fade()` parsing**  branch: p2-image-set-cross-fade
+Next step: add `CrossFade` variant to `BackgroundImage`, parse in `parse_single_bg_layer`, emit `DrawCrossFade`  `layout/src/style.rs:3018`, `paint/src/display_list.rs:2300`
 
 ---
 
 ## Next
 
+### CSS wiring (приоритет — переданы от P4, 2026-06-02)
+
+Алгоритмы реализованы P2. P4 передал CSS-обвязку P2. Детали реализации — STATUS-P4.md «Needs wiring».
+
+| # | Task | Crate(s) | Effort |
+|---|------|----------|--------|
+| C1 | **CSS `image-set()` / `cross-fade()` parsing.** В `parse_single_bg_layer`: хранить raw `image-set(…)` строку в `BackgroundImage::Url` (не резолвить — paint резолвит per-DPR). Для `cross-fade()`: parse и emit `DrawCrossFade` из `emit_background_image`. Entry: `layout/src/style.rs` `parse_single_bg_layer` (~line 13345). | `lumen-layout`, `lumen-paint` | M |
+| C2 | **`@media (prefers-color-scheme: dark)` визуальный каскад.** Прокинуть `dark_mode: bool` в `layout_measured_hyp` → `media_context_from_viewport` → `compute_style`. Shell: `parse_and_layout`/`relayout_page` форвардят `self.dark_mode`. Snapshot default = `false`. Entry: `layout/src/style.rs:13868`. | `lumen-layout`, `lumen-shell` | M |
+| C3 | **CSS 3D transforms — `perspective()` + `transform-style: preserve-3d`.** Добавить 3D варианты в `TransformFn` (RotateX/Y/Z, Translate3d, Scale3d, Perspective, Matrix3d); wire к `Mat4` 3D-конструкторам; `ComputedStyle.perspective` + `perspective_origin`; `transform_style: TransformStyle {Flat, Preserve3d}`; flip `establishes_3d_rendering_context` → `b.style.transform_style == Preserve3d`. Entry: `layout/src/property_trees.rs` `forward_box_transform`. | `lumen-layout`, `lumen-paint` | L |
+| C4 | **`overflow: scroll` CSS wiring проверка.** Убедиться что `overflow` парсится корректно в `Scroll\|Auto`; display list emitter уже wired. Добавить 3–5 CSS unit-тестов. Entry: `layout/src/style.rs` `apply_declaration("overflow")`. | `lumen-layout` | S |
+| C5 | **`scrollbar-width` / `scrollbar-color`.** `scrollbar_width: ScrollbarWidth` + `scrollbar_color: Option<(CssColor,CssColor)>` в `ComputedStyle`; parse; прокинуть через `DrawScrollbar`; renderer читает per-command цвета. Entry: `paint/src/display_list.rs` walk emit block + renderer `DrawScrollbar`. | `lumen-layout`, `lumen-paint` | S |
+| C6 | **SVG stroke advanced properties.** `fill_rule`/`stroke_linecap`/`stroke_linejoin`/`stroke_miterlimit`/`stroke_dasharray`/`stroke_dashoffset` в `ComputedStyle`; parse; wire в `tessellate_stroke` + `emit_svg_shape`. Entry: `paint/src/svg_path.rs:548`, `paint/src/display_list.rs:3263`. | `lumen-layout`, `lumen-paint` | M |
+| C7 | **`@counter-style` кастомные счётчики.** Parse at-rule `@counter-style`; дескрипторы `system`/`symbols`/`prefix`/`suffix`/`range`/`pad`/`negative`; resolve в `counter()`/`counters()` значениях. | `lumen-layout` | M |
+| C8 | **`column-rule` / `column-span` / `column-fill`.** Поля `column_rule_*` + `column_span: ColumnSpan` + `column_fill: ColumnFill`; parse; wire в multi-column layout engine. | `lumen-layout` | S |
+| C9 | **`::marker` рендеринг.** `compute_pseudo_element_style("::marker")`; `content`/color/font поддержка; emit перед list-item боксом в display list. | `lumen-layout`, `lumen-paint` | S |
+| C10 | **`cq*` container query units** (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`). Resolve против ближайшего `container` предка в `compute_length_to_px`. | `lumen-layout` | M |
+| C11 | **`mask-image` CSS wiring.** Parse `mask-image`/`mask-repeat`/`mask-size`/`mask-position`/`mask-mode` в `ComputedStyle`; emit `PushMaskLayer`/`PopMaskLayer` из display list walk. GPU compositing pass (`p2-mask-image-layer`) готов. Entry: `paint/src/display_list.rs` walk. | `lumen-layout`, `lumen-paint` | L |
+
+### Roadmap (фичи, после CSS wiring)
+
 Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
 
-_(нет — все задачи P2 переданы P1 2026-06-02, задачи #33–36 в STATUS-P1.md)_
+| # | Task | Crate(s) | Effort | Roadmap |
+|---|------|----------|--------|---------|
+| 37 | **Intersection Observer API** (W3C IntersectionObserver L2). `new IntersectionObserver(cb, {rootMargin, threshold, root})`, `observe()/unobserve()/disconnect()/takeRecords()`. `IntersectionObserverEntry`: `boundingClientRect`, `intersectionRatio`, `isIntersecting`, `target`, `time`. Shell: poll в `about_to_wait` через запросы layout rect. Нужен для lazy loading, scroll-triggered animations, ads visibility. | `lumen-js`, `lumen-shell` | M | lumen-plan.md Phase 2 web APIs |
+| 38 | **Resize Observer API** (W3C ResizeObserver). `new ResizeObserver(cb)`, `observe(el, {box})`, `unobserve(el)`, `disconnect()`. `ResizeObserverEntry`: `contentRect`, `borderBoxSize`, `contentBoxSize`, `devicePixelContentBoxSize`. Shell: fire на `relayout()` когда border-box элементов меняется. Нужен для responsive компонентов. | `lumen-js`, `lumen-shell` | M | lumen-plan.md Phase 2 web APIs |
+| 39 | **HTML Popover API** (WHATWG HTML `popover` attribute). `el.showPopover()/hidePopover()/togglePopover()`, атрибуты `popovertarget`/`popovertargetaction`, `popover="auto"\|"manual"`, события `beforetoggle`/`toggle`, top-layer emulation через z-index 2147483647 + position fixed. Нужен для современных UI-компонентов без JS-оверлеев. | `lumen-js`, `lumen-layout` | M | lumen-plan.md Phase 2 web APIs |
+| 40 | **View Transitions API** (CSS View Transitions L1). `document.startViewTransition(callback)` → `ViewTransition { ready, finished, updateCallbackDone }`, `::view-transition*` псевдо-элементы (stub), cross-fade между снапшотами через существующий `DrawCrossFade` GPU-пасс (`p2-cross-fade-gpu`). | `lumen-js`, `lumen-paint` | L | lumen-plan.md Phase 3 |
 
 ---
 
