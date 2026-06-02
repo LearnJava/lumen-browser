@@ -16,6 +16,7 @@ pub mod animation;
 pub mod box_tree;
 pub mod counters;
 pub mod image_gating;
+pub mod motion_path;
 pub mod page;
 pub mod pagination;
 pub mod property_trees;
@@ -54,6 +55,7 @@ pub use selector_query::{
     computed_style_by_selector, computed_style_to_map, find_all_by_selector,
     find_box_by_selector, query_all, ComputedStyleSnapshot,
 };
+pub use motion_path::{resolve_motion_transform, MotionTransform};
 pub use text_iter::{collect_visible_text, TextFragment};
 pub use scroll_timeline::{
     collect_named_scroll_timelines, collect_named_view_timelines,

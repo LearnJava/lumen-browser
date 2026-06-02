@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: p1-motion-path  branch: p1-motion-path
+Next step: commit motion_path.rs + update docs  crates/engine/layout/src/motion_path.rs:1
 
 ---
 
