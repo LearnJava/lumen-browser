@@ -6,9 +6,7 @@
 
 ## In progress
 
-- **Canvas 2D JS bindings** branch: `p1-canvas2d`
-  - `canvas.getContext('2d')` → рабочий `CanvasRenderingContext2D` поверх `lumen_canvas::Context2D`; буфер пикселей грузится в renderer через `canvas:{nid}` ключ и рисуется `DrawImage`.
-  - Next step: `BoxKind::Canvas` в `crates/engine/layout/src/box_tree.rs:1880` (рядом с Video), затем `canvas2d.rs` биндинги + flush dirty → renderer.
+_(нет)_
 
 ---
 
@@ -19,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-canvas2d** ✅ 2026-06-02 — Canvas 2D JS bindings (задача 5A.2, HTML LS §4.12.4). `canvas.getContext('2d')` теперь возвращает рабочий `CanvasRenderingContext2D` поверх `lumen_canvas::Context2D` вместо `null`. **layout:** новый `BoxKind::Canvas { width, height }` — replaced element, распознаётся в `build_box` по тегу `<canvas>`, intrinsic-размер из `width`/`height`-атрибутов (UA default 300×150), добавлен во все exhaustive-матчи (`is_replaced`, layout-dispatch, `snapshot.rs`). **paint:** обе ветки `emit_box_self` эмитят `DrawImage` с ключом `canvas:{node.index()}` (как Video placeholder) — фон/border/box-shadow в painter's order. **js:** новый `crates/js/src/canvas2d.rs` — нативы `_lumen_canvas2d_*` (per-thread registry по DOM node index) + `flush_dirty()`; JS-шим `getContext('2d')`/`toDataURL`/reflected `width`/`height` встроен в `dom.rs::_lumen_make_element` (эфемерные обёртки → объект контекста кешируется в `_canvas2d_ctxs[nid]`, как `_input_values`). Ключ `nid` совпадает с `LayoutBox::node.index()`, поэтому `DrawImage src` резолвится в нужный буфер. Forwarded: fillRect/clearRect/strokeRect, beginPath/moveTo/lineTo/closePath/arc/fill/stroke, rect/ellipse, fillStyle/strokeStyle (`CanvasColor::from_css_str`), lineWidth/globalAlpha (spec-валидация), getImageData (с fingerprint-noise). Трансформы/текст/тени/градиенты/clip — no-op-стабы; toDataURL/toBlob пустые (ADR-007). **shell:** `QuickJsRuntime::flush_canvas_updates()` + `PersistentJs`-метод; `about_to_wait` дренирует dirty-буферы → `Renderer::register_image("canvas:{nid}")` + redraw. 22 теста (16 canvas2d unit + 6 dom e2e), lumen-js: 868 lib. Graphic test `57-canvas-2d.html` + демо в `1000000-final.html` + CPU-снапшот. Clippy чист. `lumen-canvas` добавлен в js-deps (workspace-internal, без новой внешней зависимости). BUG-055 (pre-existing avif `<picture>` fallback) не связан.
 
 - **p1-roadmap-audit-7b** ✅ 2026-06-02 — Синхронизация stale-маркеров 7B.2 и 7B.5 в lumen-plan.md. 7B.2 (click-hint overlay: `collect_clickable_elements` P1 + vimium F-overlay P3) и 7B.5 (find-in-page regex: `collect_visible_text` P1 + Ctrl+R UI P3) давно реализованы, но висели ⬜/🟡. Трек 7B → ✅ целиком.
 

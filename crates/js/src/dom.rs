@@ -2660,6 +2660,8 @@ function _lumen_fire_slotchange(host_nid) {
 var _validity_msg = {};
 // nid → current input value (undefined → fall back to value attribute)
 var _input_values = {};
+// nid → cached CanvasRenderingContext2D object (persists across _lumen_make_element).
+var _canvas2d_ctxs = {};
 
 // ValidityState — readonly snapshot of one form control's validity.
 function ValidityState(flags) {
@@ -2753,6 +2755,108 @@ function _compute_validity(el) {
     if (customMsg) flags.customError = true;
 
     return new ValidityState(flags);
+}
+
+// ── Canvas 2D context factory (HTML LS §4.12.4) ─────────────────────────────────
+// Builds a CanvasRenderingContext2D backed by the native _lumen_canvas2d_* bindings
+// (lumen_canvas::Context2D), keyed by the canvas element's node index `nid`.
+// Drawing methods forward to the native rasterizer; the shell uploads the pixel
+// buffer to the renderer under `canvas:{nid}` each frame.
+function _lumen_make_canvas2d_ctx(canvasEl, nid) {
+    var _fillStyle = '#000000';
+    var _strokeStyle = '#000000';
+    var _lineWidth = 1.0;
+    var _globalAlpha = 1.0;
+    var ctx = {
+        canvas: canvasEl,
+        get fillStyle() { return _fillStyle; },
+        set fillStyle(v) { _fillStyle = String(v); _lumen_canvas2d_set_fill_style(nid, _fillStyle); },
+        get strokeStyle() { return _strokeStyle; },
+        set strokeStyle(v) { _strokeStyle = String(v); _lumen_canvas2d_set_stroke_style(nid, _strokeStyle); },
+        get lineWidth() { return _lineWidth; },
+        set lineWidth(v) { var n = Number(v); if (isFinite(n) && n > 0) { _lineWidth = n; _lumen_canvas2d_set_line_width(nid, n); } },
+        get globalAlpha() { return _globalAlpha; },
+        set globalAlpha(v) { var n = Number(v); if (isFinite(n) && n >= 0 && n <= 1) { _globalAlpha = n; _lumen_canvas2d_set_global_alpha(nid, n); } },
+        fillRect: function(x, y, w, h) { _lumen_canvas2d_fill_rect(nid, +x, +y, +w, +h); },
+        clearRect: function(x, y, w, h) { _lumen_canvas2d_clear_rect(nid, +x, +y, +w, +h); },
+        strokeRect: function(x, y, w, h) { _lumen_canvas2d_stroke_rect(nid, +x, +y, +w, +h); },
+        beginPath: function() { _lumen_canvas2d_begin_path(nid); },
+        moveTo: function(x, y) { _lumen_canvas2d_move_to(nid, +x, +y); },
+        lineTo: function(x, y) { _lumen_canvas2d_line_to(nid, +x, +y); },
+        closePath: function() { _lumen_canvas2d_close_path(nid); },
+        arc: function(cx, cy, r, sa, ea, ccw) { _lumen_canvas2d_arc(nid, +cx, +cy, +r, +sa, +ea, !!ccw); },
+        fill: function() { _lumen_canvas2d_fill(nid); },
+        stroke: function() { _lumen_canvas2d_stroke(nid); },
+        rect: function(x, y, w, h) {
+            this.moveTo(x, y); this.lineTo(x + w, y);
+            this.lineTo(x + w, y + h); this.lineTo(x, y + h); this.closePath();
+        },
+        ellipse: function(x, y, rx, ry, rot, sa, ea, ccw) {
+            // Phase 0: approximate with a circle of the averaged radius.
+            this.arc(x, y, (Number(rx) + Number(ry)) / 2, sa, ea, ccw);
+        },
+        getImageData: function(x, y, sw, sh) {
+            var raw = _lumen_canvas2d_get_image_data(nid);
+            if (!raw) { return { width: sw|0, height: sh|0, data: new Uint8ClampedArray((sw|0) * (sh|0) * 4) }; }
+            var comma1 = raw.indexOf(','), comma2 = raw.indexOf(',', comma1 + 1);
+            var w = parseInt(raw.substring(0, comma1), 10);
+            var h = parseInt(raw.substring(comma1 + 1, comma2), 10);
+            var hex = raw.substring(comma2 + 1);
+            var len = hex.length >> 1;
+            var arr = new Uint8ClampedArray(len);
+            for (var i = 0; i < len; i++) { arr[i] = parseInt(hex.substr(i * 2, 2), 16); }
+            return { width: w, height: h, data: arr };
+        },
+        // Phase 0 no-ops / stubs (state save/restore, transforms, text, shadows).
+        save: function() {}, restore: function() {},
+        scale: function() {}, rotate: function() {}, translate: function() {},
+        transform: function() {}, setTransform: function() {}, resetTransform: function() {},
+        clip: function() {},
+        putImageData: function() {},
+        drawImage: function() {},
+        fillText: function() {}, strokeText: function() {},
+        measureText: function(t) { var s = String(t == null ? '' : t); return { width: s.length * 8, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; },
+        bezierCurveTo: function() {}, quadraticCurveTo: function() {},
+        arcTo: function() {},
+        setLineDash: function() {}, getLineDash: function() { return []; },
+        isPointInPath: function() { return false; }, isPointInStroke: function() { return false; },
+        createLinearGradient: function() { return { addColorStop: function() {} }; },
+        createRadialGradient: function() { return { addColorStop: function() {} }; },
+        createConicGradient: function() { return { addColorStop: function() {} }; },
+        createPattern: function() { return null; },
+        createImageData: function(w, h) { return { width: w|0, height: h|0, data: new Uint8ClampedArray((w|0) * (h|0) * 4) }; },
+    };
+    // Stub appearance/text properties accepted but not rendered in Phase 0.
+    var _stubProps = ['shadowColor','shadowBlur','shadowOffsetX','shadowOffsetY','font',
+        'textAlign','textBaseline','direction','globalCompositeOperation','lineCap',
+        'lineJoin','miterLimit','lineDashOffset','imageSmoothingEnabled','filter'];
+    for (var _pi = 0; _pi < _stubProps.length; _pi++) {
+        (function(name) {
+            var _val = (name === 'globalCompositeOperation') ? 'source-over'
+                : (name === 'lineCap') ? 'butt'
+                : (name === 'lineJoin') ? 'miter'
+                : (name === 'miterLimit') ? 10
+                : (name === 'imageSmoothingEnabled') ? true
+                : (name === 'font') ? '10px sans-serif'
+                : (name === 'shadowColor') ? 'rgba(0, 0, 0, 0)'
+                : (name === 'filter') ? 'none' : 0;
+            Object.defineProperty(ctx, name, {
+                get: function() { return _val; }, set: function(v) { _val = v; }, configurable: true,
+            });
+        })(_stubProps[_pi]);
+    }
+    return ctx;
+}
+
+// Resolve a canvas element's bitmap width/height (HTML LS §4.12.4 defaults 300×150).
+function _lumen_canvas_dims(nid) {
+    var aw = _lumen_u2n(_lumen_get_attr(nid, 'width'));
+    var ah = _lumen_u2n(_lumen_get_attr(nid, 'height'));
+    var w = (aw !== null) ? (parseInt(aw, 10) || 300) : 300;
+    var h = (ah !== null) ? (parseInt(ah, 10) || 150) : 150;
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    return [w, h];
 }
 
 // ── Element factory ───────────────────────────────────────────────────────────
@@ -2904,6 +3008,60 @@ function _lumen_make_element(nid) {
             if (!r) { return { x:0, y:0, width:0, height:0, top:0, right:0, bottom:0, left:0 }; }
             return { x: r[0], y: r[1], width: r[2], height: r[3],
                      top: r[1], left: r[0], right: r[0]+r[2], bottom: r[1]+r[3] };
+        },
+        // HTMLCanvasElement.getContext (HTML LS §4.12.4). '2d' returns a cached
+        // CanvasRenderingContext2D; 'webgl'/'webgl2' fall through to null (the
+        // functional WebGL path is the separate webgl_canvas shim). Only meaningful
+        // on <canvas>; harmless on other elements (creates an unused buffer at most).
+        getContext: function(contextType) {
+            var t = ('' + (contextType || '')).toLowerCase();
+            if (t === '2d') {
+                if (_canvas2d_ctxs[nid]) return _canvas2d_ctxs[nid];
+                if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
+                var d = _lumen_canvas_dims(nid);
+                _lumen_canvas2d_create(nid, d[0], d[1]);
+                var c2d = _lumen_make_canvas2d_ctx(this, nid);
+                _canvas2d_ctxs[nid] = c2d;
+                return c2d;
+            }
+            return null;
+        },
+        // Privacy: blank data URL defeats canvas pixel-hash fingerprinting (ADR-007).
+        toDataURL: function() {
+            return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        },
+        toBlob: function(cb) { if (typeof cb === 'function') cb(null); },
+        // HTMLCanvasElement.width/height reflect content attributes as unsigned long
+        // (HTML LS §4.12.4). Setting resizes the backing bitmap (which clears it).
+        // Only wired for <canvas>; other elements keep attribute-string semantics
+        // via getAttribute and are unaffected by these accessors.
+        get width() {
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas') {
+                return _lumen_canvas_dims(nid)[0];
+            }
+            var v = _lumen_u2n(_lumen_get_attr(nid, 'width'));
+            return v !== null ? (parseInt(v, 10) || 0) : 0;
+        },
+        set width(v) {
+            var n = parseInt(v, 10); if (!(n >= 0)) n = 0;
+            _lumen_set_attr(nid, 'width', String(n));
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas' && _canvas2d_ctxs[nid]) {
+                var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
+            }
+        },
+        get height() {
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas') {
+                return _lumen_canvas_dims(nid)[1];
+            }
+            var v = _lumen_u2n(_lumen_get_attr(nid, 'height'));
+            return v !== null ? (parseInt(v, 10) || 0) : 0;
+        },
+        set height(v) {
+            var n = parseInt(v, 10); if (!(n >= 0)) n = 0;
+            _lumen_set_attr(nid, 'height', String(n));
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas' && _canvas2d_ctxs[nid]) {
+                var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
+            }
         },
         get offsetWidth()  { var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get offsetHeight() { var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
@@ -8257,6 +8415,7 @@ function _lumen_gc_collect(nids) {
             }
         }
         delete _input_values[nid];
+        delete _canvas2d_ctxs[nid];
     }
 }
 ";
@@ -8313,6 +8472,89 @@ mod tests {
     fn console_log_does_not_crash() {
         let rt = runtime_with_dom(make_doc());
         rt.eval("console.log('hello from test')").unwrap();
+    }
+
+    #[test]
+    fn canvas_get_context_2d_returns_object() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 var ctx = c.getContext('2d');\
+                 ctx !== null && typeof ctx.fillRect === 'function' \
+                   && typeof ctx.beginPath === 'function'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_get_context_2d_caches_same_object() {
+        let rt = runtime_with_dom(make_doc());
+        let same = rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 c.getContext('2d') === c.getContext('2d')",
+            )
+            .unwrap();
+        assert_eq!(same, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_default_dimensions_are_300x150() {
+        let rt = runtime_with_dom(make_doc());
+        let w = rt
+            .eval("var c = document.createElement('canvas'); c.width")
+            .unwrap();
+        let h = rt
+            .eval("var c = document.createElement('canvas'); c.height")
+            .unwrap();
+        assert_eq!(w, lumen_core::JsValue::Number(300.0));
+        assert_eq!(h, lumen_core::JsValue::Number(150.0));
+    }
+
+    #[test]
+    fn canvas_draw_flushes_dirty_buffer() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var c = document.createElement('canvas');\
+             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+             var ctx = c.getContext('2d');\
+             ctx.fillStyle = '#00ff00';\
+             ctx.fillRect(0, 0, 4, 4);",
+        )
+        .unwrap();
+        let updates = rt.flush_canvas_updates();
+        assert_eq!(updates.len(), 1, "one dirty canvas after fillRect");
+        let (_nid, w, h, rgba) = &updates[0];
+        assert_eq!((*w, *h), (4, 4));
+        assert_eq!(rgba[1], 255, "green channel painted");
+    }
+
+    #[test]
+    fn canvas_get_context_webgl_via_2d_shim_is_null() {
+        // The 2D shim's getContext returns null for non-2d types (the functional
+        // WebGL path is the separate webgl_canvas shim, not wired in these tests).
+        let rt = runtime_with_dom(make_doc());
+        let is_null = rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 c.getContext('webgl') === null",
+            )
+            .unwrap();
+        assert_eq!(is_null, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn non_canvas_get_context_2d_is_null() {
+        let rt = runtime_with_dom(make_doc());
+        let is_null = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 d.getContext('2d') === null",
+            )
+            .unwrap();
+        assert_eq!(is_null, lumen_core::JsValue::Bool(true));
     }
 
     #[test]

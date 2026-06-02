@@ -14,6 +14,9 @@ lumen-core = { workspace = true }
 lumen-dom = { workspace = true }
 # lumen-paint: needed for GpuFingerprint (ADR-007 Layer 4, WebGL fingerprinting prevention).
 lumen-paint = { workspace = true }
+# lumen-canvas: needed for Canvas 2D API (canvas.getContext('2d')). Workspace-internal
+# crate (no new external dep) — CPU-rasterized drawing surface wired to JS via canvas2d.rs.
+lumen-canvas = { workspace = true }
 # lumen-css-parser: needed for window.matchMedia() — parses media queries and
 # evaluates them against the current MediaContext (viewport size + user prefs).
 lumen-css-parser = { workspace = true }

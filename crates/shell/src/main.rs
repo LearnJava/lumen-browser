@@ -1107,6 +1107,14 @@ pub(crate) trait PersistentJs {
     /// Calls `_lumen_deliver_popstate(state_json, url)` via `eval_js`.
     #[allow(dead_code)]
     fn fire_popstate(&self, state_json: &str, url: &str);
+    /// Drain dirty `<canvas>` 2D pixel buffers for upload to the renderer.
+    ///
+    /// Returns `(node_index, width, height, rgba)` for every canvas drawn to
+    /// since the last drain. Shell registers each as
+    /// `Renderer::register_image("canvas:{nid}", ...)` and requests a repaint.
+    /// Returns an empty vec when no canvas was drawn (HTML LS §4.12.4).
+    #[allow(dead_code)]
+    fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -1264,6 +1272,9 @@ impl PersistentJs for QuickPersistentJs {
         let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
         // state_json is already valid JSON — embed directly without quoting.
         self.eval_js(&format!("_lumen_deliver_popstate({state_json}, '{escaped}')"));
+    }
+    fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
+        self.rt.flush_canvas_updates()
     }
 }
 
@@ -4232,6 +4243,35 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let wakeup = std::time::Instant::now()
                     + std::time::Duration::from_millis(delay_ms as u64 + 1);
                 event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup));
+            }
+        }
+
+        // ── Canvas 2D: upload dirty <canvas> bitmaps to the renderer ──────────
+        // JS Canvas 2D draws into per-node CPU buffers (lumen_canvas::Context2D).
+        // Each frame we drain the dirty buffers and register them under the same
+        // `canvas:{nid}` key the display list emits, then request a repaint.
+        let canvas_updates = self
+            .js_ctx
+            .as_ref()
+            .map(|js| js.flush_canvas_updates())
+            .unwrap_or_default();
+        if !canvas_updates.is_empty() {
+            if let Some(r) = self.renderer.as_mut() {
+                for (nid, w, h, rgba) in &canvas_updates {
+                    let image = lumen_image::Image {
+                        width: *w,
+                        height: *h,
+                        format: lumen_image::PixelFormat::Rgba8,
+                        data: rgba.clone(),
+                        icc_profile: None,
+                    };
+                    if let Err(e) = r.register_image(format!("canvas:{nid}"), &image) {
+                        eprintln!("Canvas: не зарегистрирован canvas:{nid}: {e}");
+                    }
+                }
+            }
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
             }
         }
 

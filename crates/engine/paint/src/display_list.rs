@@ -3196,6 +3196,66 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             });
             emit_outline(b, out);
         }
+        BoxKind::Canvas { .. } => {
+            // HTML LS §4.12.4: <canvas> is a replaced element. Painter's order:
+            // box-shadows → background → bg-image → border → bitmap → outline.
+            if !is_paint_visible(b) {
+                return;
+            }
+            emit_box_shadows(b, out);
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b, dpr);
+            emit_inset_box_shadows(b, out);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            // Bitmap is uploaded by the shell under `canvas:{node_id}`. Until JS
+            // draws anything the key is unregistered → transparent placeholder.
+            let nid = b.node.index();
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: format!("canvas:{nid}"),
+                alt: String::new(),
+                object_fit: ObjectFit::Fill,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
         BoxKind::Audio { controls, .. } => {
             if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
                 return;
@@ -3691,6 +3751,59 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                 src: img_src,
                 alt: String::new(),
                 object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
+        BoxKind::Canvas { .. } => {
+            // visibility:hidden on <canvas> skips everything (no children).
+            if !is_paint_visible(b) {
+                return;
+            }
+            // Painter's order for replaced element: background → bg-image → border → bitmap.
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b, dpr);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            // Bitmap uploaded by shell under `canvas:{node_id}`; unregistered → transparent.
+            let nid = b.node.index();
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: format!("canvas:{nid}"),
+                alt: String::new(),
+                object_fit: ObjectFit::Fill,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
