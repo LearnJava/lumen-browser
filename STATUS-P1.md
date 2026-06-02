@@ -6,8 +6,7 @@
 
 ## In progress
 
-Task #34: WebGL GLSL shader execution  branch: p1-webgl-glsl-interp
-Next step: implement glsl.rs interpreter module  crates/engine/paint/src/glsl.rs
+_(нет)_
 
 ---
 
@@ -17,14 +16,13 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Roadmap |
 |---|------|----------|--------|---------|
-| 32 | **History / Navigation API runtime completeness.** Дотянуть `history.pushState/replaceState` до обновления URL-бара shell; `popstate` на back/forward через session history; round-trip `history.state`; `history.length`. Типы `PopStateEvent` уже есть (`js/src/dom.rs:2050`) — нужно wiring со стеком навигации shell. | `lumen-js`, `lumen-shell` | M | lumen-plan.md (Phase 3, Navigation/History API runtime) |
-| 33 | **Print PDF inline content rendering** (переназначено от P2 2026-06-02). Сейчас `--print-to-pdf` рендерит геометрию страниц, но содержимое margin-box'ов (@page headers/footers) не печатается — 6.5 помечен «P2 inline content rendering pending». Дотянуть `build_print_display_list` (`paint/src/display_list.rs`) до эмиссии реального текста/inline-контента margin-box'ов в print-DL. | `lumen-paint`, `lumen-shell` | M | lumen-plan.md:192 (задача 6.5) |
-| 34 | **WebGL GLSL shader execution** (переназначено от P2 2026-06-02). `SoftwareWebGl` (`paint/src/webgl.rs`) сейчас заливает фрагмент плоским цветом из последнего `uniform4f` — GLSL не исполняется. Добавить минимальный интерпретатор GLSL ES (vertex: позиция/varyings; fragment: цвет из varyings+uniforms+texture sample), чтобы реальные шейдеры давали корректный результат. | `lumen-paint`, `lumen-js` | L | Phase 4 §7F (сейчас flat color) |
 | 35 | **ICC profile extraction в lumen-image (decode-side)** (переназначено от P2 2026-06-02). Paint-сторона color management (Display-P3/Rec2020) помечена ✅ (3A), но `lumen-image` всегда отдаёт `icc_profile: None` — профиль не извлекается из PNG (`iCCP`) / JPEG (`APP2` multi-segment), поэтому P3-фото рендерятся как sRGB. Извлекать ICC и прокидывать в существующий paint color-management путь. | `lumen-image`, `lumen-paint` | L | lumen-plan.md:2298 / :518 (Color management ICC) |
 
 ---
 
 ## Recent merges
+
+- **p1-webgl-glsl-interp** ✅ 2026-06-02 — WebGL GLSL ES 1.0 интерпретатор (задача #34). Новый модуль `crates/engine/paint/src/glsl.rs`: лексер + рекурсивный парсер GLSL ES 1.0, runtime types (float/vec2/3/4/mat4/sampler2D), операторы ++/--, if/else/for/while, swizzle r/w, mat4×vec4/mat4, built-ins (texture2D, mix, clamp, normalize, dot, cross, тригонометрия, step/smoothstep, fract, reflect, ...). `SoftwareWebGl.draw_arrays` теперь исполняет vertex-shader на каждую вершину (gl_Position + varyings), растеризует с баrycentric-интерполяцией varyings, запускает fragment-shader per-pixel. Новые uniform-методы: uniform1/2/3f, uniform_matrix4fv, uniform1i; texture pipeline (active_texture/bind_texture/tex_image_2d_rgba, averaged-colour sampling). Seed gl_Position из attribute 0 как fallback для backward-compat. Flat-fill fallback при отсутствии program. lumen-paint: 507 lib. lumen-js: 837 тестов. Clippy чист. Без новых зависимостей.
 
 - **p1-print-pdf-margin-boxes** ✅ 2026-06-02 — Print PDF inline content rendering (задача #33). `build_print_display_list` теперь эмитирует `DrawText` для @page margin-box'ов (headers, footers, page numbers). `Page` struct получил `page_box: Option<PageBox>`. `do_print_to_pdf` в shell автоматически строит PageBox с подписью «N / M» на каждой странице через `attach_page_boxes` (Fixed8 measurer, без новых зависимостей). Новая функция `emit_margin_box_text` в display_list.rs — абсолютные координаты страницы (за пределами content-area PushTransform). 3 новых unit-теста. lumen-paint: 495 lib. lumen-shell: 879. Clippy чист. Задача 6.5 → ✅ полностью.
 
