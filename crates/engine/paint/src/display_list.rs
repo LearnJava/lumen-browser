@@ -24,6 +24,7 @@ use lumen_layout::{
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent,
+    ScrollbarWidth,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow,
     TransformStyle,
@@ -579,9 +580,9 @@ pub enum DisplayCommand {
     /// container. Drawn in document-space CSS px, outside the scroll layer so
     /// it does not translate with scrolled content.
     ///
-    /// # CSS: scrollbar-width, scrollbar-color
-    /// P4 wires: `ComputedStyle.scrollbar_width` (thin/auto/none, CSS Scrollbars L1)
-    /// and `ComputedStyle.scrollbar_color` (thumb/track colors) to control appearance.
+    /// Colors and gutter width come from `ComputedStyle.scrollbar_color` /
+    /// `scrollbar_width` (CSS Scrollbars L1). `scrollbar-width: none` suppresses
+    /// this command entirely — the scroll container still scrolls, just invisibly.
     DrawScrollbar {
         /// Full track rectangle (document-space CSS px). Fills the scrollbar gutter.
         track_rect: Rect,
@@ -590,6 +591,10 @@ pub enum DisplayCommand {
         thumb_rect: Rect,
         /// `true` = vertical scrollbar (right edge); `false` = horizontal (bottom edge).
         vertical: bool,
+        /// Thumb fill color in linear-light sRGB [r, g, b, a] (pre-multiplied alpha not used).
+        thumb_color: [f32; 4],
+        /// Track fill color in linear-light sRGB [r, g, b, a].
+        track_color: [f32; 4],
     },
 
     /// Marks a page boundary in a print display list.
@@ -1139,7 +1144,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     content.x, content.y, content.width, content.height,
                 ));
             }
-            DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical } => {
+            DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical, .. } => {
                 out.push_str(&format!(
                     "DrawScrollbar {} track=({:.0},{:.0},{:.0},{:.0}) thumb=({:.0},{:.0},{:.0},{:.0})\n",
                     if *vertical { "vertical" } else { "horizontal" },
@@ -2666,10 +2671,26 @@ fn emit_inset_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 }
 
-/// Default scrollbar gutter width / height in CSS px.
+/// Default scrollbar gutter width for `scrollbar-width: auto` in CSS px.
 const SCROLLBAR_WIDTH: f32 = 12.0;
+/// Scrollbar gutter width for `scrollbar-width: thin` in CSS px.
+const SCROLLBAR_WIDTH_THIN: f32 = 6.0;
 /// Minimum thumb length in CSS px so it stays clickable at large scroll ranges.
 const SCROLLBAR_MIN_THUMB: f32 = 20.0;
+/// Default track color: very light translucent grey.
+const SCROLLBAR_TRACK_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.08];
+/// Default thumb color: semi-transparent dark pill.
+const SCROLLBAR_THUMB_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.38];
+
+/// Convert a CSS `Color` (u8 sRGB) to a linear `[f32; 4]` array for the renderer.
+fn color_u8_to_f32(c: Color) -> [f32; 4] {
+    [
+        c.r as f32 / 255.0,
+        c.g as f32 / 255.0,
+        c.b as f32 / 255.0,
+        c.a as f32 / 255.0,
+    ]
+}
 
 /// Input geometry for `scrollbar_rects`.
 struct ScrollbarInput {
@@ -2688,6 +2709,8 @@ struct ScrollbarInput {
     pub need_v: bool,
     /// Emit horizontal scrollbar when content_w > clip_w.
     pub need_h: bool,
+    /// Scrollbar gutter width/height in CSS px. From `scrollbar-width`: auto=12, thin=6.
+    pub gutter_px: f32,
 }
 
 /// One axis result: `(track_rect, thumb_rect)` in document-space CSS px.
@@ -2698,14 +2721,20 @@ type ScrollbarAxis = Option<(Rect, Rect)>;
 /// Returns `(vertical, horizontal)` where each is `Some((track, thumb))` if the
 /// axis overflows, or `None` if the content fits within the clip rect for that axis.
 fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
+    let g = i.gutter_px;
+    // Minimum thumb length scales with gutter so thin scrollbars stay clickable.
+    let min_thumb = SCROLLBAR_MIN_THUMB.min(g * 2.0).max(g);
+    // Inset from track edge — 2px for auto, 1px for thin.
+    let inset = if g >= 10.0 { 2.0 } else { 1.0 };
+
     let v = if i.need_v && i.content_h > i.clip_h {
         let track = Rect::new(
-            i.clip_x + i.clip_w - SCROLLBAR_WIDTH,
+            i.clip_x + i.clip_w - g,
             i.clip_y,
-            SCROLLBAR_WIDTH,
+            g,
             i.clip_h,
         );
-        let thumb_h = ((i.clip_h / i.content_h) * i.clip_h).max(SCROLLBAR_MIN_THUMB).min(i.clip_h);
+        let thumb_h = ((i.clip_h / i.content_h) * i.clip_h).max(min_thumb).min(i.clip_h);
         let max_scroll = (i.content_h - i.clip_h).max(0.0);
         let thumb_y = if max_scroll > 0.0 {
             i.clip_y + (i.scroll_y / max_scroll) * (i.clip_h - thumb_h)
@@ -2713,9 +2742,9 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
             i.clip_y
         };
         let thumb = Rect::new(
-            track.x + 2.0,
+            track.x + inset,
             thumb_y.clamp(i.clip_y, i.clip_y + i.clip_h - thumb_h),
-            SCROLLBAR_WIDTH - 4.0,
+            g - inset * 2.0,
             thumb_h,
         );
         Some((track, thumb))
@@ -2726,11 +2755,11 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
     let h = if i.need_h && i.content_w > i.clip_w {
         let track = Rect::new(
             i.clip_x,
-            i.clip_y + i.clip_h - SCROLLBAR_WIDTH,
+            i.clip_y + i.clip_h - g,
             i.clip_w,
-            SCROLLBAR_WIDTH,
+            g,
         );
-        let thumb_w = ((i.clip_w / i.content_w) * i.clip_w).max(SCROLLBAR_MIN_THUMB).min(i.clip_w);
+        let thumb_w = ((i.clip_w / i.content_w) * i.clip_w).max(min_thumb).min(i.clip_w);
         let max_scroll = (i.content_w - i.clip_w).max(0.0);
         let thumb_x = if max_scroll > 0.0 {
             i.clip_x + (i.scroll_x / max_scroll) * (i.clip_w - thumb_w)
@@ -2739,9 +2768,9 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
         };
         let thumb = Rect::new(
             thumb_x.clamp(i.clip_x, i.clip_x + i.clip_w - thumb_w),
-            track.y + 2.0,
+            track.y + inset,
             thumb_w,
-            SCROLLBAR_WIDTH - 4.0,
+            g - inset * 2.0,
         );
         Some((track, thumb))
     } else {
@@ -3541,39 +3570,58 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                     out.push(DisplayCommand::PopScrollLayer);
                     // Emit scrollbar track + thumb after the scroll layer so they
                     // render at a fixed position (not translated with scrolled content).
+                    // `scrollbar-width: none` suppresses the visual scrollbar while
+                    // keeping the scroll layer (container still scrolls via keyboard/JS).
                     if let Some((px, py, pw, ph)) = scroll_padding_box {
-                        // Compute content size from children (same as layout's content_height/width).
-                        let content_w = b.children.iter().fold(b.rect.width, |acc, c| {
-                            acc.max(c.rect.x + c.rect.width - b.rect.x)
-                        });
-                        let content_h = b.children.iter().fold(b.rect.height, |acc, c| {
-                            acc.max(c.rect.y + c.rect.height - b.rect.y)
-                        });
-                        let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
-                            clip_x: px,
-                            clip_y: py,
-                            clip_w: pw,
-                            clip_h: ph,
-                            scroll_x: b.scroll_x,
-                            scroll_y: b.scroll_y,
-                            content_w,
-                            content_h,
-                            need_v: is_scroll_y,
-                            need_h: is_scroll_x,
-                        });
-                        if let Some((track, thumb)) = v_bars {
-                            out.push(DisplayCommand::DrawScrollbar {
-                                track_rect: track,
-                                thumb_rect: thumb,
-                                vertical: true,
+                        let gutter_px = match b.style.scrollbar_width {
+                            ScrollbarWidth::Auto => SCROLLBAR_WIDTH,
+                            ScrollbarWidth::Thin => SCROLLBAR_WIDTH_THIN,
+                            ScrollbarWidth::None => 0.0,
+                        };
+                        // Only emit when scrollbar is visible (gutter_px > 0).
+                        if gutter_px > 0.0 {
+                            let (thumb_color, track_color) = match b.style.scrollbar_color {
+                                Some((thumb, track)) => (color_u8_to_f32(thumb), color_u8_to_f32(track)),
+                                None => (SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR),
+                            };
+                            // Compute content size from children (same as layout's content_height/width).
+                            let content_w = b.children.iter().fold(b.rect.width, |acc, c| {
+                                acc.max(c.rect.x + c.rect.width - b.rect.x)
                             });
-                        }
-                        if let Some((track, thumb)) = h_bars {
-                            out.push(DisplayCommand::DrawScrollbar {
-                                track_rect: track,
-                                thumb_rect: thumb,
-                                vertical: false,
+                            let content_h = b.children.iter().fold(b.rect.height, |acc, c| {
+                                acc.max(c.rect.y + c.rect.height - b.rect.y)
                             });
+                            let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
+                                clip_x: px,
+                                clip_y: py,
+                                clip_w: pw,
+                                clip_h: ph,
+                                scroll_x: b.scroll_x,
+                                scroll_y: b.scroll_y,
+                                content_w,
+                                content_h,
+                                need_v: is_scroll_y,
+                                need_h: is_scroll_x,
+                                gutter_px,
+                            });
+                            if let Some((track, thumb)) = v_bars {
+                                out.push(DisplayCommand::DrawScrollbar {
+                                    track_rect: track,
+                                    thumb_rect: thumb,
+                                    vertical: true,
+                                    thumb_color,
+                                    track_color,
+                                });
+                            }
+                            if let Some((track, thumb)) = h_bars {
+                                out.push(DisplayCommand::DrawScrollbar {
+                                    track_rect: track,
+                                    thumb_rect: thumb,
+                                    vertical: false,
+                                    thumb_color,
+                                    track_color,
+                                });
+                            }
                         }
                     }
                 } else {
@@ -8308,7 +8356,7 @@ mod tests {
             .iter()
             .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
             .expect("должен быть вертикальный DrawScrollbar");
-        if let DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical: true } = sb {
+        if let DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical: true, .. } = sb {
             // Track right edge must be at right edge of clip (within padding box).
             assert!(track_rect.width > 0.0, "track width > 0");
             assert!(thumb_rect.height > 0.0, "thumb height > 0");
@@ -8331,10 +8379,74 @@ mod tests {
             track_rect: Rect::new(90.0, 0.0, 12.0, 50.0),
             thumb_rect: Rect::new(92.0, 5.0, 8.0, 20.0),
             vertical: true,
+            thumb_color: SCROLLBAR_THUMB_COLOR,
+            track_color: SCROLLBAR_TRACK_COLOR,
         }];
         let s = serialize_display_list(&dl);
         assert!(s.contains("DrawScrollbar"), "serialization must contain DrawScrollbar");
         assert!(s.contains("vertical"), "serialization must mention orientation");
+    }
+
+    /// `scrollbar-width: none` suppresses DrawScrollbar while keeping scroll layer.
+    #[test]
+    fn scrollbar_width_none_no_draw_scrollbar() {
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-width:none"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let bars = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
+            .count();
+        assert_eq!(bars, 0, "scrollbar-width:none → нет DrawScrollbar");
+        // Scroll layer must still be present so content can scroll.
+        let has_scroll = dl
+            .iter()
+            .any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+        assert!(has_scroll, "scrollbar-width:none → scroll layer должен оставаться");
+    }
+
+    /// `scrollbar-width: thin` emits DrawScrollbar with narrower track (6px gutter).
+    #[test]
+    fn scrollbar_width_thin_narrow_track() {
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-width:thin"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let sb = dl
+            .iter()
+            .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
+            .expect("thin scrollbar must emit DrawScrollbar");
+        if let DisplayCommand::DrawScrollbar { track_rect, .. } = sb {
+            assert!(
+                (track_rect.width - SCROLLBAR_WIDTH_THIN).abs() < 0.5,
+                "thin track width should be ~{} px, got {}",
+                SCROLLBAR_WIDTH_THIN,
+                track_rect.width
+            );
+        }
+    }
+
+    /// `scrollbar-color` wires custom thumb+track colors into DrawScrollbar.
+    #[test]
+    fn scrollbar_color_custom_colors() {
+        // red thumb, blue track
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-color:red blue"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let sb = dl
+            .iter()
+            .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
+            .expect("must emit DrawScrollbar");
+        if let DisplayCommand::DrawScrollbar { thumb_color, track_color, .. } = sb {
+            // Red thumb: r≈1.0, g≈0, b≈0
+            assert!(thumb_color[0] > 0.9, "thumb red channel must be ~1.0");
+            assert!(thumb_color[1] < 0.1, "thumb green channel must be ~0");
+            // Blue track: b≈1.0, r≈0
+            assert!(track_color[2] > 0.9, "track blue channel must be ~1.0");
+            assert!(track_color[0] < 0.1, "track red channel must be ~0");
+        }
     }
 
     /// overflow:hidden does not emit DrawScrollbar (no scroll layer).
