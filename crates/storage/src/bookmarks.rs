@@ -207,6 +207,40 @@ impl Bookmarks {
         Ok(())
     }
 
+    /// Все закладки, отсортированные по папке (ASC), затем по created_at DESC.
+    ///
+    /// Используется UI-панелью менеджера закладок для построения дерева папок
+    /// и списка. Папка с пустой строкой (`""`, корень) сортируется первой.
+    pub fn list_all(&self) -> Result<Vec<Bookmark>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("bookmarks mutex poisoned".into()))?;
+        list_with_query(
+            &conn,
+            "SELECT id, url, title, folder, created_at, note FROM bookmarks
+             ORDER BY folder ASC, created_at DESC",
+            params![],
+        )
+    }
+
+    /// Переместить закладку в другую папку (DnD reorder в UI-панели).
+    ///
+    /// `folder` — новый путь папки (`""` = корень). Если закладки с таким `url`
+    /// нет — no-op. Теги и created_at сохраняются.
+    pub fn set_folder(&self, url: &str, folder: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("bookmarks mutex poisoned".into()))?;
+        conn.execute(
+            "UPDATE bookmarks SET folder = ?2 WHERE url = ?1",
+            params![url, folder],
+        )
+        .map_err(|e| Error::Storage(format!("bookmarks set_folder: {e}")))?;
+        Ok(())
+    }
+
     /// Список закладок в данной папке (точное совпадение строки).
     /// Сортировка по created_at DESC.
     pub fn list_by_folder(&self, folder: &str) -> Result<Vec<Bookmark>> {
@@ -517,6 +551,43 @@ mod tests {
         assert_eq!(got.title, "Главная статья");
         assert_eq!(got.folder, "/Чтение");
         assert!(got.tags.contains(&"русский".to_string()));
+    }
+
+    #[test]
+    fn list_all_sorted_by_folder_then_recency() {
+        let b = make();
+        b.add("https://a/", "A", "/Work", &[], "", 100).unwrap();
+        b.add("https://b/", "B", "/Work", &[], "", 200).unwrap();
+        b.add("https://root/", "Root", "", &[], "", 50).unwrap();
+        b.add("https://c/", "C", "/Personal", &[], "", 300).unwrap();
+        let all = b.list_all().unwrap();
+        let order: Vec<&str> = all.iter().map(|x| x.url.as_str()).collect();
+        // "" (root) first, then /Personal, then /Work; within folder DESC by time.
+        assert_eq!(
+            order,
+            vec!["https://root/", "https://c/", "https://b/", "https://a/"]
+        );
+    }
+
+    #[test]
+    fn set_folder_moves_bookmark() {
+        let b = make();
+        b.add("https://x/", "X", "/Old", &["t".into()], "n", 100).unwrap();
+        b.set_folder("https://x/", "/New").unwrap();
+        let got = b.get("https://x/").unwrap().unwrap();
+        assert_eq!(got.folder, "/New");
+        // Tags, note and created_at survive the move.
+        assert_eq!(got.tags, vec!["t".to_string()]);
+        assert_eq!(got.note, "n");
+        assert_eq!(got.created_at, 100);
+    }
+
+    #[test]
+    fn set_folder_missing_url_noop() {
+        let b = make();
+        // Must not error when the url is absent.
+        b.set_folder("https://nope/", "/X").unwrap();
+        assert_eq!(b.count().unwrap(), 0);
     }
 
     #[test]

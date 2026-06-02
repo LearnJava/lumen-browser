@@ -1847,7 +1847,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
 `crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
-## lumen-shell  (404 symbols)
+## lumen-shell  (418 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2060,6 +2060,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/notification.rs:18` **fn** `show_os_notification` — Show a desktop notification asynchronously
 `crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
+`crates/shell/src/panels/bookmark_panel.rs:95` **struct** `BmEntry` — Lightweight bookmark entry used for panel rendering (loaded from the
+`crates/shell/src/panels/bookmark_panel.rs:109` **struct** `BookmarkPanel` — Bookmark manager panel state
+`crates/shell/src/panels/bookmark_panel.rs:131` **fn** `new` — Create a new (hidden) panel with an empty bookmark list
+`crates/shell/src/panels/bookmark_panel.rs:145` **fn** `toggle` — Flip visibility.  Resets transient state (search focus, drag) when hiding
+`crates/shell/src/panels/bookmark_panel.rs:154` **fn** `set_data` — Replace the cached bookmark list and recompute the folder set
+`crates/shell/src/panels/bookmark_panel.rs:174` **fn** `visible_entries` — Bookmarks visible under the current folder filter and search query, in
+`crates/shell/src/panels/bookmark_panel.rs:191` **fn** `append_search` — Append typed text to the search query (called while `search_active`)
+`crates/shell/src/panels/bookmark_panel.rs:197` **fn** `backspace_search` — Delete the last character of the search query
+`crates/shell/src/panels/bookmark_panel.rs:203` **fn** `begin_drag` — Begin dragging the bookmark with the given id
+`crates/shell/src/panels/bookmark_panel.rs:208` **fn** `take_drag` — Take (and clear) the dragged bookmark id, if a drag is in progress
+`crates/shell/src/panels/bookmark_panel.rs:215` **fn** `scroll_by` — Scroll the bookmark list by `dy` CSS px, clamped to `[0, max]` where
+`crates/shell/src/panels/bookmark_panel.rs:235` **enum** `BookmarkHit` — Result of a click inside the bookmark panel
+`crates/shell/src/panels/bookmark_panel.rs:252` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the panel anchored with its
+`crates/shell/src/panels/bookmark_panel.rs:309` **fn** `build_panel` — Build the display list for the panel anchored at `(ax, ay)` (top-left)
 `crates/shell/src/panels/permission_panel.rs:58` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
 `crates/shell/src/panels/permission_panel.rs:79` **fn** `label` — Short display name for the permission row label
 `crates/shell/src/panels/permission_panel.rs:89` **fn** `icon` — Emoji icon shown to the left of the label
@@ -2254,7 +2268,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/tree.rs:63` **struct** `VisibleRow` — A row item produced by [`visible_order`]
 `crates/shell/src/tabs/tree.rs:82` **fn** `visible_order` — Build the ordered list of visible tabs for tree-style rendering
 
-## lumen-storage  (400 symbols)
+## lumen-storage  (402 symbols)
 
 `crates/storage/src/autofill.rs:17` **struct** `AutofillEntry`
 `crates/storage/src/autofill.rs:25` **struct** `Autofill`
@@ -2283,11 +2297,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/bookmarks.rs:103` **fn** `add` — Добавить или обновить закладку. Если url уже существует —
 `crates/storage/src/bookmarks.rs:162` **fn** `get` — Получить закладку по url. None если нет
 `crates/storage/src/bookmarks.rs:200` **fn** `delete` — Удалить закладку (вместе с тегами благодаря ON DELETE CASCADE)
-`crates/storage/src/bookmarks.rs:212` **fn** `list_by_folder` — Список закладок в данной папке (точное совпадение строки)
-`crates/storage/src/bookmarks.rs:226` **fn** `list_by_tag` — Список закладок с данным тегом. Сортировка по created_at DESC
-`crates/storage/src/bookmarks.rs:243` **fn** `all_tags` — Все уникальные теги в системе (для UI tag-cloud / autocomplete)
-`crates/storage/src/bookmarks.rs:262` **fn** `all_folders` — Все уникальные папки
-`crates/storage/src/bookmarks.rs:283` **fn** `count` — Общее число закладок
+`crates/storage/src/bookmarks.rs:214` **fn** `list_all` — Все закладки, отсортированные по папке (ASC), затем по created_at DESC
+`crates/storage/src/bookmarks.rs:231` **fn** `set_folder` — Переместить закладку в другую папку (DnD reorder в UI-панели)
+`crates/storage/src/bookmarks.rs:246` **fn** `list_by_folder` — Список закладок в данной папке (точное совпадение строки)
+`crates/storage/src/bookmarks.rs:260` **fn** `list_by_tag` — Список закладок с данным тегом. Сортировка по created_at DESC
+`crates/storage/src/bookmarks.rs:277` **fn** `all_tags` — Все уникальные теги в системе (для UI tag-cloud / autocomplete)
+`crates/storage/src/bookmarks.rs:296` **fn** `all_folders` — Все уникальные папки
+`crates/storage/src/bookmarks.rs:317` **fn** `count` — Общее число закладок
 `crates/storage/src/broadcast_channels.rs:24` **struct** `ChannelRegistration`
 `crates/storage/src/broadcast_channels.rs:34` **struct** `BroadcastChannels`
 `crates/storage/src/broadcast_channels.rs:45` **fn** `open`
@@ -2658,4 +2674,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2593 symbols in 20 crates*
+*Total: 2609 symbols in 20 crates*

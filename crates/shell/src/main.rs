@@ -374,6 +374,8 @@ fn run_window_mode(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
+        bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
+        bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1476,6 +1478,10 @@ enum KeyCommand {
     ToggleCookieBannerDismiss,
     /// Показать/скрыть правую боковую панель (Ctrl+Shift+A, 7D.3).
     ToggleSidebar,
+    /// Показать/скрыть менеджер закладок (Ctrl+Shift+O, task #22).
+    ToggleBookmarks,
+    /// Добавить текущую страницу в закладки (Ctrl+D).
+    BookmarkCurrentPage,
     /// Показать/скрыть DevTools JS-консоль (F12, §7E.5).
     DevConsole,
     /// Показать/скрыть DevTools DOM-инспектор (Ctrl+Shift+I, §7E.1).
@@ -1573,6 +1579,12 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyA if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleSidebar)
         }
+        // Ctrl+Shift+O — toggle bookmark manager panel (task #22)
+        KeyCode::KeyO if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleBookmarks)
+        }
+        // Ctrl+D — bookmark the current page
+        KeyCode::KeyD if ctrl_only => Some(KeyCommand::BookmarkCurrentPage),
         // F12 — toggle DevTools JS console (§7E.5)
         KeyCode::F12 if no_mods => Some(KeyCommand::DevConsole),
         // Ctrl+Shift+I — toggle DevTools DOM inspector (§7E.1)
@@ -3112,6 +3124,18 @@ struct Lumen {
     /// the page display list.  When visible, `page_content_width_css()`
     /// subtracts [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
     sidebar: panels::sidebar_panel::SidebarPanel,
+    /// SQLite-backed bookmark store (in-memory for the session).
+    ///
+    /// Backs the bookmark manager panel. `@read-later <url>` omnibox commands and
+    /// `Ctrl+D` (bookmark current page) write here; the panel reads via
+    /// `Bookmarks::list_all` on every refresh.
+    bookmarks: lumen_storage::Bookmarks,
+    /// Bookmark manager panel state (task #22).
+    ///
+    /// Floating overlay anchored under the toolbar. `Ctrl+Shift+O` toggles
+    /// visibility. Folder tree + bookmark list + search + drag-and-drop re-file
+    /// (move bookmark to folder, persisted via `Bookmarks::set_folder`).
+    bookmark_panel: panels::bookmark_panel::BookmarkPanel,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -4368,6 +4392,55 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // Bookmark manager panel (task #22): floating overlay.
+                    if self.bookmark_panel.visible {
+                        let (ax, ay) = self.bookmark_anchor();
+                        if let Some(hit) = panels::bookmark_panel::hit_test(
+                            &self.bookmark_panel,
+                            x_css,
+                            y_css,
+                            ax,
+                            ay,
+                        ) {
+                            use panels::bookmark_panel::BookmarkHit;
+                            match hit {
+                                BookmarkHit::Close => {
+                                    self.bookmark_panel.visible = false;
+                                    self.bookmark_panel.search_active = false;
+                                }
+                                BookmarkHit::FocusSearch => {
+                                    self.bookmark_panel.search_active = true;
+                                }
+                                BookmarkHit::SelectFolder(folder) => {
+                                    self.bookmark_panel.selected_folder = folder;
+                                    self.bookmark_panel.scroll_y = 0.0;
+                                }
+                                BookmarkHit::DeleteBookmark(id) => {
+                                    if let Some(url) = self
+                                        .bookmark_panel
+                                        .entries
+                                        .iter()
+                                        .find(|e| e.id == id)
+                                        .map(|e| e.url.clone())
+                                    {
+                                        let _ = self.bookmarks.delete(&url);
+                                        self.refresh_bookmarks();
+                                    }
+                                }
+                                BookmarkHit::Bookmark(id) => {
+                                    // Begin a potential drag; open vs. re-file is
+                                    // resolved on the matching mouse release.
+                                    self.bookmark_panel.begin_drag(id);
+                                }
+                                BookmarkHit::Empty => {
+                                    self.bookmark_panel.search_active = false;
+                                }
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+
                     // Sidebar web panel (7D.3): right-docked panel.
                     if self.sidebar.visible {
                         let win_w = self.viewport_width_css();
@@ -4496,6 +4569,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 } else {
                     // Released — завершаем drag (если он был).
+                    // Bookmark drag-and-drop: if a bookmark drag is in progress,
+                    // resolve the drop target. Dropping on a folder re-files the
+                    // bookmark; dropping anywhere else opens it (a plain click).
+                    if let Some(id) = self.bookmark_panel.take_drag() {
+                        self.finish_bookmark_drop(id);
+                        self.request_redraw();
+                    }
                     self.scroll_drag = None;
                     // Курсор был «зафиксирован» как Pointer пока тянули
                     // thumb; теперь пересчитаем по hover-точке текущего
@@ -4517,6 +4597,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     } else if lines < 0.0 {
                         self.network_panel.scroll_down(lines.abs().ceil() as usize);
                     }
+                    self.request_redraw();
+                    return;
+                }
+                // Bookmark panel intercepts the wheel while visible: scroll the
+                // bookmark list rather than the page.
+                if self.bookmark_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    // winit: wheel up → lines > 0 → scroll content up (scroll_y -=).
+                    self.bookmark_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
                     self.request_redraw();
                     return;
                 }
@@ -5029,6 +5121,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut ws_cmds);
                 }
 
+                // Bookmark manager panel (task #22): floating overlay anchored
+                // under the toolbar. Drawn above page/other overlays, below the
+                // tab bar.
+                if self.bookmark_panel.visible {
+                    let (ax, ay) = self.bookmark_anchor();
+                    let mut bm_cmds =
+                        panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay);
+                    overlay_buf.append(&mut bm_cmds);
+                }
+
                 // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
                 // Rendered last → always on top of all other overlays.
                 {
@@ -5457,6 +5559,16 @@ impl Lumen {
             return;
         }
 
+        // Bookmark panel search box: when focused, printable input + Backspace +
+        // Esc route to the search query. Modified keys (Ctrl/Cmd) fall through so
+        // global shortcuts (e.g. Ctrl+Shift+O to close) keep working.
+        if self.bookmark_panel.visible
+            && self.bookmark_panel.search_active
+            && self.handle_bookmark_key(code, key_event)
+        {
+            return;
+        }
+
         // Vim keybinding mode: intercept navigation keys in Normal state.
         // In Insert state, PassThrough falls through to the keybinding table.
         if let Some(ref mut vm) = self.vim_mode {
@@ -5680,6 +5792,17 @@ impl Lumen {
                 // Sidebar occupies right PANEL_WIDTH — relayout so main page
                 // content width adjusts accordingly.
                 self.relayout();
+                self.request_redraw();
+            }
+            KeyCommand::ToggleBookmarks => {
+                self.bookmark_panel.toggle();
+                if self.bookmark_panel.visible {
+                    self.refresh_bookmarks();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::BookmarkCurrentPage => {
+                self.bookmark_current_page();
                 self.request_redraw();
             }
             KeyCommand::SetTabContainer(container) => {
@@ -5954,7 +6077,24 @@ impl Lumen {
                     self.notes.push(text);
                 }
                 omnibox::AliasAction::SaveReadLater(url) => {
-                    self.read_later.push(url);
+                    self.read_later.push(url.clone());
+                    // Also persist into the bookmark store under a dedicated
+                    // folder so the bookmark manager panel shows it.
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    let _ = self.bookmarks.add(
+                        &url,
+                        &url,
+                        "/Read Later",
+                        &["read-later".to_owned()],
+                        "",
+                        now,
+                    );
+                    if self.bookmark_panel.visible {
+                        self.refresh_bookmarks();
+                    }
                 }
             }
             return;
@@ -6072,6 +6212,39 @@ impl Lumen {
                     self.scroll_to_active_match();
                     self.request_redraw();
                 }
+            }
+        }
+    }
+
+    /// Handle a key while the bookmark panel search box is focused.
+    ///
+    /// Returns `true` when the key was consumed. Modified keys (Ctrl/Cmd) are
+    /// *not* consumed so global shortcuts continue to work.
+    fn handle_bookmark_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.bookmark_panel.search_active = false;
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace => {
+                self.bookmark_panel.backspace_search();
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if let Some(text) = key_event.text.as_ref()
+                    && !text.is_empty()
+                    && !text.chars().any(char::is_control)
+                {
+                    self.bookmark_panel.append_search(text);
+                    self.request_redraw();
+                    return true;
+                }
+                false
             }
         }
     }
@@ -6305,6 +6478,93 @@ impl Lumen {
             })
             .collect();
         self.workspace_panel.set_workspaces(entries);
+    }
+
+    /// Reload the bookmark list from storage into the panel cache.
+    ///
+    /// Call this after every bookmark mutation (add / delete / move) so the
+    /// panel renders up-to-date rows on the next redraw.
+    fn refresh_bookmarks(&mut self) {
+        let entries = self
+            .bookmarks
+            .list_all()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|b| panels::bookmark_panel::BmEntry {
+                id: b.id,
+                url: b.url,
+                title: b.title,
+                folder: b.folder,
+            })
+            .collect();
+        self.bookmark_panel.set_data(entries);
+    }
+
+    /// Add the current page to bookmarks (Ctrl+D).
+    ///
+    /// No-op when the current page has no URL (e.g. blank tab). The active tab
+    /// title is used when available, otherwise the URL stands in as the title.
+    fn bookmark_current_page(&mut self) {
+        let Some(url) = self.source.url_str().map(str::to_owned) else {
+            return;
+        };
+        let title = self
+            .tab_strip
+            .tabs
+            .get(self.tab_strip.active)
+            .map(|t| t.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| url.clone());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let _ = self.bookmarks.add(&url, &title, "", &[], "", now);
+        if self.bookmark_panel.visible {
+            self.refresh_bookmarks();
+        }
+    }
+
+    /// Top-left anchor of the bookmark panel overlay (just under the tab bar).
+    fn bookmark_anchor(&self) -> (f32, f32) {
+        (8.0, tabs::strip::TAB_BAR_HEIGHT + 4.0)
+    }
+
+    /// Resolve a bookmark drag release: dropping on a folder re-files the
+    /// bookmark (`Bookmarks::set_folder`), dropping elsewhere opens it.
+    fn finish_bookmark_drop(&mut self, id: i64) {
+        let Some(cursor) = self.cursor_position else { return };
+        let dpr = self
+            .renderer
+            .as_ref()
+            .map_or(1.0_f32, |r| r.scale_factor() as f32)
+            .max(1e-6);
+        let x_css = (cursor.x as f32) / dpr;
+        let y_css = (cursor.y as f32) / dpr;
+        let Some(url) = self
+            .bookmark_panel
+            .entries
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.url.clone())
+        else {
+            return;
+        };
+        let (ax, ay) = self.bookmark_anchor();
+        match panels::bookmark_panel::hit_test(&self.bookmark_panel, x_css, y_css, ax, ay) {
+            Some(panels::bookmark_panel::BookmarkHit::SelectFolder(folder)) => {
+                // Re-file: `None` (the "All" row) moves the bookmark to root.
+                let target = folder.unwrap_or_default();
+                let _ = self.bookmarks.set_folder(&url, &target);
+                self.refresh_bookmarks();
+            }
+            _ => {
+                // Released over the same row / list / outside: treat as a click.
+                self.bookmark_panel.visible = false;
+                self.bookmark_panel.search_active = false;
+                self.navigate_to(PageSource::from_arg(Some(&url)));
+            }
+        }
     }
 
     /// Максимальный валидный scroll_y: ничего не скроллим, если контент
