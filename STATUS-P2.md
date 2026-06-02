@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: Command palette (7E.2)  branch: p2-command-palette
-Next step: merge — реализация завершена (`shell/src/panels/command_palette.rs`)
+_(нет)_
 
 ---
 
