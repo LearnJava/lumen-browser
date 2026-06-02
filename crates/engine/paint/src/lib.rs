@@ -9,6 +9,7 @@
 //! на основе TTF-данных; используется в shell для line wrapping при layout.
 
 pub mod atlas;
+pub mod backdrop_cache;
 pub mod compositor;
 pub mod display_list;
 pub mod fallback;
@@ -25,6 +26,7 @@ pub mod webgl;
 pub mod cpu_raster;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
+pub use backdrop_cache::BackdropCache;
 pub use fallback::CURATED_FALLBACK_FAMILIES;
 pub use compositor::{
     BasicLayer, BasicLayerTree, Compositor, CompositorThread, InProcessCompositor, Layer,
@@ -33,9 +35,9 @@ pub use compositor::{
 pub use display_list::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
-    build_display_list_with_anim, build_print_display_list, is_image_set, select_image_set_url,
-    split_at_page_breaks, serialize_display_list, BlendMode, CornerRadii, DisplayCommand,
-    DisplayList,
+    build_display_list_with_anim, build_print_display_list, contains_backdrop_filter,
+    hash_display_list, is_image_set, select_image_set_url, split_at_page_breaks,
+    serialize_display_list, BlendMode, CornerRadii, DisplayCommand, DisplayList,
 };
 pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};

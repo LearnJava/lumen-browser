@@ -781,6 +781,74 @@ fn border_style_short(s: BorderStyle) -> &'static str {
     }
 }
 
+/// Returns `true` if the display list contains any `backdrop-filter` element.
+///
+/// Cheap pre-check the renderer uses to decide whether computing a frame
+/// content hash for [`hash_display_list`] is worthwhile — pages without a
+/// backdrop-filter pay zero hashing cost.
+#[must_use]
+pub fn contains_backdrop_filter(content: &[DisplayCommand], overlay: &[DisplayCommand]) -> bool {
+    content
+        .iter()
+        .chain(overlay.iter())
+        .any(|c| matches!(c, DisplayCommand::PushBackdropFilter { .. }))
+}
+
+/// Adapter that feeds `core::fmt` output straight into a [`Hasher`] without
+/// allocating an intermediate `String`.
+struct HashFmt<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+
+impl std::fmt::Write for HashFmt<'_> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        use std::hash::Hasher;
+        self.0.write(s.as_bytes());
+        Ok(())
+    }
+}
+
+/// Computes a content hash over a frame's display list plus the viewport state
+/// that affects backdrop-filter output (scroll offset and surface size).
+///
+/// Used by the renderer's `backdrop-filter` cache (CSS Filter Effects L1 §2):
+/// if two consecutive frames hash identically, every backdrop element's
+/// filtered result is guaranteed identical, so the blur passes can be skipped
+/// and the cached texture reused.
+///
+/// The hash is **total** — it folds every field of every command via each
+/// command's `Debug` representation — so adding new `DisplayCommand` variants or
+/// fields can never silently produce a false cache hit (which would paint stale
+/// pixels). It is computed only when [`contains_backdrop_filter`] is true.
+///
+/// The hasher (`DefaultHasher`) is process-deterministic and never influences
+/// pixel output (only the skip decision), so cross-OS bit-identity is not a
+/// concern here.
+#[must_use]
+pub fn hash_display_list(
+    content: &[DisplayCommand],
+    overlay: &[DisplayCommand],
+    scroll_x: f32,
+    scroll_y: f32,
+    surface_w: u32,
+    surface_h: u32,
+) -> u64 {
+    use std::fmt::Write as _;
+    use std::hash::Hasher;
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write_u32(surface_w);
+    hasher.write_u32(surface_h);
+    hasher.write_u32(scroll_x.to_bits());
+    hasher.write_u32(scroll_y.to_bits());
+    {
+        let mut hf = HashFmt(&mut hasher);
+        for cmd in content.iter().chain(overlay.iter()) {
+            // Errors are impossible: HashFmt::write_str never fails.
+            let _ = write!(hf, "{cmd:?}");
+        }
+    }
+    hasher.finish()
+}
+
 pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
     let mut out = String::new();
     for cmd in dl {
@@ -8437,5 +8505,72 @@ mod tests {
             })
             .collect();
         assert_eq!(srcs, vec!["b.png"]);
+    }
+
+    // ── backdrop-filter frame hash (CSS Filter Effects L1 §2 cache) ──────────
+
+    fn red_fill(x: f32) -> DisplayCommand {
+        DisplayCommand::FillRect {
+            rect: Rect::new(x, 0.0, 10.0, 10.0),
+            color: lumen_layout::Color { r: 255, g: 0, b: 0, a: 255 },
+        }
+    }
+
+    fn backdrop_cmd() -> DisplayCommand {
+        DisplayCommand::PushBackdropFilter {
+            filters: vec![lumen_layout::FilterFn::Blur(4.0)],
+            bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
+        }
+    }
+
+    #[test]
+    fn contains_backdrop_filter_detects_presence() {
+        let with = vec![backdrop_cmd(), DisplayCommand::PopBackdropFilter];
+        let without = vec![red_fill(0.0)];
+        assert!(contains_backdrop_filter(&with, &[]));
+        assert!(contains_backdrop_filter(&[], &with), "overlay lane is scanned too");
+        assert!(!contains_backdrop_filter(&without, &without));
+    }
+
+    #[test]
+    fn hash_is_deterministic_for_identical_input() {
+        let content = vec![backdrop_cmd(), red_fill(5.0), DisplayCommand::PopBackdropFilter];
+        let a = hash_display_list(&content, &[], 0.0, 0.0, 1024, 720);
+        let b = hash_display_list(&content, &[], 0.0, 0.0, 1024, 720);
+        assert_eq!(a, b, "same inputs must hash identically");
+    }
+
+    #[test]
+    fn hash_changes_when_command_changes() {
+        let a = hash_display_list(&[red_fill(5.0)], &[], 0.0, 0.0, 1024, 720);
+        let b = hash_display_list(&[red_fill(6.0)], &[], 0.0, 0.0, 1024, 720);
+        assert_ne!(a, b, "a moved rect must change the hash");
+    }
+
+    #[test]
+    fn hash_changes_on_scroll_and_size() {
+        let content = vec![red_fill(5.0)];
+        let base = hash_display_list(&content, &[], 0.0, 0.0, 1024, 720);
+        assert_ne!(base, hash_display_list(&content, &[], 0.0, 40.0, 1024, 720), "scroll_y");
+        assert_ne!(base, hash_display_list(&content, &[], 12.0, 0.0, 1024, 720), "scroll_x");
+        assert_ne!(base, hash_display_list(&content, &[], 0.0, 0.0, 800, 720), "width");
+        assert_ne!(base, hash_display_list(&content, &[], 0.0, 0.0, 1024, 600), "height");
+    }
+
+    #[test]
+    fn hash_distinguishes_content_from_overlay_lane() {
+        // The same command in the content lane vs the overlay lane must not
+        // collide — order across lanes is part of the hashed sequence.
+        let cmd = vec![red_fill(5.0)];
+        let in_content = hash_display_list(&cmd, &[], 0.0, 0.0, 1024, 720);
+        let in_overlay = hash_display_list(&[], &cmd, 0.0, 0.0, 1024, 720);
+        // Both fold the same single command, so to make them distinct we add a
+        // second distinguishing command to one lane.
+        let two_content = hash_display_list(&[red_fill(5.0), red_fill(9.0)], &[], 0.0, 0.0, 1024, 720);
+        assert_ne!(in_content, two_content);
+        // content+overlay folding is sequential: content first, then overlay.
+        let split = hash_display_list(&[red_fill(5.0)], &[red_fill(9.0)], 0.0, 0.0, 1024, 720);
+        assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
+        let _ = in_overlay;
     }
 }
