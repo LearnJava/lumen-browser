@@ -1,7 +1,8 @@
 //! DevTools network log panel (§7E.4).
 //!
 //! Captures HTTP request lifecycle events ([`Event::RequestStarted`],
-//! [`Event::RequestCompleted`], [`Event::RequestBlocked`]) and renders a
+//! [`Event::RequestCompleted`], [`Event::RequestBlocked`],
+//! [`Event::RequestFailed`]) and renders a
 //! scrollable bottom overlay showing one row per request: method, status,
 //! timing and URL.  Toggle with `Ctrl+Shift+E` (mirrors Firefox's network
 //! monitor shortcut; `F12` is taken by the JS console).
@@ -41,11 +42,13 @@ const FG_TIME: Color = Color { r: 160, g: 162, b: 170, a: 255 };
 const STATUS_OK: Color = Color { r: 90, g: 200, b: 120, a: 255 };
 /// 3xx redirect.
 const STATUS_REDIRECT: Color = Color { r: 220, g: 190, b: 90, a: 255 };
-/// 4xx / 5xx error, and blocked requests.
+/// 4xx / 5xx error, blocked, and failed requests.
 const STATUS_ERROR: Color = Color { r: 237, g: 90, b: 90, a: 255 };
 /// Pending (no status yet).
 const STATUS_PENDING: Color = Color { r: 140, g: 142, b: 150, a: 255 };
 const BLOCKED_BG: Color = Color { r: 45, g: 20, b: 20, a: 255 };
+/// Row background for network-level failures (DNS/TCP/TLS/read errors).
+const FAILED_BG: Color = Color { r: 40, g: 25, b: 10, a: 255 };
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
@@ -80,11 +83,15 @@ pub struct NetworkEntry {
     pub status: Option<u16>,
     /// `true` when the request was blocked by the content filter (never sent).
     pub blocked: bool,
-    /// Matched filter rule / block reason when [`blocked`] is `true` (e.g. the
-    /// EasyList rule or `"easylist"` source tag). `None` for allowed requests.
-    /// Surfaced by the privacy panel (V5) as the "matched filter" column.
+    /// `true` when the request failed at the network level (DNS/TCP/TLS/read)
+    /// before an HTTP response was received.  Mutually exclusive with
+    /// [`blocked`] — exactly one of `blocked`, `failed`, or a `status` is set.
     ///
     /// [`blocked`]: NetworkEntry::blocked
+    pub failed: bool,
+    /// For blocked requests: the matched filter rule / source tag.
+    /// For failed requests: `"<stage>: <reason>"` (e.g. `"dns: NXDOMAIN"`).
+    /// `None` for pending or completed requests.
     pub reason: Option<String>,
     /// Wall-clock instant the request started (used to compute `duration_ms`).
     start: Instant,
@@ -112,6 +119,7 @@ impl NetworkLog {
             url: url.to_owned(),
             status: None,
             blocked: false,
+            failed: false,
             reason: None,
             start: Instant::now(),
             duration_ms: None,
@@ -127,7 +135,7 @@ impl NetworkLog {
             .entries
             .iter_mut()
             .rev()
-            .find(|e| e.url == url && e.status.is_none() && !e.blocked)
+            .find(|e| e.url == url && e.status.is_none() && !e.blocked && !e.failed)
         {
             entry.status = Some(status);
             entry.duration_ms = Some(entry.start.elapsed().as_millis() as u64);
@@ -137,6 +145,7 @@ impl NetworkLog {
                 url: url.to_owned(),
                 status: Some(status),
                 blocked: false,
+                failed: false,
                 reason: None,
                 start: Instant::now(),
                 duration_ms: Some(0),
@@ -153,11 +162,44 @@ impl NetworkLog {
             url: url.to_owned(),
             status: None,
             blocked: true,
+            failed: false,
             reason: Some(reason.to_owned()),
             start: Instant::now(),
             duration_ms: None,
         });
         self.trim();
+    }
+
+    /// Record a network-level failure for a previously started request.
+    ///
+    /// `stage` is the failure stage string (`"dns"`, `"tcp"`, `"tls"`,
+    /// `"read"`); `reason` is the underlying error message.  Finds the most
+    /// recent pending entry for `url` and marks it as failed.  If no pending
+    /// entry is found (start event missed), a synthetic failed entry is appended.
+    pub fn record_failed(&mut self, url: &str, stage: &str, reason: &str) {
+        let combined = format!("{stage}: {reason}");
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .rev()
+            .find(|e| e.url == url && e.status.is_none() && !e.blocked && !e.failed)
+        {
+            entry.failed = true;
+            entry.duration_ms = Some(entry.start.elapsed().as_millis() as u64);
+            entry.reason = Some(combined);
+        } else {
+            self.entries.push(NetworkEntry {
+                method: "GET".to_owned(),
+                url: url.to_owned(),
+                status: None,
+                blocked: false,
+                failed: true,
+                reason: Some(combined),
+                start: Instant::now(),
+                duration_ms: Some(0),
+            });
+            self.trim();
+        }
     }
 
     /// Clear all recorded requests (call on every top-level navigation).
@@ -216,6 +258,9 @@ impl EventSink for NetworkLogSink {
             }
             Event::RequestBlocked { url, reason, .. } => {
                 guard.record_blocked(url.as_str(), reason.as_str());
+            }
+            Event::RequestFailed { url, stage, reason, .. } => {
+                guard.record_failed(url.as_str(), stage.as_str(), reason.as_str());
             }
             _ => {}
         }
@@ -371,11 +416,16 @@ pub fn build_network_panel(panel: &NetworkPanel, (win_w, win_h): (u32, u32)) -> 
         let row_y = panel_y + HEADER_H + i as f32 * LINE_H;
         let text_y = row_y + (LINE_H - FONT_SIZE) / 2.0;
 
-        // Highlight blocked rows.
+        // Highlight blocked / failed rows.
         if entry.blocked {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(0.0, row_y, panel_w, LINE_H),
                 color: BLOCKED_BG,
+            });
+        } else if entry.failed {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(0.0, row_y, panel_w, LINE_H),
+                color: FAILED_BG,
             });
         }
 
@@ -442,10 +492,18 @@ pub fn build_network_panel(panel: &NetworkPanel, (win_w, win_h): (u32, u32)) -> 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Status text for an entry: `"blocked"`, the numeric code, or `"…"` if pending.
+/// Status text for an entry: `"blocked"`, failure stage, numeric code, or `"…"`.
 fn status_label(entry: &NetworkEntry) -> String {
     if entry.blocked {
         "blocked".to_string()
+    } else if entry.failed {
+        // Show the stage prefix (e.g. "dns", "tcp") — fits the narrow status column.
+        entry
+            .reason
+            .as_deref()
+            .and_then(|r| r.split(':').next())
+            .unwrap_or("err")
+            .to_string()
     } else if let Some(code) = entry.status {
         code.to_string()
     } else {
@@ -453,9 +511,9 @@ fn status_label(entry: &NetworkEntry) -> String {
     }
 }
 
-/// Status colour: green 2xx, amber 3xx, red 4xx/5xx & blocked, grey pending.
+/// Status colour: green 2xx, amber 3xx, red 4xx/5xx & blocked & failed, grey pending.
 fn status_color(entry: &NetworkEntry) -> Color {
-    if entry.blocked {
+    if entry.blocked || entry.failed {
         return STATUS_ERROR;
     }
     match entry.status {
@@ -466,9 +524,9 @@ fn status_color(entry: &NetworkEntry) -> Color {
     }
 }
 
-/// Timing text: `"123 ms"` once completed, `"…"` while pending, `"—"` if blocked.
+/// Timing text: `"123 ms"` once completed, `"…"` while pending, `"—"` if blocked or failed.
 fn timing_label(entry: &NetworkEntry) -> String {
-    if entry.blocked {
+    if entry.blocked || entry.failed {
         "—".to_string()
     } else if let Some(ms) = entry.duration_ms {
         format!("{ms} ms")
@@ -770,20 +828,143 @@ mod tests {
 
     #[test]
     fn status_color_buckets() {
-        let mk = |status: Option<u16>, blocked: bool| NetworkEntry {
+        let mk = |status: Option<u16>, blocked: bool, failed: bool| NetworkEntry {
             method: "GET".into(),
             url: "https://a.com/".into(),
             status,
             blocked,
-            reason: blocked.then(|| "easylist".to_owned()),
+            failed,
+            reason: if blocked {
+                Some("easylist".to_owned())
+            } else if failed {
+                Some("dns: NXDOMAIN".to_owned())
+            } else {
+                None
+            },
             start: Instant::now(),
             duration_ms: None,
         };
-        assert_eq!(status_color(&mk(Some(204), false)), STATUS_OK);
-        assert_eq!(status_color(&mk(Some(301), false)), STATUS_REDIRECT);
-        assert_eq!(status_color(&mk(Some(404), false)), STATUS_ERROR);
-        assert_eq!(status_color(&mk(None, false)), STATUS_PENDING);
-        assert_eq!(status_color(&mk(None, true)), STATUS_ERROR);
+        assert_eq!(status_color(&mk(Some(204), false, false)), STATUS_OK);
+        assert_eq!(status_color(&mk(Some(301), false, false)), STATUS_REDIRECT);
+        assert_eq!(status_color(&mk(Some(404), false, false)), STATUS_ERROR);
+        assert_eq!(status_color(&mk(None, false, false)), STATUS_PENDING);
+        assert_eq!(status_color(&mk(None, true, false)), STATUS_ERROR);
+        assert_eq!(status_color(&mk(None, false, true)), STATUS_ERROR);
+    }
+
+    // ── RequestFailed ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn record_failed_marks_pending_entry() {
+        let mut log = NetworkLog::default();
+        log.record_started("GET", "https://bad.example/");
+        log.record_failed("https://bad.example/", "dns", "NXDOMAIN");
+        assert_eq!(log.len(), 1);
+        let e = &log.entries[0];
+        assert!(e.failed);
+        assert!(!e.blocked);
+        assert!(e.status.is_none());
+        assert_eq!(e.reason.as_deref(), Some("dns: NXDOMAIN"));
+        assert!(e.duration_ms.is_some());
+    }
+
+    #[test]
+    fn record_failed_without_start_synthesizes() {
+        let mut log = NetworkLog::default();
+        log.record_failed("https://orphan.example/", "tcp", "connection refused");
+        assert_eq!(log.len(), 1);
+        let e = &log.entries[0];
+        assert!(e.failed);
+        assert_eq!(e.reason.as_deref(), Some("tcp: connection refused"));
+    }
+
+    #[test]
+    fn record_failed_does_not_clobber_completed() {
+        let mut log = NetworkLog::default();
+        log.record_started("GET", "https://ok.example/");
+        log.record_completed("https://ok.example/", 200);
+        // A stale failed event for the same URL must not touch the completed entry.
+        log.record_failed("https://ok.example/", "read", "timeout");
+        assert_eq!(log.len(), 2);
+        assert_eq!(log.entries[0].status, Some(200));
+        assert!(!log.entries[0].failed);
+        assert!(log.entries[1].failed);
+    }
+
+    #[test]
+    fn sink_records_failed_event() {
+        struct NullSink;
+        impl EventSink for NullSink {
+            fn emit(&self, _: &Event) {}
+        }
+
+        let log = make_log();
+        let sink = NetworkLogSink {
+            inner: Arc::new(NullSink),
+            log: Arc::clone(&log),
+        };
+        sink.emit(&Event::RequestStarted {
+            tab_id: TabId(0),
+            url: url("https://timeout.example/"),
+        });
+        sink.emit(&Event::RequestFailed {
+            tab_id: TabId(0),
+            url: url("https://timeout.example/"),
+            stage: lumen_core::event::RequestStage::Tcp,
+            reason: "connection refused".to_owned(),
+        });
+        let guard = log.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        assert!(guard.entries[0].failed);
+        assert_eq!(guard.entries[0].reason.as_deref(), Some("tcp: connection refused"));
+    }
+
+    #[test]
+    fn build_shows_failed_row() {
+        let log = make_log();
+        {
+            let mut g = log.lock().unwrap();
+            g.record_started("GET", "https://fail.example/");
+            g.record_failed("https://fail.example/", "dns", "NXDOMAIN");
+        }
+        let mut p = NetworkPanel::new(log);
+        p.visible = true;
+        p.refresh();
+        let dl = build_network_panel(&p, (1280, 800));
+        let has_stage = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == "dns")
+        });
+        assert!(has_stage, "must show failure stage in status column");
+    }
+
+    #[test]
+    fn status_label_failed_shows_stage() {
+        let entry = NetworkEntry {
+            method: "GET".into(),
+            url: "https://a.com/".into(),
+            status: None,
+            blocked: false,
+            failed: true,
+            reason: Some("tls: bad cert".to_owned()),
+            start: Instant::now(),
+            duration_ms: Some(5),
+        };
+        assert_eq!(status_label(&entry), "tls");
+    }
+
+    #[test]
+    fn timing_label_failed_is_dash() {
+        let entry = NetworkEntry {
+            method: "GET".into(),
+            url: "https://a.com/".into(),
+            status: None,
+            blocked: false,
+            failed: true,
+            reason: Some("dns: NXDOMAIN".to_owned()),
+            start: Instant::now(),
+            duration_ms: Some(10),
+        };
+        assert_eq!(timing_label(&entry), "—");
     }
 
     #[test]
