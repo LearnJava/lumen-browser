@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: WebDriver BiDi stub (#19)  branch: p2-bidi-stub
+Next step: `lumen --bidi-port N` → TCP listener + WS handshake + `session.new` / `browsingContext.created`  shell/src/bidi/server.rs
 
 ---
 

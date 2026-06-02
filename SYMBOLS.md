@@ -1844,7 +1844,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
 `crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
-## lumen-shell  (399 symbols)
+## lumen-shell  (404 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1872,6 +1872,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/animation_scheduler.rs:54` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
 `crates/shell/src/animation_scheduler.rs:75` **fn** `clear` — Удалить все записи для элементов, которых больше нет в дереве
+`crates/shell/src/bidi/protocol.rs:32` **struct** `BidiState` — Состояние одного BiDi-соединения
+`crates/shell/src/bidi/protocol.rs:43` **fn** `new` — Новое пустое состояние соединения
+`crates/shell/src/bidi/protocol.rs:60` **struct** `DispatchResult` — Результат обработки одной команды
+`crates/shell/src/bidi/protocol.rs:68` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
+`crates/shell/src/bidi/server.rs:21` **fn** `spawn` — Запустить BiDi-сервер на `127.0.0.1:port`. Не блокирует — поток в фоне
 `crates/shell/src/config.rs:45` **fn** `init_global` — Install the process-global fingerprint profile. Idempotent: the first call
 `crates/shell/src/config.rs:51` **fn** `global` — Return the process-global fingerprint profile, or the default if unset
 `crates/shell/src/config.rs:61` **struct** `FingerprintProfile` — User-configurable fingerprint identity (9F.1)
@@ -2650,4 +2655,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2585 symbols in 20 crates*
+*Total: 2590 symbols in 20 crates*

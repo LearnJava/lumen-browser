@@ -9,6 +9,7 @@
 //! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
 //! - `lumen --print-to-pdf <out.pdf> <path-or-url>` — сохранить страницу как PDF (A4).
 //! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
+//! - `lumen --bidi-port <N>` — запустить WebDriver BiDi WebSocket сервер на порту N.
 //! - `lumen --mcp [url]` — MCP-сервер (stdio) для AI-агентов (Claude, Browser Use…).
 //! - `lumen --mcp-port <N> [url]` — MCP-сервер на TCP порту N (отладка через netcat).
 //!
@@ -21,6 +22,7 @@
 
 mod address_bar;
 mod animation_scheduler;
+mod bidi;
 mod config;
 mod deterministic;
 mod devtools;
@@ -170,6 +172,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let (bidi_port, rest_args) = match extract_bidi_port(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Ошибка аргументов: {err}");
+            print_usage();
+            return ExitCode::FAILURE;
+        }
+    };
     let (import_session, rest_args) = match extract_import_session(&rest_args) {
         Ok(r) => r,
         Err(err) => {
@@ -201,6 +211,13 @@ fn main() -> ExitCode {
         && let Err(e) = DevToolsServer::spawn(port)
     {
         eprintln!("Ошибка запуска DevTools на порту {port}: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    if let Some(port) = bidi_port
+        && let Err(e) = bidi::spawn(port)
+    {
+        eprintln!("Ошибка запуска BiDi на порту {port}: {e}");
         return ExitCode::FAILURE;
     }
 
@@ -586,6 +603,7 @@ fn print_usage() {
     eprintln!("  lumen --dump-display-list <path-or-url>         — display list в stdout");
     eprintln!("  lumen --print-to-pdf <out.pdf> <path-or-url>   — сохранить страницу как PDF");
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
+    eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
     eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
     eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
@@ -762,6 +780,24 @@ fn extract_devtools_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), 
         if args[i] == "--devtools-port" {
             i += 1;
             let s = args.get(i).ok_or("--devtools-port требует номер порта")?;
+            port = Some(s.parse::<u16>().map_err(|_| format!("неверный порт: {s}"))?);
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    Ok((port, rest))
+}
+
+/// Извлечь `--bidi-port N` из аргументов, вернуть (port, остальные аргументы).
+fn extract_bidi_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), String> {
+    let mut port: Option<u16> = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--bidi-port" {
+            i += 1;
+            let s = args.get(i).ok_or("--bidi-port требует номер порта")?;
             port = Some(s.parse::<u16>().map_err(|_| format!("неверный порт: {s}"))?);
         } else {
             rest.push(args[i].clone());
