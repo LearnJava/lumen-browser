@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-compression-stream** — CompressionStream / DecompressionStream (WICG Compression Streams Standard)
+branch: p1-compression-stream
+Next step: нативные биндинги в `install_primitives` + JS-шим в `WEB_API_SHIM`  `crates/js/src/dom.rs:1872`
 
 ---
 
