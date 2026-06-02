@@ -207,8 +207,16 @@ fn main() -> ExitCode {
     let blocked_log = Arc::new(std::sync::Mutex::new(
         panels::shields_panel::BlockedLog::default(),
     ));
+    let network_log = Arc::new(std::sync::Mutex::new(
+        devtools::network_panel::NetworkLog::default(),
+    ));
+    // Sink chain: StdoutEventSink → NetworkLogSink → ShieldCountSink.
+    // Each wrapper forwards to its inner sink, so all three observe every event.
     let event_sink: Arc<dyn EventSink> = Arc::new(panels::shields_panel::ShieldCountSink {
-        inner: Arc::new(StdoutEventSink),
+        inner: Arc::new(devtools::network_panel::NetworkLogSink {
+            inner: Arc::new(StdoutEventSink),
+            log: Arc::clone(&network_log),
+        }),
         log: Arc::clone(&blocked_log),
     });
 
@@ -220,7 +228,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, initial_scroll, no_scrollbar, det_mode),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
     }
@@ -230,6 +238,7 @@ fn run_window_mode(
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
     blocked_log: Arc<std::sync::Mutex<panels::shields_panel::BlockedLog>>,
+    network_log: Arc<std::sync::Mutex<devtools::network_panel::NetworkLog>>,
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
     deterministic: bool,
@@ -360,6 +369,7 @@ fn run_window_mode(
         deterministic,
         devtools_console: devtools::console_panel::ConsolePanel::new(),
         dom_inspector: devtools::inspector::DomInspectorPanel::new(),
+        network_panel: devtools::network_panel::NetworkPanel::new(network_log),
         fallbacks_preloaded: false,
     };
     // Restore the previous session only when launched without an explicit page
@@ -1434,6 +1444,8 @@ enum KeyCommand {
     DevConsole,
     /// Показать/скрыть DevTools DOM-инспектор (Ctrl+Shift+I, §7E.1).
     DevInspector,
+    /// Показать/скрыть DevTools панель сети (Ctrl+Shift+E, §7E.4).
+    DevNetwork,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1530,6 +1542,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+I — toggle DevTools DOM inspector (§7E.1)
         KeyCode::KeyI if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::DevInspector)
+        }
+        // Ctrl+Shift+E — toggle DevTools network panel (§7E.4)
+        KeyCode::KeyE if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::DevNetwork)
         }
         _ => None,
     }
@@ -3121,6 +3137,12 @@ struct Lumen {
     /// box-model overlay and clicking pins a node, showing its computed style
     /// in a right-docked side panel. Toggled with `Ctrl+Shift+I`.
     dom_inspector: devtools::inspector::DomInspectorPanel,
+    /// DevTools network log panel (§7E.4).
+    ///
+    /// Shows a live log of HTTP requests (method / status / timing / URL),
+    /// fed by `NetworkLogSink` from the engine's `EventSink`. Bottom overlay,
+    /// toggled with `Ctrl+Shift+E`.
+    network_panel: devtools::network_panel::NetworkPanel,
     /// Whether the curated system-font fallback chain has been preloaded into
     /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
     ///
@@ -3674,6 +3696,9 @@ impl Lumen {
             self.shields.clear_log();
             self.shields.set_domain(domain);
         }
+
+        // Clear the network panel log so each page starts with a fresh request list.
+        self.network_panel.clear_log();
 
         // Update permission panel origin on navigation.
         {
@@ -4444,6 +4469,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
+                // DevTools network panel intercepts the wheel while visible:
+                // scroll the request list instead of the page.
+                if self.network_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    if lines > 0.0 {
+                        self.network_panel.scroll_up(lines.abs().ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.network_panel.scroll_down(lines.abs().ceil() as usize);
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // winit отдаёт два типа дельты:
                 // - LineDelta(cols, lines): mouse wheel notch, нет momentum.
                 // - PixelDelta({x, y}): тачпад, device px, делим на DPR.
@@ -4832,6 +4872,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         con_win_size,
                     );
                     overlay_buf.append(&mut con_cmds);
+                }
+
+                // DevTools network panel: bottom overlay, toggled by Ctrl+Shift+E.
+                if self.network_panel.visible {
+                    self.network_panel.refresh();
+                    let net_win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let mut net_cmds = devtools::network_panel::build_network_panel(
+                        &self.network_panel,
+                        net_win_size,
+                    );
+                    overlay_buf.append(&mut net_cmds);
                 }
 
                 // DevTools DOM inspector: right-docked computed-style side panel.
@@ -5602,6 +5656,10 @@ impl Lumen {
             }
             KeyCommand::DevInspector => {
                 self.dom_inspector.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::DevNetwork => {
+                self.network_panel.toggle();
                 self.request_redraw();
             }
         }

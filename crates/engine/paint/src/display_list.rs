@@ -1140,7 +1140,7 @@ fn blend_mode_name(m: BlendMode) -> &'static str {
 
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
     let mut list = Vec::new();
-    walk(root, &mut list);
+    walk(root, &mut list, 1.0);
     list
 }
 
@@ -1158,7 +1158,7 @@ pub fn build_display_list_with_anim(
     anim: Option<&CompositorAnimFrame>,
 ) -> DisplayList {
     let mut list = Vec::new();
-    walk_with_anim(root, anim, &mut list);
+    walk_with_anim(root, anim, &mut list, 1.0);
     list
 }
 
@@ -1198,10 +1198,22 @@ pub fn build_display_list_ordered(
     tree: &StackingTree,
     order: &PaintOrder,
 ) -> DisplayList {
+    build_display_list_ordered_dpr(root, tree, order, 1.0)
+}
+
+/// Like [`build_display_list_ordered`] but resolves `image-set()` background
+/// variants for the device pixel ratio `dpr` (CSS Images L4 §5). Shell passes
+/// the window scale factor; `build_display_list_ordered` defaults to `1.0`.
+pub fn build_display_list_ordered_dpr(
+    root: &LayoutBox,
+    tree: &StackingTree,
+    order: &PaintOrder,
+    dpr: f32,
+) -> DisplayList {
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None);
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr);
 
     let mut out = Vec::new();
     for (sc_id, phase) in &order.steps {
@@ -1240,10 +1252,22 @@ pub fn build_display_list_ordered_with_anim(
     order: &PaintOrder,
     anim: Option<&CompositorAnimFrame>,
 ) -> DisplayList {
+    build_display_list_ordered_with_anim_dpr(root, tree, order, anim, 1.0)
+}
+
+/// Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
+/// background variants for the device pixel ratio `dpr` (CSS Images L4 §5).
+pub fn build_display_list_ordered_with_anim_dpr(
+    root: &LayoutBox,
+    tree: &StackingTree,
+    order: &PaintOrder,
+    anim: Option<&CompositorAnimFrame>,
+    dpr: f32,
+) -> DisplayList {
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim);
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr);
 
     let mut out = Vec::new();
     for (sc_id, phase) in &order.steps {
@@ -1286,7 +1310,7 @@ pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
             let dy = frag.page_y_offset - frag.layout_box.rect.y;
             let matrix = Mat4::translation_2d(0.0, dy);
             cmds.push(DisplayCommand::PushTransform { matrix });
-            walk(&frag.layout_box, &mut cmds);
+            walk(&frag.layout_box, &mut cmds, 1.0);
             cmds.push(DisplayCommand::PopTransform);
         }
     }
@@ -1748,6 +1772,7 @@ fn fill_buckets(
     buckets: &mut [ScBucket],
     is_sc_root: bool,
     anim: Option<&CompositorAnimFrame>,
+    dpr: f32,
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
     let (pre_ops, post_ops) = box_layer_ops(b, ov);
@@ -1755,7 +1780,7 @@ fn fill_buckets(
     if is_sc_root {
         let bucket = &mut buckets[current_sc.0 as usize];
         bucket.pre.extend(pre_ops);
-        emit_box_self(b, &mut bucket.root_bg);
+        emit_box_self(b, &mut bucket.root_bg, dpr);
         // `post` эмитится в фазе InlineContent после descendants — заполним
         // его сейчас, чтобы не повторно вычислять триггеры.
         bucket.post.extend(post_ops);
@@ -1766,9 +1791,9 @@ fn fill_buckets(
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr);
             }
         }
     } else {
@@ -1777,7 +1802,7 @@ fn fill_buckets(
         // триггерят SC сами, до сюда не дойдут с не-пустым pre_ops).
         let bucket = &mut buckets[current_sc.0 as usize];
         bucket.contents.extend(pre_ops);
-        emit_box_self(b, &mut bucket.contents);
+        emit_box_self(b, &mut bucket.contents, dpr);
 
         for child in &b.children {
             let child_creates_sc =
@@ -1785,9 +1810,9 @@ fn fill_buckets(
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr);
             }
         }
 
@@ -2011,15 +2036,187 @@ fn background_origin_rect(b: &LayoutBox, origin: BackgroundOrigin) -> Rect {
     background_clip_rect(b, origin_to_clip(origin))
 }
 
+/// ASCII case-insensitive `starts_with`.
+fn starts_with_ci(s: &str, prefix: &str) -> bool {
+    s.len() >= prefix.len() && s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+/// CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
+///
+/// Used by [`emit_background_layer`] to decide whether to run resolution
+/// selection via [`select_image_set_url`] before emitting a `DrawBackgroundImage`.
+#[must_use]
+pub fn is_image_set(value: &str) -> bool {
+    let v = value.trim_start();
+    starts_with_ci(v, "image-set(") || starts_with_ci(v, "-webkit-image-set(")
+}
+
+/// Strips an outer `image-set( … )` / `-webkit-image-set( … )` wrapper,
+/// returning the comma-separated option list. `None` if `s` is not wrapped.
+fn strip_image_set_wrapper(s: &str) -> Option<&str> {
+    if !s.ends_with(')') {
+        return None;
+    }
+    for prefix in ["image-set(", "-webkit-image-set("] {
+        if starts_with_ci(s, prefix) {
+            return Some(&s[prefix.len()..s.len() - 1]);
+        }
+    }
+    None
+}
+
+/// Splits `s` on top-level commas — commas inside `(…)` or quotes are ignored.
+/// Each returned slice is a subslice of `s` (no allocation of contents). Needed
+/// because `url(data:…,…)` and function values may contain literal commas.
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let bytes = s.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match in_quote {
+            Some(q) => {
+                if c == q {
+                    in_quote = None;
+                }
+            }
+            None => match c {
+                b'"' | b'\'' => in_quote = Some(c),
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b',' if depth == 0 => {
+                    parts.push(&s[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
+/// Strips matching surrounding single/double quotes from `s` (if present).
+fn strip_quotes(s: &str) -> &str {
+    let s = s.trim();
+    let b = s.as_bytes();
+    if b.len() >= 2 && (b[0] == b'"' || b[0] == b'\'') && b[b.len() - 1] == b[0] {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+/// Parses a CSS `<resolution>` token (first whitespace-separated token of
+/// `rest`) into device-pixel-ratio units (dppx). Supports `x` / `dppx`
+/// (1× = 1 dppx), `dpi` (÷96), `dpcm` (×2.54/96). `None` if not a resolution.
+fn parse_resolution(rest: &str) -> Option<f32> {
+    let tok = rest.split_whitespace().next()?;
+    let lower = tok.to_ascii_lowercase();
+    let (num_str, factor) = if let Some(n) = lower.strip_suffix("dppx") {
+        (n, 1.0)
+    } else if let Some(n) = lower.strip_suffix("dpcm") {
+        (n, 2.54 / 96.0)
+    } else if let Some(n) = lower.strip_suffix("dpi") {
+        (n, 1.0 / 96.0)
+    } else if let Some(n) = lower.strip_suffix('x') {
+        (n, 1.0)
+    } else {
+        return None;
+    };
+    let v: f32 = num_str.trim().parse().ok()?;
+    Some(v * factor)
+}
+
+/// Parses one `image-set()` option `<url-or-string> [<resolution>]` into a
+/// `(url, resolution_dppx)` pair. URL is returned with the `url(…)` wrapper
+/// and any surrounding quotes stripped (a subslice of `opt`). Missing
+/// resolution defaults to `1.0` (1×).
+fn parse_image_set_option(opt: &str) -> (&str, f32) {
+    let opt = opt.trim();
+    let bytes = opt.as_bytes();
+    let (url, rest): (&str, &str) = if starts_with_ci(opt, "url(") {
+        if let Some(close) = opt.find(')') {
+            (strip_quotes(opt[4..close].trim()), opt[close + 1..].trim_start())
+        } else {
+            (strip_quotes(opt[4..].trim()), "")
+        }
+    } else if bytes.first() == Some(&b'"') || bytes.first() == Some(&b'\'') {
+        let q = bytes[0] as char;
+        if let Some(rel) = opt[1..].find(q) {
+            (&opt[1..1 + rel], opt[1 + rel + 1..].trim_start())
+        } else {
+            (&opt[1..], "")
+        }
+    } else {
+        match opt.find(char::is_whitespace) {
+            Some(sp) => (&opt[..sp], opt[sp..].trim_start()),
+            None => (opt, ""),
+        }
+    };
+    (url, parse_resolution(rest).unwrap_or(1.0))
+}
+
+/// CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`.
+///
+/// Parses an `image-set( <option># )` expression where each option is
+/// `<url-or-string> [<resolution>]`. Resolution defaults to `1x`. Supported
+/// resolution units: `x` / `dppx` (device pixel ratio), `dpi`, `dpcm`.
+///
+/// Returns the URL (with `url(…)` wrapper and surrounding quotes stripped)
+/// whose resolution is closest to `dpr`; ties prefer the higher resolution
+/// (sharper asset). If `value` is not an `image-set()` expression the whole
+/// trimmed value is treated as a single 1× option, so plain URLs pass through
+/// unchanged. Returns `""` when no candidate can be parsed.
+///
+/// The result is a subslice of `value` — no allocation.
+#[must_use]
+pub fn select_image_set_url(value: &str, dpr: f32) -> &str {
+    let trimmed = value.trim();
+    let inner = strip_image_set_wrapper(trimmed).unwrap_or(trimmed);
+
+    let mut best: Option<(&str, f32)> = None;
+    for opt in split_top_level_commas(inner) {
+        let opt = opt.trim();
+        if opt.is_empty() {
+            continue;
+        }
+        let (url, res) = parse_image_set_option(opt);
+        if url.is_empty() {
+            continue;
+        }
+        let better = match best {
+            None => true,
+            Some((_, bres)) => {
+                let d = (res - dpr).abs();
+                let bd = (bres - dpr).abs();
+                d < bd || (d == bd && res > bres)
+            }
+        };
+        if better {
+            best = Some((url, res));
+        }
+    }
+    best.map_or("", |(u, _)| u)
+}
+
 /// Эмитит одну background-layer команду.
 ///
 /// CSS Compositing L1 §8.3: если `layer.blend_mode != Normal`, оборачивает
 /// draw-команду в PushBlendMode/PopBlendMode. Слои рисуются снизу вверх,
 /// каждый с указанным blend mode относительно уже нарисованных слоёв ниже.
+///
+/// `dpr` — device pixel ratio, передаётся в [`select_image_set_url`] для
+/// выбора варианта `image-set()` (CSS Images L4 §5).
 fn emit_background_layer(
     out: &mut Vec<DisplayCommand>,
     b: &LayoutBox,
     layer: &BackgroundLayer,
+    dpr: f32,
 ) {
     let clip = background_clip_rect(b, layer.clip);
     if clip.width <= 0.0 || clip.height <= 0.0 {
@@ -2034,15 +2231,26 @@ fn emit_background_layer(
     }
     match &layer.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
-            out.push(DisplayCommand::DrawBackgroundImage {
-                rect: clip,
-                origin_rect: origin,
-                src: src.clone(),
-                size: layer.size,
-                position: layer.position,
-                repeat: layer.repeat,
-                image_rendering: b.style.image_rendering,
-            });
+            // CSS: image-set — resolve image-set() to the best URL for the
+            // current device pixel ratio; plain urls pass through unchanged.
+            // P4 wires parsing: keep the raw `image-set(…)` string in
+            // BackgroundImage::Url so this resolution triggers (CSS Images L4 §5).
+            let resolved = if is_image_set(src) {
+                select_image_set_url(src, dpr)
+            } else {
+                src.as_str()
+            };
+            if !resolved.is_empty() {
+                out.push(DisplayCommand::DrawBackgroundImage {
+                    rect: clip,
+                    origin_rect: origin,
+                    src: resolved.to_string(),
+                    size: layer.size,
+                    position: layer.position,
+                    repeat: layer.repeat,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
         }
         BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
             out.push(DisplayCommand::DrawLinearGradient {
@@ -2085,10 +2293,10 @@ fn emit_background_layer(
 /// CSS Backgrounds L3 §3: слои рисуются снизу вверх — последний в списке (Vec)
 /// рисуется первым (самый нижний), первый в списке — последним (самый верхний).
 /// Пустых layers → no-op.
-fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
+fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32) {
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
     for layer in b.style.background_layers.iter().rev() {
-        emit_background_layer(out, b, layer);
+        emit_background_layer(out, b, layer, dpr);
     }
 }
 
@@ -2642,7 +2850,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
 
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
-fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     // opacity:0 → whole-subtree invisible (см. is_opacity_subtree_painted).
     // emit_box_self не идёт в children, но self-content тоже skip-аем.
     if !is_opacity_subtree_painted(b) {
@@ -2670,7 +2878,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     }
                 }
             }
-            emit_background_image(out, b);
+            emit_background_image(out, b, dpr);
             emit_inset_box_shadows(b, out);
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
@@ -2730,7 +2938,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     }
                 }
             }
-            emit_background_image(out, b);
+            emit_background_image(out, b, dpr);
             emit_inset_box_shadows(b, out);
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
@@ -2777,7 +2985,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
-            emit_background_image(out, b);
+            emit_background_image(out, b, dpr);
             emit_inset_box_shadows(b, out);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
@@ -2832,7 +3040,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
-            emit_background_image(out, b);
+            emit_background_image(out, b, dpr);
             emit_inset_box_shadows(b, out);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
@@ -2955,7 +3163,7 @@ fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
     order
 }
 
-fn walk(b: &LayoutBox, out: &mut DisplayList) {
+fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
     // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
     // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
     // skip-ом (отличие от visibility:hidden, где children могут
@@ -3048,7 +3256,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                     }
                 }
-                emit_background_image(out, b);
+                emit_background_image(out, b, dpr);
                 emit_inset_box_shadows(b, out);
                 let s = &b.style;
                 let has_border = s.border_top_style.is_visible()
@@ -3130,11 +3338,11 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             // otherwise document order (flat compositing).
             if establishes_3d_rendering_context(b) {
                 for i in depth_sorted_child_order(&b.children) {
-                    walk(&b.children[i], out);
+                    walk(&b.children[i], out, dpr);
                 }
             } else {
                 for child in &b.children {
-                    walk(child, out);
+                    walk(child, out, dpr);
                 }
             }
             if has_overflow_clip {
@@ -3255,7 +3463,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             // Анонимный контейнер: нет фона/бордера собственного.
             // Просто рекурсивно рисуем всех дочерних (BoxKind::Block).
             for child in &b.children {
-                walk(child, out);
+                walk(child, out, dpr);
             }
         }
         BoxKind::InlineSpace => {}
@@ -3281,7 +3489,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
-            emit_background_image(out, b);
+            emit_background_image(out, b, dpr);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
@@ -3337,7 +3545,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
-            emit_background_image(out, b);
+            emit_background_image(out, b, dpr);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
@@ -3395,7 +3603,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
             }
             for child in &b.children {
-                walk(child, out);
+                walk(child, out, dpr);
             }
         }
         BoxKind::SvgShape { shape, .. } => {
@@ -3701,7 +3909,7 @@ fn emit_wavy_line(
 /// When a node has an animated opacity or transform, the overridden values replace
 /// the style values in the emitted Push* commands. All other paint (FillRect, DrawText,
 /// borders, shadows) uses the base style unchanged.
-fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut DisplayList) {
+fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut DisplayList, dpr: f32) {
     let ov = anim.and_then(|a| a.get(b.node));
 
     // CSS Positioning L3 §6.3 — position:sticky (same as in walk).
@@ -3797,11 +4005,11 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
             // context (preserve-3d); else document order. Mirrors `walk`.
             if establishes_3d_rendering_context(b) {
                 for i in depth_sorted_child_order(&b.children) {
-                    walk_with_anim(&b.children[i], anim, out);
+                    walk_with_anim(&b.children[i], anim, out, dpr);
                 }
             } else {
                 for child in &b.children {
-                    walk_with_anim(child, anim, out);
+                    walk_with_anim(child, anim, out, dpr);
                 }
             }
             if self_visible {
@@ -3816,7 +4024,7 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         }
         BoxKind::InlineBlockRow => {
             for child in &b.children {
-                walk_with_anim(child, anim, out);
+                walk_with_anim(child, anim, out, dpr);
             }
         }
         BoxKind::InlineSpace => {}
@@ -3825,7 +4033,7 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         }
         // Image and other kinds: no compositor-offloadable properties, delegate to walk.
         _ => {
-            walk(b, out);
+            walk(b, out, dpr);
         }
     }
     if is_sticky {
@@ -8078,5 +8286,156 @@ mod tests {
         // Здесь просто smoke-проверяем сериализацию через публичный API.
         let s = serialize_display_list(std::slice::from_ref(&cmd));
         assert!(s.contains("DrawCrossFade"));
+    }
+
+    // ── image-set() (CSS Images L4 §5) ──────────────────────────────────────
+
+    #[test]
+    fn is_image_set_detects_function() {
+        assert!(is_image_set("image-set(\"a.png\" 1x)"));
+        assert!(is_image_set("  IMAGE-SET(url(a.png) 2x)"));
+        assert!(is_image_set("-webkit-image-set(\"a.png\" 1x)"));
+        assert!(!is_image_set("url(a.png)"));
+        assert!(!is_image_set("linear-gradient(red, blue)"));
+        assert!(!is_image_set("https://example.com/image-set.png"));
+    }
+
+    #[test]
+    fn image_set_picks_1x_at_dpr_1() {
+        let v = "image-set(\"a.png\" 1x, \"b.png\" 2x)";
+        assert_eq!(select_image_set_url(v, 1.0), "a.png");
+    }
+
+    #[test]
+    fn image_set_picks_2x_at_dpr_2() {
+        let v = "image-set(\"a.png\" 1x, \"b.png\" 2x)";
+        assert_eq!(select_image_set_url(v, 2.0), "b.png");
+    }
+
+    #[test]
+    fn image_set_picks_closest_resolution() {
+        let v = "image-set(\"a.png\" 1x, \"b.png\" 2x, \"c.png\" 3x)";
+        // dpr 1.4 → |1-1.4|=0.4 wins over |2-1.4|=0.6.
+        assert_eq!(select_image_set_url(v, 1.4), "a.png");
+        // dpr 1.6 → |2-1.6|=0.4 wins over |1-1.6|=0.6.
+        assert_eq!(select_image_set_url(v, 1.6), "b.png");
+        // dpr 5.0 (no exact) → highest available.
+        assert_eq!(select_image_set_url(v, 5.0), "c.png");
+    }
+
+    #[test]
+    fn image_set_tie_prefers_higher_resolution() {
+        let v = "image-set(\"a.png\" 1x, \"b.png\" 2x)";
+        // dpr 1.5 equidistant → prefer sharper (2x).
+        assert_eq!(select_image_set_url(v, 1.5), "b.png");
+    }
+
+    #[test]
+    fn image_set_supports_url_wrapper_and_single_quotes() {
+        let v = "image-set(url(a.png) 1x, url('b.png') 2x)";
+        assert_eq!(select_image_set_url(v, 1.0), "a.png");
+        assert_eq!(select_image_set_url(v, 2.0), "b.png");
+    }
+
+    #[test]
+    fn image_set_default_resolution_is_1x() {
+        // Option with no explicit resolution defaults to 1x.
+        let v = "image-set(\"a.png\", \"b.png\" 2x)";
+        assert_eq!(select_image_set_url(v, 1.0), "a.png");
+    }
+
+    #[test]
+    fn image_set_dppx_dpi_dpcm_units() {
+        let v = "image-set(\"a.png\" 96dpi, \"b.png\" 2dppx)";
+        // 96dpi = 1dppx, 2dppx = 2.
+        assert_eq!(select_image_set_url(v, 1.0), "a.png");
+        assert_eq!(select_image_set_url(v, 2.0), "b.png");
+        let v2 = "image-set(\"x.png\" 1x, \"y.png\" 192dpi)";
+        // 192dpi = 2dppx.
+        assert_eq!(select_image_set_url(v2, 2.0), "y.png");
+    }
+
+    #[test]
+    fn image_set_webkit_prefix() {
+        let v = "-webkit-image-set(url(a.png) 1x, url(b.png) 2x)";
+        assert_eq!(select_image_set_url(v, 2.0), "b.png");
+    }
+
+    #[test]
+    fn image_set_data_uri_with_commas_not_split() {
+        // A data: URI inside url() contains commas — must not split the option.
+        let v = "image-set(url(data:image/png;base64,AAAA) 1x, \"b.png\" 2x)";
+        assert_eq!(select_image_set_url(v, 1.0), "data:image/png;base64,AAAA");
+        assert_eq!(select_image_set_url(v, 2.0), "b.png");
+    }
+
+    #[test]
+    fn image_set_plain_url_passes_through() {
+        // Non image-set value treated as a single 1x option.
+        assert_eq!(select_image_set_url("\"a.png\"", 2.0), "a.png");
+        assert_eq!(select_image_set_url("url(a.png)", 2.0), "a.png");
+    }
+
+    #[test]
+    fn image_set_empty_returns_empty() {
+        assert_eq!(select_image_set_url("image-set()", 1.0), "");
+    }
+
+    /// Recursively overrides the `background-image` of the first box that has a
+    /// background layer with an `image-set(…)` raw string. Mimics what P4 will
+    /// store in `BackgroundImage::Url` once `image-set()` parsing is wired —
+    /// lets us exercise the paint-side resolution without the CSS parser.
+    fn set_first_bg_image_set(b: &mut LayoutBox, value: &str) -> bool {
+        if let Some(layer) = b.style.background_layers.first_mut() {
+            layer.image = BackgroundImage::Url(value.to_string());
+            return true;
+        }
+        for child in &mut b.children {
+            if set_first_bg_image_set(child, value) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn image_set_wired_into_background_layer() {
+        // Start from a real url background so a layer exists, then inject the
+        // image-set string the way P4's parser will once wired.
+        let css = "div { width: 100px; height: 100px; background-image: url(placeholder.png); }";
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(css);
+        let mut tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        assert!(set_first_bg_image_set(&mut tree, "image-set(url(a.png) 1x, url(b.png) 2x)"));
+        // build_display_list defaults to dpr 1.0 → must pick the 1x url.
+        let dl = build_display_list(&tree);
+        let srcs: Vec<&str> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBackgroundImage { src, .. } => Some(src.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(srcs, vec!["a.png"]);
+    }
+
+    #[test]
+    fn image_set_dpr2_builder_picks_2x() {
+        let css = "div { width: 100px; height: 100px; background-image: url(placeholder.png); }";
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(css);
+        let mut tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        assert!(set_first_bg_image_set(&mut tree, "image-set(url(a.png) 1x, url(b.png) 2x)"));
+        let stree = lumen_layout::StackingTree::build(&tree);
+        let order = PaintOrder::from_tree(&stree);
+        let dl = build_display_list_ordered_dpr(&tree, &stree, &order, 2.0);
+        let srcs: Vec<&str> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawBackgroundImage { src, .. } => Some(src.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(srcs, vec!["b.png"]);
     }
 }

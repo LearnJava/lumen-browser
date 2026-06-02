@@ -294,7 +294,7 @@
 | 7E.1 | ✅ **`[P2]` DOM inspector panel** (hover box-model overlay + click computed style) | `shell/src/devtools/inspector.rs` + read из `lumen-dom` | P2: Ctrl+Shift+I toggle — 2026-06-02 |
 | 7E.2 | ⬜ **`[P3+P4]` Computed styles panel** | сериализация `ComputedStyle` | P4: expose ComputedStyle как serializable JSON |
 | 7E.3 | ✅ **`[P3+P2]` Box model overlay** (margin/border/padding overlay) | через display list | P2: overlay primitive в `DisplayCommand` — 2026-05-29 |
-| 7E.4 | ⬜ Network panel (live request log) | `devtools` слушает `NetworkTransport` events | — |
+| 7E.4 | ✅ **`[P2]` Network panel (live request log)** | `shell/src/devtools/network_panel.rs` слушает `EventSink` (RequestStarted/Completed/Blocked) | P2: Ctrl+Shift+E toggle, method/status/timing/URL — 2026-06-02 |
 | 7E.5 | ⬜ JS console (eval в контексте страницы) | `devtools` + `JsRuntime::eval` | — |
 | 8 | ⬜ **`[P3]` Automation API** (§6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md)) | First-class automation surface, фундамент собственных тестов и внешних клиентов | `lumen-driver`, `lumen-mcp-server`, `lumen-bidi-server` |
 | 8A | ✅ **`[P3]` `lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** (Phase 0) | 8A.1–8A.6 ✅; 8A.7 ⬜ (Phase 4) | `crates/driver/` |
