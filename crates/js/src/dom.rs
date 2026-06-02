@@ -106,6 +106,34 @@ pub enum NavigateRequest {
     Reload,
 }
 
+// ─── history URL update ───────────────────────────────────────────────────────
+
+/// Notification emitted by `history.pushState`/`history.replaceState` so the
+/// shell can update the address-bar display URL without triggering a page load.
+///
+/// Queued in `pending_history_url_updates` during JS execution; drained by the
+/// shell in `about_to_wait` to update `display_url` and the navigation stack.
+#[derive(Debug, Clone)]
+pub enum HistoryUrlUpdate {
+    /// `history.pushState` — add a same-document entry to the back-stack and
+    /// update the displayed URL.  `new_state_json` is the serialised state
+    /// object for the new entry (used when going forward back to this point).
+    Push {
+        /// New virtual URL to show in the address bar.
+        url: String,
+        /// Serialised JS state object for this new history entry.
+        new_state_json: String,
+    },
+    /// `history.replaceState` — replace the current entry URL only; do not add
+    /// a new back-stack entry.  `new_state_json` replaces the current state.
+    Replace {
+        /// New virtual URL to show in the address bar.
+        url: String,
+        /// Serialised JS state object replacing the current history entry.
+        new_state_json: String,
+    },
+}
+
 /// A popup window request emitted by JS `window.open(url, target, features)`.
 ///
 /// Captured in `window_open_requests` during script execution and drained by the
@@ -177,8 +205,9 @@ pub fn install_dom_api(
     window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
+    pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -241,6 +270,7 @@ fn install_primitives(
     window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
+    pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -809,6 +839,29 @@ fn install_primitives(
         reg!("_lumen_history_url", move || -> String {
             h.lock().unwrap().url().to_string()
         });
+
+        // Notify shell of pushState/replaceState URL changes so the address bar
+        // can be updated without a page reload.  Called from history.pushState /
+        // history.replaceState in WEB_API_SHIM after the JS HistoryState is updated.
+        let q = Arc::clone(&pending_history_url_updates);
+        reg!(
+            "_lumen_history_push_url",
+            move |url: String, new_state_json: String| {
+                q.lock()
+                    .unwrap()
+                    .push(HistoryUrlUpdate::Push { url, new_state_json });
+            }
+        );
+
+        let q = Arc::clone(&pending_history_url_updates);
+        reg!(
+            "_lumen_history_replace_url",
+            move |url: String, new_state_json: String| {
+                q.lock()
+                    .unwrap()
+                    .push(HistoryUrlUpdate::Replace { url, new_state_json });
+            }
+        );
     }
 
     // ── navigation (location.href =, assign, replace, reload) ────────────────
@@ -3994,6 +4047,22 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
 
 var _popstate_listeners = [];
 
+// Called by the shell (via eval_js) when the user navigates back/forward to a
+// same-document (pushState) history entry.  Updates location and fires popstate.
+// state_json is already valid JSON; url may be empty (means keep current).
+function _lumen_deliver_popstate(state_json, url) {
+    if (url) _lumen_location_update(url);
+    var s;
+    try { s = JSON.parse(state_json); } catch(e) { s = null; }
+    var ev = new PopStateEvent('popstate', { state: s, bubbles: true });
+    if (typeof window.onpopstate === 'function') {
+        try { window.onpopstate(ev); } catch(e) {}
+    }
+    for (var i = 0; i < _popstate_listeners.length; i++) {
+        try { _popstate_listeners[i](ev); } catch(e) {}
+    }
+}
+
 var history = {
     get length()  { return _lumen_history_length(); },
     get state()   {
@@ -4001,13 +4070,21 @@ var history = {
     },
     pushState:    function(state, title, url) {
         var target = String(url !== undefined && url !== null ? url : '');
-        _lumen_history_push(JSON.stringify(state !== undefined ? state : null), target);
-        if (target) _lumen_location_update(target);
+        var new_state_json = JSON.stringify(state !== undefined ? state : null);
+        _lumen_history_push(new_state_json, target);
+        if (target) {
+            _lumen_location_update(target);
+            _lumen_history_push_url(target, new_state_json);
+        }
     },
     replaceState: function(state, title, url) {
         var target = String(url !== undefined && url !== null ? url : '');
-        _lumen_history_replace(JSON.stringify(state !== undefined ? state : null), target);
-        if (target) _lumen_location_update(target);
+        var new_state_json = JSON.stringify(state !== undefined ? state : null);
+        _lumen_history_replace(new_state_json, target);
+        if (target) {
+            _lumen_location_update(target);
+            _lumen_history_replace_url(target, new_state_json);
+        }
     },
     back:    function() { history.go(-1); },
     forward: function() { history.go(1); },
@@ -9855,6 +9932,74 @@ mod tests {
         rt.eval("history.pushState(null, '', '/other')").unwrap();
         // pushState changes URL client-side without a network request
         assert!(rt.take_navigate_request().is_none());
+    }
+
+    #[test]
+    fn push_state_enqueues_history_url_update_push() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("history.pushState({a:1}, '', '/page2')").unwrap();
+        let updates = rt.take_history_url_updates();
+        assert_eq!(updates.len(), 1, "one push update expected");
+        match &updates[0] {
+            HistoryUrlUpdate::Push { url, new_state_json } => {
+                assert_eq!(url, "/page2");
+                assert_eq!(new_state_json, r#"{"a":1}"#);
+            }
+            other => panic!("expected Push, got {other:?}"),
+        }
+        // Second drain: already consumed
+        assert!(rt.take_history_url_updates().is_empty());
+    }
+
+    #[test]
+    fn replace_state_enqueues_history_url_update_replace() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("history.replaceState({b:2}, '', '/new-page')").unwrap();
+        let updates = rt.take_history_url_updates();
+        assert_eq!(updates.len(), 1, "one replace update expected");
+        match &updates[0] {
+            HistoryUrlUpdate::Replace { url, new_state_json } => {
+                assert_eq!(url, "/new-page");
+                assert_eq!(new_state_json, r#"{"b":2}"#);
+            }
+            other => panic!("expected Replace, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn push_state_no_url_does_not_enqueue_update() {
+        let rt = runtime_with_url("https://example.com/");
+        // pushState with null url → no URL update
+        rt.eval("history.pushState({x:3}, '')").unwrap();
+        assert!(rt.take_history_url_updates().is_empty());
+    }
+
+    #[test]
+    fn deliver_popstate_fires_onpopstate() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("var fired = null; window.onpopstate = function(e) { fired = e.state; };").unwrap();
+        rt.eval("_lumen_deliver_popstate('{\"x\":42}', '/page0')").unwrap();
+        let r = rt.eval("fired && fired.x").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn deliver_popstate_updates_location() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("_lumen_deliver_popstate('null', '/restored')").unwrap();
+        // _lumen_location_update updates href (= raw url string).
+        // pathname is only correct for absolute URLs due to _lumen_parse_url limitations.
+        let r = rt.eval("location.href").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("/restored".into()));
+    }
+
+    #[test]
+    fn deliver_popstate_fires_event_listeners() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("var count = 0; window.addEventListener('popstate', function(e) { count += e.state.n; });").unwrap();
+        rt.eval("_lumen_deliver_popstate('{\"n\":5}', '')").unwrap();
+        let r = rt.eval("count").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(5.0));
     }
 
     #[test]

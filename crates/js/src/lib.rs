@@ -30,7 +30,7 @@ use std::sync::{
 
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
-pub use dom::NavigateRequest;
+pub use dom::{HistoryUrlUpdate, NavigateRequest};
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use lumen_core::WebStorage;
 
@@ -136,6 +136,12 @@ pub struct QuickJsRuntime {
     /// drained by `pump_shared_workers()` and delivered to the matching client
     /// `port` via `_lumen_deliver_shared_worker_messages`.
     shared_worker_outbox: shared_worker::SharedWorkerOutbox,
+    /// `history.pushState` / `history.replaceState` URL-update notifications.
+    ///
+    /// Each call to `pushState`/`replaceState` with a non-empty URL appends an
+    /// entry here.  The shell drains via `take_history_url_updates()` and updates
+    /// the address-bar display URL and navigation stack accordingly.
+    pending_history_url_updates: Arc<Mutex<Vec<dom::HistoryUrlUpdate>>>,
 }
 
 struct Inner {
@@ -176,6 +182,7 @@ impl QuickJsRuntime {
             console_messages: Arc::new(Mutex::new(Vec::new())),
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
+            pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -275,6 +282,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.window_open_requests),
                 deterministic_seed,
                 Arc::clone(&self.console_messages),
+                Arc::clone(&self.pending_history_url_updates),
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
@@ -476,6 +484,16 @@ impl QuickJsRuntime {
     /// Must be called before `drop(runtime)` to avoid losing the request.
     pub fn take_navigate_request(&self) -> Option<NavigateRequest> {
         self.nav_out.lock().unwrap().take()
+    }
+
+    /// Drain `history.pushState` / `history.replaceState` URL-update notifications
+    /// queued since the last call.
+    ///
+    /// Returns an empty `Vec` when no pushState/replaceState calls were made.
+    /// Shell drains this in `about_to_wait` to update the address-bar display URL
+    /// and the same-document navigation stack.
+    pub fn take_history_url_updates(&self) -> Vec<dom::HistoryUrlUpdate> {
+        std::mem::take(&mut *self.pending_history_url_updates.lock().unwrap())
     }
 
     /// Returns `true` if JS mutated the DOM since the last call, clearing the flag.
