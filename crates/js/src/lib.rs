@@ -8,6 +8,7 @@ pub mod dom;
 pub mod geolocation;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
+pub mod shared_worker;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod webgl_bindings;
@@ -124,6 +125,12 @@ pub struct QuickJsRuntime {
     /// `broadcast_channel` routes posted messages here. Drained by
     /// `pump_broadcast_channels()` and delivered to the matching JS instance.
     broadcast_channels: broadcast_channel::BroadcastRegistry,
+    /// Outbound queue for this page's `SharedWorker` ports (WHATWG HTML §10.2).
+    ///
+    /// Process-global shared-worker threads push `(port_id, json)` replies here;
+    /// drained by `pump_shared_workers()` and delivered to the matching client
+    /// `port` via `_lumen_deliver_shared_worker_messages`.
+    shared_worker_outbox: shared_worker::SharedWorkerOutbox,
 }
 
 struct Inner {
@@ -163,6 +170,7 @@ impl QuickJsRuntime {
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
+            shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -294,6 +302,14 @@ impl QuickJsRuntime {
                 eprintln!("Worker bindings init failed: {}", e);
             }
 
+            // Install Shared Worker bindings (WHATWG HTML §10.2) — after Worker so
+            // TextDecoder / _object_url_store / atob are available for script resolution.
+            if let Err(e) =
+                shared_worker::install_shared_worker_bindings(&ctx, &self.shared_worker_outbox)
+            {
+                eprintln!("SharedWorker bindings init failed: {}", e);
+            }
+
             // Install Web Notifications API (W3C Notifications API L1) — after DOM so
             // Event, Promise, and queueMicrotask are already defined.
             // Default permission: "denied" (privacy-first; shell can override per origin).
@@ -390,6 +406,31 @@ impl QuickJsRuntime {
         let script = format!(
             "if(typeof _lumen_deliver_broadcast_messages==='function')\
              _lumen_deliver_broadcast_messages({json})"
+        );
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>(script.as_str()).ok();
+        });
+    }
+
+    /// Deliver messages posted by `SharedWorker` threads to this page's ports.
+    ///
+    /// Drains this runtime's shared-worker outbox (filled by process-global
+    /// shared-worker threads in `shared_worker`) and calls
+    /// `_lumen_deliver_shared_worker_messages(msgs)` so each client `port`'s
+    /// `onmessage` / `addEventListener('message', fn)` handlers fire.
+    ///
+    /// Shell must call this on every event-loop tick (alongside `pump_workers()`)
+    /// so that replies from shared workers are delivered promptly.
+    pub fn pump_shared_workers(&self) {
+        let messages = shared_worker::drain_messages(&self.shared_worker_outbox);
+        if messages.is_empty() {
+            return;
+        }
+        let json = build_worker_messages_json(&messages);
+        let script = format!(
+            "if(typeof _lumen_deliver_shared_worker_messages==='function')\
+             _lumen_deliver_shared_worker_messages({json})"
         );
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
