@@ -780,6 +780,427 @@ fn miter_offset(i: usize, m: usize, seg_normals: &[[f32; 2]], half_w: f32, close
     [mx, my]
 }
 
+// ─── Advanced stroke: linecap / linejoin / miterlimit / dasharray ────────────
+
+/// Stroke caps applied at open sub-path endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinecap {
+    /// Flat cap at endpoint (butt).
+    #[default]
+    Butt,
+    /// Semicircular cap.
+    Round,
+    /// Square cap extending half-width past endpoint.
+    Square,
+}
+
+/// Join style at connected segment vertices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinejoin {
+    /// Pointed miter join (clamped by miterlimit).
+    #[default]
+    Miter,
+    /// Circular arc join.
+    Round,
+    /// Flat bevel triangle.
+    Bevel,
+}
+
+/// Parameters for advanced stroke tessellation.
+#[derive(Debug, Clone)]
+pub struct StrokeParams {
+    /// Half of `stroke-width` in px (≥ 0).
+    pub half_width: f32,
+    /// Cap style for open sub-path endpoints.
+    pub linecap: StrokeLinecap,
+    /// Join style at interior vertices.
+    pub linejoin: StrokeLinejoin,
+    /// Miter limit ratio (≥ 1.0). Used only with `Miter` join.
+    pub miterlimit: f32,
+    /// Dash pattern lengths in px, cycled. Empty = solid line.
+    pub dasharray: Vec<f32>,
+    /// Offset into the dash pattern in px.
+    pub dashoffset: f32,
+}
+
+impl Default for StrokeParams {
+    fn default() -> Self {
+        StrokeParams {
+            half_width: 0.5,
+            linecap: StrokeLinecap::Butt,
+            linejoin: StrokeLinejoin::Miter,
+            miterlimit: 4.0,
+            dasharray: Vec::new(),
+            dashoffset: 0.0,
+        }
+    }
+}
+
+/// Apply a dash pattern to a list of contours.
+///
+/// Returns new contours where only the "on" (dash) segments are present.
+/// If `dasharray` is empty, returns the original contours unchanged.
+#[must_use]
+pub fn apply_dash_pattern(
+    contours: &[Vec<[f32; 2]>],
+    dasharray: &[f32],
+    dashoffset: f32,
+) -> Vec<Vec<[f32; 2]>> {
+    if dasharray.is_empty() {
+        return contours.to_vec();
+    }
+    // Total cycle length (dash + gap pairs, cycling the array if odd length).
+    let cycle: f32 = dasharray.iter().sum::<f32>()
+        * if dasharray.len() % 2 == 1 { 2.0 } else { 1.0 };
+    if cycle <= 0.0 {
+        return Vec::new();
+    }
+    let mut result = Vec::new();
+    for contour in contours {
+        let n = contour.len();
+        if n < 2 {
+            continue;
+        }
+        // Detect closed: last ≈ first.
+        let closed = n > 2
+            && (contour[0][0] - contour[n - 1][0]).abs() < 1e-4
+            && (contour[0][1] - contour[n - 1][1]).abs() < 1e-4;
+        // Effective dashoffset: mod by cycle, negated (offset shifts pattern forward).
+        let start_offset = ((-dashoffset) % cycle + cycle) % cycle;
+
+        // Walk along the path, tracking which dash phase we're in.
+        let mut phase_len = start_offset; // remaining length in current dash/gap
+        let mut phase_idx = 0usize;        // index into dasharray
+        // Advance phase to account for start_offset.
+        let mut rem = start_offset;
+        phase_idx = 0;
+        loop {
+            let d = dasharray[phase_idx % dasharray.len()];
+            if rem <= d {
+                phase_len = d - rem;
+                break;
+            }
+            rem -= d;
+            phase_idx += 1;
+        }
+        // phase_idx % 2 == 0 → drawing; odd → gap.
+        let mut drawing = (phase_idx % 2) == 0;
+        let mut current_dash: Vec<[f32; 2]> = Vec::new();
+        let seg_count = if closed { n - 1 } else { n - 1 };
+        for i in 0..seg_count {
+            let a = contour[i];
+            let b = contour[i + 1];
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let seg_len = (dx * dx + dy * dy).sqrt();
+            if seg_len < 1e-6 {
+                continue;
+            }
+            let ux = dx / seg_len;
+            let uy = dy / seg_len;
+            let mut t = 0.0f32; // consumed distance along this segment
+            loop {
+                let remaining_in_seg = seg_len - t;
+                if phase_len >= remaining_in_seg {
+                    // Current phase continues beyond this segment.
+                    if drawing {
+                        if current_dash.is_empty() {
+                            current_dash.push([a[0] + ux * t, a[1] + uy * t]);
+                        }
+                        current_dash.push(b);
+                    }
+                    phase_len -= remaining_in_seg;
+                    break;
+                }
+                // Phase ends within this segment.
+                let end_t = t + phase_len;
+                let end_pt = [a[0] + ux * end_t, a[1] + uy * end_t];
+                if drawing {
+                    if current_dash.is_empty() {
+                        current_dash.push([a[0] + ux * t, a[1] + uy * t]);
+                    }
+                    current_dash.push(end_pt);
+                    if current_dash.len() >= 2 {
+                        result.push(current_dash.clone());
+                    }
+                    current_dash.clear();
+                }
+                t = end_t;
+                drawing = !drawing;
+                phase_idx += 1;
+                phase_len = dasharray[phase_idx % dasharray.len()];
+            }
+        }
+        // Flush last dash.
+        if drawing && current_dash.len() >= 2 {
+            result.push(current_dash);
+        }
+    }
+    result
+}
+
+/// Tessellate strokes with full linecap / linejoin / miterlimit / dasharray support.
+///
+/// Returns flat triangle vertex list (3 `[f32;2]` per triangle).
+#[must_use]
+pub fn tessellate_stroke_ex(contours: &[Vec<[f32; 2]>], params: &StrokeParams) -> Vec<[f32; 2]> {
+    if params.half_width <= 0.0 {
+        return Vec::new();
+    }
+    let dashed = apply_dash_pattern(contours, &params.dasharray, params.dashoffset);
+    let mut tris = Vec::new();
+    for contour in &dashed {
+        stroke_contour_ex(contour, params, &mut tris);
+    }
+    tris
+}
+
+/// Tessellate one polyline with advanced join/cap support.
+fn stroke_contour_ex(pts: &[[f32; 2]], params: &StrokeParams, out: &mut Vec<[f32; 2]>) {
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    let half_w = params.half_width;
+    let closed = n > 2
+        && (pts[0][0] - pts[n - 1][0]).abs() < 1e-4
+        && (pts[0][1] - pts[n - 1][1]).abs() < 1e-4;
+    let wpts = if closed { &pts[..n - 1] } else { pts };
+    let m = wpts.len();
+    if m < 2 {
+        return;
+    }
+    let n_segs = if closed { m } else { m - 1 };
+
+    // Per-segment unit normals (left of travel, Y-down coords).
+    let seg_normals: Vec<[f32; 2]> = (0..n_segs)
+        .map(|i| {
+            let a = wpts[i];
+            let b = wpts[(i + 1) % m];
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+            [dy / len, -dx / len]
+        })
+        .collect();
+
+    // Segment direction vectors (unit).
+    let seg_dirs: Vec<[f32; 2]> = (0..n_segs)
+        .map(|i| {
+            let a = wpts[i];
+            let b = wpts[(i + 1) % m];
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+            [dx / len, dy / len]
+        })
+        .collect();
+
+    // Build per-vertex left/right offsets considering linejoin.
+    // For endpoints of open paths, the offset equals the segment normal × half_w.
+    let mut left_pts: Vec<[f32; 2]> = Vec::with_capacity(m);
+    let mut right_pts: Vec<[f32; 2]> = Vec::with_capacity(m);
+    // join_tris: extra triangles added at joints (round/bevel).
+    let mut join_tris: Vec<(usize, Vec<[f32; 2]>)> = Vec::new();
+
+    for i in 0..m {
+        let p = wpts[i];
+        let has_prev = closed || i > 0;
+        let has_next = closed || i < m - 1;
+
+        if !has_prev || !has_next {
+            // Open endpoint: use adjacent normal.
+            let n = if !has_prev { seg_normals[0] } else { seg_normals[n_segs - 1] };
+            left_pts.push([p[0] + n[0] * half_w, p[1] + n[1] * half_w]);
+            right_pts.push([p[0] - n[0] * half_w, p[1] - n[1] * half_w]);
+        } else {
+            let n_in = seg_normals[(i + n_segs - 1) % n_segs];
+            let n_out = seg_normals[i % n_segs];
+            match params.linejoin {
+                StrokeLinejoin::Miter => {
+                    let ofs = miter_offset_ex(i, m, &seg_normals, half_w, params.miterlimit, closed);
+                    left_pts.push([p[0] + ofs[0], p[1] + ofs[1]]);
+                    right_pts.push([p[0] - ofs[0], p[1] - ofs[1]]);
+                }
+                StrokeLinejoin::Bevel => {
+                    // Use outgoing normal for the main quad; add bevel triangle separately.
+                    left_pts.push([p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w]);
+                    right_pts.push([p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w]);
+                    // Bevel fill triangle: connects incoming and outgoing sides.
+                    let li = [p[0] + n_in[0] * half_w, p[1] + n_in[1] * half_w];
+                    let ri = [p[0] - n_in[0] * half_w, p[1] - n_in[1] * half_w];
+                    let lo = [p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w];
+                    let ro = [p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w];
+                    // Which side is the "outside" of the turn?
+                    let cross = n_in[0] * n_out[1] - n_in[1] * n_out[0];
+                    let extra = if cross > 0.0 {
+                        vec![p, li, lo] // left side bevel
+                    } else {
+                        vec![p, ri, ro] // right side bevel
+                    };
+                    join_tris.push((i, extra));
+                }
+                StrokeLinejoin::Round => {
+                    // Use outgoing normal for main quad; add round fan separately.
+                    left_pts.push([p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w]);
+                    right_pts.push([p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w]);
+                    let extra = round_join_tris(p, n_in, n_out, half_w);
+                    join_tris.push((i, extra));
+                }
+            }
+        }
+    }
+
+    // Emit main segment quads.
+    for i in 0..n_segs {
+        let j = (i + 1) % m;
+        let (l0, r0) = (left_pts[i], right_pts[i]);
+        let (l1, r1) = (left_pts[j], right_pts[j]);
+        out.push(l0); out.push(r0); out.push(l1);
+        out.push(l1); out.push(r0); out.push(r1);
+    }
+
+    // Emit join triangles.
+    for (_, tris) in &join_tris {
+        for t in tris.chunks(3) {
+            if t.len() == 3 {
+                out.push(t[0]); out.push(t[1]); out.push(t[2]);
+            }
+        }
+    }
+
+    // Emit linecap triangles for open sub-paths.
+    if !closed && params.linecap != StrokeLinecap::Butt {
+        // Start cap.
+        let dir0 = seg_dirs[0];
+        let n0 = seg_normals[0];
+        let p0 = wpts[0];
+        emit_cap(p0, n0, [-dir0[0], -dir0[1]], half_w, params.linecap, out);
+        // End cap.
+        let dir_last = seg_dirs[n_segs - 1];
+        let n_last = seg_normals[n_segs - 1];
+        let p_last = wpts[m - 1];
+        emit_cap(p_last, n_last, dir_last, half_w, params.linecap, out);
+    }
+}
+
+/// Emit triangles for a linecap (round or square) at `center` pointing in `dir`.
+fn emit_cap(center: [f32; 2], normal: [f32; 2], dir: [f32; 2], half_w: f32, cap: StrokeLinecap, out: &mut Vec<[f32; 2]>) {
+    let l = [center[0] + normal[0] * half_w, center[1] + normal[1] * half_w];
+    let r = [center[0] - normal[0] * half_w, center[1] - normal[1] * half_w];
+    match cap {
+        StrokeLinecap::Butt => {}
+        StrokeLinecap::Square => {
+            // Extend by half_w in cap direction.
+            let tip_l = [l[0] + dir[0] * half_w, l[1] + dir[1] * half_w];
+            let tip_r = [r[0] + dir[0] * half_w, r[1] + dir[1] * half_w];
+            out.push(l); out.push(r); out.push(tip_l);
+            out.push(tip_l); out.push(r); out.push(tip_r);
+        }
+        StrokeLinecap::Round => {
+            // Semicircle fan from center.
+            const SEGS: usize = 12;
+            // Angle from +normal to -normal going through +dir, step by PI/SEGS.
+            for k in 0..SEGS {
+                let a0 = (k as f32 / SEGS as f32) * PI;
+                let a1 = ((k + 1) as f32 / SEGS as f32) * PI;
+                // Rotate +normal by angle around center.
+                let pt0 = rotate_normal(normal, dir, a0, half_w, center);
+                let pt1 = rotate_normal(normal, dir, a1, half_w, center);
+                out.push(center); out.push(pt0); out.push(pt1);
+            }
+        }
+    }
+}
+
+/// Rotate `normal` toward `dir` by `angle` radians, scaled by `half_w`, offset by `center`.
+#[inline]
+fn rotate_normal(normal: [f32; 2], dir: [f32; 2], angle: f32, half_w: f32, center: [f32; 2]) -> [f32; 2] {
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+    // Rotate `normal` by -angle (right-hand rule in Y-down): new = cos*normal + sin*dir
+    let nx = cos_a * normal[0] + sin_a * dir[0];
+    let ny = cos_a * normal[1] + sin_a * dir[1];
+    [center[0] + nx * half_w, center[1] + ny * half_w]
+}
+
+/// Generate round join triangles (arc from n_in to n_out side).
+fn round_join_tris(p: [f32; 2], n_in: [f32; 2], n_out: [f32; 2], half_w: f32) -> Vec<[f32; 2]> {
+    let cross = n_in[0] * n_out[1] - n_in[1] * n_out[0];
+    // Angle between n_in and n_out (clamped to avoid NaN).
+    let dot = (n_in[0] * n_out[0] + n_in[1] * n_out[1]).clamp(-1.0, 1.0);
+    let angle = dot.acos();
+    if angle < 1e-4 {
+        return Vec::new();
+    }
+    const SEGS: usize = 8;
+    let mut tris = Vec::with_capacity(SEGS * 3);
+    // Choose which side to arc (outside of the turn).
+    let (start_n, sign) = if cross > 0.0 { (n_in, 1.0f32) } else { ([-n_in[0], -n_in[1]], -1.0f32) };
+    let target_n = if cross > 0.0 { n_out } else { [-n_out[0], -n_out[1]] };
+    for k in 0..SEGS {
+        let t0 = k as f32 / SEGS as f32;
+        let t1 = (k + 1) as f32 / SEGS as f32;
+        let pt0 = slerp_normal(start_n, target_n, t0, half_w, p);
+        let pt1 = slerp_normal(start_n, target_n, t1, half_w, p);
+        let _ = sign; // used for direction selection above
+        tris.push(p); tris.push(pt0); tris.push(pt1);
+    }
+    tris
+}
+
+/// Spherical linear interpolation between two unit normals, scaled to half_w, offset by center.
+fn slerp_normal(n0: [f32; 2], n1: [f32; 2], t: f32, half_w: f32, center: [f32; 2]) -> [f32; 2] {
+    let dot = (n0[0] * n1[0] + n0[1] * n1[1]).clamp(-1.0, 1.0);
+    if (1.0 - dot.abs()) < 1e-6 {
+        // Nearly parallel — linear interpolation.
+        let x = n0[0] + t * (n1[0] - n0[0]);
+        let y = n0[1] + t * (n1[1] - n0[1]);
+        let len = (x * x + y * y).sqrt().max(1e-6);
+        return [center[0] + x / len * half_w, center[1] + y / len * half_w];
+    }
+    let angle = dot.acos();
+    let sin_a = angle.sin();
+    let w0 = ((1.0 - t) * angle).sin() / sin_a;
+    let w1 = (t * angle).sin() / sin_a;
+    let nx = w0 * n0[0] + w1 * n1[0];
+    let ny = w0 * n0[1] + w1 * n1[1];
+    [center[0] + nx * half_w, center[1] + ny * half_w]
+}
+
+/// Miter-join offset at vertex `i` with configurable miterlimit.
+fn miter_offset_ex(i: usize, m: usize, seg_normals: &[[f32; 2]], half_w: f32, miterlimit: f32, closed: bool) -> [f32; 2] {
+    let n_segs = seg_normals.len();
+    let has_prev = closed || i > 0;
+    let has_next = closed || i < m - 1;
+    if !has_prev {
+        let n = seg_normals[0];
+        return [n[0] * half_w, n[1] * half_w];
+    }
+    if !has_next {
+        let n = seg_normals[n_segs - 1];
+        return [n[0] * half_w, n[1] * half_w];
+    }
+    let n_in = seg_normals[(i + n_segs - 1) % n_segs];
+    let n_out = seg_normals[i % n_segs];
+    let sx = n_in[0] + n_out[0];
+    let sy = n_in[1] + n_out[1];
+    let denom = sx * n_out[0] + sy * n_out[1];
+    if denom.abs() < 0.05 {
+        return [n_out[0] * half_w, n_out[1] * half_w];
+    }
+    let scale = half_w / denom;
+    let mx = sx * scale;
+    let my = sy * scale;
+    // Miter length = 2 * half_w / sin(theta/2). Limit applied as ratio.
+    let miter_len_sq = mx * mx + my * my;
+    let limit = miterlimit * half_w;
+    if miter_len_sq > limit * limit {
+        return [n_out[0] * half_w, n_out[1] * half_w]; // fall back to bevel
+    }
+    [mx, my]
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

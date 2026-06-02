@@ -20,7 +20,7 @@ use lumen_layout::{
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
-    FormControlKind, SvgShapeKind,
+    FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent,
@@ -3981,12 +3981,14 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             if need_fill || need_stroke {
                 let segs = crate::svg_path::parse_svg_path(d);
                 let contours = crate::svg_path::flatten_path(&segs, 0.5);
-                // CSS: fill-rule (nonzero vs even-odd) — P4 wires when svg_fill_rule is in ComputedStyle.
                 if let Some(fc) = fill_color {
-                    let vertices = crate::svg_path::tessellate_fill(&contours);
+                    // even-odd fill uses same tessellation (GPU nonzero approx for multi-contour).
+                    let vertices = match b.style.svg_fill_rule {
+                        FillRule::NonZero | FillRule::EvenOdd => {
+                            crate::svg_path::tessellate_fill(&contours)
+                        }
+                    };
                     if !vertices.is_empty() {
-                        // Shift path vertices by box origin so path coords are in
-                        // CSS-pixel layout space (same as all other DisplayCommands).
                         let shifted: Vec<[f32; 2]> = vertices
                             .iter()
                             .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
@@ -3994,12 +3996,26 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                         out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
                     }
                 }
-                // CSS: stroke-linecap, stroke-linejoin, stroke-miterlimit — P4 wires.
-                // CSS: stroke-dasharray, stroke-dashoffset — P4 wires.
                 if let Some(sc) = stroke_color
                     && stroke_w > 0.0
                 {
-                    let vertices = crate::svg_path::tessellate_stroke(&contours, stroke_w * 0.5);
+                    let stroke_params = crate::svg_path::StrokeParams {
+                        half_width: stroke_w * 0.5,
+                        linecap: match b.style.svg_stroke_linecap {
+                            StrokeLinecap::Butt   => crate::svg_path::StrokeLinecap::Butt,
+                            StrokeLinecap::Round  => crate::svg_path::StrokeLinecap::Round,
+                            StrokeLinecap::Square => crate::svg_path::StrokeLinecap::Square,
+                        },
+                        linejoin: match b.style.svg_stroke_linejoin {
+                            StrokeLinejoin::Miter => crate::svg_path::StrokeLinejoin::Miter,
+                            StrokeLinejoin::Round => crate::svg_path::StrokeLinejoin::Round,
+                            StrokeLinejoin::Bevel => crate::svg_path::StrokeLinejoin::Bevel,
+                        },
+                        miterlimit: b.style.svg_stroke_miterlimit,
+                        dasharray: b.style.svg_stroke_dasharray.clone(),
+                        dashoffset: b.style.svg_stroke_dashoffset,
+                    };
+                    let vertices = crate::svg_path::tessellate_stroke_ex(&contours, &stroke_params);
                     if !vertices.is_empty() {
                         let shifted: Vec<[f32; 2]> = vertices
                             .iter()

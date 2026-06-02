@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+C6: SVG stroke advanced properties  branch: p2-svg-stroke-advanced
+Next step: add FillRule/StrokeLinecap/StrokeLinejoin enums + ComputedStyle fields  style.rs:2300
 
 ---
 

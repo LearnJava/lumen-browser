@@ -855,6 +855,43 @@ impl SvgPaint {
     }
 }
 
+/// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
+/// Controls how the interior of a shape is determined for overlapping contours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FillRule {
+    /// Nonzero winding rule: count crossings, fill if winding number ≠ 0.
+    #[default]
+    NonZero,
+    /// Even-odd rule: count crossings, fill if count is odd.
+    EvenOdd,
+}
+
+/// SVG §11.4 — `stroke-linecap`. Inherited. Initial: `Butt`.
+/// Shape of the cap at the end of open sub-paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinecap {
+    /// Flat cap exactly at the endpoint (default).
+    #[default]
+    Butt,
+    /// Semicircular cap extending `stroke-width/2` past the endpoint.
+    Round,
+    /// Rectangular cap extending `stroke-width/2` past the endpoint.
+    Square,
+}
+
+/// SVG §11.4 — `stroke-linejoin`. Inherited. Initial: `Miter`.
+/// Shape of join between connected path segments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinejoin {
+    /// Pointed join, bounded by `stroke-miterlimit` (default).
+    #[default]
+    Miter,
+    /// Circular join.
+    Round,
+    /// Flat bevel cut at the join.
+    Bevel,
+}
+
 /// Стиль линии CSS border. None = рамка не отображается (как `display: none`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BorderStyle {
@@ -2308,6 +2345,19 @@ pub struct ComputedStyle {
     pub svg_stroke_opacity: f32,
     /// SVG §11.4 — `stroke-width`. Inherited. In resolved px. Initial: 1.0.
     pub svg_stroke_width: f32,
+    /// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
+    pub svg_fill_rule: FillRule,
+    /// SVG §11.4 — `stroke-linecap`. Inherited. Initial: `Butt`.
+    pub svg_stroke_linecap: StrokeLinecap,
+    /// SVG §11.4 — `stroke-linejoin`. Inherited. Initial: `Miter`.
+    pub svg_stroke_linejoin: StrokeLinejoin,
+    /// SVG §11.4 — `stroke-miterlimit`. Inherited. Range ≥ 1.0. Initial: 4.0.
+    pub svg_stroke_miterlimit: f32,
+    /// SVG §11.4 — `stroke-dasharray`. Inherited. Empty = solid line (none).
+    /// Resolved dash/gap lengths in px, repeated cyclically.
+    pub svg_stroke_dasharray: Vec<f32>,
+    /// SVG §11.4 — `stroke-dashoffset`. Inherited. In resolved px. Initial: 0.0.
+    pub svg_stroke_dashoffset: f32,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -4227,6 +4277,12 @@ impl ComputedStyle {
             svg_stroke: SvgPaint::None,
             svg_stroke_opacity: 1.0,
             svg_stroke_width: 1.0,
+            svg_fill_rule: FillRule::NonZero,
+            svg_stroke_linecap: StrokeLinecap::Butt,
+            svg_stroke_linejoin: StrokeLinejoin::Miter,
+            svg_stroke_miterlimit: 4.0,
+            svg_stroke_dasharray: Vec::new(),
+            svg_stroke_dashoffset: 0.0,
         }
     }
 }
@@ -4502,6 +4558,12 @@ pub fn compute_style(
         svg_stroke: inherited.svg_stroke,
         svg_stroke_opacity: inherited.svg_stroke_opacity,
         svg_stroke_width: inherited.svg_stroke_width,
+        svg_fill_rule: inherited.svg_fill_rule,
+        svg_stroke_linecap: inherited.svg_stroke_linecap,
+        svg_stroke_linejoin: inherited.svg_stroke_linejoin,
+        svg_stroke_miterlimit: inherited.svg_stroke_miterlimit,
+        svg_stroke_dasharray: inherited.svg_stroke_dasharray.clone(),
+        svg_stroke_dashoffset: inherited.svg_stroke_dashoffset,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -10736,6 +10798,62 @@ fn apply_declaration(
                 style.svg_stroke_width = w.max(0.0);
             }
         }
+        "fill-rule" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("evenodd") {
+                style.svg_fill_rule = FillRule::EvenOdd;
+            } else if v.eq_ignore_ascii_case("nonzero") {
+                style.svg_fill_rule = FillRule::NonZero;
+            }
+        }
+        "stroke-linecap" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("round") {
+                style.svg_stroke_linecap = StrokeLinecap::Round;
+            } else if v.eq_ignore_ascii_case("square") {
+                style.svg_stroke_linecap = StrokeLinecap::Square;
+            } else if v.eq_ignore_ascii_case("butt") {
+                style.svg_stroke_linecap = StrokeLinecap::Butt;
+            }
+        }
+        "stroke-linejoin" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("round") {
+                style.svg_stroke_linejoin = StrokeLinejoin::Round;
+            } else if v.eq_ignore_ascii_case("bevel") {
+                style.svg_stroke_linejoin = StrokeLinejoin::Bevel;
+            } else if v.eq_ignore_ascii_case("miter") {
+                style.svg_stroke_linejoin = StrokeLinejoin::Miter;
+            }
+        }
+        "stroke-miterlimit" => {
+            if let Ok(v) = val.trim().parse::<f32>() {
+                if v >= 1.0 {
+                    style.svg_stroke_miterlimit = v;
+                }
+            }
+        }
+        "stroke-dasharray" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.svg_stroke_dasharray = Vec::new();
+            } else {
+                let dashes: Vec<f32> = v
+                    .split(|c: char| c == ',' || c.is_ascii_whitespace())
+                    .filter(|s| !s.is_empty())
+                    .filter_map(|s| resolve_box_length(s, em_basis, viewport, is_quirks))
+                    .filter(|&v| v >= 0.0)
+                    .collect();
+                if !dashes.is_empty() {
+                    style.svg_stroke_dasharray = dashes;
+                }
+            }
+        }
+        "stroke-dashoffset" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.svg_stroke_dashoffset = v;
+            }
+        }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
             // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
@@ -12089,6 +12207,24 @@ fn apply_css_wide_keyword(
         }
         "stroke-width" => {
             style.svg_stroke_width = if inh_only_inherit { inherited.svg_stroke_width } else { init.svg_stroke_width };
+        }
+        "fill-rule" => {
+            style.svg_fill_rule = if inh_only_inherit { inherited.svg_fill_rule } else { init.svg_fill_rule };
+        }
+        "stroke-linecap" => {
+            style.svg_stroke_linecap = if inh_only_inherit { inherited.svg_stroke_linecap } else { init.svg_stroke_linecap };
+        }
+        "stroke-linejoin" => {
+            style.svg_stroke_linejoin = if inh_only_inherit { inherited.svg_stroke_linejoin } else { init.svg_stroke_linejoin };
+        }
+        "stroke-miterlimit" => {
+            style.svg_stroke_miterlimit = if inh_only_inherit { inherited.svg_stroke_miterlimit } else { init.svg_stroke_miterlimit };
+        }
+        "stroke-dasharray" => {
+            style.svg_stroke_dasharray = if inh_only_inherit { inherited.svg_stroke_dasharray.clone() } else { init.svg_stroke_dasharray.clone() };
+        }
+        "stroke-dashoffset" => {
+            style.svg_stroke_dashoffset = if inh_only_inherit { inherited.svg_stroke_dashoffset } else { init.svg_stroke_dashoffset };
         }
         "overflow" => {
             let (x, y) = if inh_only_inherit {

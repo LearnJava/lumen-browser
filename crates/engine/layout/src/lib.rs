@@ -86,7 +86,7 @@ pub use style::{
     PointerEvents,
     Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
-    ScrollbarWidth, StepPosition, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
+    FillRule, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn, TransformStyle,
     UserSelect, Visibility,
