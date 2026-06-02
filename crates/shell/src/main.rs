@@ -47,6 +47,7 @@ mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
 mod tabs;
+mod zoom;
 
 use crate::tab_lifecycle::state::TabState;
 use std::cell::Cell;
@@ -121,6 +122,9 @@ impl EventSink for StdoutEventSink {
             Event::RequestStarted { url, .. } => eprintln!("→ GET {url}"),
             Event::RequestCompleted { url, status, .. } => eprintln!("← {status} {url}"),
             Event::RequestBlocked { url, reason, .. } => eprintln!("✗ {url} ({reason})"),
+            Event::RequestFailed { url, stage, reason, .. } => {
+                eprintln!("✗ {url} ({}: {reason})", stage.as_str());
+            }
             Event::SubresourceHintFound { url, kind, priority } => {
                 let label = match kind {
                     SubresourceKind::Stylesheet => "css",
@@ -398,6 +402,9 @@ fn run_window_mode(
         )),
         privacy: panels::privacy_panel::PrivacyPanel::new(network_log),
         fallbacks_preloaded: false,
+        zoom_factor: zoom::ZOOM_DEFAULT,
+        display_url: None,
+        current_history_state_json: String::from("null"),
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -478,7 +485,10 @@ fn do_print_to_pdf(
         margin_left: 48.0,
         margin_right: 48.0,
     };
-    let pages = paginate(&parsed.layout, &ctx);
+    let mut pages = paginate(&parsed.layout, &ctx);
+    let page_count_total = pages.len() as u32;
+    // Attach @page margin-box data: page N of M at bottom-center.
+    attach_page_boxes(&mut pages, page_count_total, &ctx);
     let cmds = build_print_display_list(&pages);
     let split_pages = split_at_page_breaks(cmds);
 
@@ -493,6 +503,51 @@ fn do_print_to_pdf(
     let pdf_bytes = encode_images_as_pdf(&images, PDF_PAGE_W, PDF_PAGE_H);
     std::fs::write(output, &pdf_bytes)?;
     Ok(page_count)
+}
+
+/// Attaches `PageBox` data to each page with default @page content: page N of M at bottom-center.
+///
+/// Uses a fixed-width measurer (8 px/char at any font size) for margin-box text layout,
+/// matching the Phase 0 text-measurement approach used in layout tests. Shell has no
+/// access to a real `TextMeasurer` outside the full layout pipeline, and margin-box
+/// text is short (page numbers) so the approximation is acceptable.
+fn attach_page_boxes(
+    pages: &mut [lumen_layout::pagination::Page],
+    total: u32,
+    ctx: &lumen_layout::PaginationContext,
+) {
+    use lumen_layout::{MarginBoxPosition, PageBox, PageProperties, TextMeasurer};
+
+    /// Fixed 8 px per character at any size — matches the Phase 0 layout test measurer.
+    struct Fixed8;
+    impl TextMeasurer for Fixed8 {
+        fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    }
+
+    let props = PageProperties {
+        width: ctx.page_width,
+        height: ctx.page_height,
+        orientation: if ctx.page_width > ctx.page_height { "landscape".to_string() } else { "portrait".to_string() },
+        margin_top: ctx.margin_top,
+        margin_bottom: ctx.margin_bottom,
+        margin_left: ctx.margin_left,
+        margin_right: ctx.margin_right,
+    };
+
+    for page in pages.iter_mut() {
+        let mut page_box = PageBox::new(page.number, props.clone());
+        page_box.layout_margin_boxes();
+
+        let label = format!("{} / {}", page.number + 1, total);
+        let font_size = 10.0_f32;
+        let line_height = font_size * 1.5;
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::BottomCenter) {
+            mb.content = Some(label.clone());
+            mb.layout_text(&label, font_size, line_height, &Fixed8);
+        }
+
+        page.page_box = Some(page_box);
+    }
 }
 
 /// Кодирует набор растровых изображений в PDF-файл (по одному на страницу).
@@ -836,6 +891,14 @@ struct NavEntry {
     source: PageSource,
     scroll_x: f32,
     scroll_y: f32,
+    /// Overrides `source.url_str()` in the address bar for same-document entries.
+    /// `None` for full-document navigation entries; `Some(url)` when this entry
+    /// was created by `history.pushState` (the virtual URL at that point).
+    display_url: Option<String>,
+    /// State JSON for a same-document `history.pushState` entry.
+    /// `None` → full navigation (popping this entry reloads the page).
+    /// `Some(json)` → same-document (popping fires `popstate` with this state).
+    same_doc_state_json: Option<String>,
 }
 
 /// Навигационный запрос от JS (location.href=, assign, replace, reload).
@@ -960,6 +1023,13 @@ pub(crate) trait PersistentJs {
     /// which drains `_lumen_ws_poll()` for every open handle.
     #[allow(dead_code)]
     fn pump_websockets(&self);
+    /// Poll all live `EventSource` instances and deliver queued SSE events to JS.
+    ///
+    /// Must be called on every event-loop step so that `onopen`/`onmessage`/
+    /// `onerror` handlers fire promptly. Calls `_lumen_pump_sse()` which drains
+    /// `_lumen_sse_poll()` for every open handle (HTML Living Standard §9.2).
+    #[allow(dead_code)]
+    fn pump_sse(&self);
     /// Deliver messages posted by Web Worker threads to their `Worker` JS instances.
     ///
     /// Must be called on every event-loop tick alongside `tick_timers()` so that
@@ -1023,6 +1093,28 @@ pub(crate) trait PersistentJs {
     /// applies each via `set_scroll_position()`. Empty when none are pending.
     #[allow(dead_code)]
     fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)>;
+    /// Drain `history.pushState` / `history.replaceState` URL-update notifications.
+    ///
+    /// Each entry is `(is_push, url, new_state_json)` where `is_push = true`
+    /// means `pushState` (adds a same-document entry to nav_back) and `false`
+    /// means `replaceState` (updates the displayed URL only).
+    #[allow(dead_code)]
+    fn take_history_url_updates(&self) -> Vec<(bool, String, String)>;
+    /// Fire a `popstate` event in JS for a same-document back/forward navigation.
+    ///
+    /// `state_json` is the already-serialised state for the destination entry.
+    /// `url` is the virtual address-bar URL to restore (may be empty).
+    /// Calls `_lumen_deliver_popstate(state_json, url)` via `eval_js`.
+    #[allow(dead_code)]
+    fn fire_popstate(&self, state_json: &str, url: &str);
+    /// Drain dirty `<canvas>` 2D pixel buffers for upload to the renderer.
+    ///
+    /// Returns `(node_index, width, height, rgba)` for every canvas drawn to
+    /// since the last drain. Shell registers each as
+    /// `Renderer::register_image("canvas:{nid}", ...)` and requests a repaint.
+    /// Returns an empty vec when no canvas was drawn (HTML LS §4.12.4).
+    #[allow(dead_code)]
+    fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -1113,6 +1205,9 @@ impl PersistentJs for QuickPersistentJs {
     fn pump_websockets(&self) {
         self.eval_js("if(typeof _lumen_pump_websockets==='function')_lumen_pump_websockets();");
     }
+    fn pump_sse(&self) {
+        self.eval_js("if(typeof _lumen_pump_sse==='function')_lumen_pump_sse();");
+    }
     fn pump_workers(&self) {
         self.rt.pump_workers();
     }
@@ -1157,6 +1252,29 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
         self.rt.take_scroll_requests()
+    }
+    fn take_history_url_updates(&self) -> Vec<(bool, String, String)> {
+        self.rt
+            .take_history_url_updates()
+            .into_iter()
+            .map(|u| match u {
+                lumen_js::HistoryUrlUpdate::Push { url, new_state_json } => {
+                    (true, url, new_state_json)
+                }
+                lumen_js::HistoryUrlUpdate::Replace { url, new_state_json } => {
+                    (false, url, new_state_json)
+                }
+            })
+            .collect()
+    }
+    fn fire_popstate(&self, state_json: &str, url: &str) {
+        // Escape url for embedding in a JS string literal (single-quoted).
+        let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
+        // state_json is already valid JSON — embed directly without quoting.
+        self.eval_js(&format!("_lumen_deliver_popstate({state_json}, '{escaped}')"));
+    }
+    fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
+        self.rt.flush_canvas_updates()
     }
 }
 
@@ -1512,6 +1630,12 @@ enum KeyCommand {
     /// гасим dead_code-предупреждение, чтобы `cargo clippy -D warnings` прошёл.
     #[allow(dead_code)]
     SetTabContainer(tabs::containers::ContainerKind),
+    /// Увеличить масштаб страницы (Ctrl+=).
+    ZoomIn,
+    /// Уменьшить масштаб страницы (Ctrl+-).
+    ZoomOut,
+    /// Сбросить масштаб страницы к 100% (Ctrl+0).
+    ZoomReset,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -1625,6 +1749,12 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyV if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::TogglePip)
         }
+        // Ctrl+= — zoom in
+        KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
+        // Ctrl+- — zoom out
+        KeyCode::Minus if ctrl_only => Some(KeyCommand::ZoomOut),
+        // Ctrl+0 — reset zoom
+        KeyCode::Digit0 if ctrl_only => Some(KeyCommand::ZoomReset),
         _ => None,
     }
 }
@@ -2049,6 +2179,16 @@ struct PageSnapshot {
     animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
     gif_last_frame: HashMap<String, usize>,
     image_cache: lumen_image::ImageDecodeCache,
+    /// Per-tab user zoom factor. Preserved when the tab goes to background.
+    zoom_factor: f32,
+    /// Virtual URL shown in the address bar when `history.pushState` /
+    /// `history.replaceState` changed the displayed URL without a page load.
+    /// `None` → use `source.url_str()`.  Reset to `None` on any full navigation.
+    display_url: Option<String>,
+    /// Serialised JS state object for the current history entry, mirrored from
+    /// the JS side so the shell can store it in `NavEntry` when pushState fires.
+    /// Initialised to `"null"` (the default initial `history.state`).
+    current_history_state_json: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2084,18 +2224,21 @@ fn parse_and_layout(
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
     // QuickJS + install_dom дают скриптам полный доступ к DOM-дереву.
-    // fetch_provider пробрасывается в window.fetch(); ws_provider — в new WebSocket().
-    let (fetch_provider, ws_provider) = match base {
+    // fetch_provider пробрасывается в window.fetch(); ws_provider — в new WebSocket();
+    // sse_provider — в new EventSource(). Все три используют один HttpClient.
+    let (fetch_provider, ws_provider, sse_provider) = match base {
         ResourceBase::Url(_) => {
             let client = base.http_client_for_subresource(Arc::clone(sink));
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
             let wp: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> =
-                Some(arc_client as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
-            (fp, wp)
+                Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
+            let sp: Option<Arc<dyn lumen_core::ext::JsSseProvider>> =
+                Some(arc_client as Arc<dyn lumen_core::ext::JsSseProvider>);
+            (fp, wp, sp)
         }
-        ResourceBase::File(_) => (None, None),
+        ResourceBase::File(_) => (None, None, None),
     };
     // URL страницы для инициализации window.location в JS.
     let page_url = match base {
@@ -2108,6 +2251,7 @@ fn parse_and_layout(
         &page_url,
         fetch_provider,
         ws_provider,
+        sse_provider,
         ls_store,
         idb_backend,
         sw_backend,
@@ -2184,8 +2328,17 @@ fn parse_and_layout(
 
     let font = lumen_font::Font::parse(INTER_FONT)
         .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
-    let measurer = lumen_paint::FontMeasurer::new(&font)
+    // Многошрифтовый измеритель: Inter как fallback + @font-face семьи.
+    // CSS: @font-face multi-font TextMeasurer — wired здесь.
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
+    for rule in &sheet.font_faces {
+        if !rule.family.is_empty() {
+            if let Some(bytes) = font_registry.face_bytes_for_family(&rule.family) {
+                measurer.register_family(&rule.family, bytes);
+            }
+        }
+    }
 
     let layout = {
         let d = doc_arc.lock().unwrap();
@@ -2430,6 +2583,17 @@ fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvide
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
+}
+
+/// Extract `initial-scale` from the `<meta name=viewport>` of a page's document.
+///
+/// Returns `1.0` when the page has no viewport meta or omits `initial-scale`.
+fn meta_initial_scale(src: &LayoutSource) -> f32 {
+    src.document
+        .lock()
+        .ok()
+        .and_then(|doc| doc.viewport_meta().map(|m| m.initial_scale))
+        .unwrap_or(1.0)
 }
 
 /// Get-or-create the localStorage partition for the given `ResourceBase` origin.
@@ -2707,6 +2871,7 @@ fn apply_iframe_sandbox_gates(doc: &Document) {
 /// `page_url` пробрасывается в `window.location` (инициализация).
 /// `fetch_provider` пробрасывается в `window.fetch()`.
 /// `ws_provider` пробрасывается в `new WebSocket(url)`.
+/// `sse_provider` пробрасывается в `new EventSource(url)`.
 /// `ls_store` — localStorage partition для текущего origin (persists across reloads).
 /// `None` = no network (sandboxed context или отключён quickjs feature).
 #[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
@@ -2717,6 +2882,7 @@ fn run_scripts_with_dom(
     page_url: &str,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
@@ -2748,7 +2914,7 @@ fn run_scripts_with_dom(
                 if deterministic {
                     rt.set_deterministic_mode();
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store, idb_backend, sw_backend) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 for src in &scripts {
@@ -2784,6 +2950,7 @@ fn run_scripts_with_dom(
         let _ = page_url;
         let _ = fetch_provider;
         let _ = ws_provider;
+        let _ = sse_provider;
         use lumen_core::ext::JsRuntime as _;
         for src in &scripts {
             match lumen_core::NullJsRuntime.eval(src) {
@@ -2944,6 +3111,12 @@ struct Lumen {
     /// `deliver_media_query_changes(.., self.dark_mode)`. Default `false` (light)
     /// до создания окна и в headless/deterministic-режимах (стабильность snapshot-ов).
     dark_mode: bool,
+    /// Per-tab user zoom factor (100% = 1.0). Changed via Ctrl+= / Ctrl+- / Ctrl+0.
+    ///
+    /// Combined with `<meta viewport initial-scale>` to compute the effective CSS
+    /// layout viewport: `effective = physical / (meta_scale * zoom_factor)`.
+    /// Resets to 1.0 on tab switch (stored in `PageSnapshot` for background tabs).
+    zoom_factor: f32,
     /// Последняя известная позиция курсора в **physical** пикселях (от winit).
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
@@ -3296,6 +3469,14 @@ struct Lumen {
     /// fonts, identical across pages), so this guard runs it once after the
     /// first page provides a `FontProvider`.
     fallbacks_preloaded: bool,
+    /// Virtual URL shown in the address bar after `history.pushState` /
+    /// `history.replaceState`.  `None` → use `source.url_str()`.
+    /// Reset to `None` on any full navigation.
+    display_url: Option<String>,
+    /// Serialised JS state JSON for the current history entry, mirrored from JS
+    /// so the shell can populate `NavEntry::same_doc_state_json` on pushState.
+    /// `"null"` until a `pushState`/`replaceState` call updates it.
+    current_history_state_json: String,
 }
 
 impl Lumen {
@@ -3309,7 +3490,11 @@ impl Lumen {
         if vp_size.width <= 0.0 || vp_size.height <= 0.0 {
             return;
         }
-        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
+        let meta_scale = meta_initial_scale(src);
+        let (css_w, css_h) =
+            zoom::effective_viewport(vp_size.width as f32, vp_size.height as f32, meta_scale, self.zoom_factor);
+        let viewport = Size::new(css_w, css_h);
         let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider);
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
@@ -3900,6 +4085,14 @@ impl Lumen {
         if let Some(js) = &self.js_ctx {
             js.notify_window_loaded();
         }
+
+        // If zoom or <meta viewport initial-scale> is active, relayout with the
+        // correct effective viewport. The initial load used the raw physical size.
+        let zoom = self.zoom_factor;
+        let meta_scale = self.layout_source.as_ref().map(meta_initial_scale).unwrap_or(1.0);
+        if (zoom - 1.0).abs() > 0.001 || (meta_scale - 1.0).abs() > 0.001 {
+            self.relayout();
+        }
     }
 }
 
@@ -4043,6 +4236,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(js) = &self.js_ctx {
             js.tick_timers();
             js.pump_websockets();
+            js.pump_sse();
             js.pump_workers();
             js.pump_broadcast_channels();
             js.pump_shared_workers();
@@ -4058,6 +4252,66 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let wakeup = std::time::Instant::now()
                     + std::time::Duration::from_millis(delay_ms as u64 + 1);
                 event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup));
+            }
+        }
+
+        // ── Canvas 2D: upload dirty <canvas> bitmaps to the renderer ──────────
+        // JS Canvas 2D draws into per-node CPU buffers (lumen_canvas::Context2D).
+        // Each frame we drain the dirty buffers and register them under the same
+        // `canvas:{nid}` key the display list emits, then request a repaint.
+        let canvas_updates = self
+            .js_ctx
+            .as_ref()
+            .map(|js| js.flush_canvas_updates())
+            .unwrap_or_default();
+        if !canvas_updates.is_empty() {
+            if let Some(r) = self.renderer.as_mut() {
+                for (nid, w, h, rgba) in &canvas_updates {
+                    let image = lumen_image::Image {
+                        width: *w,
+                        height: *h,
+                        format: lumen_image::PixelFormat::Rgba8,
+                        data: rgba.clone(),
+                        icc_profile: None,
+                    };
+                    if let Err(e) = r.register_image(format!("canvas:{nid}"), &image) {
+                        eprintln!("Canvas: не зарегистрирован canvas:{nid}: {e}");
+                    }
+                }
+            }
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
+        }
+
+        // ── History API: pushState/replaceState URL updates ───────────────────
+        // Drain URL-update notifications from history.pushState/replaceState.
+        // pushState adds a same-document back-stack entry; replaceState updates
+        // the displayed URL only.  Neither triggers a page load.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let updates = js.take_history_url_updates();
+            for (is_push, url, new_state_json) in updates {
+                if is_push {
+                    // pushState: save current state to nav_back as same-doc entry.
+                    let old_display = self.display_url.take();
+                    let old_state = std::mem::replace(
+                        &mut self.current_history_state_json,
+                        new_state_json,
+                    );
+                    self.nav_back.push(NavEntry {
+                        source: self.source.clone(),
+                        scroll_x: self.scroll_x,
+                        scroll_y: self.scroll_y,
+                        display_url: old_display,
+                        same_doc_state_json: Some(old_state),
+                    });
+                    self.display_url = Some(url);
+                } else {
+                    // replaceState: update URL + state, no nav_back push.
+                    self.current_history_state_json = new_state_json;
+                    self.display_url = Some(url);
+                }
             }
         }
 
@@ -6007,7 +6261,7 @@ impl Lumen {
             }
             KeyCommand::OpenAddressBar => {
                 self.hint.close();
-                let current = self.source.url_str().unwrap_or("").to_owned();
+                let current = self.current_display_url().to_owned();
                 self.address_bar.open(&current);
                 self.request_redraw();
             }
@@ -6163,6 +6417,18 @@ impl Lumen {
                 self.toggle_pip();
                 self.request_redraw();
             }
+            KeyCommand::ZoomIn => {
+                self.zoom_factor = zoom::zoom_in(self.zoom_factor);
+                self.relayout();
+            }
+            KeyCommand::ZoomOut => {
+                self.zoom_factor = zoom::zoom_out(self.zoom_factor);
+                self.relayout();
+            }
+            KeyCommand::ZoomReset => {
+                self.zoom_factor = zoom::zoom_reset();
+                self.relayout();
+            }
         }
     }
 
@@ -6206,14 +6472,18 @@ impl Lumen {
                 title: self.title.clone(),
             });
         }
-        // Push current page to back stack.
+        // Push current page to back stack (full-doc entry: no same_doc_state_json).
         self.nav_back.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
+            display_url: None,
+            same_doc_state_json: None,
         });
-        // New navigation invalidates forward history.
+        // New navigation invalidates forward history and resets same-doc state.
         self.nav_fwd.clear();
+        self.display_url = None;
+        self.current_history_state_json = String::from("null");
         // Load new page.
         self.source = source;
         self.reload();
@@ -6224,6 +6494,8 @@ impl Lumen {
     fn navigate_replace(&mut self, source: PageSource) {
         // New navigation invalidates forward history but does NOT push to back stack.
         self.nav_fwd.clear();
+        self.display_url = None;
+        self.current_history_state_json = String::from("null");
         self.source = source;
         self.reload();
     }
@@ -6231,11 +6503,45 @@ impl Lumen {
     /// Перейти на предыдущую страницу в истории (Alt+Left).
     fn navigate_back(&mut self) {
         let Some(prev) = self.nav_back.pop() else { return };
-        // Save current page to forward stack.
+
+        if let Some(state_json) = prev.same_doc_state_json {
+            // Same-document navigation: fire popstate, update address bar, don't reload.
+            // Push current same-doc state to forward stack so Alt+Right restores it.
+            let cur_display = self.display_url.take();
+            let cur_state = std::mem::replace(
+                &mut self.current_history_state_json,
+                state_json.clone(),
+            );
+            self.nav_fwd.push(NavEntry {
+                source: self.source.clone(),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                display_url: cur_display,
+                same_doc_state_json: Some(cur_state),
+            });
+            let url = prev.display_url.unwrap_or_default();
+            self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
+            if let Some(js) = &self.js_ctx {
+                js.fire_popstate(&state_json, &url);
+            }
+            self.request_redraw();
+            return;
+        }
+
+        // Full-document navigation: restore page and reload.
+        // Push current page to forward stack.
+        let cur_display = self.display_url.take();
+        let cur_state = std::mem::replace(
+            &mut self.current_history_state_json,
+            String::from("null"),
+        );
         self.nav_fwd.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
+            display_url: cur_display,
+            // If we were in a same-doc state before this full-page nav, record it.
+            same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
         });
         // Try bfcache first.
         let restored_scroll = if let Some(url) = prev.source.url_str() {
@@ -6265,11 +6571,42 @@ impl Lumen {
     /// Перейти на следующую страницу в истории (Alt+Right).
     fn navigate_forward(&mut self) {
         let Some(next) = self.nav_fwd.pop() else { return };
-        // Save current page to back stack.
+
+        if let Some(state_json) = next.same_doc_state_json {
+            // Same-document forward navigation: fire popstate, update address bar.
+            let cur_display = self.display_url.take();
+            let cur_state = std::mem::replace(
+                &mut self.current_history_state_json,
+                state_json.clone(),
+            );
+            self.nav_back.push(NavEntry {
+                source: self.source.clone(),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                display_url: cur_display,
+                same_doc_state_json: Some(cur_state),
+            });
+            let url = next.display_url.unwrap_or_default();
+            self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
+            if let Some(js) = &self.js_ctx {
+                js.fire_popstate(&state_json, &url);
+            }
+            self.request_redraw();
+            return;
+        }
+
+        // Full-document forward navigation.
+        let cur_display = self.display_url.take();
+        let cur_state = std::mem::replace(
+            &mut self.current_history_state_json,
+            String::from("null"),
+        );
         self.nav_back.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
+            display_url: cur_display,
+            same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
         });
         // Try bfcache first.
         let restored_scroll = if let Some(url) = next.source.url_str() {
@@ -6726,6 +7063,17 @@ impl Lumen {
         }
     }
 
+    /// Returns the URL to display in the address bar and use for history / bookmarks.
+    ///
+    /// When `history.pushState` / `history.replaceState` has updated the virtual
+    /// URL without a page load, `display_url` overrides the real `source` URL.
+    fn current_display_url(&self) -> &str {
+        self.display_url
+            .as_deref()
+            .or_else(|| self.source.url_str())
+            .unwrap_or("")
+    }
+
     /// Текущая логическая (CSS px) высота viewport-а. Если окно ещё не создано —
     /// fallback на layout-viewport 720 px, который у нас hardcoded в pipeline.
     fn viewport_height_css(&self) -> f32 {
@@ -6978,7 +7326,7 @@ impl Lumen {
                 }
                 PaletteAction::OpenAddressBar => {
                     self.hint.close();
-                    let current = self.source.url_str().unwrap_or("").to_owned();
+                    let current = self.current_display_url().to_owned();
                     self.address_bar.open(&current);
                 }
                 PaletteAction::ToggleBookmarks => {
@@ -7011,7 +7359,8 @@ impl Lumen {
     /// No-op when the current page has no URL (e.g. blank tab). The active tab
     /// title is used when available, otherwise the URL stands in as the title.
     fn bookmark_current_page(&mut self) {
-        let Some(url) = self.source.url_str().map(str::to_owned) else {
+        let url = self.current_display_url().to_owned();
+        if url.is_empty() {
             return;
         };
         let title = self
@@ -7610,14 +7959,17 @@ impl Lumen {
             html_source: None,
         };
 
-        // Re-run layout+paint with the current viewport.
-        let viewport = self.renderer.as_ref().map_or_else(
-            || lumen_core::geom::Size::new(1024.0, 720.0),
+        // Re-run layout+paint with the current viewport (including zoom).
+        let phys = self.renderer.as_ref().map_or_else(
+            || (1024.0_f32, 720.0_f32),
             |r| {
                 let s = r.viewport_size();
-                lumen_core::geom::Size::new(s.width as f32, s.height as f32)
+                (s.width as f32, s.height as f32)
             },
         );
+        let meta_scale = meta_initial_scale(&layout_source);
+        let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, meta_scale, self.zoom_factor);
+        let viewport = lumen_core::geom::Size::new(css_w, css_h);
         let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider);
 
         // Install into the active slot.
@@ -7743,6 +8095,12 @@ impl Lumen {
                 &mut self.image_cache,
                 lumen_image::ImageDecodeCache::new(),
             ),
+            zoom_factor: self.zoom_factor,
+            display_url: self.display_url.take(),
+            current_history_state_json: std::mem::replace(
+                &mut self.current_history_state_json,
+                String::from("null"),
+            ),
         }
     }
 
@@ -7789,6 +8147,9 @@ impl Lumen {
         self.animated_gifs = snap.animated_gifs;
         self.gif_last_frame = snap.gif_last_frame;
         self.image_cache = snap.image_cache;
+        self.zoom_factor = snap.zoom_factor;
+        self.display_url = snap.display_url;
+        self.current_history_state_json = snap.current_history_state_json;
     }
 
     /// Reset all per-page fields to blank-tab defaults.
@@ -7839,6 +8200,9 @@ impl Lumen {
         self.animated_gifs = HashMap::new();
         self.gif_last_frame = HashMap::new();
         self.image_cache = lumen_image::ImageDecodeCache::new();
+        self.zoom_factor = zoom::ZOOM_DEFAULT;
+        self.display_url = None;
+        self.current_history_state_json = String::from("null");
         // Cancel in-flight scroll animations.
         self.scroll_anim = None;
         self.momentum_anim = None;

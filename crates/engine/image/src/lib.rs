@@ -110,6 +110,21 @@ impl From<AvifError> for ImageError {
     fn from(e: AvifError) -> Self { Self::Avif(e) }
 }
 
+/// Идентифицированный цветовой охват ICC профиля.
+///
+/// Используется для выбора матрицы конвертации при загрузке изображения в GPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IccGamut {
+    /// Профиль опознан как sRGB — конвертация не нужна.
+    Srgb,
+    /// DCI-P3 / Display P3 (D65) — применяется P3→sRGB матрица.
+    DisplayP3,
+    /// ITU-R BT.2020 / Rec. 2020 — применяется Rec2020→sRGB матрица.
+    Rec2020,
+    /// Профиль не опознан — конвертация пропускается.
+    Unknown,
+}
+
 /// ICC профиль изображения (опциональный).
 ///
 /// Содержит сырые данные ICC профиля.
@@ -125,6 +140,146 @@ impl IccProfile {
     pub fn is_valid(&self) -> bool {
         self.data.len() >= 128
     }
+
+    /// Определяет цветовой охват по сигнатуре пространства данных (bytes 16-19)
+    /// и описанию профиля (сканирование ASCII-байт).
+    ///
+    /// Практичная эвристика — не требует полного ICC CMM. Работает для реальных
+    /// Display P3 и Rec2020 изображений с Apple/Adobe профилями.
+    #[must_use]
+    pub fn detect_gamut(&self) -> IccGamut {
+        if self.data.len() < 20 {
+            return IccGamut::Unknown;
+        }
+        // Bytes 16-19: color space of data (e.g., b"RGB " / b"GRAY" / b"CMYK").
+        // Only RGB profiles need gamut conversion.
+        if &self.data[16..20] != b"RGB " {
+            return IccGamut::Unknown;
+        }
+
+        // Fast path: check the profile description tag by scanning raw bytes
+        // for known wide-gamut marker strings. ICC desc data follows the 128-byte
+        // header + tag table, but scanning raw bytes is equally reliable for
+        // well-formed standard profiles without parsing the full tag directory.
+        let haystack = &self.data;
+
+        if contains_ascii(haystack, b"Display P3")
+            || contains_ascii(haystack, b"DCI-P3")
+            || contains_ascii(haystack, b"DCI P3")
+            || contains_utf16be(haystack, "Display P3")
+            || contains_utf16be(haystack, "DCI-P3")
+        {
+            return IccGamut::DisplayP3;
+        }
+
+        if contains_ascii(haystack, b"Rec. 2020")
+            || contains_ascii(haystack, b"Rec2020")
+            || contains_ascii(haystack, b"BT.2020")
+            || contains_ascii(haystack, b"BT2020")
+            || contains_utf16be(haystack, "Rec. 2020")
+            || contains_utf16be(haystack, "Rec2020")
+            || contains_utf16be(haystack, "BT.2020")
+        {
+            return IccGamut::Rec2020;
+        }
+
+        // sRGB profiles explicitly labelled.
+        if contains_ascii(haystack, b"sRGB") || contains_ascii(haystack, b"IEC 61966") {
+            return IccGamut::Srgb;
+        }
+
+        IccGamut::Unknown
+    }
+}
+
+/// Returns true if `haystack` contains `needle` as a contiguous byte slice.
+fn contains_ascii(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Returns true if `haystack` contains `text` encoded as big-endian UTF-16.
+fn contains_utf16be(haystack: &[u8], text: &str) -> bool {
+    let needle: Vec<u8> = text.encode_utf16().flat_map(|c| c.to_be_bytes()).collect();
+    if needle.is_empty() { return false; }
+    haystack.windows(needle.len()).any(|w| w == needle.as_slice())
+}
+
+/// Применяет ICC-коррекцию к RGBA8 пикселям in-place.
+///
+/// Конвертирует Display P3 или Rec2020 пиксели в sRGB для корректного отображения
+/// на sRGB-мониторах. Для `IccGamut::Srgb` и `IccGamut::Unknown` — no-op.
+pub fn correct_rgba_pixels(rgba: &mut [u8], profile: &IccProfile) {
+    match profile.detect_gamut() {
+        IccGamut::DisplayP3 => convert_pixels_to_srgb(rgba, p3_to_srgb_pixel),
+        IccGamut::Rec2020 => convert_pixels_to_srgb(rgba, rec2020_to_srgb_pixel),
+        IccGamut::Srgb | IccGamut::Unknown => {}
+    }
+}
+
+fn convert_pixels_to_srgb(rgba: &mut [u8], converter: fn(f32, f32, f32) -> (f32, f32, f32)) {
+    for pixel in rgba.chunks_exact_mut(4) {
+        let r = pixel[0] as f32 / 255.0;
+        let g = pixel[1] as f32 / 255.0;
+        let b = pixel[2] as f32 / 255.0;
+        let (sr, sg, sb) = converter(r, g, b);
+        pixel[0] = (sr.clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[1] = (sg.clamp(0.0, 1.0) * 255.0).round() as u8;
+        pixel[2] = (sb.clamp(0.0, 1.0) * 255.0).round() as u8;
+        // alpha channel unchanged
+    }
+}
+
+/// Display P3 gamma-encoded → sRGB gamma-encoded (per-pixel).
+/// Decode P3 gamma → linear P3 → linear sRGB → encode sRGB gamma.
+fn p3_to_srgb_pixel(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let lr = srgb_gamma_decode(r);
+    let lg = srgb_gamma_decode(g);
+    let lb = srgb_gamma_decode(b);
+    let (sr, sg, sb) = p3_linear_to_srgb_linear(lr, lg, lb);
+    (srgb_gamma_encode(sr), srgb_gamma_encode(sg), srgb_gamma_encode(sb))
+}
+
+/// Rec2020 gamma-encoded → sRGB gamma-encoded (per-pixel).
+fn rec2020_to_srgb_pixel(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let lr = rec2020_gamma_decode(r);
+    let lg = rec2020_gamma_decode(g);
+    let lb = rec2020_gamma_decode(b);
+    let (sr, sg, sb) = rec2020_linear_to_srgb_linear(lr, lg, lb);
+    (srgb_gamma_encode(sr), srgb_gamma_encode(sg), srgb_gamma_encode(sb))
+}
+
+/// Display P3 linear → sRGB linear (CSS Color L4 §10.9 matrix).
+fn p3_linear_to_srgb_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let sr =  1.224_94  * r - 0.224_94  * g;
+    let sg = -0.042_076 * r + 1.042_076 * g;
+    let sb = -0.019_692 * r - 0.078_654 * g + 1.098_346 * b;
+    (sr, sg, sb)
+}
+
+/// Rec2020 linear → sRGB linear (CSS Color L4 §10.9 matrix).
+fn rec2020_linear_to_srgb_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let sr =  1.660_491 * r - 0.587_641 * g - 0.072_85  * b;
+    let sg = -0.124_551 * r + 1.132_9   * g - 0.008_35  * b;
+    let sb = -0.018_151 * r - 0.100_578 * g + 1.118_73  * b;
+    (sr, sg, sb)
+}
+
+/// sRGB / P3 gamma decode: encoded → linear (IEC 61966-2-1).
+fn srgb_gamma_decode(c: f32) -> f32 {
+    if c <= 0.040_45 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+/// sRGB gamma encode: linear → encoded.
+fn srgb_gamma_encode(c: f32) -> f32 {
+    let c = c.max(0.0);
+    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// Rec2020 (BT.2020 OETF) gamma decode: encoded → linear.
+fn rec2020_gamma_decode(c: f32) -> f32 {
+    const ALPHA: f32 = 1.099_296_8;
+    const BETA: f32 = 0.018_053_97;
+    if c < 4.5 * BETA { c / 4.5 } else { ((c + (ALPHA - 1.0)) / ALPHA).powf(1.0 / 0.45) }
 }
 
 /// Декодированное растровое изображение в плотной row-major упаковке.
@@ -513,5 +668,142 @@ mod tests {
         let dst = resize_area_avg(&src, 0, 0);
         assert_eq!(dst.width, 1);
         assert_eq!(dst.height, 1);
+    }
+
+    // ── ICC gamut detection ───────────────────────────────────────────────
+
+    fn icc_with_rgb_space_and_desc(desc: &[u8]) -> IccProfile {
+        let mut data = vec![0u8; 256];
+        // bytes 16-19: data color space = "RGB "
+        data[16..20].copy_from_slice(b"RGB ");
+        // bytes 36-39: file signature "acsp" (not required by detect_gamut, but realistic)
+        data[36..40].copy_from_slice(b"acsp");
+        // Embed description string at offset 130 (after 128-byte header + tag count).
+        if 130 + desc.len() <= data.len() {
+            data[130..130 + desc.len()].copy_from_slice(desc);
+        }
+        IccProfile { data }
+    }
+
+    #[test]
+    fn detect_gamut_display_p3() {
+        let p = icc_with_rgb_space_and_desc(b"Display P3");
+        assert_eq!(p.detect_gamut(), IccGamut::DisplayP3);
+    }
+
+    #[test]
+    fn detect_gamut_dci_p3_hyphen() {
+        let p = icc_with_rgb_space_and_desc(b"DCI-P3");
+        assert_eq!(p.detect_gamut(), IccGamut::DisplayP3);
+    }
+
+    #[test]
+    fn detect_gamut_rec2020_dot() {
+        let p = icc_with_rgb_space_and_desc(b"Rec. 2020");
+        assert_eq!(p.detect_gamut(), IccGamut::Rec2020);
+    }
+
+    #[test]
+    fn detect_gamut_bt2020() {
+        let p = icc_with_rgb_space_and_desc(b"BT.2020");
+        assert_eq!(p.detect_gamut(), IccGamut::Rec2020);
+    }
+
+    #[test]
+    fn detect_gamut_srgb_label() {
+        let p = icc_with_rgb_space_and_desc(b"sRGB");
+        assert_eq!(p.detect_gamut(), IccGamut::Srgb);
+    }
+
+    #[test]
+    fn detect_gamut_unknown_label() {
+        let p = icc_with_rgb_space_and_desc(b"ProPhoto RGB");
+        assert_eq!(p.detect_gamut(), IccGamut::Unknown);
+    }
+
+    #[test]
+    fn detect_gamut_non_rgb_colorspace() {
+        let mut data = vec![0u8; 256];
+        data[16..20].copy_from_slice(b"GRAY");
+        data[130..140].copy_from_slice(b"Display P3");
+        let p = IccProfile { data };
+        // Non-RGB space: even if description says P3, we can't convert.
+        assert_eq!(p.detect_gamut(), IccGamut::Unknown);
+    }
+
+    #[test]
+    fn detect_gamut_too_short() {
+        let p = IccProfile { data: vec![0u8; 10] };
+        assert_eq!(p.detect_gamut(), IccGamut::Unknown);
+    }
+
+    // ── correct_rgba_pixels ───────────────────────────────────────────────
+
+    #[test]
+    fn correct_rgba_srgb_profile_noop() {
+        let profile = icc_with_rgb_space_and_desc(b"sRGB");
+        let original = vec![200u8, 100, 50, 255];
+        let mut rgba = original.clone();
+        correct_rgba_pixels(&mut rgba, &profile);
+        assert_eq!(rgba, original, "sRGB profile should not change pixels");
+    }
+
+    #[test]
+    fn correct_rgba_unknown_profile_noop() {
+        let profile = icc_with_rgb_space_and_desc(b"ProPhoto RGB");
+        let original = vec![200u8, 100, 50, 128];
+        let mut rgba = original.clone();
+        correct_rgba_pixels(&mut rgba, &profile);
+        assert_eq!(rgba, original, "unknown profile should not change pixels");
+    }
+
+    #[test]
+    fn correct_rgba_p3_changes_pixels() {
+        let profile = icc_with_rgb_space_and_desc(b"Display P3");
+        // (200, 100, 50) in P3 gamma encoding — not a sRGB-identical point.
+        let original = vec![200u8, 100, 50, 255];
+        let mut rgba = original.clone();
+        correct_rgba_pixels(&mut rgba, &profile);
+        // After P3→sRGB conversion the RGB values change (different primaries).
+        assert_ne!(rgba[..3], original[..3], "P3 correction should change RGB");
+        // Alpha must be preserved.
+        assert_eq!(rgba[3], 255);
+    }
+
+    #[test]
+    fn correct_rgba_rec2020_changes_pixels() {
+        let profile = icc_with_rgb_space_and_desc(b"Rec. 2020");
+        let original = vec![180u8, 80, 40, 200];
+        let mut rgba = original.clone();
+        correct_rgba_pixels(&mut rgba, &profile);
+        assert_ne!(rgba[..3], original[..3], "Rec2020 correction should change RGB");
+        assert_eq!(rgba[3], 200, "alpha must not change");
+    }
+
+    #[test]
+    fn correct_rgba_alpha_preserved_always() {
+        let profile = icc_with_rgb_space_and_desc(b"Display P3");
+        let mut rgba = vec![100u8, 150, 200, 77, 50, 60, 70, 128];
+        correct_rgba_pixels(&mut rgba, &profile);
+        assert_eq!(rgba[3], 77);
+        assert_eq!(rgba[7], 128);
+    }
+
+    #[test]
+    fn correct_rgba_white_pixel_roundtrip() {
+        // White (255,255,255) in P3 = white in sRGB (identical by definition).
+        let profile = icc_with_rgb_space_and_desc(b"Display P3");
+        let mut rgba = vec![255u8, 255, 255, 255];
+        correct_rgba_pixels(&mut rgba, &profile);
+        assert_eq!(rgba, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn correct_rgba_black_pixel_roundtrip() {
+        // Black (0,0,0) maps to black in any gamut.
+        let profile = icc_with_rgb_space_and_desc(b"Display P3");
+        let mut rgba = vec![0u8, 0, 0, 255];
+        correct_rgba_pixels(&mut rgba, &profile);
+        assert_eq!(rgba, [0, 0, 0, 255]);
     }
 }

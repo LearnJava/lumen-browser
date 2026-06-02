@@ -22,7 +22,7 @@ use lumen_layout::{
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
     FormControlKind, SvgShapeKind,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
-    InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
+    InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow,
@@ -1365,8 +1365,13 @@ pub fn build_display_list_ordered_with_anim_dpr(
 /// `PushTransform` / `PopTransform`. Pages are separated by `PageBreak` markers.
 /// Use `split_at_page_breaks` to get per-page command slices for rendering.
 ///
+/// If a page has `page_box` set, margin-box text fragments (@page headers, footers,
+/// page numbers) are emitted as `DrawText` commands positioned at absolute page
+/// coordinates (not inside the content-area transform).
+///
 /// Coordinate convention: page origin = (0, 0) at top-left of content area.
 /// Fragment y-offset is relative to the content area, not the page box.
+/// Margin-box positions are relative to the page box origin (top-left of full page).
 pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
     let mut cmds: DisplayList = Vec::new();
     for (page_idx, page) in pages.iter().enumerate() {
@@ -1381,8 +1386,46 @@ pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
             walk(&frag.layout_box, &mut cmds, 1.0);
             cmds.push(DisplayCommand::PopTransform);
         }
+        // Emit margin-box text content (headers, footers, page numbers).
+        if let Some(page_box) = &page.page_box {
+            for margin_box in page_box.margin_boxes.values() {
+                emit_margin_box_text(margin_box, &mut cmds);
+            }
+        }
     }
     cmds
+}
+
+/// Emits `DrawText` commands for each text fragment in a margin-box.
+///
+/// Positions are absolute page coordinates: `margin_box.x + fragment.x` and
+/// `margin_box.y + fragment.y`. Text uses the page default: 10px black,
+/// no explicit font family (renderer falls back to bundled Inter).
+fn emit_margin_box_text(margin_box: &MarginBox, cmds: &mut DisplayList) {
+    let default_font_size = 10.0_f32;
+    let text_color = Color { r: 0, g: 0, b: 0, a: 255 };
+    for frag in &margin_box.text_fragments {
+        if frag.text.is_empty() {
+            continue;
+        }
+        let rect = Rect {
+            x: margin_box.x + frag.x,
+            y: margin_box.y + frag.y,
+            width: frag.width,
+            height: frag.height,
+        };
+        cmds.push(DisplayCommand::DrawText {
+            rect,
+            text: frag.text.clone(),
+            font_size: default_font_size,
+            color: text_color,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            tab_size: 0.0,
+        });
+    }
 }
 
 /// Splits a print display list at `PageBreak` markers.
@@ -2349,16 +2392,31 @@ fn emit_background_layer(
                 repeating: *repeating,
             });
         }
-        // CSS Images L4 §4.2 — cross-fade() two-texture GPU blend.
-        BackgroundImage::CrossFade { a, b, progress }
-            if !a.is_empty() && !b.is_empty() =>
-        {
-            out.push(DisplayCommand::DrawCrossFade {
-                dest: clip,
-                src_a: a.clone(),
-                src_b: b.clone(),
-                progress: progress.clamp(0.0, 1.0),
-            });
+        BackgroundImage::CrossFade { a, b, t } => {
+            // CSS Images L4 §4 — emit DrawCrossFade for two-URL cross-fade.
+            // Gradient sides are not composited via DrawCrossFade (Phase 0 scope).
+            if let (BackgroundImage::Url(url_a), BackgroundImage::Url(url_b)) =
+                (a.as_ref(), b.as_ref())
+            {
+                let src_a = if is_image_set(url_a) {
+                    select_image_set_url(url_a, dpr).to_string()
+                } else {
+                    url_a.clone()
+                };
+                let src_b = if is_image_set(url_b) {
+                    select_image_set_url(url_b, dpr).to_string()
+                } else {
+                    url_b.clone()
+                };
+                if !src_a.is_empty() && !src_b.is_empty() {
+                    out.push(DisplayCommand::DrawCrossFade {
+                        dest: clip,
+                        src_a,
+                        src_b,
+                        progress: *t,
+                    });
+                }
+            }
         }
         _ => {}
     }
@@ -3164,6 +3222,66 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             });
             emit_outline(b, out);
         }
+        BoxKind::Canvas { .. } => {
+            // HTML LS §4.12.4: <canvas> is a replaced element. Painter's order:
+            // box-shadows → background → bg-image → border → bitmap → outline.
+            if !is_paint_visible(b) {
+                return;
+            }
+            emit_box_shadows(b, out);
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b, dpr);
+            emit_inset_box_shadows(b, out);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            // Bitmap is uploaded by the shell under `canvas:{node_id}`. Until JS
+            // draws anything the key is unregistered → transparent placeholder.
+            let nid = b.node.index();
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: format!("canvas:{nid}"),
+                alt: String::new(),
+                object_fit: ObjectFit::Fill,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
         BoxKind::Audio { controls, .. } => {
             if !is_paint_visible(b) || !controls || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
                 return;
@@ -3659,6 +3777,59 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                 src: img_src,
                 alt: String::new(),
                 object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
+        BoxKind::Canvas { .. } => {
+            // visibility:hidden on <canvas> skips everything (no children).
+            if !is_paint_visible(b) {
+                return;
+            }
+            // Painter's order for replaced element: background → bg-image → border → bitmap.
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b, dpr);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            // Bitmap uploaded by shell under `canvas:{node_id}`; unregistered → transparent.
+            let nid = b.node.index();
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: format!("canvas:{nid}"),
+                alt: String::new(),
+                object_fit: ObjectFit::Fill,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
@@ -8276,6 +8447,133 @@ mod tests {
         assert_eq!(breaks, pages.len() - 1, "N pages → N-1 PageBreaks");
     }
 
+    // ── Tests for build_print_display_list margin-box rendering ──────────
+
+    /// Page without page_box emits no margin-box DrawText commands.
+    #[test]
+    fn print_dl_no_page_box_no_margin_text() {
+        use lumen_layout::{paginate, PaginationContext};
+
+        let doc = lumen_html_parser::parse("<div style='height:100px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(400.0, 600.0));
+        let ctx = PaginationContext {
+            page_width: 400.0,
+            page_height: 600.0,
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            margin_left: 0.0,
+            margin_right: 0.0,
+        };
+        let pages = paginate(&tree, &ctx);
+        assert!(!pages.is_empty());
+        // No page_box — no DrawText from margin boxes
+        let cmds = build_print_display_list(&pages);
+        let text_cmds: Vec<_> = cmds.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).collect();
+        assert!(text_cmds.is_empty(), "no margin-box DrawText without page_box");
+    }
+
+    /// Page with a page_box containing bottom-center text emits a DrawText command.
+    #[test]
+    fn print_dl_page_box_bottom_center_emits_draw_text() {
+        use lumen_layout::{
+            paginate, MarginBoxPosition, PageBox, PageProperties, PaginationContext, TextMeasurer,
+        };
+
+        struct Fixed8;
+        impl TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        let doc = lumen_html_parser::parse("<div style='height:100px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(400.0, 600.0));
+        let ctx = PaginationContext {
+            page_width: 400.0,
+            page_height: 600.0,
+            margin_top: 40.0,
+            margin_bottom: 40.0,
+            margin_left: 40.0,
+            margin_right: 40.0,
+        };
+        let mut pages = paginate(&tree, &ctx);
+        assert!(!pages.is_empty());
+
+        let props = PageProperties {
+            width: 400.0, height: 600.0,
+            orientation: "portrait".to_string(),
+            margin_top: 40.0, margin_bottom: 40.0,
+            margin_left: 40.0, margin_right: 40.0,
+        };
+        let mut page_box = PageBox::new(0, props);
+        page_box.layout_margin_boxes();
+        let label = "1 / 1";
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::BottomCenter) {
+            mb.content = Some(label.to_string());
+            mb.layout_text(label, 10.0, 15.0, &Fixed8);
+        }
+        pages[0].page_box = Some(page_box);
+
+        let cmds = build_print_display_list(&pages);
+        let texts: Vec<&str> = cmds.iter().filter_map(|c| {
+            if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
+        }).collect();
+        assert!(texts.contains(&"1 / 1"), "expected '1 / 1' in DrawText, got: {:?}", texts);
+    }
+
+    /// Margin-box DrawText positioned at page-box coordinates (not inside content transform).
+    #[test]
+    fn print_dl_margin_box_text_absolute_position() {
+        use lumen_layout::{
+            paginate, MarginBoxPosition, PageBox, PageProperties, PaginationContext, TextMeasurer,
+        };
+
+        struct Fixed8;
+        impl TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        let doc = lumen_html_parser::parse("<div style='height:50px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(200.0, 300.0));
+        let ctx = PaginationContext {
+            page_width: 200.0,
+            page_height: 300.0,
+            margin_top: 30.0,
+            margin_bottom: 30.0,
+            margin_left: 30.0,
+            margin_right: 30.0,
+        };
+        let mut pages = paginate(&tree, &ctx);
+
+        let props = PageProperties {
+            width: 200.0, height: 300.0,
+            orientation: "portrait".to_string(),
+            margin_top: 30.0, margin_bottom: 30.0,
+            margin_left: 30.0, margin_right: 30.0,
+        };
+        let mut page_box = PageBox::new(0, props);
+        page_box.layout_margin_boxes();
+        let label = "PG1";
+        // Use top-left-corner so we can predict coordinates: x=0, y=0
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::TopLeftCorner) {
+            mb.content = Some(label.to_string());
+            mb.layout_text(label, 10.0, 15.0, &Fixed8);
+        }
+        pages[0].page_box = Some(page_box);
+
+        let cmds = build_print_display_list(&pages);
+        let pg1_rect = cmds.iter().find_map(|c| {
+            if let DisplayCommand::DrawText { text, rect, .. } = c {
+                if text == "PG1" { Some(*rect) } else { None }
+            } else { None }
+        });
+        let rect = pg1_rect.expect("DrawText 'PG1' not found");
+        // TopLeftCorner is at page origin (0,0); fragment offset is 0,0 inside box
+        assert!(rect.x >= 0.0 && rect.x < 10.0, "x should be at page origin, got {}", rect.x);
+        assert!(rect.y >= 0.0 && rect.y < 10.0, "y should be at page origin, got {}", rect.y);
+    }
+
     // ── Tests for DrawCrossFade ────────────────────────────────────────────
 
     /// Конструкция DrawCrossFade сохраняет все поля без потерь.
@@ -8583,54 +8881,5 @@ mod tests {
         let split = hash_display_list(&[red_fill(5.0)], &[red_fill(9.0)], 0.0, 0.0, 1024, 720);
         assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
         let _ = in_overlay;
-    }
-
-    // ── BackgroundImage::CrossFade → DrawCrossFade emit ────────────────────
-
-    #[test]
-    fn cross_fade_emit_two_url_images() {
-        // cross-fade() parsed end-to-end → DrawCrossFade emitted with correct fields.
-        let dl = build(
-            "<div></div>",
-            "div { width: 100px; height: 60px; \
-             background-image: cross-fade(url(a.png), url(b.png)); }",
-        );
-        let cf: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawCrossFade { .. })).collect();
-        assert_eq!(cf.len(), 1, "expected exactly one DrawCrossFade");
-        if let DisplayCommand::DrawCrossFade { src_a, src_b, progress, .. } = cf[0] {
-            assert_eq!(src_a, "a.png");
-            assert_eq!(src_b, "b.png");
-            assert!((progress - 0.5).abs() < 1e-4, "default progress should be 0.5, got {progress}");
-        }
-    }
-
-    #[test]
-    fn cross_fade_emit_with_explicit_percentage() {
-        // cross-fade(<img>, <img>, 30%) → progress = 0.3.
-        let dl = build(
-            "<div></div>",
-            "div { width: 100px; height: 60px; \
-             background-image: cross-fade(url(a.png), url(b.png), 30%); }",
-        );
-        let cf: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawCrossFade { .. })).collect();
-        assert_eq!(cf.len(), 1, "expected exactly one DrawCrossFade");
-        if let DisplayCommand::DrawCrossFade { progress, .. } = cf[0] {
-            assert!((progress - 0.3).abs() < 1e-4, "expected 0.3, got {progress}");
-        }
-    }
-
-    #[test]
-    fn cross_fade_emit_at_100_percent() {
-        // cross-fade at 100% → progress = 1.0 → fully image B.
-        let dl = build(
-            "<div></div>",
-            "div { width: 100px; height: 60px; \
-             background-image: cross-fade(url(a.png), url(b.png), 100%); }",
-        );
-        let cf: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawCrossFade { .. })).collect();
-        assert_eq!(cf.len(), 1);
-        if let DisplayCommand::DrawCrossFade { progress, .. } = cf[0] {
-            assert!((progress - 1.0).abs() < 1e-4, "expected 1.0, got {progress}");
-        }
     }
 }

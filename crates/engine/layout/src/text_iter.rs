@@ -142,7 +142,7 @@ mod tests {
             node: NodeId::from_index(1),
             rect,
             style: ComputedStyle::root(),
-            kind: BoxKind::InlineRun { segments: vec![], lines },
+            kind: BoxKind::InlineRun { segments: vec![], lines, first_line_style: None },
             children: vec![],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,

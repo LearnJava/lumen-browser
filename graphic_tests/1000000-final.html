@@ -604,6 +604,45 @@
   <div style="width:80px;height:60px;border:10px solid #3182ce;padding:10px;background-color:#2d3748;background-image:url(../samples/images/perceptron.png);background-size:30px 24px;background-repeat:no-repeat;background-position:0% 0%;background-origin:content-box;"></div>
 </div>
 
+<!-- canvas 2D (HTML LS §4.12.4): getContext('2d') fillRect/arc/path -->
+<div style="margin-top:12px;display:flex;gap:12px;align-items:flex-start;">
+  <canvas id="final-canvas" width="200" height="80" style="background:#1e293b;border:1px solid #38bdf8;"></canvas>
+</div>
+<script>
+  (function () {
+    var el = document.getElementById('final-canvas');
+    if (!el || !el.getContext) return;
+    var ctx = el.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(10, 15, 50, 50);
+    ctx.fillStyle = '#22c55e';
+    ctx.beginPath();
+    ctx.arc(110, 40, 28, 0, Math.PI * 2, false);
+    ctx.fill();
+    ctx.fillStyle = '#ec4899';
+    ctx.beginPath();
+    ctx.moveTo(160, 15);
+    ctx.lineTo(190, 65);
+    ctx.lineTo(150, 65);
+    ctx.closePath();
+    ctx.fill();
+  })();
+</script>
+
+<!-- ::first-letter / ::first-line demo row -->
+<style>
+  .pseudo-row { margin-top: 10px; display: flex; gap: 16px; }
+  .fl-mini { width: 200px; font: 13px/1.6 sans-serif; color: #e2e8f0; background: #1a202c; padding: 6px; border-radius: 3px; }
+  .fl-mini::first-letter { font-size: 36px; font-weight: 700; color: #f6e05e; float: left; line-height: 1; margin-right: 3px; }
+  .fline-mini { width: 200px; font: 13px/1.6 sans-serif; color: #e2e8f0; background: #1a202c; padding: 6px; border-radius: 3px; }
+  .fline-mini::first-line { color: #68d391; font-weight: 700; }
+</style>
+<div class="pseudo-row">
+  <div class="fl-mini">Once upon a time there was a CSS engine.</div>
+  <div class="fline-mini">The first line is green and bold via ::first-line style override.</div>
+</div>
+
 </div><!-- /card -->
 </body>
 </html>

@@ -16,6 +16,7 @@ pub mod animation;
 pub mod box_tree;
 pub mod counters;
 pub mod image_gating;
+pub mod motion_path;
 pub mod page;
 pub mod pagination;
 pub mod property_trees;
@@ -54,6 +55,7 @@ pub use selector_query::{
     computed_style_by_selector, computed_style_to_map, find_all_by_selector,
     find_box_by_selector, query_all, ComputedStyleSnapshot,
 };
+pub use motion_path::{resolve_motion_transform, MotionTransform};
 pub use text_iter::{collect_visible_text, TextFragment};
 pub use scroll_timeline::{
     collect_named_scroll_timelines, collect_named_view_timelines,
@@ -103,6 +105,19 @@ pub trait TextMeasurer {
     // CSS: font-variation-settings — вариационные оси здесь не передаются;
     // P4 добавит вариантную версию этого метода после cascade для font-variation-settings.
     fn char_width(&self, ch: char, font_size_px: f32) -> f32;
+
+    /// Ширина символа `ch` с учётом CSS `font-family` каскада.
+    ///
+    /// Перебирает `families` по порядку и возвращает ширину из первого шрифта,
+    /// в котором есть глиф для `ch`. Если ни одна семья не загружена или не
+    /// содержит глиф, делегирует к [`Self::char_width`] (Inter-fallback).
+    ///
+    /// Реализации, поддерживающие несколько шрифтов, должны переопределить
+    /// этот метод. По умолчанию игнорирует `families`.
+    fn char_width_with_families(&self, ch: char, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.char_width(ch, font_size_px)
+    }
 
     /// Descent шрифта в пикселях при размере `font_size_px`.
     /// Используется для IFC strut: определяет, насколько линия строки

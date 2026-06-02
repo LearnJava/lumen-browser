@@ -78,6 +78,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::InlineSpace => "InlineSpace",
         BoxKind::Image { .. } => "Image",
         BoxKind::Video { .. } => "Video",
+        BoxKind::Canvas { .. } => "Canvas",
         BoxKind::Audio { .. } => "Audio",
         BoxKind::FormControl { .. } => "FormControl",
         BoxKind::Skip => "Skip",
@@ -97,6 +98,9 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     }
     if let BoxKind::Video { src, poster } = &b.kind {
         let _ = write!(out, " src={src:?} poster={poster:?}");
+    }
+    if let BoxKind::Canvas { width, height } = &b.kind {
+        let _ = write!(out, " canvas={width}x{height}");
     }
     if let BoxKind::Audio { src, controls } = &b.kind {
         let _ = write!(out, " src={src:?} controls={controls}");
@@ -119,7 +123,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     write_style_attrs(out, &b.style);
     out.push('\n');
 
-    if let BoxKind::InlineRun { segments, lines } = &b.kind {
+    if let BoxKind::InlineRun { segments, lines, .. } = &b.kind {
         let inner = "  ".repeat(depth + 1);
         for (i, seg) in segments.iter().enumerate() {
             write_segment(out, &inner, i, seg);

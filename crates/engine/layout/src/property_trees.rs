@@ -800,6 +800,11 @@ fn walk(
             let (raw_ox, raw_oy, oz) = style.transform_origin;
             let resolved_origin = (raw_ox.resolve(b.rect.width), raw_oy.resolve(b.rect.height), oz);
             let local = compute_local_transform(&style.transform, resolved_origin);
+            // CSS: offset-path, offset-distance, offset-rotate, offset-anchor (CSS Motion Path L1).
+            // P4 wires: if style.offset_path.is_some(), call
+            //   lumen_layout::resolve_motion_transform(&path, dist_px, style.offset_rotate)
+            // and compose the resulting translate+rotate into `local` before pushing the node.
+            // The containing-block length for percent offset-distance is b.rect diagonal.
             trees.transform.nodes.push(TransformNode {
                 id,
                 parent: Some(transform_parent),

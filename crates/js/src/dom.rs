@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
+use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
 use lumen_core::url::Url;
 use lumen_dom::{
     Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
@@ -106,6 +106,34 @@ pub enum NavigateRequest {
     Reload,
 }
 
+// ─── history URL update ───────────────────────────────────────────────────────
+
+/// Notification emitted by `history.pushState`/`history.replaceState` so the
+/// shell can update the address-bar display URL without triggering a page load.
+///
+/// Queued in `pending_history_url_updates` during JS execution; drained by the
+/// shell in `about_to_wait` to update `display_url` and the navigation stack.
+#[derive(Debug, Clone)]
+pub enum HistoryUrlUpdate {
+    /// `history.pushState` — add a same-document entry to the back-stack and
+    /// update the displayed URL.  `new_state_json` is the serialised state
+    /// object for the new entry (used when going forward back to this point).
+    Push {
+        /// New virtual URL to show in the address bar.
+        url: String,
+        /// Serialised JS state object for this new history entry.
+        new_state_json: String,
+    },
+    /// `history.replaceState` — replace the current entry URL only; do not add
+    /// a new back-stack entry.  `new_state_json` replaces the current state.
+    Replace {
+        /// New virtual URL to show in the address bar.
+        url: String,
+        /// Serialised JS state object replacing the current history entry.
+        new_state_json: String,
+    },
+}
+
 /// A popup window request emitted by JS `window.open(url, target, features)`.
 ///
 /// Captured in `window_open_requests` during script execution and drained by the
@@ -138,6 +166,7 @@ pub struct PopupRequest {
 ///              it after all scripts have run.
 /// `fetch_provider` wires `window.fetch()` to the real HTTP stack.
 /// `ws_provider` wires `new WebSocket(url)` to the real WS stack.
+/// `sse_provider` wires `new EventSource(url)` to the real SSE stack.
 /// `ls_store` — shared localStorage partition for this origin; persists across
 ///              page reloads.  Pass a fresh `Arc<Mutex<WebStorage>>` per origin.
 /// `ss_store` — fresh sessionStorage for this page load; created by the caller.
@@ -160,6 +189,7 @@ pub fn install_dom_api(
     nav_out: Arc<Mutex<Option<NavigateRequest>>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
+    sse_provider: Option<Arc<dyn JsSseProvider>>,
     ls_store: Arc<Mutex<WebStorage>>,
     ss_store: Arc<Mutex<WebStorage>>,
     timer_wakeup: Arc<Mutex<Option<f64>>>,
@@ -177,8 +207,9 @@ pub fn install_dom_api(
     window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
+    pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -223,6 +254,7 @@ fn install_primitives(
     nav_out: Arc<Mutex<Option<NavigateRequest>>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
+    sse_provider: Option<Arc<dyn JsSseProvider>>,
     ls_store: Arc<Mutex<WebStorage>>,
     ss_store: Arc<Mutex<WebStorage>>,
     timer_wakeup: Arc<Mutex<Option<f64>>>,
@@ -241,6 +273,7 @@ fn install_primitives(
     window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
+    pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -809,6 +842,29 @@ fn install_primitives(
         reg!("_lumen_history_url", move || -> String {
             h.lock().unwrap().url().to_string()
         });
+
+        // Notify shell of pushState/replaceState URL changes so the address bar
+        // can be updated without a page reload.  Called from history.pushState /
+        // history.replaceState in WEB_API_SHIM after the JS HistoryState is updated.
+        let q = Arc::clone(&pending_history_url_updates);
+        reg!(
+            "_lumen_history_push_url",
+            move |url: String, new_state_json: String| {
+                q.lock()
+                    .unwrap()
+                    .push(HistoryUrlUpdate::Push { url, new_state_json });
+            }
+        );
+
+        let q = Arc::clone(&pending_history_url_updates);
+        reg!(
+            "_lumen_history_replace_url",
+            move |url: String, new_state_json: String| {
+                q.lock()
+                    .unwrap()
+                    .push(HistoryUrlUpdate::Replace { url, new_state_json });
+            }
+        );
     }
 
     // ── navigation (location.href =, assign, replace, reload) ────────────────
@@ -1101,6 +1157,100 @@ fn install_primitives(
                 })
             }
         );
+    }
+
+    // ── Server-Sent Events API (HTML Living Standard §9.2) ───────────────────
+    // Phase 0 model: background recv thread buffers events, JS polls.
+    // _lumen_sse_connect(url) → handle u32 (0 = error / no provider)
+    // _lumen_sse_poll(handle) → Option<String> (JSON event or null)
+    // _lumen_sse_close(handle)
+    {
+        use std::collections::HashMap;
+
+        /// JSON-escape a string into a quoted JSON string literal (`"..."`).
+        ///
+        /// Handles the characters that must be escaped per RFC 8259 §7:
+        /// `"`, `\`, and the C0 control set (`\n`/`\r`/`\t`/`\b`/`\f` plus `\u00XX`).
+        fn json_str(s: &str) -> String {
+            let mut out = String::with_capacity(s.len() + 2);
+            out.push('"');
+            for c in s.chars() {
+                match c {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    '\u{08}' => out.push_str("\\b"),
+                    '\u{0c}' => out.push_str("\\f"),
+                    c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
+
+        // Registry: handle → Box<dyn JsSseSession>
+        let registry: Arc<Mutex<HashMap<u32, Box<dyn lumen_core::ext::JsSseSession>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
+
+        let (reg_c, nid_c, sp) = (Arc::clone(&registry), Arc::clone(&next_id), sse_provider);
+        reg!("_lumen_sse_connect", move |url: String| -> u32 {
+            let Some(ref provider) = sp else { return 0 };
+            match provider.connect_sse(&url) {
+                Ok(session) => {
+                    let id = {
+                        let mut n = nid_c.lock().unwrap();
+                        let id = *n;
+                        *n = n.wrapping_add(1).max(1);
+                        id
+                    };
+                    reg_c.lock().unwrap().insert(id, session);
+                    id
+                }
+                Err(e) => {
+                    eprintln!("[JS SSE] connect error: {e}");
+                    0
+                }
+            }
+        });
+
+        let reg_c = Arc::clone(&registry);
+        reg!("_lumen_sse_poll", move |handle: u32| -> Option<String> {
+            let map = reg_c.lock().unwrap();
+            let sess = map.get(&handle)?;
+            sess.poll().map(|ev| match ev {
+                JsSseEvent::Open => r#"{"t":"open"}"#.to_string(),
+                JsSseEvent::Message {
+                    event_type,
+                    data,
+                    id,
+                } => {
+                    let id_json = id
+                        .as_deref()
+                        .map_or_else(|| "null".to_string(), json_str);
+                    format!(
+                        r#"{{"t":"message","event":{},"data":{},"id":{}}}"#,
+                        json_str(&event_type),
+                        json_str(&data),
+                        id_json
+                    )
+                }
+                JsSseEvent::Close => r#"{"t":"close"}"#.to_string(),
+                JsSseEvent::Error(e) => {
+                    format!(r#"{{"t":"error","message":{}}}"#, json_str(&e))
+                }
+            })
+        });
+
+        let reg_c = Arc::clone(&registry);
+        reg!("_lumen_sse_close", move |handle: u32| {
+            if let Some(mut sess) = reg_c.lock().unwrap().remove(&handle) {
+                sess.close();
+            }
+        });
     }
 
     // ── localStorage ─────────────────────────────────────────────────────────
@@ -2510,6 +2660,8 @@ function _lumen_fire_slotchange(host_nid) {
 var _validity_msg = {};
 // nid → current input value (undefined → fall back to value attribute)
 var _input_values = {};
+// nid → cached CanvasRenderingContext2D object (persists across _lumen_make_element).
+var _canvas2d_ctxs = {};
 
 // ValidityState — readonly snapshot of one form control's validity.
 function ValidityState(flags) {
@@ -2603,6 +2755,108 @@ function _compute_validity(el) {
     if (customMsg) flags.customError = true;
 
     return new ValidityState(flags);
+}
+
+// ── Canvas 2D context factory (HTML LS §4.12.4) ─────────────────────────────────
+// Builds a CanvasRenderingContext2D backed by the native _lumen_canvas2d_* bindings
+// (lumen_canvas::Context2D), keyed by the canvas element's node index `nid`.
+// Drawing methods forward to the native rasterizer; the shell uploads the pixel
+// buffer to the renderer under `canvas:{nid}` each frame.
+function _lumen_make_canvas2d_ctx(canvasEl, nid) {
+    var _fillStyle = '#000000';
+    var _strokeStyle = '#000000';
+    var _lineWidth = 1.0;
+    var _globalAlpha = 1.0;
+    var ctx = {
+        canvas: canvasEl,
+        get fillStyle() { return _fillStyle; },
+        set fillStyle(v) { _fillStyle = String(v); _lumen_canvas2d_set_fill_style(nid, _fillStyle); },
+        get strokeStyle() { return _strokeStyle; },
+        set strokeStyle(v) { _strokeStyle = String(v); _lumen_canvas2d_set_stroke_style(nid, _strokeStyle); },
+        get lineWidth() { return _lineWidth; },
+        set lineWidth(v) { var n = Number(v); if (isFinite(n) && n > 0) { _lineWidth = n; _lumen_canvas2d_set_line_width(nid, n); } },
+        get globalAlpha() { return _globalAlpha; },
+        set globalAlpha(v) { var n = Number(v); if (isFinite(n) && n >= 0 && n <= 1) { _globalAlpha = n; _lumen_canvas2d_set_global_alpha(nid, n); } },
+        fillRect: function(x, y, w, h) { _lumen_canvas2d_fill_rect(nid, +x, +y, +w, +h); },
+        clearRect: function(x, y, w, h) { _lumen_canvas2d_clear_rect(nid, +x, +y, +w, +h); },
+        strokeRect: function(x, y, w, h) { _lumen_canvas2d_stroke_rect(nid, +x, +y, +w, +h); },
+        beginPath: function() { _lumen_canvas2d_begin_path(nid); },
+        moveTo: function(x, y) { _lumen_canvas2d_move_to(nid, +x, +y); },
+        lineTo: function(x, y) { _lumen_canvas2d_line_to(nid, +x, +y); },
+        closePath: function() { _lumen_canvas2d_close_path(nid); },
+        arc: function(cx, cy, r, sa, ea, ccw) { _lumen_canvas2d_arc(nid, +cx, +cy, +r, +sa, +ea, !!ccw); },
+        fill: function() { _lumen_canvas2d_fill(nid); },
+        stroke: function() { _lumen_canvas2d_stroke(nid); },
+        rect: function(x, y, w, h) {
+            this.moveTo(x, y); this.lineTo(x + w, y);
+            this.lineTo(x + w, y + h); this.lineTo(x, y + h); this.closePath();
+        },
+        ellipse: function(x, y, rx, ry, rot, sa, ea, ccw) {
+            // Phase 0: approximate with a circle of the averaged radius.
+            this.arc(x, y, (Number(rx) + Number(ry)) / 2, sa, ea, ccw);
+        },
+        getImageData: function(x, y, sw, sh) {
+            var raw = _lumen_canvas2d_get_image_data(nid);
+            if (!raw) { return { width: sw|0, height: sh|0, data: new Uint8ClampedArray((sw|0) * (sh|0) * 4) }; }
+            var comma1 = raw.indexOf(','), comma2 = raw.indexOf(',', comma1 + 1);
+            var w = parseInt(raw.substring(0, comma1), 10);
+            var h = parseInt(raw.substring(comma1 + 1, comma2), 10);
+            var hex = raw.substring(comma2 + 1);
+            var len = hex.length >> 1;
+            var arr = new Uint8ClampedArray(len);
+            for (var i = 0; i < len; i++) { arr[i] = parseInt(hex.substr(i * 2, 2), 16); }
+            return { width: w, height: h, data: arr };
+        },
+        // Phase 0 no-ops / stubs (state save/restore, transforms, text, shadows).
+        save: function() {}, restore: function() {},
+        scale: function() {}, rotate: function() {}, translate: function() {},
+        transform: function() {}, setTransform: function() {}, resetTransform: function() {},
+        clip: function() {},
+        putImageData: function() {},
+        drawImage: function() {},
+        fillText: function() {}, strokeText: function() {},
+        measureText: function(t) { var s = String(t == null ? '' : t); return { width: s.length * 8, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; },
+        bezierCurveTo: function() {}, quadraticCurveTo: function() {},
+        arcTo: function() {},
+        setLineDash: function() {}, getLineDash: function() { return []; },
+        isPointInPath: function() { return false; }, isPointInStroke: function() { return false; },
+        createLinearGradient: function() { return { addColorStop: function() {} }; },
+        createRadialGradient: function() { return { addColorStop: function() {} }; },
+        createConicGradient: function() { return { addColorStop: function() {} }; },
+        createPattern: function() { return null; },
+        createImageData: function(w, h) { return { width: w|0, height: h|0, data: new Uint8ClampedArray((w|0) * (h|0) * 4) }; },
+    };
+    // Stub appearance/text properties accepted but not rendered in Phase 0.
+    var _stubProps = ['shadowColor','shadowBlur','shadowOffsetX','shadowOffsetY','font',
+        'textAlign','textBaseline','direction','globalCompositeOperation','lineCap',
+        'lineJoin','miterLimit','lineDashOffset','imageSmoothingEnabled','filter'];
+    for (var _pi = 0; _pi < _stubProps.length; _pi++) {
+        (function(name) {
+            var _val = (name === 'globalCompositeOperation') ? 'source-over'
+                : (name === 'lineCap') ? 'butt'
+                : (name === 'lineJoin') ? 'miter'
+                : (name === 'miterLimit') ? 10
+                : (name === 'imageSmoothingEnabled') ? true
+                : (name === 'font') ? '10px sans-serif'
+                : (name === 'shadowColor') ? 'rgba(0, 0, 0, 0)'
+                : (name === 'filter') ? 'none' : 0;
+            Object.defineProperty(ctx, name, {
+                get: function() { return _val; }, set: function(v) { _val = v; }, configurable: true,
+            });
+        })(_stubProps[_pi]);
+    }
+    return ctx;
+}
+
+// Resolve a canvas element's bitmap width/height (HTML LS §4.12.4 defaults 300×150).
+function _lumen_canvas_dims(nid) {
+    var aw = _lumen_u2n(_lumen_get_attr(nid, 'width'));
+    var ah = _lumen_u2n(_lumen_get_attr(nid, 'height'));
+    var w = (aw !== null) ? (parseInt(aw, 10) || 300) : 300;
+    var h = (ah !== null) ? (parseInt(ah, 10) || 150) : 150;
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    return [w, h];
 }
 
 // ── Element factory ───────────────────────────────────────────────────────────
@@ -2754,6 +3008,60 @@ function _lumen_make_element(nid) {
             if (!r) { return { x:0, y:0, width:0, height:0, top:0, right:0, bottom:0, left:0 }; }
             return { x: r[0], y: r[1], width: r[2], height: r[3],
                      top: r[1], left: r[0], right: r[0]+r[2], bottom: r[1]+r[3] };
+        },
+        // HTMLCanvasElement.getContext (HTML LS §4.12.4). '2d' returns a cached
+        // CanvasRenderingContext2D; 'webgl'/'webgl2' fall through to null (the
+        // functional WebGL path is the separate webgl_canvas shim). Only meaningful
+        // on <canvas>; harmless on other elements (creates an unused buffer at most).
+        getContext: function(contextType) {
+            var t = ('' + (contextType || '')).toLowerCase();
+            if (t === '2d') {
+                if (_canvas2d_ctxs[nid]) return _canvas2d_ctxs[nid];
+                if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
+                var d = _lumen_canvas_dims(nid);
+                _lumen_canvas2d_create(nid, d[0], d[1]);
+                var c2d = _lumen_make_canvas2d_ctx(this, nid);
+                _canvas2d_ctxs[nid] = c2d;
+                return c2d;
+            }
+            return null;
+        },
+        // Privacy: blank data URL defeats canvas pixel-hash fingerprinting (ADR-007).
+        toDataURL: function() {
+            return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        },
+        toBlob: function(cb) { if (typeof cb === 'function') cb(null); },
+        // HTMLCanvasElement.width/height reflect content attributes as unsigned long
+        // (HTML LS §4.12.4). Setting resizes the backing bitmap (which clears it).
+        // Only wired for <canvas>; other elements keep attribute-string semantics
+        // via getAttribute and are unaffected by these accessors.
+        get width() {
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas') {
+                return _lumen_canvas_dims(nid)[0];
+            }
+            var v = _lumen_u2n(_lumen_get_attr(nid, 'width'));
+            return v !== null ? (parseInt(v, 10) || 0) : 0;
+        },
+        set width(v) {
+            var n = parseInt(v, 10); if (!(n >= 0)) n = 0;
+            _lumen_set_attr(nid, 'width', String(n));
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas' && _canvas2d_ctxs[nid]) {
+                var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
+            }
+        },
+        get height() {
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas') {
+                return _lumen_canvas_dims(nid)[1];
+            }
+            var v = _lumen_u2n(_lumen_get_attr(nid, 'height'));
+            return v !== null ? (parseInt(v, 10) || 0) : 0;
+        },
+        set height(v) {
+            var n = parseInt(v, 10); if (!(n >= 0)) n = 0;
+            _lumen_set_attr(nid, 'height', String(n));
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() === 'canvas' && _canvas2d_ctxs[nid]) {
+                var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
+            }
         },
         get offsetWidth()  { var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get offsetHeight() { var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
@@ -2938,6 +3246,13 @@ function _lumen_make_element(nid) {
         get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
         enumerable: false, configurable: true,
     });
+    // Web Animations API (WAAPI Level 1) — element.animate() and getAnimations().
+    _obj.animate = function(keyframes, options) {
+        return _wa_element_animate(this, keyframes, options);
+    };
+    _obj.getAnimations = function() {
+        return _wa_get_animations_for(this);
+    };
     return _obj;
 }
 
@@ -3303,6 +3618,9 @@ var document = {
     queryCommandValue:     function(cmd) { return ''; },
     queryCommandSupported: function(cmd) { return true; },
     queryCommandIndeterm:  function(cmd) { return false; },
+    // Web Animations API (WAAPI Level 1) — document.timeline and document.getAnimations().
+    get timeline() { return _wa_doc_timeline; },
+    getAnimations: function() { return _wa_doc_get_animations(); },
 };
 
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
@@ -3973,6 +4291,7 @@ function cancelAnimationFrame(id) {
 // Snapshot-pattern per spec: new rAF calls during callbacks go into the NEXT
 // frame. Returns true when any callback was invoked (for relayout check).
 function _lumen_run_raf_callbacks(timestamp_ms) {
+    _wa_current_time = +timestamp_ms;
     var callbacks = _lumen_raf_callbacks.splice(0);
     if (callbacks.length === 0) return false;
     for (var i = 0; i < callbacks.length; i++) {
@@ -3983,6 +4302,22 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
 
 var _popstate_listeners = [];
 
+// Called by the shell (via eval_js) when the user navigates back/forward to a
+// same-document (pushState) history entry.  Updates location and fires popstate.
+// state_json is already valid JSON; url may be empty (means keep current).
+function _lumen_deliver_popstate(state_json, url) {
+    if (url) _lumen_location_update(url);
+    var s;
+    try { s = JSON.parse(state_json); } catch(e) { s = null; }
+    var ev = new PopStateEvent('popstate', { state: s, bubbles: true });
+    if (typeof window.onpopstate === 'function') {
+        try { window.onpopstate(ev); } catch(e) {}
+    }
+    for (var i = 0; i < _popstate_listeners.length; i++) {
+        try { _popstate_listeners[i](ev); } catch(e) {}
+    }
+}
+
 var history = {
     get length()  { return _lumen_history_length(); },
     get state()   {
@@ -3990,13 +4325,21 @@ var history = {
     },
     pushState:    function(state, title, url) {
         var target = String(url !== undefined && url !== null ? url : '');
-        _lumen_history_push(JSON.stringify(state !== undefined ? state : null), target);
-        if (target) _lumen_location_update(target);
+        var new_state_json = JSON.stringify(state !== undefined ? state : null);
+        _lumen_history_push(new_state_json, target);
+        if (target) {
+            _lumen_location_update(target);
+            _lumen_history_push_url(target, new_state_json);
+        }
     },
     replaceState: function(state, title, url) {
         var target = String(url !== undefined && url !== null ? url : '');
-        _lumen_history_replace(JSON.stringify(state !== undefined ? state : null), target);
-        if (target) _lumen_location_update(target);
+        var new_state_json = JSON.stringify(state !== undefined ? state : null);
+        _lumen_history_replace(new_state_json, target);
+        if (target) {
+            _lumen_location_update(target);
+            _lumen_history_replace_url(target, new_state_json);
+        }
     },
     back:    function() { history.go(-1); },
     forward: function() { history.go(1); },
@@ -4016,15 +4359,112 @@ var history = {
     },
 };
 
-function EventSource(url) {
+// ── Server-Sent Events API (HTML Living Standard §9.2) ─────────────────────
+// Phase 0 model: synchronous connect; background recv thread queues events;
+// JS polls via _lumen_pump_sse(). Mirrors the WebSocket polling model.
+
+var _sse_instances = [];
+
+function _lumen_sse_fire(es, type, ev) {
+    ev.target = es;
+    if (type === 'message' && typeof es.onmessage === 'function') {
+        try { es.onmessage(ev); } catch(e) {}
+    } else if (type === 'open' && typeof es.onopen === 'function') {
+        try { es.onopen(ev); } catch(e) {}
+    } else if (type === 'error' && typeof es.onerror === 'function') {
+        try { es.onerror(ev); } catch(e) {}
+    }
+    var arr = es._listeners[type];
+    if (arr) { for (var i = 0; i < arr.length; i++) { try { arr[i](ev); } catch(e) {} } }
+}
+
+function _lumen_sse_pump_one(es) {
+    if (!es._handle) return;
+    var raw;
+    while ((raw = _lumen_sse_poll(es._handle)) !== null && raw !== undefined) {
+        try {
+            var ev = JSON.parse(raw);
+            if (ev.t === 'open') {
+                if (es.readyState === 2) { continue; }
+                es.readyState = 1;
+                _lumen_sse_fire(es, 'open', new Event('open', { isTrusted: true }));
+            } else if (ev.t === 'message') {
+                if (es.readyState === 2) { continue; }
+                var type = ev.event || 'message';
+                var me = new MessageEvent(ev.data != null ? ev.data : '', { isTrusted: true });
+                me.type = type;
+                me.lastEventId = ev.id != null ? ev.id : '';
+                me.origin = es._origin;
+                if (me.lastEventId) { es._lastEventId = me.lastEventId; }
+                _lumen_sse_fire(es, type, me);
+            } else if (ev.t === 'close') {
+                es.readyState = 2;
+                _lumen_sse_close(es._handle);
+                es._handle = 0;
+                break;
+            } else if (ev.t === 'error') {
+                // Per spec a failed connection fires `error` and stays/transitions
+                // to CLOSED when no reconnection is attempted (Phase 0: no retry).
+                es.readyState = 2;
+                var err = new Event('error', { isTrusted: true });
+                err.message = ev.message;
+                _lumen_sse_fire(es, 'error', err);
+                es._handle = 0;
+                break;
+            }
+        } catch(ignore) {}
+    }
+}
+
+function _lumen_pump_sse() {
+    for (var i = _sse_instances.length - 1; i >= 0; i--) {
+        _lumen_sse_pump_one(_sse_instances[i]);
+        if (_sse_instances[i].readyState === 2 && !_sse_instances[i]._handle) {
+            _sse_instances.splice(i, 1);
+        }
+    }
+}
+
+function EventSource(url, opts) {
     this.url = String(url || '');
-    this.readyState = 0;
+    this.readyState = 0; // CONNECTING
+    this.withCredentials = !!(opts && opts.withCredentials);
     this.onopen = null;
     this.onmessage = null;
     this.onerror = null;
     this._listeners = {};
+    this._handle = 0;
+    this._lastEventId = '';
+    // Origin best-effort: scheme+host of the target URL (for MessageEvent.origin).
+    this._origin = '';
+    var _sep = this.url.indexOf('://');
+    if (_sep >= 0) {
+        var _rest = this.url.slice(_sep + 3);
+        var _end = _rest.length;
+        var _slash = _rest.indexOf('/'); if (_slash >= 0 && _slash < _end) _end = _slash;
+        var _q = _rest.indexOf('?'); if (_q >= 0 && _q < _end) _end = _q;
+        var _hash = _rest.indexOf('#'); if (_hash >= 0 && _hash < _end) _end = _hash;
+        this._origin = this.url.slice(0, _sep + 3) + _rest.slice(0, _end);
+    }
+    var self = this;
+    var h = _lumen_sse_connect(this.url);
+    if (!h) {
+        // No provider, or the connection could not be established: fail per spec.
+        this.readyState = 2; // CLOSED
+        setTimeout(function() {
+            var e = new Event('error', { isTrusted: true });
+            e.message = 'EventSource connection failed';
+            _lumen_sse_fire(self, 'error', e);
+        }, 0);
+        return;
+    }
+    this._handle = h;
+    _sse_instances.push(this);
+    // Phase 0: no persistent event loop — caller must invoke _lumen_pump_sse()
+    // after setting onopen/onmessage to receive queued events.
 }
 EventSource.prototype.addEventListener = function(type, fn) {
+    if (typeof fn !== 'function') return;
     if (!this._listeners[type]) this._listeners[type] = [];
     this._listeners[type].push(fn);
 };
@@ -4033,7 +4473,13 @@ EventSource.prototype.removeEventListener = function(type, fn) {
     var idx = this._listeners[type].indexOf(fn);
     if (idx >= 0) this._listeners[type].splice(idx, 1);
 };
-EventSource.prototype.close = function() { this.readyState = 2; };
+EventSource.prototype.close = function() {
+    if (this._handle) {
+        _lumen_sse_close(this._handle);
+        this._handle = 0;
+    }
+    this.readyState = 2; // CLOSED
+};
 EventSource.CONNECTING = 0;
 EventSource.OPEN = 1;
 EventSource.CLOSED = 2;
@@ -5418,6 +5864,7 @@ var window = {
     CloseEvent: CloseEvent,
     MessageEvent: MessageEvent,
     _lumen_pump_websockets: _lumen_pump_websockets,
+    _lumen_pump_sse: _lumen_pump_sse,
     caches: caches,
     document: document,
     console: console,
@@ -6192,6 +6639,8 @@ window.WheelEvent            = WheelEvent;
 window.PointerEvent          = PointerEvent;
 window.AnimationEvent        = AnimationEvent;
 window.TransitionEvent       = TransitionEvent;
+window.Animation             = Animation;
+window.KeyframeEffect        = KeyframeEffect;
 window.StorageEvent          = StorageEvent;
 window.PopStateEvent         = PopStateEvent;
 window.HashChangeEvent       = HashChangeEvent;
@@ -7494,6 +7943,460 @@ document.addEventListener('keydown', function(evt) {
     }
 });
 
+// ── Web Animations API (WAAPI Level 1) ────────────────────────────────────────
+// element.animate(keyframes, options) → Animation
+// KeyframeEffect / Animation / document.timeline / element.getAnimations()
+//
+// P1 scope: value interpolation + JS objects. Style applied via element.style
+// (inline layer, overrides normal CSS). Compositor offload (P2) and CSS
+// animation-timeline scheduling (P4) are separate tasks.
+
+// Current animation timeline time — updated at the start of every RAF tick.
+var _wa_current_time = 0;
+
+// Live registry of all non-idle Animation instances.
+var _wa_animations = [];
+
+// DocumentTimeline — wraps the document's global animation timeline.
+function DocumentTimeline(options) {
+    this._originTime = (options && options.originTime != null) ? +options.originTime : 0;
+}
+Object.defineProperty(DocumentTimeline.prototype, 'currentTime', {
+    get: function() { return _wa_current_time > 0 ? _wa_current_time - this._originTime : null; },
+    configurable: true,
+});
+
+// Singleton document timeline — shared across all animations on the page.
+var _wa_doc_timeline = new DocumentTimeline();
+
+// Normalize the keyframes argument into a sorted array of
+// { offset, easing, composite, <prop>: <value> } objects.
+function _wa_normalize_keyframes(keyframes) {
+    if (!keyframes) return [];
+    var result = [];
+    if (Array.isArray(keyframes)) {
+        var n = keyframes.length;
+        for (var i = 0; i < n; i++) {
+            var src = keyframes[i] || {};
+            var kf = {};
+            kf.offset = (src.offset != null) ? +src.offset : (n <= 1 ? 0 : i / (n - 1));
+            kf.easing = src.easing || 'linear';
+            kf.composite = src.composite || 'replace';
+            for (var p in src) {
+                if (p !== 'offset' && p !== 'easing' && p !== 'composite') kf[p] = src[p];
+            }
+            result.push(kf);
+        }
+    } else {
+        // Property-indexed form: { opacity: [0, 1], transform: ['none', 'rotate(90deg)'] }
+        var offsets = Array.isArray(keyframes.offset) ? keyframes.offset : null;
+        var len = 0;
+        var propNames = [];
+        for (var pp in keyframes) {
+            if (pp !== 'offset' && pp !== 'easing' && pp !== 'composite' && Array.isArray(keyframes[pp])) {
+                if (keyframes[pp].length > len) len = keyframes[pp].length;
+                propNames.push(pp);
+            }
+        }
+        for (var j = 0; j < len; j++) {
+            var kf2 = {};
+            kf2.offset = (offsets && offsets[j] != null) ? +offsets[j] : (len <= 1 ? 0 : j / (len - 1));
+            kf2.easing = (Array.isArray(keyframes.easing) ? keyframes.easing[j] : keyframes.easing) || 'linear';
+            kf2.composite = 'replace';
+            for (var k = 0; k < propNames.length; k++) {
+                var arr = keyframes[propNames[k]];
+                kf2[propNames[k]] = arr[j];
+            }
+            result.push(kf2);
+        }
+    }
+    result.sort(function(a, b) { return a.offset - b.offset; });
+    return result;
+}
+
+// Easing functions: linear / ease / ease-in / ease-out / ease-in-out.
+function _wa_ease(t, easing) {
+    if (!easing || easing === 'linear') return t;
+    if (easing === 'ease-in')  return t * t;
+    if (easing === 'ease-out') return t * (2 - t);
+    if (easing === 'ease' || easing === 'ease-in-out') return t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+    if (easing === 'step-start') return t > 0 ? 1 : 0;
+    if (easing === 'step-end')   return t >= 1 ? 1 : 0;
+    // cubic-bezier(p1x, p1y, p2x, p2y) — approximate with de Casteljau.
+    var m = easing.match(/^cubic-bezier\\(([^,]+),([^,]+),([^,]+),([^)]+)\\)$/);
+    if (m) {
+        var p1x = +m[1], p1y = +m[2], p2x = +m[3], p2y = +m[4];
+        // Newton's method to find t_css for x == t, then return y.
+        var u = t;
+        for (var iter = 0; iter < 8; iter++) {
+            var cx = 3*p1x, bx = 3*(p2x-p1x)-cx, ax = 1-cx-bx;
+            var x = ((ax*u+bx)*u+cx)*u;
+            var dx = (3*ax*u+2*bx)*u+cx;
+            if (Math.abs(dx) < 1e-8) break;
+            u -= (x - t) / dx;
+        }
+        var cy = 3*p1y, by = 3*(p2y-p1y)-cy, ay = 1-cy-by;
+        return ((ay*u+by)*u+cy)*u;
+    }
+    return t;
+}
+
+// Parse a CSS color string to [r, g, b, a] (0-255).
+function _wa_parse_color(str) {
+    str = String(str).trim();
+    var m;
+    if ((m = str.match(/^rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)(?:\\s*,\\s*([\\d.]+))?\\s*\\)$/))) {
+        return [+m[1], +m[2], +m[3], m[4] != null ? Math.round(+m[4]*255) : 255];
+    }
+    if (str.charAt(0) === '#') {
+        var h = str.slice(1);
+        if (h.length === 3)  h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+        if (h.length === 6)  h += 'ff';
+        if (h.length === 8)  return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16),parseInt(h.slice(6,8),16)];
+    }
+    return null;
+}
+
+// Lerp a CSS color.
+function _wa_lerp_color(a, b, t) {
+    var ca = _wa_parse_color(a), cb = _wa_parse_color(b);
+    if (!ca || !cb) return t < 0.5 ? a : b;
+    function lr(x, y) { return Math.round(x + (y-x)*t); }
+    var al = lr(ca[3], cb[3]);
+    if (al === 255) return 'rgb('+lr(ca[0],cb[0])+','+lr(ca[1],cb[1])+','+lr(ca[2],cb[2])+')';
+    return 'rgba('+lr(ca[0],cb[0])+','+lr(ca[1],cb[1])+','+lr(ca[2],cb[2])+','+(al/255).toFixed(4)+')';
+}
+
+// Lerp a single CSS scalar+unit value (e.g. '100px', '0.5').
+function _wa_lerp_scalar(a, b, t) {
+    var na = parseFloat(a), nb = parseFloat(b);
+    if (isNaN(na) || isNaN(nb)) return t < 0.5 ? a : b;
+    var v = na + (nb - na) * t;
+    var ua = String(a).replace(/[0-9. +-]/g, '');
+    var ub = String(b).replace(/[0-9. +-]/g, '');
+    return v + (ua || ub || '');
+}
+
+// CSS color-like property names.
+var _wa_color_props = {
+    color:1, backgroundColor:1, borderColor:1, outlineColor:1,
+    borderTopColor:1, borderRightColor:1, borderBottomColor:1, borderLeftColor:1,
+    textDecorationColor:1, fill:1, stroke:1
+};
+
+// Parse a transform function string: 'rotate(90deg)' → {name:'rotate', args:['90deg']}.
+function _wa_parse_tfn(s) {
+    var m = s.match(/^(\\w+)\\(([^)]*)\\)$/);
+    return m ? { name: m[1], args: m[2].split(',').map(function(a){ return a.trim(); }) } : null;
+}
+
+// Lerp two transform strings using matched-pair lerp when possible.
+function _wa_lerp_transform(from, to, t) {
+    if (from === to) return from;
+    if (from === 'none' && to === 'none') return 'none';
+    if (from === 'none') return to;
+    if (to === 'none') return from;
+    var fns_a = from.match(/\\w+\\([^)]*\\)/g) || [];
+    var fns_b = to.match(/\\w+\\([^)]*\\)/g) || [];
+    if (fns_a.length !== fns_b.length) return t < 0.5 ? from : to;
+    var out = [];
+    for (var i = 0; i < fns_a.length; i++) {
+        var fa = _wa_parse_tfn(fns_a[i]), fb = _wa_parse_tfn(fns_b[i]);
+        if (!fa || !fb || fa.name !== fb.name) return t < 0.5 ? from : to;
+        var args = [];
+        for (var j = 0; j < fa.args.length; j++) args.push(_wa_lerp_scalar(fa.args[j], fb.args[j], t));
+        out.push(fa.name + '(' + args.join(', ') + ')');
+    }
+    return out.join(' ');
+}
+
+// Interpolate a single CSS property value between two string values.
+function _wa_interp_prop(prop, from, to, t) {
+    if (from === to) return from;
+    if (_wa_color_props[prop]) return _wa_lerp_color(from, to, t);
+    if (prop === 'opacity') {
+        var fa2 = parseFloat(from), fb2 = parseFloat(to);
+        if (!isNaN(fa2) && !isNaN(fb2)) return String(+(fa2+(fb2-fa2)*t).toFixed(6));
+    }
+    if (prop === 'transform') return _wa_lerp_transform(from, to, t);
+    return _wa_lerp_scalar(from, to, t);
+}
+
+// Compute the per-property interpolated styles for a KeyframeEffect at progress p.
+function _wa_compute_at_p(effect, p) {
+    var kfs = effect._keyframes;
+    if (!kfs || !kfs.length) return {};
+    // Find surrounding keyframe pair.
+    var from = kfs[0], to = kfs[kfs.length - 1];
+    for (var i = 0; i < kfs.length - 1; i++) {
+        if (kfs[i].offset <= p && kfs[i+1].offset >= p) { from = kfs[i]; to = kfs[i+1]; break; }
+    }
+    var span = to.offset - from.offset;
+    var lt = span < 1e-7 ? 1 : Math.max(0, Math.min(1, (p - from.offset) / span));
+    lt = _wa_ease(lt, from.easing || 'linear');
+    var result = {};
+    for (var fp in from) {
+        if (fp === 'offset' || fp === 'easing' || fp === 'composite') continue;
+        result[fp] = (fp in to) ? _wa_interp_prop(fp, from[fp], to[fp], lt) : from[fp];
+    }
+    for (var tp in to) {
+        if (tp === 'offset' || tp === 'easing' || tp === 'composite') continue;
+        if (!(tp in result)) result[tp] = to[tp];
+    }
+    return result;
+}
+
+// Compute the iteration progress [0,1] from animation timing and currentTime.
+function _wa_iter_progress(timing, ct) {
+    var dur = +timing.duration || 0;
+    if (dur <= 0) return 1;
+    var delay = +(timing.delay || 0);
+    var elapsed = ct - delay;
+    var fill = timing.fill || 'auto';
+    if (elapsed < 0) {
+        return (fill === 'backwards' || fill === 'both') ? 0 : -1;
+    }
+    var maxIter = (timing.iterations === Infinity || timing.iterations == null) ? Infinity : +(timing.iterations) || 1;
+    var totalDur = maxIter === Infinity ? Infinity : dur * maxIter;
+    if (totalDur !== Infinity && elapsed >= totalDur) {
+        return (fill === 'forwards' || fill === 'both') ? 1 : -2;
+    }
+    var iterFloor = Math.floor(elapsed / dur);
+    var iterProg = (elapsed % dur) / dur;
+    var dir = timing.direction || 'normal';
+    var isOdd = iterFloor % 2 === 1;
+    var directed = iterProg;
+    if      (dir === 'reverse')           directed = 1 - iterProg;
+    else if (dir === 'alternate')         directed = isOdd ? 1 - iterProg : iterProg;
+    else if (dir === 'alternate-reverse') directed = isOdd ? iterProg : 1 - iterProg;
+    return _wa_ease(Math.max(0, Math.min(1, directed)), timing.easing || 'linear');
+}
+
+// KeyframeEffect constructor (Web Animations §5.1).
+function KeyframeEffect(target, keyframes, options) {
+    this.target = target || null;
+    this._keyframes = _wa_normalize_keyframes(keyframes);
+    var opts = (typeof options === 'number') ? { duration: options } : (options || {});
+    this._timing = {
+        duration:       opts.duration     != null  ? +opts.duration       : 0,
+        delay:          +(opts.delay      || 0),
+        endDelay:       +(opts.endDelay   || 0),
+        fill:           opts.fill         || 'auto',
+        iterationStart: +(opts.iterationStart || 0),
+        iterations:     opts.iterations   != null  ? opts.iterations      : 1,
+        easing:         opts.easing       || 'linear',
+        direction:      opts.direction    || 'normal',
+    };
+    this.composite          = opts.composite          || 'replace';
+    this.iterationComposite = opts.iterationComposite || 'replace';
+    this.pseudoElement      = opts.pseudoElement      || null;
+}
+KeyframeEffect.prototype.getTiming    = function() { return Object.assign({}, this._timing); };
+KeyframeEffect.prototype.updateTiming = function(t) { Object.assign(this._timing, t); };
+KeyframeEffect.prototype.getKeyframes = function() { return this._keyframes.slice(); };
+KeyframeEffect.prototype.setKeyframes = function(kf) { this._keyframes = _wa_normalize_keyframes(kf); };
+
+// Animation constructor (Web Animations §3.4).
+var _wa_anim_seq = 1;
+function Animation(effect, timeline) {
+    this._wid         = _wa_anim_seq++;
+    this.id           = '';
+    this.effect       = effect   || null;
+    this.timeline     = timeline || _wa_doc_timeline;
+    this._startTime   = null;
+    this._holdTime    = null;
+    this._pbRate      = 1;
+    this._state       = 'idle';   // idle | running | paused | finished
+    this._prevStyles  = {};
+    this.onfinish     = null;
+    this.oncancel     = null;
+    this.onremove     = null;
+    var self = this;
+    this.ready    = Promise.resolve(self);
+    this.finished = new Promise(function(res) { self._finishRes = res; });
+    this._rafId   = null;
+}
+
+Object.defineProperty(Animation.prototype, 'currentTime', {
+    get: function() {
+        if (this._holdTime !== null) return this._holdTime;
+        if (this._startTime === null) return null;
+        return (_wa_current_time - this._startTime) * this._pbRate;
+    },
+    set: function(v) {
+        if (v == null) { this._holdTime = null; return; }
+        this._holdTime = +v;
+        if (this._state !== 'paused' && this._startTime !== null) {
+            this._startTime = _wa_current_time - this._holdTime / this._pbRate;
+            this._holdTime = null;
+        }
+    },
+    configurable: true,
+});
+Object.defineProperty(Animation.prototype, 'startTime', {
+    get: function() { return this._startTime; },
+    set: function(v) {
+        this._startTime = (v == null) ? null : +v;
+        this._holdTime  = null;
+        if (this._startTime !== null && this._state === 'idle') this._state = 'running';
+    },
+    configurable: true,
+});
+Object.defineProperty(Animation.prototype, 'playbackRate', {
+    get: function() { return this._pbRate; },
+    set: function(v) { this._pbRate = +v || 1; },
+    configurable: true,
+});
+Object.defineProperty(Animation.prototype, 'playState', {
+    get: function() { return this._state; },
+    configurable: true,
+});
+Object.defineProperty(Animation.prototype, 'pending', {
+    get: function() { return false; },
+    configurable: true,
+});
+
+Animation.prototype.play = function() {
+    var hold = this._holdTime !== null ? this._holdTime : (this._state === 'idle' ? 0 : null);
+    if (hold !== null) {
+        this._startTime = _wa_current_time - hold / this._pbRate;
+        this._holdTime  = null;
+    } else if (this._startTime === null) {
+        this._startTime = _wa_current_time;
+    }
+    this._state = 'running';
+    this._scheduleRaf();
+    var idx = _wa_animations.indexOf(this);
+    if (idx < 0) _wa_animations.push(this);
+};
+
+Animation.prototype.pause = function() {
+    var ct = this.currentTime;
+    this._holdTime  = ct !== null ? ct : 0;
+    this._startTime = null;
+    this._state     = 'paused';
+    this._cancelRaf();
+};
+
+Animation.prototype.cancel = function() {
+    this._clearStyles();
+    this._state     = 'idle';
+    this._startTime = null;
+    this._holdTime  = null;
+    this._cancelRaf();
+    var idx = _wa_animations.indexOf(this);
+    if (idx >= 0) _wa_animations.splice(idx, 1);
+    if (typeof this.oncancel === 'function') try { this.oncancel(new Event('cancel')); } catch(e) {}
+};
+
+Animation.prototype.finish = function() {
+    var eff = this.effect;
+    if (eff) {
+        var t = eff._timing;
+        var maxI = (t.iterations === Infinity || t.iterations == null) ? Infinity : +t.iterations || 1;
+        this._holdTime = maxI === Infinity ? 0 : +t.duration * maxI;
+    }
+    this._state = 'finished';
+    this._applyAtP(1);
+    this._cancelRaf();
+    this._onFinish();
+};
+
+Animation.prototype.reverse = function() {
+    this._pbRate = -this._pbRate;
+    this.play();
+};
+
+Animation.prototype.updatePlaybackRate = function(rate) {
+    this._pbRate = +rate || 1;
+};
+
+Animation.prototype._scheduleRaf = function() {
+    if (this._rafId !== null) return;
+    var self = this;
+    this._rafId = requestAnimationFrame(function(ts) {
+        self._rafId = null;
+        self._tick(ts);
+    });
+};
+
+Animation.prototype._cancelRaf = function() {
+    if (this._rafId !== null) {
+        cancelAnimationFrame(this._rafId);
+        this._rafId = null;
+    }
+};
+
+Animation.prototype._tick = function(now) {
+    if (this._state !== 'running') return;
+    var eff = this.effect;
+    if (!eff) return;
+    var ct = this.currentTime;
+    if (ct === null) return;
+    var p = _wa_iter_progress(eff._timing, ct);
+    if (p === -2) {
+        // Past end — finished
+        this._state = 'finished';
+        this._applyAtP(1);
+        var idx = _wa_animations.indexOf(this);
+        if (idx >= 0) _wa_animations.splice(idx, 1);
+        this._onFinish();
+        return;
+    }
+    if (p === -1) {
+        // Before delay start — apply 'from' frame if fill=backwards|both
+        var fillMode = (eff._timing && eff._timing.fill) || 'auto';
+        if (fillMode === 'backwards' || fillMode === 'both') this._applyAtP(0);
+    } else {
+        this._applyAtP(p);
+    }
+    this._scheduleRaf();
+};
+
+Animation.prototype._applyAtP = function(p) {
+    var eff = this.effect;
+    if (!eff || !eff.target) return;
+    var styles = _wa_compute_at_p(eff, p);
+    for (var prop in styles) {
+        try { eff.target.style[prop] = styles[prop]; } catch(e) {}
+    }
+    this._prevStyles = styles;
+};
+
+Animation.prototype._clearStyles = function() {
+    var eff = this.effect;
+    if (!eff || !eff.target) return;
+    for (var prop in this._prevStyles) {
+        try { eff.target.style[prop] = ''; } catch(e) {}
+    }
+    this._prevStyles = {};
+};
+
+Animation.prototype._onFinish = function() {
+    if (typeof this.onfinish === 'function') try { this.onfinish(new Event('finish')); } catch(e) {}
+    if (typeof this._finishRes === 'function') { try { this._finishRes(this); } catch(e) {} this._finishRes = null; }
+};
+
+// element.animate() factory shortcut (Web Animations §3.3).
+function _wa_element_animate(target, keyframes, options) {
+    var eff  = new KeyframeEffect(target, keyframes, options);
+    var anim = new Animation(eff, _wa_doc_timeline);
+    anim.play();
+    return anim;
+}
+
+// element.getAnimations() — all non-idle animations targeting this element.
+function _wa_get_animations_for(target) {
+    return _wa_animations.filter(function(a) {
+        return a._state !== 'idle' && a.effect && a.effect.target === target;
+    });
+}
+
+// document.getAnimations() — all non-idle animations on this document.
+function _wa_doc_get_animations() {
+    return _wa_animations.filter(function(a) { return a._state !== 'idle'; });
+}
+
 // ── DOM GC collect (idle shell tick) ─────────────────────────────────────────
 // Called by the shell's GcTick every 30 s with an array of node IDs that
 // have been detached from the document and have zero live JS references.
@@ -7512,6 +8415,7 @@ function _lumen_gc_collect(nids) {
             }
         }
         delete _input_values[nid];
+        delete _canvas2d_ctxs[nid];
     }
 }
 ";
@@ -7560,7 +8464,7 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(doc, "", None, None, None, None, None).unwrap();
+        rt.install_dom(doc, "", None, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -7568,6 +8472,89 @@ mod tests {
     fn console_log_does_not_crash() {
         let rt = runtime_with_dom(make_doc());
         rt.eval("console.log('hello from test')").unwrap();
+    }
+
+    #[test]
+    fn canvas_get_context_2d_returns_object() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 var ctx = c.getContext('2d');\
+                 ctx !== null && typeof ctx.fillRect === 'function' \
+                   && typeof ctx.beginPath === 'function'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_get_context_2d_caches_same_object() {
+        let rt = runtime_with_dom(make_doc());
+        let same = rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 c.getContext('2d') === c.getContext('2d')",
+            )
+            .unwrap();
+        assert_eq!(same, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_default_dimensions_are_300x150() {
+        let rt = runtime_with_dom(make_doc());
+        let w = rt
+            .eval("var c = document.createElement('canvas'); c.width")
+            .unwrap();
+        let h = rt
+            .eval("var c = document.createElement('canvas'); c.height")
+            .unwrap();
+        assert_eq!(w, lumen_core::JsValue::Number(300.0));
+        assert_eq!(h, lumen_core::JsValue::Number(150.0));
+    }
+
+    #[test]
+    fn canvas_draw_flushes_dirty_buffer() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var c = document.createElement('canvas');\
+             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+             var ctx = c.getContext('2d');\
+             ctx.fillStyle = '#00ff00';\
+             ctx.fillRect(0, 0, 4, 4);",
+        )
+        .unwrap();
+        let updates = rt.flush_canvas_updates();
+        assert_eq!(updates.len(), 1, "one dirty canvas after fillRect");
+        let (_nid, w, h, rgba) = &updates[0];
+        assert_eq!((*w, *h), (4, 4));
+        assert_eq!(rgba[1], 255, "green channel painted");
+    }
+
+    #[test]
+    fn canvas_get_context_webgl_via_2d_shim_is_null() {
+        // The 2D shim's getContext returns null for non-2d types (the functional
+        // WebGL path is the separate webgl_canvas shim, not wired in these tests).
+        let rt = runtime_with_dom(make_doc());
+        let is_null = rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 c.getContext('webgl') === null",
+            )
+            .unwrap();
+        assert_eq!(is_null, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn non_canvas_get_context_2d_is_null() {
+        let rt = runtime_with_dom(make_doc());
+        let is_null = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 d.getContext('2d') === null",
+            )
+            .unwrap();
+        assert_eq!(is_null, lumen_core::JsValue::Bool(true));
     }
 
     #[test]
@@ -9042,7 +10029,7 @@ mod tests {
     fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
         rt
     }
 
@@ -9107,7 +10094,7 @@ mod tests {
     fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
         rt
     }
 
@@ -9158,6 +10145,239 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("_lumen_ws_connect('ws://test')").unwrap();
         assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    // ── EventSource / Server-Sent Events (HTML Living Standard §9.2) ──────────
+
+    /// Mock SSE session feeding a preset event sequence via `poll()`.
+    struct MockSseSession {
+        queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsSseEvent>>,
+    }
+    impl lumen_core::ext::JsSseSession for MockSseSession {
+        fn poll(&self) -> Option<lumen_core::ext::JsSseEvent> {
+            self.queue.lock().unwrap().pop_front()
+        }
+        fn close(&mut self) {}
+    }
+
+    /// Mock SSE provider that queues a fixed event sequence on connect.
+    struct MockSseProvider {
+        events: Vec<lumen_core::ext::JsSseEvent>,
+    }
+    impl lumen_core::ext::JsSseProvider for MockSseProvider {
+        fn connect_sse(
+            &self,
+            _url: &str,
+        ) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsSseSession>> {
+            let q: std::collections::VecDeque<_> = self.events.iter().cloned().collect();
+            Ok(Box::new(MockSseSession {
+                queue: std::sync::Mutex::new(q),
+            }))
+        }
+    }
+
+    fn runtime_with_mock_sse(
+        doc: Arc<Mutex<Document>>,
+        events: Vec<lumen_core::ext::JsSseEvent>,
+    ) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let provider: Arc<dyn lumen_core::ext::JsSseProvider> =
+            Arc::new(MockSseProvider { events });
+        rt.install_dom(doc, "", None, None, Some(provider), None, None, None)
+            .unwrap();
+        rt
+    }
+
+    #[test]
+    fn eventsource_constructor_no_provider_sets_closed() {
+        // Without an sse_provider, _lumen_sse_connect returns 0 → readyState CLOSED.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("var es = new EventSource('https://x/sse'); es.readyState")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn eventsource_no_provider_connect_returns_zero() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_lumen_sse_connect('https://x/sse')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn eventsource_opens_on_sse_connect() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open]);
+        let r = rt
+            .eval(
+                "var opened = false;
+                 var es = new EventSource('https://x/sse');
+                 es.onopen = function() { opened = true; };
+                 _lumen_pump_sse();
+                 [es.readyState, opened]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                // readyState OPEN (1) and onopen fired.
+                assert_eq!(arr[0], lumen_core::JsValue::Number(1.0));
+                assert_eq!(arr[1], lumen_core::JsValue::Bool(true));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_delivers_message() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![
+                JsSseEvent::Open,
+                JsSseEvent::Message {
+                    event_type: "message".into(),
+                    data: "hello world".into(),
+                    id: Some("42".into()),
+                },
+            ],
+        );
+        let r = rt
+            .eval(
+                "var data = null; var lid = null;
+                 var es = new EventSource('https://x/sse');
+                 es.onmessage = function(e) { data = e.data; lid = e.lastEventId; };
+                 _lumen_pump_sse();
+                 [data, lid]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::String("hello world".into()));
+                assert_eq!(arr[1], lumen_core::JsValue::String("42".into()));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_delivers_typed_event() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![
+                JsSseEvent::Open,
+                JsSseEvent::Message {
+                    event_type: "ping".into(),
+                    data: "p".into(),
+                    id: None,
+                },
+            ],
+        );
+        // A named event must reach addEventListener('ping', ...), not onmessage.
+        let r = rt
+            .eval(
+                "var got = null; var onmsg = false;
+                 var es = new EventSource('https://x/sse');
+                 es.onmessage = function() { onmsg = true; };
+                 es.addEventListener('ping', function(e) { got = e.data; });
+                 _lumen_pump_sse();
+                 [got, onmsg]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::String("p".into()));
+                assert_eq!(arr[1], lumen_core::JsValue::Bool(false));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_close_sets_closed() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open]);
+        let r = rt
+            .eval(
+                "var es = new EventSource('https://x/sse');
+                 _lumen_pump_sse();
+                 es.close();
+                 es.readyState",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn eventsource_error_on_server_close() {
+        use lumen_core::ext::JsSseEvent;
+        // A Close event from the stream transitions to CLOSED (no reconnect, Phase 0).
+        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
+        let r = rt
+            .eval(
+                "var es = new EventSource('https://x/sse');
+                 _lumen_pump_sse();
+                 es.readyState",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn eventsource_error_event_fires_onerror() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![JsSseEvent::Open, JsSseEvent::Error("boom".into())],
+        );
+        let r = rt
+            .eval(
+                "var errored = false; var msg = null;
+                 var es = new EventSource('https://x/sse');
+                 es.onerror = function(e) { errored = true; msg = e.message; };
+                 _lumen_pump_sse();
+                 [errored, msg, es.readyState]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::Bool(true));
+                assert_eq!(arr[1], lumen_core::JsValue::String("boom".into()));
+                assert_eq!(arr[2], lumen_core::JsValue::Number(2.0));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_poll_json_escapes_message() {
+        use lumen_core::ext::JsSseEvent;
+        // Data containing quotes/newlines must round-trip through JSON intact.
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![
+                JsSseEvent::Open,
+                JsSseEvent::Message {
+                    event_type: "message".into(),
+                    data: "line1\nline2 \"quoted\"".into(),
+                    id: None,
+                },
+            ],
+        );
+        let r = rt
+            .eval(
+                "var data = null;
+                 var es = new EventSource('https://x/sse');
+                 es.onmessage = function(e) { data = e.data; };
+                 _lumen_pump_sse();
+                 data",
+            )
+            .unwrap();
+        assert_eq!(
+            r,
+            lumen_core::JsValue::String("line1\nline2 \"quoted\"".into())
+        );
     }
 
     #[test]
@@ -9231,7 +10451,7 @@ mod tests {
     fn runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
         rt
     }
 
@@ -9288,7 +10508,7 @@ mod tests {
 
     fn runtime_with_url(url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), url, None, None, None, None, None).unwrap();
+        rt.install_dom(make_doc(), url, None, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -9391,6 +10611,74 @@ mod tests {
     }
 
     #[test]
+    fn push_state_enqueues_history_url_update_push() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("history.pushState({a:1}, '', '/page2')").unwrap();
+        let updates = rt.take_history_url_updates();
+        assert_eq!(updates.len(), 1, "one push update expected");
+        match &updates[0] {
+            HistoryUrlUpdate::Push { url, new_state_json } => {
+                assert_eq!(url, "/page2");
+                assert_eq!(new_state_json, r#"{"a":1}"#);
+            }
+            other => panic!("expected Push, got {other:?}"),
+        }
+        // Second drain: already consumed
+        assert!(rt.take_history_url_updates().is_empty());
+    }
+
+    #[test]
+    fn replace_state_enqueues_history_url_update_replace() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("history.replaceState({b:2}, '', '/new-page')").unwrap();
+        let updates = rt.take_history_url_updates();
+        assert_eq!(updates.len(), 1, "one replace update expected");
+        match &updates[0] {
+            HistoryUrlUpdate::Replace { url, new_state_json } => {
+                assert_eq!(url, "/new-page");
+                assert_eq!(new_state_json, r#"{"b":2}"#);
+            }
+            other => panic!("expected Replace, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn push_state_no_url_does_not_enqueue_update() {
+        let rt = runtime_with_url("https://example.com/");
+        // pushState with null url → no URL update
+        rt.eval("history.pushState({x:3}, '')").unwrap();
+        assert!(rt.take_history_url_updates().is_empty());
+    }
+
+    #[test]
+    fn deliver_popstate_fires_onpopstate() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("var fired = null; window.onpopstate = function(e) { fired = e.state; };").unwrap();
+        rt.eval("_lumen_deliver_popstate('{\"x\":42}', '/page0')").unwrap();
+        let r = rt.eval("fired && fired.x").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn deliver_popstate_updates_location() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("_lumen_deliver_popstate('null', '/restored')").unwrap();
+        // _lumen_location_update updates href (= raw url string).
+        // pathname is only correct for absolute URLs due to _lumen_parse_url limitations.
+        let r = rt.eval("location.href").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("/restored".into()));
+    }
+
+    #[test]
+    fn deliver_popstate_fires_event_listeners() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("var count = 0; window.addEventListener('popstate', function(e) { count += e.state.n; });").unwrap();
+        rt.eval("_lumen_deliver_popstate('{\"n\":5}', '')").unwrap();
+        let r = rt.eval("count").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(5.0));
+    }
+
+    #[test]
     fn location_file_url_parsed() {
         let rt = runtime_with_url("file:///home/user/page.html");
         let r = rt.eval("location.protocol").unwrap();
@@ -9401,7 +10689,7 @@ mod tests {
 
     fn runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, ls, None, None).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, ls, None, None).unwrap();
         rt
     }
 
@@ -11372,7 +12660,7 @@ mod tests {
 
     fn runtime_with_idb(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, Some(backend), None)
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, Some(backend), None)
             .unwrap();
         rt
     }
@@ -11693,7 +12981,7 @@ mod tests {
     fn runtime_with_fetch(provider: Arc<CaptureFetch>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None).unwrap();
         rt
     }
 
@@ -14444,7 +15732,7 @@ mod tests {
     fn runtime_deterministic(doc: Arc<Mutex<Document>>, url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         rt.set_deterministic_mode();
-        rt.install_dom(doc, url, None, None, None, None, None).unwrap();
+        rt.install_dom(doc, url, None, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -14589,5 +15877,207 @@ mod tests {
         // Second drain must be empty.
         let second = rt.take_window_open_requests();
         assert_eq!(second.len(), 0);
+    }
+
+    // ── Web Animations API ─────────────────────────────────────────────────
+
+    #[test]
+    fn web_animations_classes_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.Animation === 'function' && typeof window.KeyframeEffect === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn keyframe_effect_stores_keyframes() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var kf = new KeyframeEffect(null, [{opacity:0},{opacity:1}], 300); \
+             kf.getKeyframes().length"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn keyframe_effect_timing_duration() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var kf = new KeyframeEffect(null, [], {duration:500, delay:100}); \
+             kf.getTiming().duration"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(500.0));
+    }
+
+    #[test]
+    fn animation_initial_state_is_idle() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var a = new Animation(new KeyframeEffect(null, [], 300)); \
+             a.playState"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("idle".into()));
+    }
+
+    #[test]
+    fn animation_play_changes_state() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var a = new Animation(new KeyframeEffect(null, [], 300)); \
+             a.play(); \
+             a.playState"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("running".into()));
+    }
+
+    #[test]
+    fn animation_pause_changes_state() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var a = new Animation(new KeyframeEffect(null, [], 300)); \
+             a.play(); a.pause(); \
+             a.playState"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("paused".into()));
+    }
+
+    #[test]
+    fn animation_cancel_removes_from_registry() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var a = new Animation(new KeyframeEffect(null, [], 300)); \
+             a.play(); a.cancel();"
+        ).unwrap();
+        let r = rt.eval("document.getAnimations().length").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn document_timeline_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.timeline instanceof DocumentTimeline").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_timeline_current_time_null_before_raf() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.timeline.currentTime === null").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_timeline_current_time_after_raf() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_lumen_run_raf_callbacks(100.0)").unwrap();
+        let r = rt.eval("document.timeline.currentTime >= 0").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_animate_returns_animation() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); \
+             var a = el.animate([{opacity:0},{opacity:1}], 300); \
+             a instanceof Animation"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_animate_play_state_running() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); \
+             var a = el.animate([{opacity:0},{opacity:1}], 300); \
+             a.playState"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("running".into()));
+    }
+
+    #[test]
+    fn element_get_animations() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); \
+             el.animate([{opacity:0},{opacity:1}], 500); \
+             el.getAnimations().length"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn document_get_animations() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); \
+             el.animate([{opacity:0},{opacity:1}], 500); \
+             document.getAnimations().length"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn animation_finish_fires_onfinish() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fired = false; \
+             var a = new Animation(new KeyframeEffect(null, [], 300)); \
+             a.onfinish = function() { fired = true; }; \
+             a.finish(); \
+             fired"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn animation_finish_state() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var a = new Animation(new KeyframeEffect(null, [], 300)); \
+             a.finish(); \
+             a.playState"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("finished".into()));
+    }
+
+    #[test]
+    fn keyframe_effect_property_indexed_form() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var kf = new KeyframeEffect(null, {opacity: [0, 0.5, 1]}, 400); \
+             kf.getKeyframes().length"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn animation_reverse_negates_playback_rate() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var a = new Animation(new KeyframeEffect(null, [], 300)); \
+             a.play(); \
+             var rate_before = a.playbackRate; \
+             a.reverse(); \
+             a.playbackRate === -rate_before"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_animate_applies_opacity_style() {
+        let rt = runtime_with_dom(make_doc());
+        // Advance time then tick to let the animation apply its first frame.
+        let r = rt.eval(
+            "var el = document.createElement('div'); \
+             document.body.appendChild(el); \
+             _wa_current_time = 0; \
+             var a = el.animate([{opacity:0},{opacity:1}], {duration:1000}); \
+             // At t=0 the animation should set opacity to 0
+             a._applyAtP(0); \
+             el.style.opacity"
+        ).unwrap();
+        // opacity at progress=0 should be '0'
+        assert_eq!(r, lumen_core::JsValue::String("0".into()));
     }
 }

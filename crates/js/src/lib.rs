@@ -2,6 +2,7 @@ pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
 pub mod broadcast_channel;
+pub mod canvas2d;
 pub mod clipboard;
 pub mod cookie_banner;
 pub mod credentials;
@@ -30,7 +31,7 @@ use std::sync::{
 
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
-pub use dom::NavigateRequest;
+pub use dom::{HistoryUrlUpdate, NavigateRequest};
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use lumen_core::WebStorage;
 
@@ -136,6 +137,12 @@ pub struct QuickJsRuntime {
     /// drained by `pump_shared_workers()` and delivered to the matching client
     /// `port` via `_lumen_deliver_shared_worker_messages`.
     shared_worker_outbox: shared_worker::SharedWorkerOutbox,
+    /// `history.pushState` / `history.replaceState` URL-update notifications.
+    ///
+    /// Each call to `pushState`/`replaceState` with a non-empty URL appends an
+    /// entry here.  The shell drains via `take_history_url_updates()` and updates
+    /// the address-bar display URL and navigation stack accordingly.
+    pending_history_url_updates: Arc<Mutex<Vec<dom::HistoryUrlUpdate>>>,
 }
 
 struct Inner {
@@ -176,6 +183,7 @@ impl QuickJsRuntime {
             console_messages: Arc::new(Mutex::new(Vec::new())),
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
+            pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -202,6 +210,7 @@ impl QuickJsRuntime {
     /// `page_url` initialises `window.location` with the current page URL.
     /// `fetch_provider` is forwarded to `window.fetch()`.
     /// `ws_provider` is forwarded to `new WebSocket(url)`.
+    /// `sse_provider` is forwarded to `new EventSource(url)`.
     /// `ls_store` — shared localStorage for this origin; persists across reloads.
     ///   Pass a fresh `Arc::new(Mutex::new(WebStorage::default()))` per origin.
     ///   A fresh `sessionStorage` is created automatically inside.
@@ -220,6 +229,7 @@ impl QuickJsRuntime {
         page_url: &str,
         fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
         ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+        sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
         ls_store: Option<Arc<Mutex<WebStorage>>>,
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
@@ -245,6 +255,13 @@ impl QuickJsRuntime {
                 eprintln!("WebGL bindings init failed: {}", e);
             }
 
+            // Install Canvas 2D native bindings (HTML LS §4.12.4). The JS-side
+            // getContext('2d') shim lives in dom.rs::_lumen_make_element and
+            // calls these `_lumen_canvas2d_*` functions keyed by node index.
+            if let Err(e) = canvas2d::install_canvas2d_bindings(&ctx) {
+                eprintln!("Canvas 2D bindings init failed: {}", e);
+            }
+
             // Install AudioContext stub with per-session fingerprint noise (ADR-007 Layer 4, 9D.3).
             let audio_seed = audio_bindings::new_session_seed();
             if let Err(e) = audio_bindings::install_audio_bindings(&ctx, audio_seed) {
@@ -258,6 +275,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.nav_out),
                 fetch_provider,
                 ws_provider,
+                sse_provider,
                 ls,
                 ss,
                 Arc::clone(&self.timer_wakeup),
@@ -275,6 +293,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.window_open_requests),
                 deterministic_seed,
                 Arc::clone(&self.console_messages),
+                Arc::clone(&self.pending_history_url_updates),
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
@@ -421,6 +440,20 @@ impl QuickJsRuntime {
         });
     }
 
+    /// Drain dirty Canvas 2D buffers for upload to the renderer.
+    ///
+    /// Returns `(node_index, width, height, rgba)` for every `<canvas>` whose
+    /// 2D context was drawn to since the last call. The shell uploads each as
+    /// `Renderer::register_image("canvas:{nid}", ...)` and requests a repaint.
+    ///
+    /// Acquires the runtime lock so the thread-local canvas registry is read on
+    /// the same thread that executes the JS context. Shell must call this on
+    /// every event-loop tick (alongside `pump_workers()`).
+    pub fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|_ctx| canvas2d::flush_dirty())
+    }
+
     /// Deliver messages posted to this page's `BroadcastChannel` instances.
     ///
     /// Drains the per-runtime receiver queues (filled by the process-global hub
@@ -476,6 +509,16 @@ impl QuickJsRuntime {
     /// Must be called before `drop(runtime)` to avoid losing the request.
     pub fn take_navigate_request(&self) -> Option<NavigateRequest> {
         self.nav_out.lock().unwrap().take()
+    }
+
+    /// Drain `history.pushState` / `history.replaceState` URL-update notifications
+    /// queued since the last call.
+    ///
+    /// Returns an empty `Vec` when no pushState/replaceState calls were made.
+    /// Shell drains this in `about_to_wait` to update the address-bar display URL
+    /// and the same-document navigation stack.
+    pub fn take_history_url_updates(&self) -> Vec<dom::HistoryUrlUpdate> {
+        std::mem::take(&mut *self.pending_history_url_updates.lock().unwrap())
     }
 
     /// Returns `true` if JS mutated the DOM since the last call, clearing the flag.

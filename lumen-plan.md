@@ -78,7 +78,7 @@
 - ⬜ Кросс-устройственная синхронизация E2E (§12.11) — Phase 4+, требует mobile
 - 🟡 DevTools (инспектор / консоль / network) (§12.12) — инспектор (Ctrl+Shift+I), JS-консоль (F12), network panel (Ctrl+Shift+E) готовы; computed-styles panel (7E.2, P4) отложена
 - 🟡 Tab UX: вертикальные/tree-style вкладки, workspaces, split view, auto-archive (§12.13) — vertical/tree/workspaces/split view ✅; auto-archive (7A.5) ⬜
-- 🟡 Power-user input: vim-keys, gestures, omnibox-алиасы, regex find (§12.14) — vim/gestures/omnibox-алиасы ✅; click-hint overlay (7B.2) + regex find UI (7B.5) 🟡
+- ✅ Power-user input: vim-keys, gestures, omnibox-алиасы, regex find, click-hint overlay (§12.14) — все 5 пунктов 7B.1–7B.5 ✅
 - ✅ Privacy UX: встроенный блокировщик, per-site контролы, cookie-banner dismiss (§12.15) — block list engine + permission panel + cookie-banner dismiss + shields widget (7C.1–7C.4) ✅
 - 🟡 Web platform baseline: Passkeys/WebAuthn, контейнеры, sidebar web panels (§12.16) — контейнеры (7D.2) + sidebar (7D.3) ✅; WebAuthn (7D.1) 🟡 (software authenticator готов, roaming CTAP2 — future)
 
@@ -189,7 +189,7 @@
 | 6.2 | ✅ accessibility forms validation + visualization | Constraint validation in accessibility tree | Phase 1-3 ✅ P1 done (2026-05-28); P3 pending |
 | 6.3 | ✅ ime-input composition events + ranges | Keyboard input for CJK/Cyrillic | Phase 1-3 ✅ P1 done (2026-05-31); Phase 2-3 P3 shell integration pending |
 | 6.4 | ✅ svg-layout advanced transforms + viewport nesting | SVG aspect-ratio preservation | Phase 1-3 ✅ P1 done (2026-05-30); Phase 4 ✅ P2 done (2026-05-29): DrawSvgPath + tessellator |
-| 6.5 | ✅ print-pdf advanced @page margin boxes + headers/footers | Full print pipeline from margin-box content | Phase 1-4 ✅ P1 done (2026-05-31); P2 inline content rendering pending |
+| 6.5 | ✅ print-pdf advanced @page margin boxes + headers/footers | Full print pipeline from margin-box content | Phase 1-4 ✅ P1 done (2026-05-31); P1 inline content rendering ✅ done (2026-06-02) |
 | 6.6 | ✅ animation keyframe easing (cubic-bezier/steps) | Full timing functions support | Phase 1-2 ✅ P1 done (2026-05-20); complete in Phase 0 |
 | 6.7 | ✅ transition advanced (interrupted/fill-mode/grouped) | Animation lifecycle completeness | Phase 1-3 ✅ P1 done (2026-05-28) |
 | 6.8 | ✅ **`[P1+P3]` font-loading API** | @font-face lifecycle, FontFace interface, document.fonts | Phase 1 ✅ P1 done; Phase 2 ✅ JS bindings (_lumen_fonts_*); Phase 3 P3 pending |
@@ -226,6 +226,7 @@
 | 4.5.2 | ✅ forward_box_transform публичный из layout | `layout/src/property_trees.rs` | 2026-05-20 |
 | 4.5.3 | ✅ transform_stack + CPU-side vertex transformation | `paint/src/renderer.rs` | 2026-05-20 |
 | 5A | ✅ **Canvas 2D basic context** — CPU rasterizer, `CanvasRenderingContext2D` Phase 0 | `engine/canvas/` | 2026-05-22 |
+| 5A.2 | ✅ **Canvas 2D JS bindings** — `canvas.getContext('2d')` → `lumen_canvas::Context2D`; `BoxKind::Canvas` replaced element; `DrawImage` keyed `canvas:{nid}`; dirty-buffer flush to renderer | `js/src/canvas2d.rs` + `layout/box_tree.rs` + `paint/display_list.rs` + `shell` | 2026-06-02 |
 | 5B | ✅ **WOFF2/WOFF1 decoder** — brotli + zlib, glyf transform, sfnt rebuild | `engine/font/src/woff2.rs` | 2026-05-22 |
 | 5+ | ✅ **GPU linear/radial gradient pipeline** — WGSL шейдер + CPU uniform + DrawOp::Gradient | `paint/src/renderer.rs` | 2026-05-22 |
 | 5++ | ✅ **Extras**: object-fit ✅, variable fonts ✅, Print PDF Phase 1 (✅ pagination module) | `layout/src/pagination.rs` | 2026-05-28 |
@@ -275,12 +276,12 @@
 | 7A.3 | ✅ Workspaces (изолированные группы) | `shell/src/panels/workspace_panel.rs` + `storage/src/workspaces.rs` | P2 done 2026-06-01 (p2-workspaces-ui): bottom switcher, Ctrl+Shift+W |
 | 7A.4 | ✅ **`[P3+P2]` Split view** (2-4 viewport на окно) | `shell/src/panels/split_view.rs` + `paint` multi-viewport | P2 done 2026-06-01 (p2-split-view): Ctrl+\ toggle, Ctrl+M focus |
 | 7A.5 | ⬜ Tab auto-archive (UX-фича: убрать вкладки старше 12 ч из tab strip в @archive) | `shell/src/tabs/archive.rs` | **семантика отделена от трека 10**: 7A.5 — UI-скрытие, **трек 10** — RAM-выгрузка по tier'ам |
-| 7B | 🟡 **`[P3]` Power-user input** (§12.14, Phase 2-3) | Keyboard-first аудитория; 7B.1/7B.3/7B.4 ✅, 7B.2/7B.5 🟡 | `shell/src/input/` |
+| 7B | ✅ **`[P3]` Power-user input** (§12.14, Phase 2-3) | Keyboard-first аудитория; 7B.1–7B.5 ✅ | `shell/src/input/` |
 | 7B.1 | ✅ Vim-style key bindings (modal) | `shell/src/input/vim.rs` | P1 done 2026-06-01 (p1-vim-keybindings): Normal/Insert, j/k/d/u/gg/G/yy/H/L, Ctrl+Alt+V |
-| 7B.2 | ⬜ **`[P3+P1]` Click-hint overlay** | `shell` + layout-итератор clickable | требует P1: iterator по clickable в `lumen-layout` |
+| 7B.2 | ✅ **`[P3+P1]` Click-hint overlay** | `shell/src/hints.rs` + `lumen-layout::collect_clickable_elements` | P1: iterator ✅ (p1-click-hint-overlay); P3: vimium-style F-overlay ✅ (p3-click-hint-overlay) |
 | 7B.3 | ✅ Mouse gestures | `shell/src/input/gesture.rs` | P1 done 2026-06-01 (p1-mouse-gesture): RMB drag L/R/U/D/LD/RD → Back/Forward/CloseTab/NewTab |
 | 7B.4 | ✅ Custom omnibox aliases | `shell/src/omnibox/mod.rs` + `storage` `OmniboxAliases` | P1 done 2026-06-01 (p1-omnibox-aliases): !g/!gh bang-алиасы, @-команды |
-| 7B.5 | 🟡 **`[P3+P1]` Find-in-page с regex** | `shell` + visible-text итератор | **P1 done** — `collect_visible_text` + `TextFragment` в `lumen-layout::text_iter`; P3 — regex UI + highlight overlay |
+| 7B.5 | ✅ **`[P3+P1]` Find-in-page с regex** | `shell/src/find.rs` + `lumen-layout::text_iter` | P1: `collect_visible_text` + `TextFragment` ✅ (p1-visible-text-iter); P3: Ctrl+R regex UI + highlight overlay ✅ (p3-find-in-page-regex) |
 | 7C | ✅ **`[P3]` Privacy UX** (§12.15, Phase 2) | Встроенная защита; 7C.1–7C.4 ✅ | `lumen-network::filter` + `shell` |
 | 7C.1 | ✅ Block list engine (EasyList + hosts files) | `network/src/filter/easylist.rs` + `hosts.rs` + `CompositeFilter` | P1 done 2026-05-31: 26 тестов |
 | 7C.2 | ✅ Per-site permission UI panel | `shell/src/panels/permission_panel.rs` | P2 done 2026-06-01 (p2-permission-panel): Camera/Mic/Notif/Clipboard, Ctrl+Shift+P |
@@ -504,7 +505,7 @@
 - ✅ **`[P3]` Web Storage API (`localStorage` + `sessionStorage`).** `WebStorage` in `lumen-core::web_storage` (insertion-order key list, `get_item/set_item/remove_item/clear/key/len`). `_lumen_ls_*` + `_lumen_ss_*` native bindings in `lumen-js`. `_lumen_make_storage` factory + `localStorage`/`sessionStorage` globals in `WEB_API_SHIM`. Shell stores `HashMap<origin, Arc<Mutex<WebStorage>>>` per session; `ls_store_for_base` extracts SOP-partitioned store from `ResourceBase`; `sessionStorage` is fresh per page load. 8 tests. Phase 0: in-memory only (no disk persistence).
 - ✅ **`[P1]` IndexedDB (Indexed Database API 3.0).** Pure-JS in-memory implementation in `WEB_API_SHIM` (`crates/js/src/dom.rs`): `indexedDB` (`open`/`deleteDatabase`/`databases`/`cmp`), `IDBDatabase`/`IDBTransaction`/`IDBObjectStore`/`IDBIndex`/`IDBCursor`/`IDBKeyRange`/`IDBRequest`/`IDBOpenDBRequest`. CRUD + indexes (unique/multiEntry) + cursors (forward/reverse/unique) + key ranges; key ordering number<date<string<array; dotted/array key paths; autoIncrement. Deferred-execution model: request actions run at dispatch time in FIFO order, `_lumen_idb_flush()` delivers events (queueMicrotask + shell tick). 23 tests. **Persistence:** Rust-backed via `IdbBackend` trait (`lumen-core::ext`) → `IdbStore` over `StorageBackend` (`lumen-storage`): the shim serializes all per-origin databases into one tagged-JSON snapshot (Dates preserved), persisted after each mutating flush (`_lumen_idb_persist`) and restored on init (`_lumen_idb_load`); databases survive page reload. Shell wires an `InMemoryStorage` backend (process lifetime, mirrors `localStorage`); disk durability is a one-line swap to `SqliteStorage`.
 - ✅ **`[P3]` Persistent JS runtime + event bubbling.** `LayoutSource::document` и `ParsedPage::document` → `Arc<Mutex<Document>>`. `run_scripts_with_dom` возвращает живой `Option<Box<dyn PersistentJs>>` — рантайм не уничтожается после начальных скриптов. `Lumen::js_ctx` хранит контекст пока страница открыта. Клики диспатчируются через `_lumen_dispatch_bubble(nid,'click')` в JS — обход предков + document-level listeners. `document.addEventListener/removeEventListener` работают через sentinel NID=-1. `Event.cancelBubble` + `stopPropagation` + JS-triggered navigation после клика.
-- ✅ **`[P3]` WebSockets (RFC 6455) + Server-Sent Events + Fetch API runtime.** ✅ WS: RFC 6455 upgrade + frame codec + JS API (`WebSocket` class, `JsWebSocketProvider`/`JsWsEvent`/`JsWebSocketSession` traits, background recv thread, `_lumen_pump_websockets()`, 12 тестов). ✅ SSE: `SseParser` + `EventSource` client + `EventSource` JS stub. ✅ Fetch: `fetch()` / `Request` / `Response` / `Headers` / `AbortController` / `AbortSignal` в JS shim; `JsFetchProvider` trait; `HttpClient` реализует.
+- ✅ **`[P3]` WebSockets (RFC 6455) + Server-Sent Events + Fetch API runtime.** ✅ WS: RFC 6455 upgrade + frame codec + JS API (`WebSocket` class, `JsWebSocketProvider`/`JsWsEvent`/`JsWebSocketSession` traits, background recv thread, `_lumen_pump_websockets()`, 12 тестов). ✅ SSE: `SseParser` + `EventSource` client + working `EventSource` JS API (`JsSseProvider`/`JsSseEvent`/`JsSseSession` traits, background recv thread, `_lumen_pump_sse()`, named events + lastEventId, shell-wired через `HttpClient`). ✅ Fetch: `fetch()` / `Request` / `Response` / `Headers` / `AbortController` / `AbortSignal` в JS shim; `JsFetchProvider` trait; `HttpClient` реализует.
 - **`[P3]` HTTP auth — Basic + Digest готовы** (см. status). **Осталось:** Negotiate/NTLM, client certificates mTLS, UI-popup для credentials.
 - **`[P3]` OCSP stapling + CT log enforcement + invalid cert UI.**
 - **`[P3]` Safe Browsing — готово** (см. status). Отложено: 4-byte prefixes с full-hash callback, public-suffix list для безопасной обрезки host-suffixes ниже eTLD+1.

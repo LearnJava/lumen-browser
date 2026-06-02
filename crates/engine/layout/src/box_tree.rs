@@ -48,6 +48,14 @@ fn is_video_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// HTML-имя `<canvas>` для распознавания replaced-боксов рисовалки в layout.
+fn is_canvas_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "canvas"
+    )
+}
+
 /// HTML-имя `<audio>` для распознавания media replaced-боксов в layout.
 fn is_audio_element(doc: &Document, id: NodeId) -> bool {
     matches!(
@@ -1038,9 +1046,14 @@ pub enum BoxKind {
     /// Анонимный контейнер для потока inline-контента (текст + inline-элементы).
     /// `segments` — сырые отрезки до lay_out; `lines` — позиционированные строки
     /// после lay_out. Каждая строка — `Vec<InlineFrag>`.
+    /// `first_line_style` — pre-computed `::first-line` pseudo-element style for the owning
+    /// element. `None` if no rule matches. Applied by `lay_out()` to frags on `lines[0]`.
     InlineRun {
         segments: Vec<InlineSegment>,
         lines: Vec<Vec<InlineFrag>>,
+        /// CSS Pseudo-elements L4 §5.3: computed ::first-line style. Set during build_box(),
+        /// applied in lay_out() after wrap_inline_run() to first-line frags.
+        first_line_style: Option<Box<crate::style::ComputedStyle>>,
     },
     /// Анонимный контейнер для горизонтального потока `display: inline-block`
     /// элементов. Сами дочерние боксы хранятся в `LayoutBox.children`. При
@@ -1068,6 +1081,19 @@ pub enum BoxKind {
         src: String,
         /// Poster image URL (`poster` attribute), may be empty.
         poster: String,
+    },
+    /// Replaced element: HTML `<canvas>` element — CPU-rasterized drawing surface
+    /// (HTML Living Standard §4.12.4).
+    ///
+    /// Phase 0: the pixel buffer is produced by JS Canvas 2D drawing operations
+    /// (`canvas.getContext('2d')`) and rendered via a `DrawImage` command keyed by
+    /// `canvas:{node_id}`. Intrinsic size comes from the `width`/`height` content
+    /// attributes; UA defaults are 300×150 CSS px (HTML LS §4.12.4).
+    Canvas {
+        /// Canvas bitmap width in CSS pixels (from `width` attribute, default 300).
+        width: u32,
+        /// Canvas bitmap height in CSS pixels (from `height` attribute, default 150).
+        height: u32,
     },
     /// Replaced element: HTML `<audio>` element (HTML spec §4.8.10).
     ///
@@ -1452,11 +1478,65 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
         node,
         rect: Rect::ZERO,
         style: anon_style(parent),
-        kind: BoxKind::InlineRun { segments: segs, lines: vec![] },
+        kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None },
         children: vec![],
         col_span: 1,
         row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
     }
+}
+
+/// CSS Pseudo-elements L4 §5.4: applies `::first-letter` style to the first grapheme of the
+/// `FirstLetter`-marked segment. Splits the segment if it contains more than one character so
+/// only the first grapheme gets the pseudo-element style; the remainder keeps the original style.
+/// No-op when no `FirstLetter` segment exists or no matching `::first-letter` rule is found.
+fn apply_first_letter_pseudo(
+    segs: &mut Vec<InlineSegment>,
+    doc: &lumen_dom::Document,
+    node: lumen_dom::NodeId,
+    sheet: &lumen_css_parser::Stylesheet,
+    parent: &crate::style::ComputedStyle,
+    viewport: lumen_core::geom::Size,
+) {
+    let Some(pos) = segs.iter().position(|s| s.pseudo_kind == PseudoKind::FirstLetter) else {
+        return;
+    };
+    let Some(fl_style) = crate::style::compute_pseudo_element_style(
+        doc, node, "first-letter", sheet, parent, viewport,
+    ) else {
+        return;
+    };
+    // Split at first Unicode scalar boundary (good-enough for Phase 0; full grapheme
+    // cluster support requires unicode-segmentation which is not yet a dependency).
+    let first_char_end = segs[pos].text.chars().next().map_or(0, |c| c.len_utf8());
+    if first_char_end == 0 {
+        return;
+    }
+    if first_char_end >= segs[pos].text.len() {
+        // Single-character segment: override style in place.
+        segs[pos].style = fl_style;
+        return;
+    }
+    // Multi-character: split into [first_char | rest], each with its own style.
+    let rest_text = segs[pos].text[first_char_end..].to_string();
+    let original_style = segs[pos].style.clone();
+    let source_node = segs[pos].source_node;
+    let post_space = segs[pos].post_space;
+    segs[pos].text.truncate(first_char_end);
+    segs[pos].style = fl_style;
+    segs[pos].post_space = 0.0;
+    segs.insert(pos + 1, InlineSegment {
+        text: rest_text,
+        style: original_style,
+        pre_space: 0.0,
+        post_space,
+        is_element_box: false,
+        img_src: None,
+        img_width: 0.0,
+        forced_break: false,
+        pseudo_kind: PseudoKind::None,
+        source_node,
+        source_char_offset: first_char_end as u32,
+    });
 }
 
 fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<LayoutBox>) -> LayoutBox {
@@ -1995,6 +2075,27 @@ fn build_box(
                     style.height = Some(Length::Px(150.0));
                 }
                 BoxKind::Video { src, poster }
+            } else if is_canvas_element(doc, id) {
+                let node = doc.get(id);
+                // HTML LS §4.12.4: width/height content attributes are
+                // non-negative integers; defaults are 300×150 CSS px.
+                let cw = node
+                    .get_attr("width")
+                    .and_then(|v| v.trim().parse::<u32>().ok())
+                    .unwrap_or(300);
+                let ch = node
+                    .get_attr("height")
+                    .and_then(|v| v.trim().parse::<u32>().ok())
+                    .unwrap_or(150);
+                // The bitmap dimensions act as intrinsic size; explicit CSS
+                // width/height (or presentational hints) win if already set.
+                if style.width.is_none() {
+                    style.width = Some(Length::Px(cw as f32));
+                }
+                if style.height.is_none() {
+                    style.height = Some(Length::Px(ch as f32));
+                }
+                BoxKind::Canvas { width: cw, height: ch }
             } else if is_audio_element(doc, id) {
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
@@ -2120,8 +2221,13 @@ fn build_box(
                 let mut had_ws = false;
                 // CSS Pseudo-elements L4 §5.1: first letter of this inline run hasn't been
                 // split out yet. Passed through all collect_inline_segments calls in this loop.
-                // CSS: ::first-letter — P4 wires style to the PseudoKind::FirstLetter segment.
                 let mut need_first_letter = true;
+                // CSS Pseudo-elements L4 §5.3: pre-compute ::first-line style once for this block.
+                let first_line_style =
+                    crate::style::compute_pseudo_element_style(doc, id, "first-line", sheet, &style, viewport)
+                        .map(Box::new);
+                // Track whether first_line_style has been assigned to the first InlineRun.
+                let mut first_line_assigned = false;
 
                 loop {
                     if i >= dom_children.len() {
@@ -2146,11 +2252,16 @@ fn build_box(
                         i += 1;
                     } else if is_inline_block(doc, sheet, cid, &style, viewport) {
                         if !pending.is_empty() {
-                            row_items.push(anon_inline_run(
-                                id,
-                                &style,
-                                std::mem::take(&mut pending),
-                            ));
+                            let mut segs = std::mem::take(&mut pending);
+                            apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport);
+                            let mut run = anon_inline_run(id, &style, segs);
+                            if !first_line_assigned {
+                                if let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind {
+                                    *fls = first_line_style.clone();
+                                }
+                                first_line_assigned = true;
+                            }
+                            row_items.push(run);
                         }
                         // Whitespace between inline-blocks → collapsed space gap.
                         if had_ws && !row_items.is_empty() {
@@ -2178,7 +2289,15 @@ fn build_box(
                     }
                 }
                 if !pending.is_empty() {
-                    row_items.push(anon_inline_run(id, &style, std::mem::take(&mut pending)));
+                    let mut segs = std::mem::take(&mut pending);
+                    apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport);
+                    let mut run = anon_inline_run(id, &style, segs);
+                    if !first_line_assigned
+                        && let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind
+                    {
+                        *fls = first_line_style.clone();
+                    }
+                    row_items.push(run);
                 }
 
                 // CSS Pseudo-elements L4 §5.1 — apply ::first-letter style.
@@ -2635,7 +2754,7 @@ fn lay_out(
     // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
-    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::FormControl { .. });
+    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::FormControl { .. });
     b.rect.width = if is_replaced {
         0.0
     } else {
@@ -2783,7 +2902,7 @@ fn lay_out(
     };
 
     // InlineRun обрабатывается до основного match.
-    if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
+    if let BoxKind::InlineRun { segments, lines, first_line_style } = &mut b.kind {
         if let Some(m) = measurer {
             // white-space: nowrap / text-wrap-mode: nowrap → infinite max_width so
             // the line-breaker never wraps; word-spacing/letter-spacing logic unchanged.
@@ -2830,12 +2949,15 @@ fn lay_out(
             *lines = one_line_fallback(segments);
         }
         // CSS Pseudo-elements L4 §3.1: ::first-line applies to the first formatted line.
-        // Mark frags on lines[0] so P4 can apply ::first-line style overrides.
-        // CSS: ::first-line — P4 wires: compute_pseudo_element_style(node, "first-line") →
-        // override style of each frag where is_first_line = true.
+        // Mark frags on lines[0] and apply pre-computed ::first-line style override.
         if let Some(first_line) = lines.first_mut() {
             for frag in first_line.iter_mut() {
                 frag.is_first_line = true;
+                // Apply ::first-line style (inheritable properties only — guaranteed by
+                // compute_pseudo_element_style which starts from inherited values).
+                if let Some(fls) = first_line_style {
+                    frag.style = *fls.clone();
+                }
             }
         }
         let line_count = lines.len().max(1);
@@ -2848,7 +2970,7 @@ fn lay_out(
     let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
-        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Audio { .. } | BoxKind::FormControl { .. } => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(
@@ -4892,6 +5014,36 @@ pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size:
     total - letter_spacing
 }
 
+/// Как [`measure_text_w`], но учитывает CSS `font-family` каскад.
+///
+/// Используется в `wrap_inline_run`, где для каждого `InlineSegment` доступен
+/// `seg.style.font_family`. Позволяет `MultiFontMeasurer` выбирать правильный
+/// шрифт для измерения ширины слов при перенос-расчёте.
+pub fn measure_text_w_families(
+    text: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    tab_size: f32,
+    families: &[String],
+    m: &dyn TextMeasurer,
+) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = text
+        .chars()
+        .map(|c| {
+            let cw = if c == '\t' {
+                tab_size
+            } else {
+                m.char_width_with_families(c, font_size, families)
+            };
+            cw + letter_spacing
+        })
+        .sum();
+    total - letter_spacing
+}
+
 /// Tries to find a hyphenation break in `display` that fits within `available_w`.
 /// `break_positions` are byte offsets in `display` (already sorted ascending).
 /// Returns `(prefix_with_hyphen, suffix)` for the rightmost fitting break, or `None`.
@@ -4936,11 +5088,12 @@ fn char_break_offset(
     avail_px: f32,
     font_size: f32,
     ls: f32,
+    families: &[String],
     m: &dyn TextMeasurer,
 ) -> usize {
     let mut w = 0.0_f32;
     for (char_idx, (byte_pos, ch)) in word.char_indices().enumerate() {
-        let cw = m.char_width(ch, font_size);
+        let cw = m.char_width_with_families(ch, font_size, families);
         // Width of prefix ending at this char: sum(cw + ls) - ls.
         // For first char: width = cw (no trailing letter-spacing).
         let prefix_w = if char_idx == 0 { cw } else { w + ls + cw };
@@ -4971,9 +5124,10 @@ fn widest_word(segments: &[InlineSegment], m: &dyn TextMeasurer) -> f32 {
         let em = seg.style.font_size;
         let ls = seg.style.letter_spacing;
         let tab = seg.style.tab_size;
+        let families = &seg.style.font_family;
         for raw in seg.text.split_whitespace() {
             let (display, _) = strip_soft_hyphens(raw);
-            let w = measure_text_w(&display, em, ls, tab, m);
+            let w = measure_text_w_families(&display, em, ls, tab, families, m);
             max_w = max_w.max(w);
         }
     }
@@ -5081,11 +5235,12 @@ fn pretty_wrap(
         .last()
         .map(|w| {
             let (display, _) = strip_soft_hyphens(w);
-            measure_text_w(
+            measure_text_w_families(
                 &display,
                 last_frag.style.font_size,
                 last_frag.style.letter_spacing,
                 0.0,
+                &last_frag.style.font_family,
                 m,
             )
         })
@@ -5162,7 +5317,7 @@ fn wrap_inline_run(
             let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
             current_x += seg.pre_space;
             let frag_x = current_x;
-            let frag_w = measure_text_w(&seg.text, em, ls, tab_size, m);
+            let frag_w = measure_text_w_families(&seg.text, em, ls, tab_size, &seg.style.font_family, m);
             current_line.push(InlineFrag {
                 x: frag_x,
                 y_offset: 0.0,
@@ -5252,7 +5407,7 @@ fn wrap_inline_run(
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
-            let word_w = measure_text_w(&display_word, style.font_size, ls, 0.0, m);
+            let word_w = measure_text_w_families(&display_word, style.font_size, ls, 0.0, &style.font_family, m);
             let gap = if current_line.is_empty() { 0.0 } else { inter_word };
 
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
@@ -5277,7 +5432,7 @@ fn wrap_inline_run(
 
                 if let Some((pfx, sfx)) = hyph_result {
                     // Emit prefix (with trailing '-') to current line, then wrap.
-                    let pfx_w = measure_text_w(&pfx, style.font_size, ls, 0.0, m);
+                    let pfx_w = measure_text_w_families(&pfx, style.font_size, ls, 0.0, &style.font_family, m);
                     current_x += gap + pre;
                     current_line.push(InlineFrag {
                         x: current_x,
@@ -5296,7 +5451,7 @@ fn wrap_inline_run(
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
                     // Emit suffix as first fragment on new line.
-                    let sfx_w = measure_text_w(&sfx, style.font_size, ls, 0.0, m);
+                    let sfx_w = measure_text_w_families(&sfx, style.font_size, ls, 0.0, &style.font_family, m);
                     current_line.push(InlineFrag {
                         x: 0.0,
                         y_offset: 0.0,
@@ -5324,11 +5479,11 @@ fn wrap_inline_run(
                     let mut first_chunk = true;
                     while !rest.is_empty() {
                         let avail = (max_width - current_x).max(0.0);
-                        let split = char_break_offset(rest, avail, style.font_size, ls, m);
+                        let split = char_break_offset(rest, avail, style.font_size, ls, &style.font_family, m);
                         let head = &rest[..split];
                         let tail = &rest[split..];
                         if !head.is_empty() {
-                            let head_w = measure_text_w(head, style.font_size, ls, 0.0, m);
+                            let head_w = measure_text_w_families(head, style.font_size, ls, 0.0, &style.font_family, m);
                             current_line.push(InlineFrag {
                                 x: current_x,
                                 y_offset: 0.0,
@@ -5374,11 +5529,11 @@ fn wrap_inline_run(
                 let mut first_chunk = true;
                 while !rest.is_empty() {
                     let avail = (max_width - current_x).max(0.0);
-                    let split = char_break_offset(rest, avail, style.font_size, ls, m);
+                    let split = char_break_offset(rest, avail, style.font_size, ls, &style.font_family, m);
                     let head = &rest[..split];
                     let tail = &rest[split..];
                     if !head.is_empty() {
-                        let head_w = measure_text_w(head, style.font_size, ls, 0.0, m);
+                        let head_w = measure_text_w_families(head, style.font_size, ls, 0.0, &style.font_family, m);
                         current_line.push(InlineFrag {
                             x: current_x,
                             y_offset: 0.0,
@@ -6089,7 +6244,7 @@ mod tests {
             fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
         }
         // "abc" = 3 chars × 8px = 24px; avail = 100 → whole word fits.
-        let off = super::char_break_offset("abc", 100.0, 16.0, 0.0, &Fixed8);
+        let off = super::char_break_offset("abc", 100.0, 16.0, 0.0, &[], &Fixed8);
         assert_eq!(off, 3); // "abc".len() == 3
     }
 
@@ -6100,7 +6255,7 @@ mod tests {
             fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
         }
         // "abcde", avail = 25px; "ab" = 20px fits, "abc" = 30px > 25 → split at 2.
-        let off = super::char_break_offset("abcde", 25.0, 16.0, 0.0, &Fixed10);
+        let off = super::char_break_offset("abcde", 25.0, 16.0, 0.0, &[], &Fixed10);
         assert_eq!(off, 2); // byte offset 2 = between 'b' and 'c'
     }
 
@@ -6112,7 +6267,7 @@ mod tests {
         }
         // avail = 5px, char width 100px — even first char doesn't fit.
         // Must return offset past first char to avoid infinite loop.
-        let off = super::char_break_offset("abc", 5.0, 16.0, 0.0, &Wide);
+        let off = super::char_break_offset("abc", 5.0, 16.0, 0.0, &[], &Wide);
         assert_eq!(off, 1); // emit 'a' anyway
     }
 
@@ -6615,6 +6770,151 @@ mod tests {
             for line in lines.iter().skip(1) {
                 for frag in line {
                     assert!(!frag.is_first_line, "lines 1+ frags must be is_first_line=false");
+                }
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    // ::first-letter / ::first-line style application
+
+    #[test]
+    fn first_letter_style_applied_when_rule_present() {
+        // ::first-letter { color: red } must change only the first segment's style.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let html = "<p>Hello world</p>";
+        let css  = "p::first-letter { color: red; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+            &Fixed8,
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert!(!segments.is_empty());
+            // First segment (the single 'H' letter) must have red color.
+            let red = crate::style::Color { r: 255, g: 0, b: 0, a: 255 };
+            assert_eq!(
+                segments[0].style.color, red,
+                "::first-letter segment must have red color"
+            );
+            assert_eq!(segments[0].text, "H", "first-letter segment should be exactly 'H'");
+            // Remaining segment keeps original (black) color.
+            if segments.len() > 1 {
+                assert_ne!(
+                    segments[1].style.color, red,
+                    "remainder segment must keep original color"
+                );
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_letter_no_rule_leaves_segment_unchanged() {
+        // Without a ::first-letter rule the segment style must be unchanged.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let html = "<p>Hello</p>";
+        let css  = "p { color: blue; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+            &Fixed8,
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            // No split: single segment still contains full text.
+            assert_eq!(segments[0].text, "Hello");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_line_style_applied_to_first_line_frags() {
+        // ::first-line { color: green } must change the style of frags on line 0 only.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        // 60px wide container forces wrap: "one two" (56px) fits on line 0, rest wraps.
+        let html = "<p>one two three four</p>";
+        let css  = "p::first-line { color: green; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        let green = crate::style::Color { r: 0, g: 128, b: 0, a: 255 };
+        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(lines.len() >= 2, "expected at least 2 lines");
+            for frag in &lines[0] {
+                assert_eq!(frag.style.color, green, "line 0 frag must have green color");
+            }
+            for line in lines.iter().skip(1) {
+                for frag in line {
+                    assert_ne!(frag.style.color, green, "lines 1+ frags must keep original color");
+                }
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_line_no_rule_frags_unchanged() {
+        // Without a ::first-line rule, frag styles must be unchanged.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let html = "<p>one two three four</p>";
+        let css  = "p { color: blue; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        let blue = crate::style::Color { r: 0, g: 0, b: 255, a: 255 };
+        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
+            // All frags across all lines must be blue (from `p { color: blue }`).
+            for line in lines {
+                for frag in line {
+                    assert_eq!(frag.style.color, blue, "all frags must keep blue color");
                 }
             }
         } else {

@@ -131,6 +131,7 @@ const PAGES: &[&str] = &[
     "47-svg-basic",
     "55-text-rendering",
     "56-mix-blend-mode",
+    "57-canvas-2d",
     "15-box-shadow",
     "52-text-shadow-blur",
     "30-css-filter",
@@ -163,6 +164,10 @@ const PAGES: &[&str] = &[
     "53-background-origin",
     // б-20: SVG path stroke — open/closed stroked paths via tessellate_stroke → DrawSvgPath
     "54-svg-path-stroke",
+    // б-21: CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter / ::first-line
+    "58-first-letter-line",
+    // б-22: CSS Images L4 §5/§4 — image-set() + cross-fade()
+    "59-image-set-cross-fade",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).

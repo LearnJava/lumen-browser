@@ -3013,31 +3013,28 @@ pub enum ParsedGradient {
     Unknown(String),
 }
 
-/// CSS Backgrounds L3 §3.1 — `background-image` value.
+/// CSS Backgrounds L3 §3.1 / CSS Images L4 §4 — `background-image` value.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum BackgroundImage {
     #[default]
     None,
-    /// `url("path")` or raw `image-set(…)` string (resolved per-DPR by paint).
+    /// `url("path")` or raw `image-set(…)` / `-webkit-image-set(…)` string.
     ///
-    /// When the value starts with `image-set(` / `-webkit-image-set(`, the
-    /// string is stored verbatim; `emit_background_layer` calls
-    /// `select_image_set_url(src, dpr)` to pick the best candidate at render
-    /// time (CSS Images L4 §5).
+    /// `image-set()` strings are stored verbatim — paint resolves them to the
+    /// best URL for the current DPR via `select_image_set_url` (CSS Images L4 §5).
     Url(String),
     /// Parsed gradient. Phase 0 renders linear / radial / conic.
     Gradient(ParsedGradient),
-    /// CSS Images L4 §4.2 — `cross-fade()` blend of two URL images.
+    /// CSS Images L4 §4 — `cross-fade(<image-a>, <image-b>, <percentage>)`.
     ///
-    /// `progress = 0.0` → fully `a`; `progress = 1.0` → fully `b`.
-    /// Rendered via `DisplayCommand::DrawCrossFade` (GPU two-texture blend).
+    /// `t` is the blend factor in `[0.0, 1.0]`: `0.0` = fully `a`, `1.0` = fully `b`.
     CrossFade {
-        /// URL of the first image (at `progress = 0.0`).
-        a: String,
-        /// URL of the second image (at `progress = 1.0`).
-        b: String,
+        /// First image (`t = 0.0`).
+        a: Box<BackgroundImage>,
+        /// Second image (`t = 1.0`).
+        b: Box<BackgroundImage>,
         /// Blend factor clamped to `[0.0, 1.0]`.
-        progress: f32,
+        t: f32,
     },
 }
 
@@ -4829,15 +4826,13 @@ fn matches_complex_for_pseudo(
     }
 }
 
-/// Вычисляет стиль для псевдоэлемента на элементе `node`.
+/// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
 ///
-/// `pseudo` — имя без `::` (например `"before"`, `"after"`, `"first-letter"`,
-/// `"first-line"`).
+/// `pseudo` — "before" или "after" (без "::").
 ///
-/// Возвращает `None` если нет CSS-правил для данного псевдоэлемента на этом
-/// узле. Для `::before`/`::after` также возвращает `None` если вычисленный
-/// `content` равен `none` / `normal`; для `::first-letter`/`::first-line`
-/// наличие хотя бы одного совпадающего правила достаточно.
+/// Возвращает `None` если:
+/// - нет CSS-правил для данного псевдоэлемента на этом узле, или
+/// - вычисленный `content` равен `none` / `normal`.
 pub fn compute_pseudo_element_style(
     doc: &Document,
     node: NodeId,
@@ -4972,15 +4967,14 @@ pub fn compute_pseudo_element_style(
         apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, parent, is_quirks);
     }
 
-    // ::before / ::after require a non-normal `content` value to generate a box.
-    // ::first-letter / ::first-line apply visual overrides without generated content.
-    if pseudo == "before" || pseudo == "after" {
+    // ::before/::after require content: to render; ::first-letter/::first-line do not.
+    if pseudo.eq_ignore_ascii_case("first-letter") || pseudo.eq_ignore_ascii_case("first-line") {
+        Some(style)
+    } else {
         match &style.content {
             Content::Items(_) => Some(style),
             _ => None,
         }
-    } else {
-        Some(style)
     }
 }
 
@@ -9852,11 +9846,11 @@ fn apply_declaration(
                 let s = s.trim();
                 let image = if s.eq_ignore_ascii_case("none") {
                     BackgroundImage::None
-                } else if is_image_set_fn(s) {
-                    // Store raw image-set() string; paint resolves per-DPR (CSS Images L4 §5).
+                } else if is_image_set_value(s) {
+                    // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
                     BackgroundImage::Url(s.to_string())
-                } else if is_cross_fade_fn(s) {
-                    parse_cross_fade(s).unwrap_or(BackgroundImage::None)
+                } else if let Some((a, b, t)) = parse_cross_fade(s) {
+                    BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }
                 } else if let Some(url) = parse_url_value(s) {
                     BackgroundImage::Url(url)
                 } else if is_gradient_function(s) {
@@ -13275,6 +13269,60 @@ fn is_gradient_function(s: &str) -> bool {
         || s.starts_with("repeating-conic-gradient(")
 }
 
+/// CSS Images L4 §5 — is `s` an `image-set()` / `-webkit-image-set()` expression?
+fn is_image_set_value(s: &str) -> bool {
+    let v = s.trim().to_ascii_lowercase();
+    v.starts_with("image-set(") || v.starts_with("-webkit-image-set(")
+}
+
+/// Parse one image value into a `BackgroundImage` (used by `parse_cross_fade`).
+fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("none") {
+        return Some(BackgroundImage::None);
+    }
+    if is_image_set_value(s) {
+        return Some(BackgroundImage::Url(s.to_string()));
+    }
+    if let Some(url) = parse_url_value(s) {
+        return Some(BackgroundImage::Url(url));
+    }
+    if is_gradient_function(s) {
+        return Some(BackgroundImage::Gradient(parse_background_gradient(s)));
+    }
+    None
+}
+
+/// CSS Images L4 §4 — parse `cross-fade(<image-a>, <image-b>, <percentage>)`.
+///
+/// Supports both `cross-fade(…)` and `-webkit-cross-fade(…)` syntax.
+/// Returns `None` if `s` does not start with the function prefix or has an
+/// unexpected argument count.
+fn parse_cross_fade(s: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    let inner = if lower.starts_with("cross-fade(") && s.ends_with(')') {
+        &s["cross-fade(".len()..s.len() - 1]
+    } else if lower.starts_with("-webkit-cross-fade(") && s.ends_with(')') {
+        &s["-webkit-cross-fade(".len()..s.len() - 1]
+    } else {
+        return None;
+    };
+    let parts = split_top_level_commas(inner);
+    if parts.len() != 3 {
+        return None;
+    }
+    let a = parse_bg_image_value(parts[0].trim())?;
+    let b = parse_bg_image_value(parts[1].trim())?;
+    let t_str = parts[2].trim();
+    let t = if let Some(pct) = t_str.strip_suffix('%') {
+        pct.trim().parse::<f32>().ok()? / 100.0
+    } else {
+        t_str.parse::<f32>().ok()?
+    };
+    Some((a, b, t.clamp(0.0, 1.0)))
+}
+
 /// CSS Backgrounds L3 §3 — разбить строку одного слоя на токены.
 ///
 /// Делит по пробелам и `/` только на depth=0 (не трогает содержимое функций
@@ -13344,94 +13392,6 @@ fn parse_background_size_single(s: &str, em_basis: f32, viewport: Size, is_quirk
     }
 }
 
-/// Returns `true` if `s` starts with `image-set(` or `-webkit-image-set(`.
-fn is_image_set_fn(s: &str) -> bool {
-    let lo = s.to_ascii_lowercase();
-    lo.starts_with("image-set(") || lo.starts_with("-webkit-image-set(")
-}
-
-/// Returns `true` if `s` starts with `cross-fade(` or `-webkit-cross-fade(`.
-fn is_cross_fade_fn(s: &str) -> bool {
-    let lo = s.to_ascii_lowercase();
-    lo.starts_with("cross-fade(") || lo.starts_with("-webkit-cross-fade(")
-}
-
-/// Strips the outer `cross-fade(…)` / `-webkit-cross-fade(…)` wrapper.
-/// Returns the inner comma-separated argument list, or `None` if not matched.
-fn strip_cross_fade_wrapper(s: &str) -> Option<&str> {
-    let s = s.trim();
-    if !s.ends_with(')') {
-        return None;
-    }
-    for prefix in ["cross-fade(", "-webkit-cross-fade("] {
-        if s.len() >= prefix.len()
-            && s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
-        {
-            return Some(&s[prefix.len()..s.len() - 1]);
-        }
-    }
-    None
-}
-
-/// Parses `<percentage>` like `"50%"` → `0.5`. Returns `None` for non-percentage strings.
-fn parse_percentage_to_f32(s: &str) -> Option<f32> {
-    let s = s.trim();
-    let digits = s.strip_suffix('%')?;
-    let pct: f32 = digits.trim().parse().ok()?;
-    Some((pct / 100.0).clamp(0.0, 1.0))
-}
-
-/// Extracts a plain URL string from an image value token.
-/// Handles `url("path")`, `url('path')`, and `url(path)`.
-/// Returns `None` if the token is not a `url(…)`.
-fn extract_url_from_image_token(s: &str) -> Option<String> {
-    let s = s.trim();
-    if s.to_ascii_lowercase().starts_with("url(") {
-        let after = &s[4..];
-        let close = after.rfind(')')?;
-        let inner = after[..close].trim().trim_matches(['"', '\''].as_ref());
-        Some(inner.to_string())
-    } else {
-        None
-    }
-}
-
-/// CSS Images L4 §4.2 — parse `cross-fade(…)` / `-webkit-cross-fade(…)`.
-///
-/// Supported forms:
-/// - `cross-fade(<image-a>, <image-b>)` → progress = 0.5
-/// - `cross-fade(<image-a>, <image-b>, <percentage>)` → progress from `%`
-/// - `cross-fade(<percentage>, <image-a>, <image-b>)` → progress from `%` (webkit)
-///
-/// Only URL-based images are supported for now; gradient sources return `None`.
-fn parse_cross_fade(s: &str) -> Option<BackgroundImage> {
-    let inner = strip_cross_fade_wrapper(s)?;
-    let parts = split_top_level_commas(inner);
-    match parts.len() {
-        2 => {
-            let url_a = extract_url_from_image_token(parts[0].trim())?;
-            let url_b = extract_url_from_image_token(parts[1].trim())?;
-            Some(BackgroundImage::CrossFade { a: url_a, b: url_b, progress: 0.5 })
-        }
-        3 => {
-            // Form 1: <image>, <image>, <percentage>  (CSS Images L4 §4.2)
-            if let Some(progress) = parse_percentage_to_f32(parts[2].trim()) {
-                let url_a = extract_url_from_image_token(parts[0].trim())?;
-                let url_b = extract_url_from_image_token(parts[1].trim())?;
-                return Some(BackgroundImage::CrossFade { a: url_a, b: url_b, progress });
-            }
-            // Form 2: <percentage>, <image>, <image>  (webkit cross-fade form)
-            if let Some(progress) = parse_percentage_to_f32(parts[0].trim()) {
-                let url_a = extract_url_from_image_token(parts[1].trim())?;
-                let url_b = extract_url_from_image_token(parts[2].trim())?;
-                return Some(BackgroundImage::CrossFade { a: url_a, b: url_b, progress });
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
 /// CSS Backgrounds L3 §3 — parse single layer of `background` shorthand.
 ///
 /// Принимает строку одного слоя (после разбивки по top-level `,`).
@@ -13464,17 +13424,14 @@ fn parse_single_bg_layer(
             idx += 1;
             continue;
         }
-        // image-set() — store raw string verbatim; paint resolves per-DPR (CSS Images L4 §5).
-        if is_image_set_fn(t) {
+        if is_image_set_value(t) {
+            // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
             layer.image = BackgroundImage::Url(t.to_string());
             idx += 1;
             continue;
         }
-        // cross-fade() — parse into CrossFade variant (CSS Images L4 §4.2).
-        if is_cross_fade_fn(t) {
-            if let Some(cf) = parse_cross_fade(t) {
-                layer.image = cf;
-            }
+        if let Some((a, b, cf_t)) = parse_cross_fade(t) {
+            layer.image = BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t: cf_t };
             idx += 1;
             continue;
         }
@@ -18149,145 +18106,83 @@ mod tests {
         assert_eq!(s.background_layers[0].image, BackgroundImage::Url("c.png".into()));
     }
 
-    // ── CSS Images L4 — image-set() / cross-fade() parsing ──────────────────
+    // ── CSS Images L4 §5 — image-set() / §4 — cross-fade() ──
 
     #[test]
-    fn image_set_shorthand_stores_raw_string() {
+    fn image_set_stored_as_raw_url_string() {
+        // CSS Images L4 §5: image-set() stored verbatim so paint can resolve per-DPR.
         let s = cascade_at(
             "<div></div>",
-            "div { background: image-set(url(a.png) 1x, url(b.png) 2x); }",
+            r#"div { background-image: image-set("a.png" 1x, "a@2x.png" 2x); }"#,
             &[0],
         );
-        // Raw image-set() string is stored in Url variant; paint resolves per-DPR.
         assert_eq!(s.background_layers.len(), 1);
-        if let BackgroundImage::Url(ref raw) = s.background_layers[0].image {
-            assert!(raw.starts_with("image-set("), "expected raw image-set string, got: {raw}");
-        } else {
-            panic!("expected Url variant, got: {:?}", s.background_layers[0].image);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::Url(u) if u.contains("image-set(")),
+            "image-set() should be stored as Url containing the raw function string"
+        );
+    }
+
+    #[test]
+    fn webkit_image_set_stored_as_raw_url_string() {
+        // -webkit-image-set() vendor prefix handled identically.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: -webkit-image-set(url("x.png") 1x); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::Url(u) if u.contains("image-set(")),
+            "-webkit-image-set() should be stored as Url containing the raw function string"
+        );
+    }
+
+    #[test]
+    fn cross_fade_two_urls_parsed() {
+        // CSS Images L4 §4: cross-fade(<image-a>, <image-b>, <pct>) → CrossFade variant.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 30%); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        match &s.background_layers[0].image {
+            BackgroundImage::CrossFade { a, b, t } => {
+                assert_eq!(a.as_ref(), &BackgroundImage::Url("a.png".into()));
+                assert_eq!(b.as_ref(), &BackgroundImage::Url("b.png".into()));
+                assert!((t - 0.30).abs() < 0.001, "t should be 0.30, got {t}");
+            }
+            other => panic!("expected CrossFade, got {other:?}"),
         }
     }
 
     #[test]
-    fn image_set_property_stores_raw_string() {
+    fn webkit_cross_fade_parsed() {
+        // -webkit-cross-fade() vendor prefix.
         let s = cascade_at(
             "<div></div>",
-            "div { background-image: image-set(url(hi.png) 1x); }",
+            r#"div { background-image: -webkit-cross-fade(url("x.png"), url("y.png"), 50%); }"#,
             &[0],
         );
         assert_eq!(s.background_layers.len(), 1);
-        if let BackgroundImage::Url(ref raw) = s.background_layers[0].image {
-            assert!(raw.starts_with("image-set("), "expected raw image-set string, got: {raw}");
-        } else {
-            panic!("expected Url variant: {:?}", s.background_layers[0].image);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::CrossFade { t, .. } if (t - 0.5).abs() < 0.001),
+            "expected CrossFade with t≈0.5"
+        );
+    }
+
+    #[test]
+    fn cross_fade_t_clamped_to_unit_interval() {
+        // t > 1.0 should be clamped to 1.0.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 150%); }"#,
+            &[0],
+        );
+        if let BackgroundImage::CrossFade { t, .. } = &s.background_layers[0].image {
+            assert!(*t <= 1.0, "t should be clamped to ≤ 1.0, got {t}");
         }
-    }
-
-    #[test]
-    fn webkit_image_set_stores_raw_string() {
-        let s = cascade_at(
-            "<div></div>",
-            "div { background-image: -webkit-image-set(url(a.png) 1x); }",
-            &[0],
-        );
-        assert_eq!(s.background_layers.len(), 1);
-        if let BackgroundImage::Url(ref raw) = s.background_layers[0].image {
-            assert!(
-                raw.to_ascii_lowercase().starts_with("-webkit-image-set("),
-                "expected raw -webkit-image-set string, got: {raw}"
-            );
-        } else {
-            panic!("expected Url variant: {:?}", s.background_layers[0].image);
-        }
-    }
-
-    #[test]
-    fn cross_fade_two_images_defaults_to_half() {
-        let s = cascade_at(
-            "<div></div>",
-            "div { background-image: cross-fade(url(a.png), url(b.png)); }",
-            &[0],
-        );
-        assert_eq!(s.background_layers.len(), 1);
-        assert_eq!(
-            s.background_layers[0].image,
-            BackgroundImage::CrossFade { a: "a.png".into(), b: "b.png".into(), progress: 0.5 }
-        );
-    }
-
-    #[test]
-    fn cross_fade_with_trailing_percentage() {
-        let s = cascade_at(
-            "<div></div>",
-            "div { background-image: cross-fade(url(a.png), url(b.png), 30%); }",
-            &[0],
-        );
-        assert_eq!(s.background_layers.len(), 1);
-        assert_eq!(
-            s.background_layers[0].image,
-            BackgroundImage::CrossFade { a: "a.png".into(), b: "b.png".into(), progress: 0.3 }
-        );
-    }
-
-    #[test]
-    fn cross_fade_webkit_form_leading_percentage() {
-        let s = cascade_at(
-            "<div></div>",
-            "div { background-image: -webkit-cross-fade(url(x.png), url(y.png), 75%); }",
-            &[0],
-        );
-        assert_eq!(s.background_layers.len(), 1);
-        // -webkit-cross-fade(img_a, img_b, pct) — leading pct is webkit form
-        if let BackgroundImage::CrossFade { progress, .. } = s.background_layers[0].image {
-            assert!((progress - 0.75).abs() < 1e-4, "expected 0.75, got {progress}");
-        } else {
-            panic!("expected CrossFade variant: {:?}", s.background_layers[0].image);
-        }
-    }
-
-    #[test]
-    fn cross_fade_shorthand_parsing() {
-        let s = cascade_at(
-            "<div></div>",
-            "div { background: cross-fade(url(p.png), url(q.png)); }",
-            &[0],
-        );
-        assert_eq!(s.background_layers.len(), 1);
-        assert_eq!(
-            s.background_layers[0].image,
-            BackgroundImage::CrossFade { a: "p.png".into(), b: "q.png".into(), progress: 0.5 }
-        );
-    }
-
-    #[test]
-    fn parse_cross_fade_helper_two_args() {
-        let result = parse_cross_fade("cross-fade(url(a.png), url(b.png))");
-        assert_eq!(result, Some(BackgroundImage::CrossFade {
-            a: "a.png".into(), b: "b.png".into(), progress: 0.5
-        }));
-    }
-
-    #[test]
-    fn parse_cross_fade_helper_three_args_trailing_pct() {
-        let result = parse_cross_fade("cross-fade(url(a.png), url(b.png), 40%)");
-        assert_eq!(result, Some(BackgroundImage::CrossFade {
-            a: "a.png".into(), b: "b.png".into(), progress: 0.4
-        }));
-    }
-
-    #[test]
-    fn parse_cross_fade_helper_three_args_leading_pct() {
-        let result = parse_cross_fade("cross-fade(60%, url(a.png), url(b.png))");
-        assert_eq!(result, Some(BackgroundImage::CrossFade {
-            a: "a.png".into(), b: "b.png".into(), progress: 0.6
-        }));
-    }
-
-    #[test]
-    fn parse_cross_fade_helper_invalid_returns_none() {
-        // Missing second image → None
-        assert_eq!(parse_cross_fade("cross-fade(url(a.png))"), None);
-        // Not a cross-fade string → None
-        assert_eq!(parse_cross_fade("linear-gradient(red, blue)"), None);
     }
 
     // ── CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style / text-wrap ──

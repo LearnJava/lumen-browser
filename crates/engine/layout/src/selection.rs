@@ -265,6 +265,7 @@ mod tests {
             kind: BoxKind::InlineRun {
                 segments: vec![],
                 lines,
+                first_line_style: None,
             },
             children: vec![],
             col_span: 1,

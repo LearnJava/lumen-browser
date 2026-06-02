@@ -27,18 +27,28 @@ _(none)_
 
 ## Next
 
-_(2026-06-02: все задачи переданы P1 и P2 — CSS-wiring задачи с алгоритмами P1 → STATUS-P1.md § «CSS wiring», CSS-wiring задачи с алгоритмами P2 и новые CSS-свойства → STATUS-P2.md § «CSS wiring». P4 свободен до нового назначения.)_
+Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-05-29 state.
 
-Распределение (детали реализации — секция «Needs wiring» ниже):
-
-- **→ P1 (алгоритмы реализованы P1):** `::first-letter/::first-line`, `position: sticky`, CSS Scroll Snap, CSS Scroll-Driven Animations L1, `font-variation-settings`, `:host/::slotted`, `text-align-last`, `justify-items/justify-self`, `::selection`, `attr()` с типом, `writing-mode: sideways-*`, `subgrid`
-- **→ P2 (алгоритмы реализованы P2):** `image-set()/cross-fade()`, `@media (prefers-color-scheme: dark)`, CSS 3D transforms + `transform-style: preserve-3d`, `overflow: scroll` wiring check, `scrollbar-width/scrollbar-color`, SVG stroke advanced, `@counter-style`, `column-rule/column-span/column-fill`, `::marker`, `cq*` units, `mask-image`
+| # | Property / Feature | Effort | Blocker |
+|---|-------------------|--------|---------|
+| 1 | `overflow: scroll` scrollable containers | L | shell scroll event |
+| 2 | `text-align-last` | S | none |
+| 3 | `perspective()` + `transform-style: preserve-3d` (3D Transforms L2) | L | none (P2 matrix primitive ready — see "Needs wiring") |
+| 4 | `@counter-style` custom counter definitions | M | none |
+| 5 | `justify-items` / `justify-self` for grid (Box Alignment L3) | S | none |
+| 6 | `column-rule` rendering + `column-span` + `column-fill` | S | none |
+| 7 | Scroll snap shell integration (`scroll-snap-type` / `scroll-snap-align`) | M | shell scroll |
+| 8 | `::selection` pseudo-element | S | none |
+| 9 | `::marker` rendering | S | none |
+| 10 | `cq*` container query units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`) | M | none |
+| 11 | `attr()` with type (CSS Values L4) | M | none |
+| 12 | `mask-image` CSS wiring | L | P2 GPU compositing pass |
+| 13 | `writing-mode: vertical-*` axis swap | L | ~~layout engine~~ **stub ready** (P1 2026-05-31, `vertical.rs`) |
+| 14 | `subgrid` track inheritance | XL | grid engine |
 
 ---
 
 ## Needs wiring (algorithm ready, CSS not connected)
-
-_(2026-06-02: все задачи этой секции переданы P1/P2. Раздел сохранён как справочник с деталями реализации — P1 и P2 используют его при выполнении своих CSS-wiring задач.)_
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
@@ -164,6 +174,16 @@ _(2026-06-02: все задачи этой секции переданы P1/P2. 
   4. In the animation scheduler (`AnimationScheduler` / shell tick loop): resolve `animation_timeline` to a progress fraction using `resolve_scroll_progress` / `resolve_view_progress`, then drive `CompositorAnimFrame` progress from it instead of wall-clock time.
 - **Entry points:** `lumen-layout/src/scroll_timeline.rs` (all public API), `lumen-layout/src/style.rs` (ComputedStyle), `lumen-layout/src/animation.rs` (AnimationScheduler).
 
+### CSS Motion Path L1 — `offset-path` / `offset-distance` / `offset-rotate` (P1 feature p1-motion-path, 2026-06-02)
+- **Status:** Algorithm ready. `lumen_layout::resolve_motion_transform(path_str, offset_distance_px, rotate) -> Option<MotionTransform>` in `lumen-layout/src/motion_path.rs`. Parses `path("M…")` SVG path strings (all commands M/L/H/V/C/S/Q/T/A/Z, relative and absolute). Returns `MotionTransform { translate_x, translate_y, rotation_deg }`. `OffsetRotate::Auto` tracks tangent, `Reverse` = tangent+180°, `AutoAngle` = tangent+extra, `Angle(deg)` = fixed. Arc commands approximated as cubic Bézier via W3C endpoint→center parameterisation. 15 unit tests.
+- **P4 task** (CSS Motion Path L1):
+  1. `ComputedStyle` already has `offset_path: Option<String>`, `offset_distance: Length`, `offset_rotate: OffsetRotate` fields (style.rs). **No new CSS parsing needed.**
+  2. In `property_trees.rs` `build_property_trees_rec()` at the `creates_transform(style)` branch (search `// CSS: offset-path` comment at `property_trees.rs:802`): after computing the CSS `transform` local matrix, if `style.offset_path.is_some()`, resolve `offset_distance` to px (percentage → fraction of `b.rect` diagonal), call `resolve_motion_transform(path_str, dist_px, style.offset_rotate)`, then compose the result into `local` as an additional `translate(tx, ty) rotate(deg)` pre-transform (multiply on the left).
+  3. `offset-anchor` (default `auto` = object's transform-origin): if `style.offset_anchor != "auto"`, shift the element's origin by `(anchor_x - origin_x, anchor_y - origin_y)` before the translate. Can be a Phase 3+ refinement — `auto` covers 90% of real usage.
+  4. Deferred path types: `url(#id)`, `ray(angle)`, `circle()`, `ellipse()` — `resolve_motion_transform` returns `None` for these; element stays at normal position.
+- **Entry points:** `lumen-layout/src/motion_path.rs` — `resolve_motion_transform()` + `MotionTransform`; `lumen-layout/src/property_trees.rs:802` — `// CSS: offset-path` handoff comment.
+- **CSS comment location:** `property_trees.rs` near line 802 (`// CSS: offset-path, offset-distance, offset-rotate, offset-anchor`).
+
 ### SVG path stroke advanced properties (P2 feature p2-svg-stroke-path)
 - **Status:** Stroke tessellation implemented. `tessellate_stroke(contours, half_width)` in `paint/src/svg_path.rs`. `emit_svg_shape` in `paint/src/display_list.rs` now reads `svg_stroke` + `svg_stroke_width` from `ComputedStyle` and emits a second `DrawSvgPath` for the stroke band (miter join, butt cap). Stroke works end-to-end for any SVG `<path>`.
 - **P4 task** (CSS Fill & Stroke L3):
@@ -180,6 +200,8 @@ _(2026-06-02: все задачи этой секции переданы P1/P2. 
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-02 | `image-set()` / `cross-fade()` | CSS Images L4 §5/§4; BackgroundImage::CrossFade; 5 unit tests + graphic test 59; CPU snapshot 58+59 |
+| 2026-06-02 | `::first-letter` / `::first-line` | CSS Pseudo-elements L4 §5.3-5.4; segment split + first_line_style; 4 unit tests + graphic test 58 |
 | 2026-05-29 | `var()` full recursive substitution | expand_vars() recursive + @property + env(); 40 unit tests + graphic test 50 |
 | 2026-05-29 | `font-optical-sizing` | auto→opsz=font-size in variation axes; none skips; 5 tests |
 
