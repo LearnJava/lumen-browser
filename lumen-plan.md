@@ -2255,7 +2255,7 @@ CI gate (задачи 9G.3 + 9G.5 в Roadmap): `cargo run -p lumen-bench --relea
   - **Forms runtime** (`[P1+P4]`) — Constraint Validation API, submission algorithm, file picker, autofill UI поверх существующего storage. P1 — ValidityState + validation pseudo-classes + submission algorithm; P4 — native pickers + autofill popup + validation tooltip.
   - ✅ **`<picture>` / `srcset` / `sizes` + `loading="lazy"`** (`[P1+P2]`) — P1 завершён: srcset, sizes, picture-picker, IntersectionObserver event source для lazy (rootMargin). P2 — image GPU upload.
   - **IME composition events** (`[P4]`) — без них японский / китайский / корейский ввод сломан.
-  - **Connection pooling + keep-alive + Brotli + Range requests** (`[P3]`, ✅ keep-alive + Brotli + single-range; ⬜ multi-range / suffix / If-Range) — без keep-alive реальный сайт = 50× TCP handshakes.
+  - ✅ **Connection pooling + keep-alive + Brotli + Range requests** (`[P3]`) — pooling/keep-alive (`with_pool`, LIFO idle, retry-on-stale), Brotli (`BrotliContentDecoder`), Range (single + multi + suffix + If-Range, `fetch_range`/`fetch_multi_range`) — все реализованы в `lumen-network` (70 range-тестов). Без keep-alive реальный сайт = 50× TCP handshakes.
   - **Find in page (Ctrl+F)** (`[P4]`).
   - **DevTools / Inspector минимум через CDP** (`[P4]`) — DOM tree + computed styles + network log. Без этого debug собственного движка невозможен.
   - **`mix-blend-mode` / `backdrop-filter` / `isolation`** (`[P1+P2]`) — нужны isolation groups в compositor pipeline. P1 — parsing + stacking model; P2 — paint pipeline + isolation groups.
