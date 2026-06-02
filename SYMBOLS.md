@@ -833,7 +833,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/html-parser/src/tree_builder.rs:195` **fn** `as_doc` — Возвращает ссылку на текущее состояние DOM
 `crates/engine/html-parser/src/tree_builder.rs:204` **fn** `finish` — Финализирует ввод. Хвост push-tokenizer-а токенизируется как
 
-## lumen-image  (52 symbols)
+## lumen-image  (55 symbols)
 
 `crates/engine/image/src/avif/mod.rs:19` **enum** `AvifError` — Ошибка декодирования AVIF
 `crates/engine/image/src/avif/mod.rs:47` **fn** `is_avif` — Проверяет AVIF-сигнатуру по ISOBMFF ftyp-боксу
@@ -868,19 +868,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/gif.rs:126` **fn** `frame_at` — Возвращает кадр для `elapsed_ms` миллисекунд от начала анимации
 `crates/engine/image/src/gif.rs:140` **fn** `decode_gif` — Декодирует GIF файл и возвращает первый кадр
 `crates/engine/image/src/gif.rs:164` **fn** `decode_gif_animated` — Декодирует все кадры GIF и возвращает [`AnimatedGif`]
-`crates/engine/image/src/jpeg/mod.rs:8` **fn** `decode_jpeg`
-`crates/engine/image/src/jpeg/mod.rs:39` **struct** `JpegError` — Ошибка декодирования JPEG (обёртка над zune-jpeg)
+`crates/engine/image/src/jpeg/mod.rs:94` **fn** `decode_jpeg`
+`crates/engine/image/src/jpeg/mod.rs:126` **struct** `JpegError` — Ошибка декодирования JPEG (обёртка над zune-jpeg)
 `crates/engine/image/src/lib.rs:27` **fn** `supported_mime_types` — MIME-типы изображений, которые `decode` умеет декодировать
 `crates/engine/image/src/lib.rs:40` **fn** `decode` — Декодирует растровое изображение по сигнатуре первых байтов
 `crates/engine/image/src/lib.rs:65` **enum** `ImageError` — Ошибка `decode`
-`crates/engine/image/src/lib.rs:117` **struct** `IccProfile` — ICC профиль изображения (опциональный)
-`crates/engine/image/src/lib.rs:125` **fn** `is_valid` — Проверяет минимальный размер ICC профиля (128 байт)
-`crates/engine/image/src/lib.rs:133` **struct** `Image` — Декодированное растровое изображение в плотной row-major упаковке
-`crates/engine/image/src/lib.rs:145` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
-`crates/engine/image/src/lib.rs:171` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
-`crates/engine/image/src/lib.rs:223` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
-`crates/engine/image/src/lib.rs:282` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
-`crates/engine/image/src/lib.rs:306` **enum** `DecodeError` — Ошибки декодирования PNG
+`crates/engine/image/src/lib.rs:117` **enum** `IccGamut` — Идентифицированный цветовой охват ICC профиля
+`crates/engine/image/src/lib.rs:132` **struct** `IccProfile` — ICC профиль изображения (опциональный)
+`crates/engine/image/src/lib.rs:140` **fn** `is_valid` — Проверяет минимальный размер ICC профиля (128 байт)
+`crates/engine/image/src/lib.rs:150` **fn** `detect_gamut` — Определяет цветовой охват по сигнатуре пространства данных (bytes 16-19)
+`crates/engine/image/src/lib.rs:211` **fn** `correct_rgba_pixels` — Применяет ICC-коррекцию к RGBA8 пикселям in-place
+`crates/engine/image/src/lib.rs:288` **struct** `Image` — Декодированное растровое изображение в плотной row-major упаковке
+`crates/engine/image/src/lib.rs:300` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
+`crates/engine/image/src/lib.rs:326` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
+`crates/engine/image/src/lib.rs:378` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
+`crates/engine/image/src/lib.rs:437` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
+`crates/engine/image/src/lib.rs:461` **enum** `DecodeError` — Ошибки декодирования PNG
 `crates/engine/image/src/png/mod.rs:54` **fn** `decode_png`
 `crates/engine/image/src/png/mod.rs:96` **fn** `encode_png_rgba8` — Кодирует RGBA8 изображение в PNG формат
 `crates/engine/image/src/webp/mod.rs:24` **struct** `WebpError` — Ошибка декодирования WebP
@@ -1679,7 +1682,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (192 symbols)
+## lumen-paint  (212 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -1761,6 +1764,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/fingerprint.rs:32` **fn** `from_adapter_info` — Create normalized GPU fingerprint from adapter info
 `crates/engine/paint/src/fingerprint.rs:40` **fn** `vendor` — Vendor string: always "WebKit"
 `crates/engine/paint/src/fingerprint.rs:45` **fn** `renderer` — Renderer string: always "Generic GPU"
+`crates/engine/paint/src/glsl.rs:32` **enum** `Val` — Runtime value inside the GLSL interpreter
+`crates/engine/paint/src/glsl.rs:49` **fn** `to_float` — Convert any numeric-ish value to a scalar f32
+`crates/engine/paint/src/glsl.rs:63` **fn** `to_vec4` — Convert any value to vec4 (broadcasting rules)
+`crates/engine/paint/src/glsl.rs:75` **fn** `components` — Number of scalar components
+`crates/engine/paint/src/glsl.rs:86` **fn** `get_component` — Read a single float component by index (0-based)
+`crates/engine/paint/src/glsl.rs:323` **enum** `GlType` — GLSL type tag (declaration-time)
+`crates/engine/paint/src/glsl.rs:394` **struct** `ParsedShader` — A parsed GLSL shader: declaration tables + the `main()` function body
+`crates/engine/paint/src/glsl.rs:911` **fn** `parse` — Parse a GLSL ES shader source string
+`crates/engine/paint/src/glsl.rs:920` **struct** `ShaderEnv` — Execution environment for a single shader invocation
+`crates/engine/paint/src/glsl.rs:938` **fn** `new`
+`crates/engine/paint/src/glsl.rs:977` **fn** `exec_main` — Execute the `main()` function of a parsed shader
+`crates/engine/paint/src/glsl.rs:1546` **fn** `interp_varyings` — Linearly interpolate a map of varying values given barycentric weights
 `crates/engine/paint/src/hit_test.rs:48` **struct** `HitTestResult` — Результат hit-теста
 `crates/engine/paint/src/hit_test.rs:71` **fn** `hit_test` — Hit-тест точки в viewport-координатах. `root` — layout-дерево из
 `crates/engine/paint/src/layer_cache.rs:21` **struct** `LayerKey` — Layer identification key for cache lookup
@@ -1781,8 +1796,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:175` **fn** `is_empty` — Check if cache is empty
 `crates/engine/paint/src/layer_cache.rs:180` **fn** `contains` — Check if a specific layer is in cache
 `crates/engine/paint/src/layer_cache.rs:189` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:62` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:72` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/lib.rs:63` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:73` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1331` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
@@ -1795,35 +1810,35 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:3026` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
 `crates/engine/paint/src/renderer.rs:3039` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
 `crates/engine/paint/src/renderer.rs:3116` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:3253` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:3262` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:3269` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:3287` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:3354` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:3359` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:3365` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:3370` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
-`crates/engine/paint/src/renderer.rs:3378` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
-`crates/engine/paint/src/renderer.rs:3387` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
-`crates/engine/paint/src/renderer.rs:3394` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
-`crates/engine/paint/src/renderer.rs:3401` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
-`crates/engine/paint/src/renderer.rs:3411` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
-`crates/engine/paint/src/renderer.rs:3417` **fn** `access_layer` — Отметить layer как используемый текущим render pass
-`crates/engine/paint/src/renderer.rs:3424` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
-`crates/engine/paint/src/renderer.rs:3430` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
-`crates/engine/paint/src/renderer.rs:3442` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
-`crates/engine/paint/src/renderer.rs:3448` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
-`crates/engine/paint/src/renderer.rs:3453` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
-`crates/engine/paint/src/renderer.rs:3458` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
-`crates/engine/paint/src/renderer.rs:3464` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:3470` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
-`crates/engine/paint/src/renderer.rs:3499` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:3508` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:3515` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:3700` **fn** `render` — Рендерит две полосы display list-а одним кадром:
-`crates/engine/paint/src/renderer.rs:6307` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:6329` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:6432` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer.rs:3262` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:3271` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:3278` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:3296` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:3363` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:3368` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:3374` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:3379` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
+`crates/engine/paint/src/renderer.rs:3387` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
+`crates/engine/paint/src/renderer.rs:3396` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
+`crates/engine/paint/src/renderer.rs:3403` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
+`crates/engine/paint/src/renderer.rs:3410` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
+`crates/engine/paint/src/renderer.rs:3420` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
+`crates/engine/paint/src/renderer.rs:3426` **fn** `access_layer` — Отметить layer как используемый текущим render pass
+`crates/engine/paint/src/renderer.rs:3433` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
+`crates/engine/paint/src/renderer.rs:3439` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
+`crates/engine/paint/src/renderer.rs:3451` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
+`crates/engine/paint/src/renderer.rs:3457` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
+`crates/engine/paint/src/renderer.rs:3462` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
+`crates/engine/paint/src/renderer.rs:3467` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
+`crates/engine/paint/src/renderer.rs:3473` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:3479` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
+`crates/engine/paint/src/renderer.rs:3508` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:3517` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:3524` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:3709` **fn** `render` — Рендерит две полосы display list-а одним кадром:
+`crates/engine/paint/src/renderer.rs:6316` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:6338` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:6441` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 `crates/engine/paint/src/svg_path.rs:16` **enum** `PathSegment` — One SVG path command (absolute coords, after normalization)
@@ -1845,34 +1860,42 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:102` **fn** `len_for_size` — Get the number of free textures of a specific size
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
-`crates/engine/paint/src/webgl.rs:107` **struct** `SoftwareWebGl` — Pure-Rust software WebGL 1.0 context
-`crates/engine/paint/src/webgl.rs:145` **fn** `new` — Create a context with a `width × height` drawing buffer
-`crates/engine/paint/src/webgl.rs:168` **fn** `width` — Drawing-buffer width in pixels
-`crates/engine/paint/src/webgl.rs:173` **fn** `height` — Drawing-buffer height in pixels
-`crates/engine/paint/src/webgl.rs:178` **fn** `pixels` — Borrow the RGBA8 framebuffer (top-left origin, `width*height*4` bytes)
-`crates/engine/paint/src/webgl.rs:184` **fn** `pixel` — Read the RGBA pixel at `(x, y)` (top-left origin). Returns
-`crates/engine/paint/src/webgl.rs:198` **fn** `viewport` — `gl.viewport(x, y, w, h)`
-`crates/engine/paint/src/webgl.rs:203` **fn** `clear_color` — `gl.clearColor(r, g, b, a)`. Components are clamped to `[0, 1]`
-`crates/engine/paint/src/webgl.rs:209` **fn** `clear` — `gl.clear(mask)`. Only `COLOR_BUFFER_BIT` has a visible effect; the
-`crates/engine/paint/src/webgl.rs:226` **fn** `create_buffer` — `gl.createBuffer()` → opaque buffer id (never 0)
-`crates/engine/paint/src/webgl.rs:236` **fn** `bind_buffer` — `gl.bindBuffer(target, buffer)`. `buffer == 0` unbinds. Only
-`crates/engine/paint/src/webgl.rs:244` **fn** `buffer_data_f32` — `gl.bufferData(target, data, usage)` for float data. Stores `data`
-`crates/engine/paint/src/webgl.rs:251` **fn** `create_shader` — `gl.createShader(kind)` → opaque shader id, or 0 for an unknown kind
-`crates/engine/paint/src/webgl.rs:269` **fn** `shader_source` — `gl.shaderSource(shader, source)`
-`crates/engine/paint/src/webgl.rs:277` **fn** `compile_shader` — `gl.compileShader(shader)`. Always marks the shader compiled; the
-`crates/engine/paint/src/webgl.rs:284` **fn** `shader_compiled` — `gl.getShaderParameter(shader, COMPILE_STATUS)` — true once compiled
-`crates/engine/paint/src/webgl.rs:289` **fn** `create_program` — `gl.createProgram()` → opaque program id (never 0)
-`crates/engine/paint/src/webgl.rs:297` **fn** `attach_shader` — `gl.attachShader(program, shader)`. Slots the shader by its kind
-`crates/engine/paint/src/webgl.rs:312` **fn** `link_program` — `gl.linkProgram(program)`. Always marks the program linked
-`crates/engine/paint/src/webgl.rs:319` **fn** `program_linked` — `gl.getProgramParameter(program, LINK_STATUS)` — true once linked
-`crates/engine/paint/src/webgl.rs:324` **fn** `use_program` — `gl.useProgram(program)`. `program == 0` clears the active program
-`crates/engine/paint/src/webgl.rs:330` **fn** `get_attrib_location` — `gl.getAttribLocation(program, name)` → stable location (≥ 0), or -1 if
-`crates/engine/paint/src/webgl.rs:347` **fn** `get_uniform_location` — `gl.getUniformLocation(program, name)` → stable location (≥ 0), or -1 if
-`crates/engine/paint/src/webgl.rs:363` **fn** `enable_vertex_attrib_array` — `gl.enableVertexAttribArray(index)`
-`crates/engine/paint/src/webgl.rs:368` **fn** `disable_vertex_attrib_array` — `gl.disableVertexAttribArray(index)`
-`crates/engine/paint/src/webgl.rs:379` **fn** `vertex_attrib_pointer` — `gl.vertexAttribPointer(index, size, type, normalized, stride, offset)`
-`crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
-`crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
+`crates/engine/paint/src/webgl.rs:114` **struct** `SoftwareWebGl` — Pure-Rust software WebGL 1.0 context
+`crates/engine/paint/src/webgl.rs:170` **fn** `new` — Create a context with a `width × height` drawing buffer
+`crates/engine/paint/src/webgl.rs:197` **fn** `width` — Drawing-buffer width in pixels
+`crates/engine/paint/src/webgl.rs:202` **fn** `height` — Drawing-buffer height in pixels
+`crates/engine/paint/src/webgl.rs:207` **fn** `pixels` — Borrow the RGBA8 framebuffer (top-left origin, `width*height*4` bytes)
+`crates/engine/paint/src/webgl.rs:213` **fn** `pixel` — Read the RGBA pixel at `(x, y)` (top-left origin). Returns
+`crates/engine/paint/src/webgl.rs:227` **fn** `viewport` — `gl.viewport(x, y, w, h)`
+`crates/engine/paint/src/webgl.rs:232` **fn** `clear_color` — `gl.clearColor(r, g, b, a)`. Components are clamped to `[0, 1]`
+`crates/engine/paint/src/webgl.rs:238` **fn** `clear` — `gl.clear(mask)`. Only `COLOR_BUFFER_BIT` has a visible effect; the
+`crates/engine/paint/src/webgl.rs:255` **fn** `create_buffer` — `gl.createBuffer()` → opaque buffer id (never 0)
+`crates/engine/paint/src/webgl.rs:265` **fn** `bind_buffer` — `gl.bindBuffer(target, buffer)`. `buffer == 0` unbinds. Only
+`crates/engine/paint/src/webgl.rs:273` **fn** `buffer_data_f32` — `gl.bufferData(target, data, usage)` for float data. Stores `data`
+`crates/engine/paint/src/webgl.rs:280` **fn** `create_shader` — `gl.createShader(kind)` → opaque shader id, or 0 for an unknown kind
+`crates/engine/paint/src/webgl.rs:294` **fn** `shader_source` — `gl.shaderSource(shader, source)`
+`crates/engine/paint/src/webgl.rs:303` **fn** `compile_shader` — `gl.compileShader(shader)`. Parses the GLSL source into an AST so
+`crates/engine/paint/src/webgl.rs:312` **fn** `shader_compiled` — `gl.getShaderParameter(shader, COMPILE_STATUS)` — true once compiled
+`crates/engine/paint/src/webgl.rs:317` **fn** `create_program` — `gl.createProgram()` → opaque program id (never 0)
+`crates/engine/paint/src/webgl.rs:325` **fn** `attach_shader` — `gl.attachShader(program, shader)`. Slots the shader by its kind
+`crates/engine/paint/src/webgl.rs:340` **fn** `link_program` — `gl.linkProgram(program)`. Always marks the program linked
+`crates/engine/paint/src/webgl.rs:347` **fn** `program_linked` — `gl.getProgramParameter(program, LINK_STATUS)` — true once linked
+`crates/engine/paint/src/webgl.rs:352` **fn** `use_program` — `gl.useProgram(program)`. `program == 0` clears the active program
+`crates/engine/paint/src/webgl.rs:358` **fn** `get_attrib_location` — `gl.getAttribLocation(program, name)` → stable location (≥ 0), or -1 if
+`crates/engine/paint/src/webgl.rs:375` **fn** `get_uniform_location` — `gl.getUniformLocation(program, name)` → stable location (≥ 0), or -1 if
+`crates/engine/paint/src/webgl.rs:391` **fn** `enable_vertex_attrib_array` — `gl.enableVertexAttribArray(index)`
+`crates/engine/paint/src/webgl.rs:396` **fn** `disable_vertex_attrib_array` — `gl.disableVertexAttribArray(index)`
+`crates/engine/paint/src/webgl.rs:407` **fn** `vertex_attrib_pointer` — `gl.vertexAttribPointer(index, size, type, normalized, stride, offset)`
+`crates/engine/paint/src/webgl.rs:422` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`
+`crates/engine/paint/src/webgl.rs:430` **fn** `uniform3f` — `gl.uniform3f(location, x, y, z)`
+`crates/engine/paint/src/webgl.rs:437` **fn** `uniform2f` — `gl.uniform2f(location, x, y)`
+`crates/engine/paint/src/webgl.rs:444` **fn** `uniform1f` — `gl.uniform1f(location, x)`
+`crates/engine/paint/src/webgl.rs:451` **fn** `uniform1i` — `gl.uniform1i(location, v)`. Used to bind sampler2D to a texture unit
+`crates/engine/paint/src/webgl.rs:459` **fn** `uniform_matrix4fv` — `gl.uniformMatrix4fv(location, transpose, values)`. Stores a 4×4 float
+`crates/engine/paint/src/webgl.rs:468` **fn** `active_texture` — `gl.activeTexture(unit_enum)`. Sets the active texture unit
+`crates/engine/paint/src/webgl.rs:473` **fn** `bind_texture` — `gl.bindTexture(target, texture_id)`. Records binding for the active unit
+`crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
+`crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
 ## lumen-shell  (555 symbols)
 
@@ -2838,4 +2861,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2773 symbols in 20 crates*
+*Total: 2796 symbols in 20 crates*
