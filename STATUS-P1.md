@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: 9F.3 (network slice) — Tor Browser request-signature pinning  branch: p1-tor-browser-pin
+Next step: обновить `HttpProfile::TorBrowser` под Firefox ESR 128 (Windows-uniform UA + Sec-Fetch) — `crates/network/src/http/headers.rs:194`
 
 ---
 
