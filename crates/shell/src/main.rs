@@ -2328,8 +2328,17 @@ fn parse_and_layout(
 
     let font = lumen_font::Font::parse(INTER_FONT)
         .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
-    let measurer = lumen_paint::FontMeasurer::new(&font)
+    // Многошрифтовый измеритель: Inter как fallback + @font-face семьи.
+    // CSS: @font-face multi-font TextMeasurer — wired здесь.
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
+    for rule in &sheet.font_faces {
+        if !rule.family.is_empty() {
+            if let Some(bytes) = font_registry.face_bytes_for_family(&rule.family) {
+                measurer.register_family(&rule.family, bytes);
+            }
+        }
+    }
 
     let layout = {
         let d = doc_arc.lock().unwrap();

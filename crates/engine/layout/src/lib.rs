@@ -106,6 +106,19 @@ pub trait TextMeasurer {
     // P4 добавит вариантную версию этого метода после cascade для font-variation-settings.
     fn char_width(&self, ch: char, font_size_px: f32) -> f32;
 
+    /// Ширина символа `ch` с учётом CSS `font-family` каскада.
+    ///
+    /// Перебирает `families` по порядку и возвращает ширину из первого шрифта,
+    /// в котором есть глиф для `ch`. Если ни одна семья не загружена или не
+    /// содержит глиф, делегирует к [`Self::char_width`] (Inter-fallback).
+    ///
+    /// Реализации, поддерживающие несколько шрифтов, должны переопределить
+    /// этот метод. По умолчанию игнорирует `families`.
+    fn char_width_with_families(&self, ch: char, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.char_width(ch, font_size_px)
+    }
+
     /// Descent шрифта в пикселях при размере `font_size_px`.
     /// Используется для IFC strut: определяет, насколько линия строки
     /// опускается ниже baseline при baseline-выравнивании.

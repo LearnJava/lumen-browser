@@ -78,6 +78,19 @@ impl FontRegistry {
     pub fn custom_face_count(&self) -> usize {
         self.custom.read().unwrap().values().map(|v| v.len()).sum()
     }
+
+    /// Возвращает байты первого загруженного face для данной семьи.
+    ///
+    /// Используется [`lumen_paint::MultiFontMeasurer`] в shell для построения
+    /// per-family измерителей из @font-face URL-источников.
+    pub fn face_bytes_for_family(&self, family: &str) -> Option<Vec<u8>> {
+        let key = family.to_ascii_lowercase();
+        let custom = self.custom.read().unwrap();
+        let face = custom.get(&key)?.first()?;
+        let path = face.path.clone();
+        drop(custom);
+        self.bytes_store.read().unwrap().get(&path).cloned()
+    }
 }
 
 impl Default for FontRegistry {

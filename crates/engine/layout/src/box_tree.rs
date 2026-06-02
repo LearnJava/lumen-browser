@@ -4807,6 +4807,36 @@ pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size:
     total - letter_spacing
 }
 
+/// Как [`measure_text_w`], но учитывает CSS `font-family` каскад.
+///
+/// Используется в `wrap_inline_run`, где для каждого `InlineSegment` доступен
+/// `seg.style.font_family`. Позволяет `MultiFontMeasurer` выбирать правильный
+/// шрифт для измерения ширины слов при перенос-расчёте.
+pub fn measure_text_w_families(
+    text: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    tab_size: f32,
+    families: &[String],
+    m: &dyn TextMeasurer,
+) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = text
+        .chars()
+        .map(|c| {
+            let cw = if c == '\t' {
+                tab_size
+            } else {
+                m.char_width_with_families(c, font_size, families)
+            };
+            cw + letter_spacing
+        })
+        .sum();
+    total - letter_spacing
+}
+
 /// Tries to find a hyphenation break in `display` that fits within `available_w`.
 /// `break_positions` are byte offsets in `display` (already sorted ascending).
 /// Returns `(prefix_with_hyphen, suffix)` for the rightmost fitting break, or `None`.
@@ -4851,11 +4881,12 @@ fn char_break_offset(
     avail_px: f32,
     font_size: f32,
     ls: f32,
+    families: &[String],
     m: &dyn TextMeasurer,
 ) -> usize {
     let mut w = 0.0_f32;
     for (char_idx, (byte_pos, ch)) in word.char_indices().enumerate() {
-        let cw = m.char_width(ch, font_size);
+        let cw = m.char_width_with_families(ch, font_size, families);
         // Width of prefix ending at this char: sum(cw + ls) - ls.
         // For first char: width = cw (no trailing letter-spacing).
         let prefix_w = if char_idx == 0 { cw } else { w + ls + cw };
@@ -4886,9 +4917,10 @@ fn widest_word(segments: &[InlineSegment], m: &dyn TextMeasurer) -> f32 {
         let em = seg.style.font_size;
         let ls = seg.style.letter_spacing;
         let tab = seg.style.tab_size;
+        let families = &seg.style.font_family;
         for raw in seg.text.split_whitespace() {
             let (display, _) = strip_soft_hyphens(raw);
-            let w = measure_text_w(&display, em, ls, tab, m);
+            let w = measure_text_w_families(&display, em, ls, tab, families, m);
             max_w = max_w.max(w);
         }
     }
@@ -4996,11 +5028,12 @@ fn pretty_wrap(
         .last()
         .map(|w| {
             let (display, _) = strip_soft_hyphens(w);
-            measure_text_w(
+            measure_text_w_families(
                 &display,
                 last_frag.style.font_size,
                 last_frag.style.letter_spacing,
                 0.0,
+                &last_frag.style.font_family,
                 m,
             )
         })
@@ -5077,7 +5110,7 @@ fn wrap_inline_run(
             let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
             current_x += seg.pre_space;
             let frag_x = current_x;
-            let frag_w = measure_text_w(&seg.text, em, ls, tab_size, m);
+            let frag_w = measure_text_w_families(&seg.text, em, ls, tab_size, &seg.style.font_family, m);
             current_line.push(InlineFrag {
                 x: frag_x,
                 y_offset: 0.0,
@@ -5167,7 +5200,7 @@ fn wrap_inline_run(
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
-            let word_w = measure_text_w(&display_word, style.font_size, ls, 0.0, m);
+            let word_w = measure_text_w_families(&display_word, style.font_size, ls, 0.0, &style.font_family, m);
             let gap = if current_line.is_empty() { 0.0 } else { inter_word };
 
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
@@ -5192,7 +5225,7 @@ fn wrap_inline_run(
 
                 if let Some((pfx, sfx)) = hyph_result {
                     // Emit prefix (with trailing '-') to current line, then wrap.
-                    let pfx_w = measure_text_w(&pfx, style.font_size, ls, 0.0, m);
+                    let pfx_w = measure_text_w_families(&pfx, style.font_size, ls, 0.0, &style.font_family, m);
                     current_x += gap + pre;
                     current_line.push(InlineFrag {
                         x: current_x,
@@ -5211,7 +5244,7 @@ fn wrap_inline_run(
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
                     // Emit suffix as first fragment on new line.
-                    let sfx_w = measure_text_w(&sfx, style.font_size, ls, 0.0, m);
+                    let sfx_w = measure_text_w_families(&sfx, style.font_size, ls, 0.0, &style.font_family, m);
                     current_line.push(InlineFrag {
                         x: 0.0,
                         y_offset: 0.0,
@@ -5239,11 +5272,11 @@ fn wrap_inline_run(
                     let mut first_chunk = true;
                     while !rest.is_empty() {
                         let avail = (max_width - current_x).max(0.0);
-                        let split = char_break_offset(rest, avail, style.font_size, ls, m);
+                        let split = char_break_offset(rest, avail, style.font_size, ls, &style.font_family, m);
                         let head = &rest[..split];
                         let tail = &rest[split..];
                         if !head.is_empty() {
-                            let head_w = measure_text_w(head, style.font_size, ls, 0.0, m);
+                            let head_w = measure_text_w_families(head, style.font_size, ls, 0.0, &style.font_family, m);
                             current_line.push(InlineFrag {
                                 x: current_x,
                                 y_offset: 0.0,
@@ -5289,11 +5322,11 @@ fn wrap_inline_run(
                 let mut first_chunk = true;
                 while !rest.is_empty() {
                     let avail = (max_width - current_x).max(0.0);
-                    let split = char_break_offset(rest, avail, style.font_size, ls, m);
+                    let split = char_break_offset(rest, avail, style.font_size, ls, &style.font_family, m);
                     let head = &rest[..split];
                     let tail = &rest[split..];
                     if !head.is_empty() {
-                        let head_w = measure_text_w(head, style.font_size, ls, 0.0, m);
+                        let head_w = measure_text_w_families(head, style.font_size, ls, 0.0, &style.font_family, m);
                         current_line.push(InlineFrag {
                             x: current_x,
                             y_offset: 0.0,
@@ -6004,7 +6037,7 @@ mod tests {
             fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
         }
         // "abc" = 3 chars × 8px = 24px; avail = 100 → whole word fits.
-        let off = super::char_break_offset("abc", 100.0, 16.0, 0.0, &Fixed8);
+        let off = super::char_break_offset("abc", 100.0, 16.0, 0.0, &[], &Fixed8);
         assert_eq!(off, 3); // "abc".len() == 3
     }
 
@@ -6015,7 +6048,7 @@ mod tests {
             fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
         }
         // "abcde", avail = 25px; "ab" = 20px fits, "abc" = 30px > 25 → split at 2.
-        let off = super::char_break_offset("abcde", 25.0, 16.0, 0.0, &Fixed10);
+        let off = super::char_break_offset("abcde", 25.0, 16.0, 0.0, &[], &Fixed10);
         assert_eq!(off, 2); // byte offset 2 = between 'b' and 'c'
     }
 
@@ -6027,7 +6060,7 @@ mod tests {
         }
         // avail = 5px, char width 100px — even first char doesn't fit.
         // Must return offset past first char to avoid infinite loop.
-        let off = super::char_break_offset("abc", 5.0, 16.0, 0.0, &Wide);
+        let off = super::char_break_offset("abc", 5.0, 16.0, 0.0, &[], &Wide);
         assert_eq!(off, 1); // emit 'a' anyway
     }
 
