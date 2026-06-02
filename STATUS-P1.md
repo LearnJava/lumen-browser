@@ -6,8 +6,7 @@
 
 ## In progress
 
-**#33 Print PDF inline content rendering** — branch: `p1-print-pdf-margin-boxes`
-Next step: Add `page_box: Option<PageBox>` to `Page` struct, update `build_print_display_list` to emit `DrawText` for margin boxes, wire page numbers in `do_print_to_pdf`.
+_(нет)_
 
 ---
 
@@ -25,6 +24,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p1-print-pdf-margin-boxes** ✅ 2026-06-02 — Print PDF inline content rendering (задача #33). `build_print_display_list` теперь эмитирует `DrawText` для @page margin-box'ов (headers, footers, page numbers). `Page` struct получил `page_box: Option<PageBox>`. `do_print_to_pdf` в shell автоматически строит PageBox с подписью «N / M» на каждой странице через `attach_page_boxes` (Fixed8 measurer, без новых зависимостей). Новая функция `emit_margin_box_text` в display_list.rs — абсолютные координаты страницы (за пределами content-area PushTransform). 3 новых unit-теста. lumen-paint: 495 lib. lumen-shell: 879. Clippy чист. Задача 6.5 → ✅ полностью.
 
 - **p1-history-nav-api** ✅ 2026-06-02 — History/Navigation API runtime completeness (задача #32). `history.pushState`/`replaceState` теперь обновляют URL-бар shell без перезагрузки страницы; Alt+Left/Right на same-document (pushState) записях фаерят `popstate` + обновляют location вместо полного reload; `history.state` round-trip и `history.length` работали. Новый `pub enum HistoryUrlUpdate { Push { url, new_state_json }, Replace { ... } }` в lumen-js. Биндинги `_lumen_history_push_url`/`_lumen_history_replace_url` + `_lumen_deliver_popstate` JS helper в WEB_API_SHIM. Shell: `NavEntry` + `same_doc_state_json: Option<String>` + `display_url: Option<String>`; `Lumen`/`PageSnapshot` + `display_url` + `current_history_state_json`; `PersistentJs` trait: `take_history_url_updates` + `fire_popstate`; дренирование в `about_to_wait`; переработаны `navigate_back`/`navigate_forward` под same-doc путь. Вспомогательный метод `current_display_url()` — адресная строка и bookmarks. 7 новых тестов. lumen-js: 837 тестов (было 830). lumen-shell: 879 тестов. Clippy чист. Без новых зависимостей.
 
