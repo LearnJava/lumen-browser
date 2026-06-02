@@ -350,6 +350,7 @@ fn run_window_mode(
         deterministic,
         devtools_console: devtools::console_panel::ConsolePanel::new(),
         dom_inspector: devtools::inspector::DomInspectorPanel::new(),
+        fallbacks_preloaded: false,
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -3106,6 +3107,17 @@ struct Lumen {
     /// box-model overlay and clicking pins a node, showing its computed style
     /// in a right-docked side panel. Toggled with `Ctrl+Shift+I`.
     dom_inspector: devtools::inspector::DomInspectorPanel,
+    /// Whether the curated system-font fallback chain has been preloaded into
+    /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
+    ///
+    /// The renderer can fall back per-glyph across loaded faces, but those
+    /// faces must first be loaded via `Renderer::preload_curated_fallbacks`.
+    /// Without it, CJK / emoji / RTL / Indic codepoints on pages with no
+    /// explicit `font-family` for that script render as `.notdef`. Preloading
+    /// is a one-time, idempotent operation (the curated families are system
+    /// fonts, identical across pages), so this guard runs it once after the
+    /// first page provides a `FontProvider`.
+    fallbacks_preloaded: bool,
 }
 
 impl Lumen {
@@ -3668,6 +3680,16 @@ impl Lumen {
         self.image_cache.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.set_font_provider(Some(page.font_registry.clone()));
+            // Warm the curated system-font fallback chain once, now that a
+            // FontProvider (this page's FontRegistry, which wraps the system
+            // font index) is available. Loads emoji / CJK / RTL / Indic / Thai
+            // faces into the renderer so the codepoint cascade can resolve
+            // glyphs Inter lacks. One-time: the faces persist across pages and
+            // the curated families are system fonts identical for every page.
+            if !self.fallbacks_preloaded {
+                r.preload_curated_fallbacks();
+                self.fallbacks_preloaded = true;
+            }
             r.clear_images();
             for (src, image) in &page.images {
                 if let Err(err) = r.register_image(src.clone(), image) {
