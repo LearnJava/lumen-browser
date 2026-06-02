@@ -6,8 +6,7 @@
 
 ## In progress
 
-**C5: `scrollbar-width` / `scrollbar-color` CSS wiring**  branch: p2-scrollbar-width-color
-Next step: add `thumb_color`/`track_color`/`gutter_px` to `DrawScrollbar`, wire from `b.style` in emit, use in renderer  paint/src/display_list.rs:585
+_(нет)_
 
 ---
 
@@ -19,7 +18,6 @@ Next step: add `thumb_color`/`track_color`/`gutter_px` to `DrawScrollbar`, wire 
 
 | # | Task | Crate(s) | Effort |
 |---|------|----------|--------|
-| C5 | **`scrollbar-width` / `scrollbar-color`.** `scrollbar_width: ScrollbarWidth` + `scrollbar_color: Option<(CssColor,CssColor)>` в `ComputedStyle`; parse; прокинуть через `DrawScrollbar`; renderer читает per-command цвета. Entry: `paint/src/display_list.rs` walk emit block + renderer `DrawScrollbar`. | `lumen-layout`, `lumen-paint` | S |
 | C6 | **SVG stroke advanced properties.** `fill_rule`/`stroke_linecap`/`stroke_linejoin`/`stroke_miterlimit`/`stroke_dasharray`/`stroke_dashoffset` в `ComputedStyle`; parse; wire в `tessellate_stroke` + `emit_svg_shape`. Entry: `paint/src/svg_path.rs:548`, `paint/src/display_list.rs:3263`. | `lumen-layout`, `lumen-paint` | M |
 | C7 | **`@counter-style` кастомные счётчики.** Parse at-rule `@counter-style`; дескрипторы `system`/`symbols`/`prefix`/`suffix`/`range`/`pad`/`negative`; resolve в `counter()`/`counters()` значениях. | `lumen-layout` | M |
 | C8 | **`column-rule` / `column-span` / `column-fill`.** Поля `column_rule_*` + `column_span: ColumnSpan` + `column_fill: ColumnFill`; parse; wire в multi-column layout engine. | `lumen-layout` | S |
@@ -42,6 +40,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-scrollbar-width-color** ✅ 2026-06-03 — C5: `scrollbar-width` / `scrollbar-color` CSS wiring. `DrawScrollbar` расширен полями `thumb_color: [f32;4]`, `track_color: [f32;4]`. `ScrollbarInput` получил `gutter_px`. Emit-блок читает `b.style.scrollbar_width` (auto=12px, thin=6px, none→команда не эмитируется) и `b.style.scrollbar_color` (Some→custom colors, None→defaults). Renderer использует per-command цвета вместо hardcoded констант. 4 новых теста; 518 passed (lumen-paint).
 - **p2-overflow-scroll-wiring** ✅ 2026-06-03 — C4: CSS unit-тесты для `overflow: scroll/auto` wiring. Подтверждено: `parse_overflow_kw` + display list emitter корректно обрабатывают `Scroll|Auto`. 5 тестов в `lumen-layout/style.rs` (одно/двухзначный shorthand, отдельные оси `overflow-x/y`) + 1 тест в `lumen-paint/display_list.rs` (`overflow:auto` → `PushScrollLayer`).
 - **p2-css-3d-wiring** ✅ 2026-06-03 — C3: CSS 3D transforms wiring end-to-end (CSS Transforms L2). `TransformFn` расширен 10 новыми вариантами: `TranslateZ`/`Translate3d`, `RotateX`/`RotateY`/`RotateZ`/`Rotate3d`, `ScaleZ`/`Scale3d`, `Matrix3d`, `Perspective`. Новый `TransformStyle { Flat, Preserve3d }` enum. `ComputedStyle` получил `transform_style: TransformStyle` (default Flat) + `perspective_origin: (PositionComponent, PositionComponent)` (default 50% 50%). `apply_declaration` парсит `transform-style` + `perspective-origin`. `parse_transform_fn` обрабатывает все 10 функций. `compute_local_transform`/`forward_box_transform`/`transform_fns_to_matrix` в `property_trees.rs` + `hit_test.rs` wired к Mat4 3D конструкторам. `establishes_3d_rendering_context` переключён с `false` на реальную проверку `b.style.transform_style == TransformStyle::Preserve3d`. `affine_of` в `animation.rs` дополнен wildcard (3D → identity для 2D-анимационного пути). `transform_fn_to_css` в `selector_query.rs` поддерживает все варианты. 15 новых unit-тестов.
 - **p2-dark-mode-visual** ✅ 2026-06-03 — C2: `@media (prefers-color-scheme: dark)` визуальный каскад. `dark_mode: bool` прокинут через весь layout-каскад: `layout_measured_hyp` → `precompute_counters` / `build_box` / `collect_inline_segments` / `collect_svg_shapes` / `is_inline_content` / `is_inline_block` / `apply_first_line_pseudo_styles` / `apply_container_styles` → `compute_style` / `compute_pseudo_element_style` → `media_context_from_viewport`. Shell: `parse_and_layout`, `relayout_page`, `render_bytes` форвардят `self.dark_mode` (winit `ThemeChanged` уже обновлял поле в предыдущем p2-dark-mode). Snapshot-тесты: `dark_mode=false` по умолчанию (ADR-008 bit-identity). +3 unit-теста (`media_prefers_color_scheme_dark_mode_false/true/light_mode`).
