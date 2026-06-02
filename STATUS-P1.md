@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+- **Canvas 2D JS bindings** branch: `p1-canvas2d`
+  - `canvas.getContext('2d')` → рабочий `CanvasRenderingContext2D` поверх `lumen_canvas::Context2D`; буфер пикселей грузится в renderer через `canvas:{nid}` ключ и рисуется `DrawImage`.
+  - Next step: `BoxKind::Canvas` в `crates/engine/layout/src/box_tree.rs:1880` (рядом с Video), затем `canvas2d.rs` биндинги + flush dirty → renderer.
 
 ---
 
