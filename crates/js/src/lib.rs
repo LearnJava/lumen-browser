@@ -7,6 +7,7 @@ pub mod cookie_banner;
 pub mod credentials;
 pub mod dom;
 pub mod geolocation;
+pub mod heap_snapshot;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod shared_worker;
@@ -175,6 +176,20 @@ impl QuickJsRuntime {
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// Capture the raw, uncompressed heap payload for a hibernation snapshot
+    /// (ADR-008 §10C.3 feeds the result to `heap_snapshot::compress_heap`).
+    ///
+    /// Full QuickJS heap serialisation (globals / closures / object graph via
+    /// `JS_WriteObject`) is task 10C.2 and is blocked by our native-function
+    /// bindings, which cannot be round-tripped through `JS_ReadObject`. Until
+    /// that lands the payload is empty: the shell's hibernation model drops the
+    /// JS runtime and re-runs the page's inline scripts on restore (see shell
+    /// `restore_js_context`), so no heap content is consumed today. The empty
+    /// payload still exercises the compression + 5 MB cap pipeline end-to-end.
+    fn capture_raw_heap(&self) -> Vec<u8> {
+        Vec::new()
     }
 
     /// Install DOM Web API globals (`document`, `window`, `console`, etc.) into
@@ -674,9 +689,33 @@ impl JsRuntime for QuickJsRuntime {
         "quickjs"
     }
 
-    fn resume(_snapshot: SuspendedHeap) -> JsResult<Self> {
-        // BUG-023: QuickJS heap snapshots not yet implemented (ADR-008 T2→T3 restore).
-        Err(JsError::Runtime("QuickJS resume not implemented".into()))
+    fn suspend(&mut self) -> JsResult<SuspendedHeap> {
+        // Pause the event loop first so no microtasks/timers mutate state mid-capture.
+        self.pause()?;
+        // Capture the serialisable heap payload (task 10C.2 produces real bytes;
+        // see `capture_raw_heap`) and deflate-compress it under the 5 MB/tab cap
+        // (ADR-008 §10C.3).
+        let raw = self.capture_raw_heap();
+        match heap_snapshot::compress_heap(&raw) {
+            Ok(heap) => Ok(heap),
+            // Over the per-tab cap: skip heap persistence and let the tab re-run
+            // its scripts on restore. Never block hibernation on a large heap.
+            Err(heap_snapshot::HeapSnapshotError::TooLarge { .. }) => {
+                Ok(SuspendedHeap::default())
+            }
+            Err(e) => Err(JsError::Runtime(e.to_string())),
+        }
+    }
+
+    fn resume(snapshot: SuspendedHeap) -> JsResult<Self> {
+        // Validate the snapshot inflates (proves the on-disk stream is intact)
+        // before rebuilding. Full heap-content restore (globals/closures/object
+        // graph) is task 10C.2 and is blocked by our native-function bindings,
+        // which `JS_ReadObject` cannot reconstruct; the shell instead re-runs the
+        // page's inline scripts against the restored DOM (see shell
+        // `restore_js_context`), so a fresh runtime is the correct result here.
+        heap_snapshot::decompress_heap(&snapshot).map_err(|e| JsError::Runtime(e.to_string()))?;
+        Self::new()
     }
 }
 
@@ -810,6 +849,32 @@ mod tests {
     #[test]
     fn eval_null() {
         assert_eq!(rt().eval("null").unwrap(), JsValue::Null);
+    }
+
+    #[test]
+    fn suspend_produces_compressed_snapshot() {
+        // Snapshot inflates back to the (currently empty) raw payload — the
+        // compression pipeline runs end-to-end even with no heap content.
+        let mut rt = rt();
+        let heap = rt.suspend().unwrap();
+        assert!(heap_snapshot::decompress_heap(&heap).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resume_rebuilds_runtime_from_valid_snapshot() {
+        let mut rt = rt();
+        let heap = rt.suspend().unwrap();
+        let restored = QuickJsRuntime::resume(heap).unwrap();
+        // Fresh runtime is functional (heap-content restore is task 10C.2).
+        assert_eq!(restored.eval("6 * 7").unwrap(), JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn resume_rejects_corrupt_snapshot() {
+        let mut bytes = b"LJH1".to_vec();
+        bytes.extend_from_slice(b"corrupt");
+        let bad = SuspendedHeap::new(bytes);
+        assert!(QuickJsRuntime::resume(bad).is_err());
     }
 
     #[test]

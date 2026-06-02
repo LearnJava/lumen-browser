@@ -141,6 +141,13 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Preserves ADR-007 Layer 4: `getParameter(UNMASKED_VENDOR/RENDERER_WEBGL)` + `getParameter(VENDOR/RENDERER)` return normalized `GpuFingerprint` strings; `toDataURL`/`toBlob` stay blank.
   - 10 unit tests (functional object, 2d→null, context caching, fingerprint normalization, blank toDataURL, clear→readPixels roundtrip, full compile→buffer→draw→readback pipeline, attrib location, non-canvas, lose-context extension). The 19 `no_automation_markers.rs` integration tests still pass.
 
+- **Heap-snapshot deflate compression + 5 MB cap** (`crates/js/src/heap_snapshot.rs`, ADR-008 §10C.3). 2026-06-02.
+  - `compress_heap(&[u8]) -> Result<SuspendedHeap, HeapSnapshotError>` — `LJH1` magic prefix + zlib (deflate) stream; rejects with `HeapSnapshotError::TooLarge` when the compressed result exceeds `MAX_HEAP_SNAPSHOT_BYTES` (5 MiB).
+  - `decompress_heap(&SuspendedHeap) -> Result<Vec<u8>, HeapSnapshotError>` — strips magic + inflates; payload without the magic prefix is returned verbatim (raw/legacy), empty → empty.
+  - Reuses the already-vendored `flate2` (PNG iCCP path; same precedent as `lumen-storage` DOM-blob compression §10J.1) — no new external dependency. The `compressed` field / trait doc say "zstd" aspirationally; the 4-byte magic lets the on-disk format evolve.
+  - Wired into `QuickJsRuntime::suspend()` (pause → `capture_raw_heap` → compress; `TooLarge` → empty snapshot so hibernation never blocks) and `resume()` (validate-inflate → fresh runtime). `capture_raw_heap` returns empty until full heap serialisation (task 10C.2) lands — blocked by native-function bindings that `JS_ReadObject` cannot reconstruct; the shell re-runs inline scripts on restore instead.
+  - 10 unit tests (roundtrip simple/empty/binary, magic prefix, repetitive shrink >4×, cap rejects incompressible, large-compressible fits, legacy passthrough, corrupt stream, error Display) + 3 runtime tests (`suspend_produces_compressed_snapshot`, `resume_rebuilds_runtime_from_valid_snapshot`, `resume_rejects_corrupt_snapshot`).
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
