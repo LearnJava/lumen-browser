@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+задача #36 — `Event::RequestFailed` → network-panel wiring  branch: p1-request-failed-wiring
+Next step: commit реализации
 
 ---
 
