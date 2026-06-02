@@ -379,6 +379,7 @@ fn run_window_mode(
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
         command_palette: panels::command_palette::CommandPalette::new(),
         focus: panels::focus_panel::FocusModePanel::new(),
+        pip: panels::pip_window::PipWindow::new(),
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -1500,6 +1501,8 @@ enum KeyCommand {
     DevNetwork,
     /// Показать/скрыть privacy-панель сети (Ctrl+Shift+Y, V5).
     TogglePrivacy,
+    /// Открыть/закрыть picture-in-picture окно видео (Ctrl+Shift+V, task #21).
+    TogglePip,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1616,6 +1619,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+Y — toggle privacy network panel (V5)
         KeyCode::KeyY if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::TogglePrivacy)
+        }
+        // Ctrl+Shift+V — toggle picture-in-picture video window (task #21)
+        KeyCode::KeyV if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::TogglePip)
         }
         _ => None,
     }
@@ -2367,6 +2374,22 @@ fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) 
     for child in &lb.children {
         collect_box_styles(child, map);
     }
+}
+
+/// Find the first `<video>` element in the layout tree (depth-first, document
+/// order) and return its `(src, poster)` URLs.  Used by the picture-in-picture
+/// window (task #21) to pick a video to embed.  Returns `None` when the page
+/// has no `<video>`.
+fn find_video_source(lb: &LayoutBox) -> Option<(String, String)> {
+    if let lumen_layout::BoxKind::Video { src, poster } = &lb.kind {
+        return Some((src.clone(), poster.clone()));
+    }
+    for child in &lb.children {
+        if let Some(found) = find_video_source(child) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Рекурсивно собирает bounding rects всех layout-боксов в плоскую карту
@@ -3177,6 +3200,14 @@ struct Lumen {
     /// floats in the top-right corner. `Esc` exits focus mode (instead of
     /// quitting). The embedded `PomodoroTimer` is ticked from `about_to_wait`.
     focus: panels::focus_panel::FocusModePanel,
+    /// Picture-in-picture floating video window (task #21).
+    ///
+    /// `Ctrl+Shift+V` opens a compact 320×180 card that keeps a tab's `<video>`
+    /// element visible (poster placeholder) while the page scrolls or the user
+    /// switches tabs. Implemented as an in-window overlay (the ad-hoc panel
+    /// convention) — a true second OS window awaits multi-window support. The
+    /// card can be dragged by its title bar.
+    pip: panels::pip_window::PipWindow,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -4300,6 +4331,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     );
                     self.scroll_to(target);
                 }
+                // PiP window drag (task #21): follow the cursor while the title
+                // bar is held, clamped to the window.
+                if self.pip.dragging() {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    self.pip.drag_to(
+                        (position.x as f32) / dpr,
+                        (position.y as f32) / dpr,
+                        win_w,
+                        win_h,
+                    );
+                    self.request_redraw();
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
@@ -4393,6 +4442,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             self.request_redraw();
                             return;
                         }
+                    }
+
+                    // Picture-in-picture window (task #21): floating draggable
+                    // card. `×` closes, the centre button toggles play/pause, the
+                    // title bar starts a drag, the body swallows the click.
+                    if self.pip.active
+                        && let Some(hit) = panels::pip_window::hit_test(&self.pip, x_css, y_css)
+                    {
+                        match hit {
+                            panels::pip_window::PipHit::Close => self.pip.close(),
+                            panels::pip_window::PipHit::PlayPause => self.pip.toggle_play(),
+                            panels::pip_window::PipHit::Header => {
+                                self.pip.begin_drag(x_css, y_css);
+                            }
+                            panels::pip_window::PipHit::Body => {}
+                        }
+                        self.request_redraw();
+                        return;
                     }
 
                     // Tab bar occupies y = 0..TAB_BAR_HEIGHT — dispatch first.
@@ -4730,6 +4797,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if let Some(id) = self.bookmark_panel.take_drag() {
                         self.finish_bookmark_drop(id);
                         self.request_redraw();
+                    }
+                    // End a PiP window drag (task #21).
+                    if self.pip.dragging() {
+                        self.pip.end_drag();
                     }
                     self.scroll_drag = None;
                     // Курсор был «зафиксирован» как Pointer пока тянули
@@ -5353,6 +5424,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut focus_cmds =
                         panels::focus_panel::build_panel(&self.focus, win_w);
                     overlay_buf.append(&mut focus_cmds);
+                }
+
+                // Picture-in-picture window (task #21) — drawn last so it floats
+                // above all other chrome.
+                if self.pip.active {
+                    let mut pip_cmds = panels::pip_window::build_panel(&self.pip);
+                    overlay_buf.append(&mut pip_cmds);
                 }
 
                 // Build the split-view combined DL before borrowing renderer,
@@ -6080,7 +6158,33 @@ impl Lumen {
                 self.privacy.toggle();
                 self.request_redraw();
             }
+            KeyCommand::TogglePip => {
+                self.toggle_pip();
+                self.request_redraw();
+            }
         }
+    }
+
+    /// Toggle the picture-in-picture window (task #21).
+    ///
+    /// When closing, just hides the card.  When opening, scans the current page
+    /// layout for the first `<video>` element and embeds its `src` / `poster`;
+    /// if the page has no video, the card opens with a placeholder so the user
+    /// still gets feedback (and can drag / close it).
+    fn toggle_pip(&mut self) {
+        if self.pip.active {
+            self.pip.close();
+            return;
+        }
+        let win_w = self.viewport_width_css();
+        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+        let (src, poster) = self
+            .layout_box
+            .as_ref()
+            .and_then(find_video_source)
+            .unwrap_or_default();
+        let title = self.title.clone().unwrap_or_default();
+        self.pip.open(src, poster, title, win_w, win_h);
     }
 
     /// Сохранить текущую страницу в bfcache и стек навигации,
