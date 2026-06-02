@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: History / Navigation API runtime completeness (#32)  branch: p1-history-nav-api
+Next step: add HistoryUrlUpdate enum + bindings in dom.rs  crates/js/src/dom.rs:773
 
 ---
 
