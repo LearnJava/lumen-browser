@@ -2349,6 +2349,17 @@ fn emit_background_layer(
                 repeating: *repeating,
             });
         }
+        // CSS Images L4 §4.2 — cross-fade() two-texture GPU blend.
+        BackgroundImage::CrossFade { a, b, progress }
+            if !a.is_empty() && !b.is_empty() =>
+        {
+            out.push(DisplayCommand::DrawCrossFade {
+                dest: clip,
+                src_a: a.clone(),
+                src_b: b.clone(),
+                progress: progress.clamp(0.0, 1.0),
+            });
+        }
         _ => {}
     }
     if use_blend {
@@ -8572,5 +8583,54 @@ mod tests {
         let split = hash_display_list(&[red_fill(5.0)], &[red_fill(9.0)], 0.0, 0.0, 1024, 720);
         assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
         let _ = in_overlay;
+    }
+
+    // ── BackgroundImage::CrossFade → DrawCrossFade emit ────────────────────
+
+    #[test]
+    fn cross_fade_emit_two_url_images() {
+        // cross-fade() parsed end-to-end → DrawCrossFade emitted with correct fields.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             background-image: cross-fade(url(a.png), url(b.png)); }",
+        );
+        let cf: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawCrossFade { .. })).collect();
+        assert_eq!(cf.len(), 1, "expected exactly one DrawCrossFade");
+        if let DisplayCommand::DrawCrossFade { src_a, src_b, progress, .. } = cf[0] {
+            assert_eq!(src_a, "a.png");
+            assert_eq!(src_b, "b.png");
+            assert!((progress - 0.5).abs() < 1e-4, "default progress should be 0.5, got {progress}");
+        }
+    }
+
+    #[test]
+    fn cross_fade_emit_with_explicit_percentage() {
+        // cross-fade(<img>, <img>, 30%) → progress = 0.3.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             background-image: cross-fade(url(a.png), url(b.png), 30%); }",
+        );
+        let cf: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawCrossFade { .. })).collect();
+        assert_eq!(cf.len(), 1, "expected exactly one DrawCrossFade");
+        if let DisplayCommand::DrawCrossFade { progress, .. } = cf[0] {
+            assert!((progress - 0.3).abs() < 1e-4, "expected 0.3, got {progress}");
+        }
+    }
+
+    #[test]
+    fn cross_fade_emit_at_100_percent() {
+        // cross-fade at 100% → progress = 1.0 → fully image B.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             background-image: cross-fade(url(a.png), url(b.png), 100%); }",
+        );
+        let cf: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawCrossFade { .. })).collect();
+        assert_eq!(cf.len(), 1);
+        if let DisplayCommand::DrawCrossFade { progress, .. } = cf[0] {
+            assert!((progress - 1.0).abs() < 1e-4, "expected 1.0, got {progress}");
+        }
     }
 }

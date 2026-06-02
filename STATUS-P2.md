@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**C1: CSS `image-set()` / `cross-fade()` parsing**  branch: p2-image-set-cross-fade
+Next step: add `CrossFade` variant to `BackgroundImage`, parse in `parse_single_bg_layer`, emit `DrawCrossFade`  `layout/src/style.rs:3018`, `paint/src/display_list.rs:2300`
 
 ---
 
