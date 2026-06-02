@@ -174,3 +174,6 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **background-blend-mode** — ✅ реализован (normal/multiply/screen/overlay/darken/lighten/difference/exclusion/color-dodge/color-burn/hard-light/soft-light/hue/saturation/color/luminosity/plus-lighter; comma-list cycling over background layers; wraps each non-Normal layer with PushBlendMode/PopBlendMode), тест 49
 
 - **mix-blend-mode** — ✅ реализован (все 16 CSS-режимов + plus-lighter; элемент блендится с backdrop в своём stacking-context через PushBlendMode/PopBlendMode; CPU snapshot-путь композитит off-screen layer вниз с tiny-skia BlendMode), тест 56
+
+- **image-set()** — ✅ реализован (CSS Images L4 §5): raw функция хранится в BackgroundImage::Url, paint выбирает лучший вариант по DPR через select_image_set_url; -webkit-image-set() тоже поддержан; тест 59
+- **cross-fade()** — ✅ реализован (CSS Images L4 §4): BackgroundImage::CrossFade { a, b, t } вариант; при двух URL-sides эмитирует DrawCrossFade; -webkit-cross-fade() тоже поддержан; тест 59
