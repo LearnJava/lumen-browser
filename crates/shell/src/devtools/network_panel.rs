@@ -80,6 +80,12 @@ pub struct NetworkEntry {
     pub status: Option<u16>,
     /// `true` when the request was blocked by the content filter (never sent).
     pub blocked: bool,
+    /// Matched filter rule / block reason when [`blocked`] is `true` (e.g. the
+    /// EasyList rule or `"easylist"` source tag). `None` for allowed requests.
+    /// Surfaced by the privacy panel (V5) as the "matched filter" column.
+    ///
+    /// [`blocked`]: NetworkEntry::blocked
+    pub reason: Option<String>,
     /// Wall-clock instant the request started (used to compute `duration_ms`).
     start: Instant,
     /// Request duration in milliseconds once completed (`None` while pending).
@@ -106,6 +112,7 @@ impl NetworkLog {
             url: url.to_owned(),
             status: None,
             blocked: false,
+            reason: None,
             start: Instant::now(),
             duration_ms: None,
         });
@@ -130,6 +137,7 @@ impl NetworkLog {
                 url: url.to_owned(),
                 status: Some(status),
                 blocked: false,
+                reason: None,
                 start: Instant::now(),
                 duration_ms: Some(0),
             });
@@ -137,13 +145,15 @@ impl NetworkLog {
         }
     }
 
-    /// Record a request blocked by the content filter.
-    pub fn record_blocked(&mut self, url: &str) {
+    /// Record a request blocked by the content filter. `reason` is the matched
+    /// filter rule / block source (surfaced by the privacy panel).
+    pub fn record_blocked(&mut self, url: &str, reason: &str) {
         self.entries.push(NetworkEntry {
             method: "GET".to_owned(),
             url: url.to_owned(),
             status: None,
             blocked: true,
+            reason: Some(reason.to_owned()),
             start: Instant::now(),
             duration_ms: None,
         });
@@ -204,7 +214,9 @@ impl EventSink for NetworkLogSink {
             Event::RequestCompleted { url, status, .. } => {
                 guard.record_completed(url.as_str(), *status);
             }
-            Event::RequestBlocked { url, .. } => guard.record_blocked(url.as_str()),
+            Event::RequestBlocked { url, reason, .. } => {
+                guard.record_blocked(url.as_str(), reason.as_str());
+            }
             _ => {}
         }
     }
@@ -555,7 +567,7 @@ mod tests {
     #[test]
     fn record_blocked_marks_entry() {
         let mut log = NetworkLog::default();
-        log.record_blocked("https://ads.com/track.js");
+        log.record_blocked("https://ads.com/track.js", "easylist");
         assert!(log.entries[0].blocked);
         assert!(log.entries[0].status.is_none());
     }
@@ -722,7 +734,7 @@ mod tests {
     #[test]
     fn build_shows_blocked_row() {
         let log = make_log();
-        log.lock().unwrap().record_blocked("https://ads.com/track.js");
+        log.lock().unwrap().record_blocked("https://ads.com/track.js", "easylist");
         let mut p = NetworkPanel::new(log);
         p.visible = true;
         p.refresh();
@@ -763,6 +775,7 @@ mod tests {
             url: "https://a.com/".into(),
             status,
             blocked,
+            reason: blocked.then(|| "easylist".to_owned()),
             start: Instant::now(),
             duration_ms: None,
         };

@@ -1867,7 +1867,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
 `crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
-## lumen-shell  (463 symbols)
+## lumen-shell  (478 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1938,24 +1938,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/devtools/inspector.rs:276` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
 `crates/shell/src/devtools/inspector.rs:373` **fn** `build_inspector_panel` — Build the right-docked computed-style side panel
 `crates/shell/src/devtools/network_panel.rs:73` **struct** `NetworkEntry` — A single recorded HTTP request and its lifecycle state
-`crates/shell/src/devtools/network_panel.rs:96` **struct** `NetworkLog` — Shared, append-only log of HTTP requests for the network panel
-`crates/shell/src/devtools/network_panel.rs:103` **fn** `record_started` — Record a newly started request: appends a pending entry
-`crates/shell/src/devtools/network_panel.rs:118` **fn** `record_completed` — Record a completed request: fills the most recent matching pending entry
-`crates/shell/src/devtools/network_panel.rs:141` **fn** `record_blocked` — Record a request blocked by the content filter
-`crates/shell/src/devtools/network_panel.rs:154` **fn** `clear` — Clear all recorded requests (call on every top-level navigation)
-`crates/shell/src/devtools/network_panel.rs:160` **fn** `len` — Number of recorded requests
-`crates/shell/src/devtools/network_panel.rs:166` **fn** `is_empty` — `true` when no requests have been recorded
-`crates/shell/src/devtools/network_panel.rs:187` **struct** `NetworkLogSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND records
-`crates/shell/src/devtools/network_panel.rs:219` **struct** `NetworkPanel` — DevTools network log panel (§7E.4)
-`crates/shell/src/devtools/network_panel.rs:234` **fn** `new` — Create a new hidden panel backed by the given shared `log`
-`crates/shell/src/devtools/network_panel.rs:244` **fn** `toggle` — Toggle panel visibility
-`crates/shell/src/devtools/network_panel.rs:250` **fn** `refresh` — Pull the latest entries from the shared [`NetworkLog`] into the panel
-`crates/shell/src/devtools/network_panel.rs:257` **fn** `clear_log` — Clear the shared log (call on every top-level navigation)
-`crates/shell/src/devtools/network_panel.rs:267` **fn** `len` — Number of entries in the current snapshot
-`crates/shell/src/devtools/network_panel.rs:273` **fn** `is_empty` — `true` when the current snapshot has no entries
-`crates/shell/src/devtools/network_panel.rs:278` **fn** `scroll_up` — Scroll up by `n` rows (towards older requests)
-`crates/shell/src/devtools/network_panel.rs:284` **fn** `scroll_down` — Scroll down by `n` rows (towards newer requests)
-`crates/shell/src/devtools/network_panel.rs:296` **fn** `build_network_panel` — Build the viewport-locked network panel overlay
+`crates/shell/src/devtools/network_panel.rs:102` **struct** `NetworkLog` — Shared, append-only log of HTTP requests for the network panel
+`crates/shell/src/devtools/network_panel.rs:109` **fn** `record_started` — Record a newly started request: appends a pending entry
+`crates/shell/src/devtools/network_panel.rs:125` **fn** `record_completed` — Record a completed request: fills the most recent matching pending entry
+`crates/shell/src/devtools/network_panel.rs:150` **fn** `record_blocked` — Record a request blocked by the content filter. `reason` is the matched
+`crates/shell/src/devtools/network_panel.rs:164` **fn** `clear` — Clear all recorded requests (call on every top-level navigation)
+`crates/shell/src/devtools/network_panel.rs:170` **fn** `len` — Number of recorded requests
+`crates/shell/src/devtools/network_panel.rs:176` **fn** `is_empty` — `true` when no requests have been recorded
+`crates/shell/src/devtools/network_panel.rs:197` **struct** `NetworkLogSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND records
+`crates/shell/src/devtools/network_panel.rs:231` **struct** `NetworkPanel` — DevTools network log panel (§7E.4)
+`crates/shell/src/devtools/network_panel.rs:246` **fn** `new` — Create a new hidden panel backed by the given shared `log`
+`crates/shell/src/devtools/network_panel.rs:256` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/devtools/network_panel.rs:262` **fn** `refresh` — Pull the latest entries from the shared [`NetworkLog`] into the panel
+`crates/shell/src/devtools/network_panel.rs:269` **fn** `clear_log` — Clear the shared log (call on every top-level navigation)
+`crates/shell/src/devtools/network_panel.rs:279` **fn** `len` — Number of entries in the current snapshot
+`crates/shell/src/devtools/network_panel.rs:285` **fn** `is_empty` — `true` when the current snapshot has no entries
+`crates/shell/src/devtools/network_panel.rs:290` **fn** `scroll_up` — Scroll up by `n` rows (towards older requests)
+`crates/shell/src/devtools/network_panel.rs:296` **fn** `scroll_down` — Scroll down by `n` rows (towards newer requests)
+`crates/shell/src/devtools/network_panel.rs:308` **fn** `build_network_panel` — Build the viewport-locked network panel overlay
 `crates/shell/src/download.rs:45` **struct** `DownloadId` — Opaque identifier for a single download entry
 `crates/shell/src/download.rs:50` **enum** `DownloadStatus` — Current state of a download entry
 `crates/shell/src/download.rs:71` **struct** `DownloadEntry` — A single download: source URL, destination path, and current status
@@ -2153,6 +2153,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/permission_panel.rs:207` **enum** `PermissionHit` — Result of a click inside the permission panel
 `crates/shell/src/panels/permission_panel.rs:220` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
 `crates/shell/src/panels/permission_panel.rs:262` **fn** `build_panel` — Build the display list for the permission floating panel
+`crates/shell/src/panels/privacy_panel.rs:79` **fn** `list_body_height` — Height in CSS px of the scrollable request-list area, given the full window
+`crates/shell/src/panels/privacy_panel.rs:88` **struct** `PrivacyPanel` — Privacy network panel (V5). Holds a snapshot of the shared [`NetworkLog`] and
+`crates/shell/src/panels/privacy_panel.rs:104` **fn** `new` — Create a new hidden panel backed by the given shared `log`
+`crates/shell/src/panels/privacy_panel.rs:114` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/panels/privacy_panel.rs:120` **fn** `refresh` — Pull the latest entries from the shared [`NetworkLog`] into the snapshot
+`crates/shell/src/panels/privacy_panel.rs:129` **fn** `clear_log` — Clear the shared log (call on every top-level navigation). The network
+`crates/shell/src/panels/privacy_panel.rs:139` **fn** `len` — Number of entries in the current snapshot
+`crates/shell/src/panels/privacy_panel.rs:145` **fn** `is_empty` — `true` when the current snapshot has no entries
+`crates/shell/src/panels/privacy_panel.rs:150` **fn** `blocked_count` — Number of blocked requests in the current snapshot
+`crates/shell/src/panels/privacy_panel.rs:156` **fn** `allowed_count` — Number of allowed (not blocked) requests in the current snapshot —
+`crates/shell/src/panels/privacy_panel.rs:167` **fn** `scroll_down` — Scroll towards older requests by `n` rows
+`crates/shell/src/panels/privacy_panel.rs:172` **fn** `scroll_up` — Scroll towards newer requests by `n` rows
+`crates/shell/src/panels/privacy_panel.rs:181` **enum** `PrivacyHit` — Result of a click on (or near) the privacy panel
+`crates/shell/src/panels/privacy_panel.rs:192` **fn** `hit_test` — Classify a click at `(x, y)` CSS px. `tab_bar_h` is the tab strip height;
+`crates/shell/src/panels/privacy_panel.rs:222` **fn** `build_privacy_panel` — Build the right-docked privacy panel overlay
 `crates/shell/src/panels/shields_panel.rs:58` **struct** `BlockedLog` — Shared accumulator for blocked-request counts, indexed by hostname
 `crates/shell/src/panels/shields_panel.rs:69` **fn** `record` — Increment the count for the hostname extracted from `url`
 `crates/shell/src/panels/shields_panel.rs:77` **fn** `clear` — Clear all counts (call on every top-level navigation)
@@ -2739,4 +2754,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2674 symbols in 20 crates*
+*Total: 2689 symbols in 20 crates*
