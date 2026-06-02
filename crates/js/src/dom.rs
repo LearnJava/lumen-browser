@@ -2933,6 +2933,22 @@ function _lumen_make_element(nid) {
             var closeEvt = new Event('close', { bubbles: false, cancelable: false });
             _lumen_dispatch(nid, closeEvt);
         },
+        // HTML Popover API (WHATWG HTML §6.12)
+        get popover() {
+            var v = _lumen_get_attr(nid, 'popover');
+            if (v === undefined) return null;
+            return (v || '').toLowerCase() === 'manual' ? 'manual' : 'auto';
+        },
+        set popover(v) {
+            if (v === null || v === undefined || v === false) {
+                _lumen_remove_attr(nid, 'popover');
+            } else {
+                _lumen_set_attr(nid, 'popover', v === '' ? '' : String(v).toLowerCase());
+            }
+        },
+        showPopover:   function()      { _lumen_popover_show(nid); },
+        hidePopover:   function()      { _lumen_popover_hide(nid); },
+        togglePopover: function(force) { _lumen_popover_toggle(nid, force); },
         appendChild:     function(c) {
             if (!c || c.__nid__ === undefined) return c;
             if (c.__isDocumentFragment__) {
@@ -7940,6 +7956,122 @@ document.addEventListener('keydown', function(evt) {
         _lumen_modal_dialog_nids.pop();
         var closeEvt = new Event('close', { bubbles: false, cancelable: false });
         _lumen_dispatch(lastNid, closeEvt);
+    }
+});
+
+// ── HTML Popover API (WHATWG HTML §6.12) ─────────────────────────────────────
+// Top-layer emulation: position:fixed + z-index:2147483647 when open.
+// Elements with [popover] are hidden by layout (is_closed_popover in box_tree.rs)
+// until showPopover() sets data-lumen-popover-open. Auto-popovers close each
+// other and on outside clicks; Escape closes the topmost auto-popover.
+
+// Open auto-popovers in stack order (newest = last).
+var _lumen_popover_stack = [];
+
+// Sentinel attribute written by showPopover() — read by layout's is_closed_popover.
+var _LPOP_ATTR = 'data-lumen-popover-open';
+
+// Fixed-position styles applied to open popovers (top-layer emulation).
+var _LPOP_STYLE = 'position:fixed;z-index:2147483647;inset:auto;margin:auto;overflow:auto;';
+
+function _lumen_popover_show(nid) {
+    if (_lumen_get_attr(nid, 'popover') === undefined) {
+        throw new DOMException('Element is not a popover', 'NotSupportedError');
+    }
+    if (_lumen_get_attr(nid, _LPOP_ATTR) !== undefined) return; // already open
+    var beforeEvt = new Event('beforetoggle', { bubbles: false, cancelable: false });
+    beforeEvt.oldState = 'closed'; beforeEvt.newState = 'open';
+    _lumen_dispatch(nid, beforeEvt);
+    // Re-check: still not open? (beforetoggle could in theory trigger re-entrant show)
+    if (_lumen_get_attr(nid, _LPOP_ATTR) !== undefined) return;
+    var popVal = (_lumen_get_attr(nid, 'popover') || '').toLowerCase();
+    var isAuto = popVal !== 'manual';
+    if (isAuto) {
+        // Close all currently open auto-popovers (top-of-stack first).
+        var snap = _lumen_popover_stack.slice();
+        for (var i = snap.length - 1; i >= 0; i--) { _lumen_popover_hide(snap[i]); }
+        _lumen_popover_stack.push(nid);
+    }
+    _lumen_set_attr(nid, _LPOP_ATTR, '');
+    // Apply top-layer emulation via inline style (saved/restored around the forced override).
+    var saved = _lumen_get_attr(nid, 'style') !== undefined ? _lumen_get_attr(nid, 'style') : '';
+    _lumen_set_attr(nid, 'data-lumen-popover-saved-style', saved);
+    _lumen_set_attr(nid, 'style', _LPOP_STYLE + (saved ? saved : ''));
+    var toggleEvt = new Event('toggle', { bubbles: false, cancelable: false });
+    toggleEvt.oldState = 'closed'; toggleEvt.newState = 'open';
+    _lumen_dispatch(nid, toggleEvt);
+}
+
+function _lumen_popover_hide(nid) {
+    if (_lumen_get_attr(nid, _LPOP_ATTR) === undefined) return; // already closed
+    var beforeEvt = new Event('beforetoggle', { bubbles: false, cancelable: false });
+    beforeEvt.oldState = 'open'; beforeEvt.newState = 'closed';
+    _lumen_dispatch(nid, beforeEvt);
+    if (_lumen_get_attr(nid, _LPOP_ATTR) === undefined) return; // closed by beforetoggle re-entry
+    var idx = _lumen_popover_stack.indexOf(nid);
+    if (idx >= 0) _lumen_popover_stack.splice(idx, 1);
+    _lumen_remove_attr(nid, _LPOP_ATTR);
+    // Restore saved inline style (remove popover-injected portion).
+    var saved = _lumen_u2n(_lumen_get_attr(nid, 'data-lumen-popover-saved-style'));
+    if (saved !== null) {
+        if (saved === '') { _lumen_remove_attr(nid, 'style'); }
+        else { _lumen_set_attr(nid, 'style', saved); }
+        _lumen_remove_attr(nid, 'data-lumen-popover-saved-style');
+    }
+    var toggleEvt = new Event('toggle', { bubbles: false, cancelable: false });
+    toggleEvt.oldState = 'open'; toggleEvt.newState = 'closed';
+    _lumen_dispatch(nid, toggleEvt);
+}
+
+function _lumen_popover_toggle(nid, force) {
+    var isOpen = _lumen_get_attr(nid, _LPOP_ATTR) !== undefined;
+    if (force === true || (!isOpen && force === undefined)) {
+        _lumen_popover_show(nid);
+    } else if (force === false || (isOpen && force === undefined)) {
+        _lumen_popover_hide(nid);
+    }
+}
+
+// Click outside handler — close auto-popovers when click lands outside all of them.
+// Runs in capture phase so it fires before target-specific handlers.
+document.addEventListener('click', function(evt) {
+    if (_lumen_popover_stack.length === 0) return;
+    // Walk from target toward root; if any open auto-popover contains the target, bail.
+    var cur = evt.target;
+    while (cur && cur.__nid__ !== undefined) {
+        if (_lumen_get_attr(cur.__nid__, _LPOP_ATTR) !== undefined) return;
+        cur = cur.parentElement;
+    }
+    // Outside click — close from top of stack downward.
+    var snap = _lumen_popover_stack.slice();
+    for (var i = snap.length - 1; i >= 0; i--) { _lumen_popover_hide(snap[i]); }
+}, true);
+
+// Escape key — close topmost auto-popover (if no modal dialog takes precedence).
+document.addEventListener('keydown', function(evt) {
+    if (evt.key !== 'Escape') return;
+    if (_lumen_popover_stack.length === 0) return;
+    // Let dialog Escape handler take priority when a modal dialog is open.
+    if (_lumen_modal_dialog_nids.length > 0) return;
+    var topNid = _lumen_popover_stack[_lumen_popover_stack.length - 1];
+    _lumen_popover_hide(topNid);
+});
+
+// popovertarget / popovertargetaction: button/input clicks trigger show/hide/toggle on target.
+document.addEventListener('click', function(evt) {
+    var el = evt.target;
+    while (el && el.__nid__ !== undefined) {
+        var ptId = _lumen_u2n(_lumen_get_attr(el.__nid__, 'popovertarget'));
+        if (ptId !== null) {
+            var targetNid = _lumen_u2n(_lumen_get_element_by_id(ptId));
+            if (targetNid !== null) {
+                var action = (_lumen_u2n(_lumen_get_attr(el.__nid__, 'popovertargetaction')) || 'toggle').toLowerCase();
+                if (action === 'show')   { _lumen_popover_show(targetNid);              return; }
+                if (action === 'hide')   { _lumen_popover_hide(targetNid);              return; }
+                /* toggle */ _lumen_popover_toggle(targetNid, undefined); return;
+            }
+        }
+        el = el.parentElement;
     }
 });
 
@@ -15015,6 +15147,162 @@ mod tests {
         // cancel was prevented, so dialog stays open
         assert!(bool_eval(&rt,
             "document.getElementById('dlg').hasAttribute('open')"));
+    }
+
+    // ── HTML Popover API tests (WHATWG HTML §6.12) ────────────────────────────
+
+    /// Build a document with two popover divs and a trigger button.
+    fn make_popover_doc() -> Arc<Mutex<Document>> {
+        let mut doc = Document::new();
+        let html  = doc.create_element(QualName::html("html"));
+        let body  = doc.create_element(QualName::html("body"));
+        let pop1  = doc.create_element(QualName::html("div"));
+        let pop2  = doc.create_element(QualName::html("div"));
+        let btn   = doc.create_element(QualName::html("button"));
+        fn set_attr(doc: &mut Document, nid: lumen_dom::NodeId, k: &str, v: &str) {
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(nid).data {
+                attrs.push(lumen_dom::Attribute { name: QualName::html(k), value: v.into() });
+            }
+        }
+        set_attr(&mut doc, pop1, "id",      "p1");
+        set_attr(&mut doc, pop1, "popover", "auto");
+        set_attr(&mut doc, pop2, "id",      "p2");
+        set_attr(&mut doc, pop2, "popover", "manual");
+        set_attr(&mut doc, btn,  "id",      "btn");
+        set_attr(&mut doc, btn,  "popovertarget", "p1");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, pop1);
+        doc.append_child(body, pop2);
+        doc.append_child(body, btn);
+        Arc::new(Mutex::new(doc))
+    }
+
+    #[test]
+    fn popover_property_getter_auto() {
+        let rt = runtime_with_dom(make_popover_doc());
+        assert!(bool_eval(&rt, "document.getElementById('p1').popover === 'auto'"));
+    }
+
+    #[test]
+    fn popover_property_getter_manual() {
+        let rt = runtime_with_dom(make_popover_doc());
+        assert!(bool_eval(&rt, "document.getElementById('p2').popover === 'manual'"));
+    }
+
+    #[test]
+    fn popover_property_getter_no_attr() {
+        let rt = runtime_with_dom(make_popover_doc());
+        assert!(bool_eval(&rt, "document.getElementById('btn').popover === null"));
+    }
+
+    #[test]
+    fn popover_show_sets_open_attr() {
+        let rt = runtime_with_dom(make_popover_doc());
+        rt.eval("document.getElementById('p1').showPopover()").unwrap();
+        assert!(bool_eval(&rt, "document.getElementById('p1').hasAttribute('data-lumen-popover-open')"));
+    }
+
+    #[test]
+    fn popover_hide_removes_open_attr() {
+        let rt = runtime_with_dom(make_popover_doc());
+        rt.eval("var p1 = document.getElementById('p1'); p1.showPopover(); p1.hidePopover()").unwrap();
+        assert!(bool_eval(&rt, "!document.getElementById('p1').hasAttribute('data-lumen-popover-open')"));
+    }
+
+    #[test]
+    fn popover_toggle_shows_when_closed() {
+        let rt = runtime_with_dom(make_popover_doc());
+        rt.eval("document.getElementById('p1').togglePopover()").unwrap();
+        assert!(bool_eval(&rt, "document.getElementById('p1').hasAttribute('data-lumen-popover-open')"));
+    }
+
+    #[test]
+    fn popover_toggle_hides_when_open() {
+        let rt = runtime_with_dom(make_popover_doc());
+        rt.eval("var p1 = document.getElementById('p1'); p1.showPopover(); p1.togglePopover()").unwrap();
+        assert!(bool_eval(&rt, "!document.getElementById('p1').hasAttribute('data-lumen-popover-open')"));
+    }
+
+    #[test]
+    fn popover_toggle_event_fired() {
+        let rt = runtime_with_dom(make_popover_doc());
+        assert!(bool_eval(&rt,
+            "var evt = null; \
+             document.getElementById('p1').addEventListener('toggle', function(e) { evt = e; }); \
+             document.getElementById('p1').showPopover(); \
+             evt !== null && evt.oldState === 'closed' && evt.newState === 'open'"));
+    }
+
+    #[test]
+    fn popover_beforetoggle_event_fired() {
+        let rt = runtime_with_dom(make_popover_doc());
+        assert!(bool_eval(&rt,
+            "var evt = null; \
+             document.getElementById('p1').addEventListener('beforetoggle', function(e) { evt = e; }); \
+             document.getElementById('p1').showPopover(); \
+             evt !== null && evt.oldState === 'closed' && evt.newState === 'open'"));
+    }
+
+    #[test]
+    fn popover_auto_closes_other_auto_on_show() {
+        let rt = runtime_with_dom(make_popover_doc());
+        // Create a second auto popover and show it first
+        rt.eval(
+            "var p1 = document.getElementById('p1'); \
+             p1.showPopover(); \
+             // Now change p2 to auto and show it — p1 should be auto-closed
+             document.getElementById('p2').setAttribute('popover','auto'); \
+             document.getElementById('p2').showPopover();"
+        ).unwrap();
+        // p1 should now be hidden, p2 open
+        assert!(bool_eval(&rt,
+            "!document.getElementById('p1').hasAttribute('data-lumen-popover-open') && \
+             document.getElementById('p2').hasAttribute('data-lumen-popover-open')"));
+    }
+
+    #[test]
+    fn popover_manual_does_not_close_auto() {
+        let rt = runtime_with_dom(make_popover_doc());
+        // Open auto p1, then open manual p2 — p1 should stay open
+        rt.eval("document.getElementById('p1').showPopover(); document.getElementById('p2').showPopover()").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('p1').hasAttribute('data-lumen-popover-open') && \
+             document.getElementById('p2').hasAttribute('data-lumen-popover-open')"));
+    }
+
+    #[test]
+    fn popover_fixed_style_applied_on_show() {
+        let rt = runtime_with_dom(make_popover_doc());
+        rt.eval("document.getElementById('p1').showPopover()").unwrap();
+        assert!(bool_eval(&rt,
+            "document.getElementById('p1').style.getPropertyValue('position') === 'fixed'"));
+    }
+
+    #[test]
+    fn popover_style_restored_on_hide() {
+        let rt = runtime_with_dom(make_popover_doc());
+        // Set a custom style before showing
+        rt.eval(
+            "var p = document.getElementById('p1'); \
+             p.style.color = 'red'; \
+             p.showPopover(); \
+             p.hidePopover();"
+        ).unwrap();
+        // position should no longer be 'fixed' after hide
+        assert!(bool_eval(&rt,
+            "document.getElementById('p1').style.getPropertyValue('position') !== 'fixed'"));
+    }
+
+    #[test]
+    fn popovertarget_button_shows_popover() {
+        let rt = runtime_with_dom(make_popover_doc());
+        // btn has popovertarget="p1"; simulate a mouse click on btn — bubbles to document.
+        rt.eval(
+            "var btn = document.getElementById('btn'); \
+             _lumen_dispatch_mouse_event(btn.__nid__, 'click', 0, 0, 0, 1, 0);"
+        ).unwrap();
+        assert!(bool_eval(&rt, "document.getElementById('p1').hasAttribute('data-lumen-popover-open')"));
     }
 
     // ── Form Constraint Validation API tests ──────────────────────────────────

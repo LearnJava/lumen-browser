@@ -242,6 +242,15 @@ fn is_summary_element(doc: &Document, id: NodeId) -> bool {
     matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local == "summary")
 }
 
+/// Returns `true` when `id` has a `popover` attribute but is not open.
+///
+/// Elements with `popover` are hidden by default (UA: `[popover]{display:none}`);
+/// JS calls `showPopover()` which sets `data-lumen-popover-open` to expose the element.
+fn is_closed_popover(doc: &Document, id: NodeId) -> bool {
+    let node = doc.get(id);
+    node.get_attr("popover").is_some() && node.get_attr("data-lumen-popover-open").is_none()
+}
+
 /// Parses a float attribute from the given element; returns 0.0 if absent or non-numeric.
 fn svg_attr_f32(doc: &Document, id: NodeId, attr: &str) -> f32 {
     doc.get(id)
@@ -2039,7 +2048,7 @@ fn build_box(
         // The flat tree already maps host children to shadow root's children.
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => BoxKind::Skip,
         NodeData::Document | NodeData::Element { .. } => {
-            if style.display == Display::None {
+            if style.display == Display::None || is_closed_popover(doc, id) {
                 BoxKind::Skip
             } else if is_image_element(doc, id) {
                 let src = resolve_image_source(doc, id, viewport);

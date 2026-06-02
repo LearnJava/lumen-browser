@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+HTML Popover API (WHATWG HTML §6.12 `popover` attribute)  branch: p1-popover-api
+Next step: JS bindings showPopover/hidePopover/togglePopover + events + top-layer emulation  crates/js/src/dom.rs
 
 ---
 
