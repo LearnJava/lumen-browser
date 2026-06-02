@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+C1: `::first-letter` / `::first-line` CSS wiring  branch: p1-first-letter-first-line
+Next step: Fix compute_pseudo_element_style, split first-letter segment, apply_first_line pass  style.rs:4957, box_tree.rs:2063
 
 ---
 

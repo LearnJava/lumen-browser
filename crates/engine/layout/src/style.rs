@@ -4813,13 +4813,15 @@ fn matches_complex_for_pseudo(
     }
 }
 
-/// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
+/// Вычисляет стиль для псевдоэлемента на элементе `node`.
 ///
-/// `pseudo` — "before" или "after" (без "::").
+/// `pseudo` — имя без `::` (например `"before"`, `"after"`, `"first-letter"`,
+/// `"first-line"`).
 ///
-/// Возвращает `None` если:
-/// - нет CSS-правил для данного псевдоэлемента на этом узле, или
-/// - вычисленный `content` равен `none` / `normal`.
+/// Возвращает `None` если нет CSS-правил для данного псевдоэлемента на этом
+/// узле. Для `::before`/`::after` также возвращает `None` если вычисленный
+/// `content` равен `none` / `normal`; для `::first-letter`/`::first-line`
+/// наличие хотя бы одного совпадающего правила достаточно.
 pub fn compute_pseudo_element_style(
     doc: &Document,
     node: NodeId,
@@ -4954,9 +4956,15 @@ pub fn compute_pseudo_element_style(
         apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, parent, is_quirks);
     }
 
-    match &style.content {
-        Content::Items(_) => Some(style),
-        _ => None,
+    // ::before / ::after require a non-normal `content` value to generate a box.
+    // ::first-letter / ::first-line apply visual overrides without generated content.
+    if pseudo == "before" || pseudo == "after" {
+        match &style.content {
+            Content::Items(_) => Some(style),
+            _ => None,
+        }
+    } else {
+        Some(style)
     }
 }
 
