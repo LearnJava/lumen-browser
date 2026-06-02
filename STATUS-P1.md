@@ -6,9 +6,7 @@
 
 ## In progress
 
-**p1-compression-stream** — CompressionStream / DecompressionStream (WICG Compression Streams Standard)
-branch: p1-compression-stream
-Next step: нативные биндинги в `install_primitives` + JS-шим в `WEB_API_SHIM`  `crates/js/src/dom.rs:1872`
+_(нет)_
 
 ---
 
@@ -19,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-compression-stream** ✅ 2026-06-03 — CompressionStream/DecompressionStream (WHATWG Compression Streams Standard). Нативные биндинги `_lumen_compress_bytes`/`_lumen_decompress_bytes` поверх уже завендоренного `flate2` (без новых зависимостей). Форматы: `deflate-raw` (raw DEFLATE RFC 1951), `deflate` (zlib RFC 1950), `gzip`. JS-шим: оба класса наследуют `TransformStream`, используют buffer-then-flush стратегию (накапливают чанки в `transform()`, сжимают/декомпрессируют атомарно в `flush()`). `window.CompressionStream`/`window.DecompressionStream` экспортированы. 9 unit-тестов: constructor exists, invalid format throws TypeError (×2), has readable/writable, instanceof TransformStream, gzip/deflate/deflate-raw round-trip. lumen-js: 891 lib. Clippy чист.
 
 - **p1-popover-api** ✅ 2026-06-03 — HTML Popover API (WHATWG HTML §6.12 `popover` attribute). `showPopover/hidePopover/togglePopover` + `popover` getter/setter на всех HTMLElement. Top-layer emulation: `showPopover()` устанавливает `data-lumen-popover-open` sentinel (читается `is_closed_popover` в `box_tree.rs` — элементы с `popover` без sentinel скипаются как `BoxKind::Skip`, аналог `<details>` hide) + применяет `position:fixed; z-index:2147483647` inline. `hidePopover()` снимает sentinel + восстанавливает style. `popover="auto"` stack: открытие нового auto-поповера закрывает все предыдущие. `beforetoggle`/`toggle` события с `oldState`/`newState`. Click-outside (capture) и Escape handlers для auto-поповеров. `popovertarget`/`popovertargetaction` кнопки. **layout/box_tree.rs:** `is_closed_popover()` хелпер. 14 unit-тестов. lumen-js: 882 lib. Clippy чист. Без новых зависимостей. `:popover-open` CSS pseudo-class (уже парсируется css-parser) — P4 handoff: wire к `data-lumen-popover-open`.
 
