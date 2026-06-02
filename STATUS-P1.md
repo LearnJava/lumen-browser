@@ -6,8 +6,7 @@
 
 ## In progress
 
-p1-eventsource: EventSource API (SSE wiring)  branch: p1-eventsource
-Next step: Add JsSseSession/JsSseProvider to lumen-core/src/ext.rs
+_(нет)_
 
 ---
 
@@ -18,6 +17,10 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-eventsource** ✅ 2026-06-02 — EventSource API (Server-Sent Events, HTML LS §9.2). JS `EventSource` был мёртвой заглушкой; SSE-транспорт `lumen-network::sse.rs` (608 строк) уже работал, но не был подключён. Новые трейты `JsSseEvent` / `JsSseSession` / `JsSseProvider` в `lumen-core::ext` (зеркало JsWebSocketProvider). `JsSseSessionImpl` в `lumen-network` — фоновый поток дренирует блокирующий `SseSession::next_event()` в `VecDeque<JsSseEvent>`, `poll()` неблокирующий. Нативные биндинги `_lumen_sse_connect/_poll/_close` в `lumen-js/src/dom.rs` + функция `json_str` для RFC 8259-экранирования. JS `EventSource` переписан: CONNECTING(0)/OPEN(1)/CLOSED(2), `withCredentials`, `onopen`/`onmessage`/`onerror`, `addEventListener` для именованных событий, `lastEventId`, `MessageEvent.origin`, `_lumen_pump_sse()`. `PersistentJs::pump_sse()` в shell вызывается в `about_to_wait` рядом с `pump_websockets()`. Обновлены все call-sites `install_dom` (5 файлов). 9 новых тестов; lumen-js: 846 тестов. Clippy чист. Без новых зависимостей.
+
+
 
 - **p1-icc-profile** ✅ 2026-06-02 — ICC profile extraction — JPEG APP2 multi-segment + paint wiring (задача #35). `parse_jpeg_icc_profile` читает APP2 multi-segment ICC (JFIF-ICC, ISO 15076-1); `IccGamut` enum + `IccProfile::detect_gamut()` сканирует ASCII/UTF-16BE описание (Display P3/DCI-P3 → P3, Rec.2020/BT.2020 → Rec2020, sRGB/IEC 61966 → Srgb, остальное → Unknown); `correct_rgba_pixels` — per-pixel конвертация P3→sRGB / Rec2020→sRGB с sRGB/Rec2020 gamma en/decode и CSS Color L4 §10.9 матрицами. lumen-paint `register_image` + `ensure_image_gpu_key` применяют ICC-коррекцию перед GPU upload — P3/Rec2020 фото корректно рендерятся на sRGB-мониторах. 7 тестов JPEG ICC, 13 тестов IccGamut+correct_rgba. lumen-image: 163 lib. Clippy чист. Без новых зависимостей.
 
