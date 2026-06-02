@@ -27,30 +27,18 @@ _(none)_
 
 ## Next
 
-Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-05-29 state.
+_(2026-06-02: все задачи переданы P1 и P2 — CSS-wiring задачи с алгоритмами P1 → STATUS-P1.md § «CSS wiring», CSS-wiring задачи с алгоритмами P2 и новые CSS-свойства → STATUS-P2.md § «CSS wiring». P4 свободен до нового назначения.)_
 
-| # | Property / Feature | Effort | Blocker |
-|---|-------------------|--------|---------|
-| 1 | `::first-letter` / `::first-line` wiring | M | none (stubs ready — see "Needs wiring") |
-| 2 | `overflow: scroll` scrollable containers | L | shell scroll event |
-| 3 | `image-set()` / `cross-fade()` — CSS Images L4 | M | none |
-| 4 | `text-align-last` | S | none |
-| 5 | `perspective()` + `transform-style: preserve-3d` (3D Transforms L2) | L | none (P2 matrix primitive ready — see "Needs wiring") |
-| 6 | `@counter-style` custom counter definitions | M | none |
-| 7 | `justify-items` / `justify-self` for grid (Box Alignment L3) | S | none |
-| 8 | `column-rule` rendering + `column-span` + `column-fill` | S | none |
-| 9 | Scroll snap shell integration (`scroll-snap-type` / `scroll-snap-align`) | M | shell scroll |
-| 10 | `::selection` pseudo-element | S | none |
-| 11 | `::marker` rendering | S | none |
-| 12 | `cq*` container query units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`) | M | none |
-| 13 | `attr()` with type (CSS Values L4) | M | none |
-| 14 | `mask-image` CSS wiring | L | P2 GPU compositing pass |
-| 15 | `writing-mode: vertical-*` axis swap | L | ~~layout engine~~ **stub ready** (P1 2026-05-31, `vertical.rs`) |
-| 16 | `subgrid` track inheritance | XL | grid engine |
+Распределение (детали реализации — секция «Needs wiring» ниже):
+
+- **→ P1 (алгоритмы реализованы P1):** `::first-letter/::first-line`, `position: sticky`, CSS Scroll Snap, CSS Scroll-Driven Animations L1, `font-variation-settings`, `:host/::slotted`, `text-align-last`, `justify-items/justify-self`, `::selection`, `attr()` с типом, `writing-mode: sideways-*`, `subgrid`
+- **→ P2 (алгоритмы реализованы P2):** `image-set()/cross-fade()`, `@media (prefers-color-scheme: dark)`, CSS 3D transforms + `transform-style: preserve-3d`, `overflow: scroll` wiring check, `scrollbar-width/scrollbar-color`, SVG stroke advanced, `@counter-style`, `column-rule/column-span/column-fill`, `::marker`, `cq*` units, `mask-image`
 
 ---
 
 ## Needs wiring (algorithm ready, CSS not connected)
+
+_(2026-06-02: все задачи этой секции переданы P1/P2. Раздел сохранён как справочник с деталями реализации — P1 и P2 используют его при выполнении своих CSS-wiring задач.)_
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
