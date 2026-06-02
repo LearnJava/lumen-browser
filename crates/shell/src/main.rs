@@ -475,6 +475,7 @@ fn do_print_to_pdf(
         &NullHyphenationProvider,
         false, // headless PDF mode: no interactive JS needed
         false, // deterministic: not needed for PDF rendering
+        false, // dark_mode: light mode for PDF output
     )?;
 
     let ctx = PaginationContext {
@@ -645,13 +646,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -1394,7 +1395,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone())?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -2205,6 +2206,7 @@ fn parse_and_layout(
     hp: &dyn HyphenationProvider,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    dark_mode: bool,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -2342,7 +2344,7 @@ fn parse_and_layout(
 
     let layout = {
         let d = doc_arc.lock().unwrap();
-        lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp)
+        lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp, dark_mode)
     };
 
     // CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)` уже
@@ -2575,11 +2577,13 @@ fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
 
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
-fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvider) -> (DisplayList, lumen_layout::LayoutBox) {
+/// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
+/// rules take effect on relayout (e.g. after OS theme change or window resize).
+fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvider, dark_mode: bool) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let doc = src.document.lock().unwrap();
-    let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp);
+    let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
@@ -2665,8 +2669,9 @@ fn render_bytes(
     hp: &dyn HyphenationProvider,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    dark_mode: bool,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -3495,7 +3500,7 @@ impl Lumen {
         let (css_w, css_h) =
             zoom::effective_viewport(vp_size.width as f32, vp_size.height as f32, meta_scale, self.zoom_factor);
         let viewport = Size::new(css_w, css_h);
-        let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider);
+        let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider, self.dark_mode);
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.display_list = new_dl;
@@ -4181,7 +4186,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                     }
@@ -7160,7 +7165,7 @@ impl Lumen {
             panels::sidebar_panel::PANEL_WIDTH,
             self.viewport_height_css().max(100.0),
         );
-        let (dl, _lb) = relayout_page(&src, sidebar_vp, &self.hyp_provider);
+        let (dl, _lb) = relayout_page(&src, sidebar_vp, &self.hyp_provider, self.dark_mode);
         let content_h = content_height_of(&dl);
         self.sidebar.set_page(dl, doc_title, content_h);
 
@@ -7970,7 +7975,7 @@ impl Lumen {
         let meta_scale = meta_initial_scale(&layout_source);
         let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, meta_scale, self.zoom_factor);
         let viewport = lumen_core::geom::Size::new(css_w, css_h);
-        let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider);
+        let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider, self.dark_mode);
 
         // Install into the active slot.
         self.display_list = display_list;
