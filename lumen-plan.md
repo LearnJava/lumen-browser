@@ -325,11 +325,11 @@
 | 8G | ✅ **`[P3+P1]` A11y tree first-class** (Phase 1, **зависит от P1 `lumen-a11y`**) | Semantic locator surface для tests + AI agents | `lumen-a11y` published interface. P1 done 2026-05-31: `AXRole::as_str()`, `A11yState`, enriched `A11yNode` (node_id/description/placeholder/state), `a11y_tree()` uses `build_ax_tree()`, 14 тестов |
 | 8G.1 | ✅ A11y tree доступна через `BrowserSession::a11y_tree()` | `driver/src/session.rs` uses `lumen_a11y::build_ax_tree()` | P1 done 2026-05-31 |
 | 8G.2 | ✅ `Query::Role { role, name }` matching по a11y-tree (Playwright-стиль `getByRole`) | `driver/src/session.rs` `find_a11y_node`/`find_all_a11y_nodes` + `matches_query` | P1 done 2026-05-31 |
-| 8H | ⬜ **`[P3]` `lumen-bidi-server` крейт** (Phase 2) | Playwright/Selenium 5/Cypress «из коробки» | `crates/bidi/` |
-| 8H.1 | ⬜ WebSocket transport + W3C BiDi handshake | `bidi/src/transport.rs` | — |
-| 8H.2 | ⬜ BiDi modules core: `session`, `browsingContext`, `script`, `network`, `input` | `bidi/src/modules/` | W3C Working Draft, May 2026 |
+| 8H | 🟡 **`[P3]` `lumen-bidi-server` крейт** (Phase 2) | Playwright/Selenium 5/Cypress «из коробки» | `crates/bidi/` |
+| 8H.1 | 🟡 WebSocket transport + W3C BiDi handshake | shell stub `shell/src/bidi/` (WS-кодек переиспользует `lumen-devtools::ws`); вынос в `bidi/src/transport.rs` отложен | — |
+| 8H.2 | 🟡 BiDi modules core: `session`, `browsingContext`, `script`, `network`, `input` | stub: `session.new/status/subscribe/end`, `browsingContext.getTree` + событие `browsingContext.created` в `shell/src/bidi/protocol.rs`; `script`/`network`/`input` отложены | W3C Working Draft, May 2026 |
 | 8H.3 | ⬜ **Ship BiDi gaps** (см. ADR-006): response body, locale/timezone/offline, per-context UA, viewport-before-popup, preload per-context, download lifecycle, cookie change events, per-origin clear | `bidi/src/extensions.rs` | gap-mapping в `subsystems/lumen-bidi-server.md` |
-| 8H.4 | ⬜ `lumen --bidi-port N` CLI flag | `shell/src/cli.rs` | — |
+| 8H.4 | ✅ `lumen --bidi-port N` CLI flag | `shell/src/main.rs` (`extract_bidi_port` + `bidi::spawn`) | — |
 | 8I | ⬜ **`[P3]` `lumen-cdp-shim` крейт** (Phase 3+, **opt-in, по реальному запросу**) | Legacy Puppeteer-совместимость | `crates/cdp-shim/` |
 | 9 | 🟡 **`[P1]` Anti-detection privacy stack** (§9.5, [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md)) | Privacy by default; устойчивость к Cloudflare/DataDome/Akamai false-positive. 9A ✅ Layer 1 (P1 2026-05-31); 9B ✅ TLS fingerprint (P1 2026-05-31); 9C ✅ HTTP fingerprint (P1 2026-05-31); 9D ⬜ rendering fingerprint | `lumen-network`, `lumen-js`, `lumen-shell`, `lumen-paint` (минимально), `lumen-canvas` |
 | 9A | ✅ **`[P1]` Layer 1: surface API без automation-маркеров** (Phase 1) | navigator.webdriver отсутствует; нет chrome.runtime/cdc_*/__playwright/etc.; event.isTrusted=true для native input; nav.appName/vendor/product/plugins/mimeTypes совместимы с Chrome | `lumen-js/src/surface_api.rs` P1 done 2026-05-31 |
