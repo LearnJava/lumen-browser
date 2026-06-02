@@ -6,8 +6,7 @@
 
 ## In progress
 
-p1-multifont-measurer: Multi-font TextMeasurer  branch: p1-multifont-measurer
-Next step: extend TextMeasurer trait + FontMeasurer impl  crates/engine/layout/src/lib.rs:100, crates/engine/paint/src/lib.rs:63
+_(нет)_
 
 ---
 
@@ -18,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-multifont-measurer** ✅ 2026-06-02 — Multi-font TextMeasurer с поддержкой @font-face (CSS Fonts L4 §5.3). `FontMeasurer` поддерживал только bundled Inter — тексты с `font-family` отличным от Inter измерялись Inter-метриками, что ломало line-wrapping для страниц с @font-face шрифтами. **layout:** новый метод `TextMeasurer::char_width_with_families(ch, font_size, families)` с default-impl (игнорирует families → Inter fallback); `measure_text_w_families` — family-aware версия `measure_text_w`; все call-sites в `wrap_inline_run`/`widest_word`/`pretty_wrap`/`char_break_offset` переведены на неё. **paint:** `MultiFontMeasurer` — `OwnedFontMetrics` хранит cmap_data+advance_widths; cascade: первая семья из font-family list с глифом побеждает, иначе fallback → Inter; регистрация через `register_family(name, bytes)`. **font:** `FontRegistry::face_bytes_for_family` — даёт shell байты @font-face шрифта. **shell:** `parse_and_layout` создаёт `MultiFontMeasurer` вместо `FontMeasurer` и регистрирует все `@font-face` правила из `StyleSheet` перед layout. 7 unit-тестов (lumen-paint: 514 lib). Clippy чист. Без новых зависимостей.
 
 - **p1-canvas2d** ✅ 2026-06-02 — Canvas 2D JS bindings (задача 5A.2, HTML LS §4.12.4). `canvas.getContext('2d')` теперь возвращает рабочий `CanvasRenderingContext2D` поверх `lumen_canvas::Context2D` вместо `null`. **layout:** новый `BoxKind::Canvas { width, height }` — replaced element, распознаётся в `build_box` по тегу `<canvas>`, intrinsic-размер из `width`/`height`-атрибутов (UA default 300×150), добавлен во все exhaustive-матчи (`is_replaced`, layout-dispatch, `snapshot.rs`). **paint:** обе ветки `emit_box_self` эмитят `DrawImage` с ключом `canvas:{node.index()}` (как Video placeholder) — фон/border/box-shadow в painter's order. **js:** новый `crates/js/src/canvas2d.rs` — нативы `_lumen_canvas2d_*` (per-thread registry по DOM node index) + `flush_dirty()`; JS-шим `getContext('2d')`/`toDataURL`/reflected `width`/`height` встроен в `dom.rs::_lumen_make_element` (эфемерные обёртки → объект контекста кешируется в `_canvas2d_ctxs[nid]`, как `_input_values`). Ключ `nid` совпадает с `LayoutBox::node.index()`, поэтому `DrawImage src` резолвится в нужный буфер. Forwarded: fillRect/clearRect/strokeRect, beginPath/moveTo/lineTo/closePath/arc/fill/stroke, rect/ellipse, fillStyle/strokeStyle (`CanvasColor::from_css_str`), lineWidth/globalAlpha (spec-валидация), getImageData (с fingerprint-noise). Трансформы/текст/тени/градиенты/clip — no-op-стабы; toDataURL/toBlob пустые (ADR-007). **shell:** `QuickJsRuntime::flush_canvas_updates()` + `PersistentJs`-метод; `about_to_wait` дренирует dirty-буферы → `Renderer::register_image("canvas:{nid}")` + redraw. 22 теста (16 canvas2d unit + 6 dom e2e), lumen-js: 868 lib. Graphic test `57-canvas-2d.html` + демо в `1000000-final.html` + CPU-снапшот. Clippy чист. `lumen-canvas` добавлен в js-deps (workspace-internal, без новой внешней зависимости). BUG-055 (pre-existing avif `<picture>` fallback) не связан.
 
