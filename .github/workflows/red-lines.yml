@@ -1,0 +1,34 @@
+name: Red Lines (ADR-006/007)
+
+# Code-level enforcement of the project's red lines (roadmap tasks 9G.1 + 9G.2):
+#   * no crate named like abuse tooling (captcha/solver/ip_rotation/proxy_pool)
+#   * no abuse-marketing vocabulary (scraping/stealth/bypass) in product copy
+# Rationale: docs/decisions/ADR-007-anti-detection-stack.md §"Red lines".
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  red-lines:
+    name: ADR-006/007 red-line enforcement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Self-test the linters
+        run: |
+          python scripts/check_crate_names.py --self-test
+          python scripts/check_marketing_words.py --self-test
+
+      - name: Forbidden crate names (9G.1)
+        run: python scripts/check_crate_names.py
+
+      - name: Marketing words in product copy (9G.2)
+        run: python scripts/check_marketing_words.py
