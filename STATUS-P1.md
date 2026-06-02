@@ -6,8 +6,7 @@
 
 ## In progress
 
-задача #36 — `Event::RequestFailed` → network-panel wiring  branch: p1-request-failed-wiring
-Next step: commit реализации
+_(нет)_
 
 ---
 
@@ -22,11 +21,12 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | 33 | **Print PDF inline content rendering** (переназначено от P2 2026-06-02). Сейчас `--print-to-pdf` рендерит геометрию страниц, но содержимое margin-box'ов (@page headers/footers) не печатается — 6.5 помечен «P2 inline content rendering pending». Дотянуть `build_print_display_list` (`paint/src/display_list.rs`) до эмиссии реального текста/inline-контента margin-box'ов в print-DL. | `lumen-paint`, `lumen-shell` | M | lumen-plan.md:192 (задача 6.5) |
 | 34 | **WebGL GLSL shader execution** (переназначено от P2 2026-06-02). `SoftwareWebGl` (`paint/src/webgl.rs`) сейчас заливает фрагмент плоским цветом из последнего `uniform4f` — GLSL не исполняется. Добавить минимальный интерпретатор GLSL ES (vertex: позиция/varyings; fragment: цвет из varyings+uniforms+texture sample), чтобы реальные шейдеры давали корректный результат. | `lumen-paint`, `lumen-js` | L | Phase 4 §7F (сейчас flat color) |
 | 35 | **ICC profile extraction в lumen-image (decode-side)** (переназначено от P2 2026-06-02). Paint-сторона color management (Display-P3/Rec2020) помечена ✅ (3A), но `lumen-image` всегда отдаёт `icc_profile: None` — профиль не извлекается из PNG (`iCCP`) / JPEG (`APP2` multi-segment), поэтому P3-фото рендерятся как sRGB. Извлекать ICC и прокидывать в существующий paint color-management путь. | `lumen-image`, `lumen-paint` | L | lumen-plan.md:2298 / :518 (Color management ICC) |
-| 36 | **`Event::RequestFailed` → network-panel wiring** (переназначено от P2 2026-06-02, изначально handoff от p1-request-failed-event). Событие `Event::RequestFailed { tab_id, url, stage: RequestStage, reason }` уже эмитится в `lumen-network` симметрично `RequestStarted` (DNS/TCP/TLS/Read-сбои до HTTP-статуса), но `network_panel.rs:202` ловит его в `_ => {}` — запись остаётся «висящей» как started. Добавить arm `Event::RequestFailed { url, stage, .. } => guard.record_failed(url.as_str(), stage)` + метод `record_failed` (по аналогии с `record_blocked`), показать `stage.as_str()` + reason в строке лога; аналогично eprintln-логгер `main.rs:119` (`✗ {url} ({stage}: {reason})`). | `lumen-shell` | S | lumen-plan.md §9.6:1472 |
 
 ---
 
 ## Recent merges
+
+- **p1-request-failed-wiring** ✅ 2026-06-02 — `Event::RequestFailed` → network-panel wiring (задача #36). `NetworkLogSink` раньше игнорировал этот event — запись зависала в статусе «pending». Теперь: новое поле `NetworkEntry.failed: bool`; `NetworkLog::record_failed(url, stage, reason)` — ищет pending-запись по URL и маркирует failed + elapsed (или синтетическую при missed start); arm `Event::RequestFailed { url, stage, reason, .. } => guard.record_failed(...)` в `NetworkLogSink::emit`; `record_completed` фильтрует уже-failed записи; `status_label` показывает stage-префикс (dns/tcp/tls/read) красным; `timing_label` возвращает «—»; `FAILED_BG` (тёмно-оранжевый) подсвечивает строку; `main.rs` eprintln-логгер: `✗ {url} ({stage}: {reason})`. 7 новых тестов. lumen-shell: 879 тестов (было 865). Clippy чист. Без новых зависимостей.
 
 - **p1-meta-viewport** ✅ 2026-06-02 — `<meta name=viewport>` parsing + per-tab page zoom (Ctrl+= / Ctrl+- / Ctrl+0). `ViewportMeta` struct (`initial_scale`, `width: Option<ViewportWidth>`) + `set_viewport_meta`/`viewport_meta` getters в `lumen-dom::Document`. HTML-парсер (`tree_builder.rs`) извлекает `<meta name=viewport content="...">` в `parse_viewport_meta()` — парсит `width=device-width|N` и `initial-scale=N`. Новый модуль `shell/src/zoom.rs`: `ZOOM_DEFAULT/MIN/MAX/STEP`, `zoom_in/out/reset()`, `effective_viewport(phys_w, phys_h, meta_scale, zoom_factor)`. `zoom_factor: f32` добавлен в `Lumen` и `PageSnapshot` (сохраняется при переключении вкладок, сбрасывается при открытии новой). `KeyCommand::ZoomIn/ZoomOut/ZoomReset` + `Ctrl+= / Ctrl+- / Ctrl+0` в `keybinding_for()`. `relayout()` вычисляет `meta_initial_scale(src)` из locked документа и передаёт `effective_viewport()` как CSS layout viewport. `apply_loaded_page` триггерит пересчёт при zoom≠1.0 или meta_scale≠1.0 (без лишнего relayout в обычном случае). `meta_initial_scale()` helper читает `doc.viewport_meta()` через Mutex. 5 тестов в html-parser (device-width, custom scale, fixed width, absent, non-viewport meta). 8 тестов в zoom.rs. lumen-html-parser: 374 тестов; lumen-shell: 865 тестов. Clippy чист. Без новых зависимостей.
 
