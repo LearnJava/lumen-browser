@@ -123,7 +123,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     write_style_attrs(out, &b.style);
     out.push('\n');
 
-    if let BoxKind::InlineRun { segments, lines } = &b.kind {
+    if let BoxKind::InlineRun { segments, lines, .. } = &b.kind {
         let inner = "  ".repeat(depth + 1);
         for (i, seg) in segments.iter().enumerate() {
             write_segment(out, &inner, i, seg);

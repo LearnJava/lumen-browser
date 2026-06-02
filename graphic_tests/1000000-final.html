@@ -630,6 +630,19 @@
   })();
 </script>
 
+<!-- ::first-letter / ::first-line demo row -->
+<style>
+  .pseudo-row { margin-top: 10px; display: flex; gap: 16px; }
+  .fl-mini { width: 200px; font: 13px/1.6 sans-serif; color: #e2e8f0; background: #1a202c; padding: 6px; border-radius: 3px; }
+  .fl-mini::first-letter { font-size: 36px; font-weight: 700; color: #f6e05e; float: left; line-height: 1; margin-right: 3px; }
+  .fline-mini { width: 200px; font: 13px/1.6 sans-serif; color: #e2e8f0; background: #1a202c; padding: 6px; border-radius: 3px; }
+  .fline-mini::first-line { color: #68d391; font-weight: 700; }
+</style>
+<div class="pseudo-row">
+  <div class="fl-mini">Once upon a time there was a CSS engine.</div>
+  <div class="fline-mini">The first line is green and bold via ::first-line style override.</div>
+</div>
+
 </div><!-- /card -->
 </body>
 </html>
