@@ -508,15 +508,17 @@ fn build_svg_children(
     inherited: &ComputedStyle,
     viewport: Size,
     flat: &FlatTree,
+    dark_mode: bool,
 ) -> Vec<LayoutBox> {
     let mut out = Vec::new();
-    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, flat, &mut out);
+    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, flat, &mut out, dark_mode);
     out
 }
 
 /// Recursively collects SVG shape and group boxes from the DOM subtree of `parent_id`.
 /// Handles the HTML5 parser's incorrect nesting of self-closing SVG tags: when a `<rect/>`
 /// is parsed as an open element, its DOM children (intended siblings) are also scanned.
+#[allow(clippy::too_many_arguments)]
 fn collect_svg_shapes(
     doc: &Document,
     sheet: &Stylesheet,
@@ -525,13 +527,14 @@ fn collect_svg_shapes(
     viewport: Size,
     flat: &FlatTree,
     out: &mut Vec<LayoutBox>,
+    dark_mode: bool,
 ) {
     for child_id in flat.children_of(doc, parent_id) {
         let child_id = *child_id;
         let Some(name) = doc.get(child_id).element_name() else {
             continue; // text node / comment / etc.
         };
-        let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport);
+        let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode);
         if style.display == crate::style::Display::None {
             continue;
         }
@@ -555,7 +558,7 @@ fn collect_svg_shapes(
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
                 // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
             }
             "circle" => {
                 out.push(LayoutBox {
@@ -570,7 +573,7 @@ fn collect_svg_shapes(
                     },
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
             }
             "ellipse" => {
                 out.push(LayoutBox {
@@ -586,7 +589,7 @@ fn collect_svg_shapes(
                     },
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
             }
             "line" => {
                 out.push(LayoutBox {
@@ -602,7 +605,7 @@ fn collect_svg_shapes(
                     },
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
             }
             "path" => {
                 let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
@@ -611,12 +614,12 @@ fn collect_svg_shapes(
                     kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
             }
             "g" => {
                 // Group: collect children shapes, then wrap in a Block box.
                 let mut group_children: Vec<LayoutBox> = Vec::new();
-                collect_svg_shapes(doc, sheet, child_id, &style, viewport, flat, &mut group_children);
+                collect_svg_shapes(doc, sheet, child_id, &style, viewport, flat, &mut group_children, dark_mode);
                 let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
@@ -626,7 +629,7 @@ fn collect_svg_shapes(
             }
             _ => {
                 // Unknown SVG element: skip self, but scan children for shapes.
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
             }
         }
     }
@@ -1245,14 +1248,15 @@ pub(crate) fn apply_first_line_pseudo_styles(
     doc: &Document,
     sheet: &Stylesheet,
     viewport: Size,
+    dark_mode: bool,
 ) {
     for child in &mut b.children {
-        apply_first_line_pseudo_styles(child, doc, sheet, viewport);
+        apply_first_line_pseudo_styles(child, doc, sheet, viewport, dark_mode);
     }
     if !matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
         return;
     }
-    let Some(fl_style) = compute_pseudo_element_style(doc, b.node, "first-line", sheet, &b.style, viewport) else {
+    let Some(fl_style) = compute_pseudo_element_style(doc, b.node, "first-line", sheet, &b.style, viewport, dark_mode) else {
         return;
     };
     // Find the first InlineRun child (or inside InlineBlockRow) and apply.
@@ -1294,18 +1298,19 @@ pub(crate) fn apply_first_line_pseudo_styles(
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
-    let counters = precompute_counters(doc, sheet, viewport, &flat);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters);
+    let counters = precompute_counters(doc, sheet, viewport, &flat, false);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, false);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb, &null_hp);
-    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport);
+    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, false);
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
-    apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp);
+    apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false);
     root
 }
 
+/// Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`.
 pub fn layout_measured(
     doc: &Document,
     sheet: &Stylesheet,
@@ -1313,26 +1318,29 @@ pub fn layout_measured(
     measurer: &dyn TextMeasurer,
 ) -> LayoutBox {
     let null_hp = NullHyphenationProvider;
-    layout_measured_hyp(doc, sheet, viewport, measurer, &null_hp)
+    layout_measured_hyp(doc, sheet, viewport, measurer, &null_hp, false)
 }
 
 /// Layout with a real hyphenation provider (for `hyphens: auto`).
+/// `dark_mode` drives `@media (prefers-color-scheme: dark)` matching throughout
+/// the cascade — shell reads the value from `Lumen.dark_mode` (OS preference via winit).
 pub fn layout_measured_hyp(
     doc: &Document,
     sheet: &Stylesheet,
     viewport: Size,
     measurer: &dyn TextMeasurer,
     hp: &dyn HyphenationProvider,
+    dark_mode: bool,
 ) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
-    let counters = precompute_counters(doc, sheet, viewport, &flat);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters);
+    let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, dark_mode);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
-    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport);
-    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp);
+    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
     root
 }
 
@@ -1409,6 +1417,7 @@ fn is_inline_content(
     id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    dark_mode: bool,
 ) -> bool {
     match &doc.get(id).data {
         NodeData::Text(s) => !s.chars().all(char::is_whitespace),
@@ -1420,7 +1429,7 @@ fn is_inline_content(
             // Phase 0 layout не делает реального flex/grid — флэт-семантика
             // блока для outer-display, но inline-family остаётся inline.
             matches!(
-                compute_style(doc, id, sheet, inherited, viewport).display,
+                compute_style(doc, id, sheet, inherited, viewport, dark_mode).display,
                 Display::Inline | Display::InlineFlex | Display::InlineGrid
             )
         }
@@ -1436,13 +1445,14 @@ fn is_inline_block(
     id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    dark_mode: bool,
 ) -> bool {
     matches!(
         &doc.get(id).data,
         NodeData::Element { .. }
         if !is_image_element(doc, id)
             && !is_form_control_element(doc, id)
-            && compute_style(doc, id, sheet, inherited, viewport).display
+            && compute_style(doc, id, sheet, inherited, viewport, dark_mode).display
                 == Display::InlineBlock
     )
 }
@@ -1496,12 +1506,13 @@ fn apply_first_letter_pseudo(
     sheet: &lumen_css_parser::Stylesheet,
     parent: &crate::style::ComputedStyle,
     viewport: lumen_core::geom::Size,
+    dark_mode: bool,
 ) {
     let Some(pos) = segs.iter().position(|s| s.pseudo_kind == PseudoKind::FirstLetter) else {
         return;
     };
     let Some(fl_style) = crate::style::compute_pseudo_element_style(
-        doc, node, "first-letter", sheet, parent, viewport,
+        doc, node, "first-letter", sheet, parent, viewport, dark_mode,
     ) else {
         return;
     };
@@ -1569,6 +1580,7 @@ fn collect_inline_segments(
     flat: &FlatTree,
     counters: &CounterMap,
     need_first_letter: &mut bool,
+    dark_mode: bool,
 ) {
     match &doc.get(id).data {
         NodeData::Text(s) if inherited.white_space.preserves_whitespace() => {
@@ -1642,7 +1654,7 @@ fn collect_inline_segments(
         }
         NodeData::Text(_) => {}
         NodeData::Element { .. } => {
-            let s = compute_style(doc, id, sheet, inherited, viewport);
+            let s = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
             if s.display == Display::None {
                 return;
             }
@@ -1690,7 +1702,7 @@ fn collect_inline_segments(
             // CSS Pseudo-elements L4 §4 — ::before in inline formatting context.
             // Block pseudo-elements inside inline context are skipped (Phase 0).
             if let Some(ps) =
-                compute_pseudo_element_style(doc, id, "before", sheet, &s, viewport)
+                compute_pseudo_element_style(doc, id, "before", sheet, &s, viewport, dark_mode)
                 && matches!(
                     ps.display,
                     Display::Inline
@@ -1703,11 +1715,11 @@ fn collect_inline_segments(
             }
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
-                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat, counters, need_first_letter);
+                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat, counters, need_first_letter, dark_mode);
             }
             // CSS Pseudo-elements L4 §4 — ::after in inline formatting context.
             if let Some(ps) =
-                compute_pseudo_element_style(doc, id, "after", sheet, &s, viewport)
+                compute_pseudo_element_style(doc, id, "after", sheet, &s, viewport, dark_mode)
                 && matches!(
                     ps.display,
                     Display::Inline
@@ -2023,6 +2035,7 @@ fn flatten_contents(children: &mut Vec<LayoutBox>) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_box(
     doc: &Document,
     sheet: &Stylesheet,
@@ -2031,8 +2044,9 @@ fn build_box(
     viewport: Size,
     flat: &FlatTree,
     counters: &CounterMap,
+    dark_mode: bool,
 ) -> LayoutBox {
-    let mut style = compute_style(doc, id, sheet, inherited, viewport);
+    let mut style = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
 
     let kind = match &doc.get(id).data {
         // Shadow root nodes are infrastructure — never rendered directly.
@@ -2197,7 +2211,7 @@ fn build_box(
         );
         if is_item_container {
             for child_id in dom_children {
-                let child_box = build_box(doc, sheet, child_id, &style, viewport, flat, counters);
+                let child_box = build_box(doc, sheet, child_id, &style, viewport, flat, counters, dark_mode);
                 if !matches!(child_box.kind, BoxKind::Skip) {
                     children.push(child_box);
                 }
@@ -2206,8 +2220,8 @@ fn build_box(
         let mut i = 0;
         while i < dom_children.len() {
             let child_id = dom_children[i];
-            let is_inl = is_inline_content(doc, sheet, child_id, &style, viewport);
-            let is_ib = !is_inl && is_inline_block(doc, sheet, child_id, &style, viewport);
+            let is_inl = is_inline_content(doc, sheet, child_id, &style, viewport, dark_mode);
+            let is_ib = !is_inl && is_inline_block(doc, sheet, child_id, &style, viewport, dark_mode);
 
             if is_inl || is_ib {
                 // Унифицированный сбор inline-уровневого контента: inline-элементы
@@ -2224,7 +2238,7 @@ fn build_box(
                 let mut need_first_letter = true;
                 // CSS Pseudo-elements L4 §5.3: pre-compute ::first-line style once for this block.
                 let first_line_style =
-                    crate::style::compute_pseudo_element_style(doc, id, "first-line", sheet, &style, viewport)
+                    crate::style::compute_pseudo_element_style(doc, id, "first-line", sheet, &style, viewport, dark_mode)
                         .map(Box::new);
                 // Track whether first_line_style has been assigned to the first InlineRun.
                 let mut first_line_assigned = false;
@@ -2246,14 +2260,14 @@ fn build_box(
                         }
                         _ => {}
                     }
-                    if is_inline_content(doc, sheet, cid, &style, viewport) {
-                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, &mut need_first_letter);
+                    if is_inline_content(doc, sheet, cid, &style, viewport, dark_mode) {
+                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
-                    } else if is_inline_block(doc, sheet, cid, &style, viewport) {
+                    } else if is_inline_block(doc, sheet, cid, &style, viewport, dark_mode) {
                         if !pending.is_empty() {
                             let mut segs = std::mem::take(&mut pending);
-                            apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport);
+                            apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
                             let mut run = anon_inline_run(id, &style, segs);
                             if !first_line_assigned {
                                 if let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind {
@@ -2275,11 +2289,11 @@ fn build_box(
                                 row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                             });
                         }
-                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters));
+                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters, dark_mode));
                         had_ws = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
-                        && compute_style(doc, cid, sheet, &style, viewport).display
+                        && compute_style(doc, cid, sheet, &style, viewport, dark_mode).display
                             == Display::None
                     {
                         // display:none не прерывает inline-контекст — CSS §9.2.4.
@@ -2290,7 +2304,7 @@ fn build_box(
                 }
                 if !pending.is_empty() {
                     let mut segs = std::mem::take(&mut pending);
-                    apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport);
+                    apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
                     let mut run = anon_inline_run(id, &style, segs);
                     if !first_line_assigned
                         && let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind
@@ -2305,7 +2319,7 @@ fn build_box(
                 // with PseudoKind::FirstLetter; split it here so wrap_inline_run uses
                 // the override font metrics for both the letter and the remainder.
                 if let Some(fl_style) = compute_pseudo_element_style(
-                    doc, id, "first-letter", sheet, &style, viewport,
+                    doc, id, "first-letter", sheet, &style, viewport, dark_mode,
                 ) {
                     apply_first_letter_style(&mut row_items, fl_style, &style);
                 }
@@ -2322,7 +2336,7 @@ fn build_box(
                     }
                 }
             } else {
-                children.push(build_box(doc, sheet, child_id, &style, viewport, flat, counters));
+                children.push(build_box(doc, sheet, child_id, &style, viewport, flat, counters, dark_mode));
                 i += 1;
             }
         }
@@ -2330,9 +2344,9 @@ fn build_box(
         // Only for Block / FlowRoot (not FormControl, not flex/grid item containers).
         if matches!(kind, BoxKind::Block | BoxKind::FlowRoot) {
             let before_ps =
-                compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport);
+                compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode);
             let after_ps =
-                compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport);
+                compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode);
             inject_pseudo(id, &mut children, before_ps, true, doc, counters);
             inject_pseudo(id, &mut children, after_ps, false, doc, counters);
             // CSS Lists L3 §2.1 — inject ::marker for list items.
@@ -2352,7 +2366,7 @@ fn build_box(
 
     // SVG root: build SVG shape children (separate from HTML box-tree flow).
     if matches!(kind, BoxKind::SvgRoot { .. }) {
-        children = build_svg_children(doc, sheet, id, &style, viewport, flat);
+        children = build_svg_children(doc, sheet, id, &style, viewport, flat, dark_mode);
     }
 
     // Read HTML colspan/rowspan attributes for table-cell elements.
@@ -5905,15 +5919,17 @@ pub fn apply_container_styles(
     viewport: Size,
     measurer: Option<&dyn TextMeasurer>,
     hp: &dyn HyphenationProvider,
+    dark_mode: bool,
 ) {
     // No container rules in this sheet → fast path.
     if sheet.container_rules.is_empty() {
         return;
     }
     let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, hp);
+    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, hp, dark_mode);
 }
 
+#[allow(clippy::too_many_arguments, clippy::only_used_in_recursion)]
 fn apply_container_inner(
     b: &mut LayoutBox,
     doc: &Document,
@@ -5922,6 +5938,7 @@ fn apply_container_inner(
     measurer: Option<&dyn TextMeasurer>,
     pcb: Rect,
     hp: &dyn HyphenationProvider,
+    dark_mode: bool,
 ) {
     let is_container = !matches!(b.style.container_type, ContainerType::Normal);
     if is_container {
@@ -5980,12 +5997,12 @@ fn apply_container_inner(
         // After re-layout, recurse into children to catch nested containers.
         // Each nested container will set its own cq* context during its own re-layout.
         for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, hp);
+            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, hp, dark_mode);
         }
     } else {
         // Not a container — just recurse looking for container descendants.
         for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, pcb, hp);
+            apply_container_inner(child, doc, sheet, viewport, measurer, pcb, hp, dark_mode);
         }
     }
 }
