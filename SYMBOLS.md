@@ -60,10 +60,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
 `crates/engine/canvas/src/rasterize.rs:41` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
 
-## lumen-core  (180 symbols)
+## lumen-core  (189 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
+`crates/core/src/crash.rs:65` **struct** `CrashRecorder` — Рекордер событий с кольцевым буфером и дампом при панике
+`crates/core/src/crash.rs:79` **fn** `new` — Рекордер с ёмкостью буфера по умолчанию ([`DEFAULT_CAPACITY`]) и без
+`crates/core/src/crash.rs:86` **fn** `with_capacity` — Рекордер с заданной ёмкостью буфера и без downstream-sink-а
+`crates/core/src/crash.rs:101` **fn** `with_downstream` — Рекордер, форвардящий каждое событие дальше указанному sink-у после
+`crates/core/src/crash.rs:111` **fn** `recent_events` — Снимок текущего содержимого буфера в виде готовых строк дампа
+`crates/core/src/crash.rs:127` **fn** `total_recorded` — Сколько событий записано всего с момента старта (включая вытесненные
+`crates/core/src/crash.rs:142` **fn** `install_panic_hook` — Установить process-global panic-hook, который при панике пишет дамп
+`crates/core/src/crash.rs:192` **fn** `format_crash_dump` — Собрать текст crash-дампа из снимка событий и сообщения паники
+`crates/core/src/crash.rs:224` **fn** `write_crash_dump` — Записать готовый текст дампа в новый файл `lumen-crash-<unix_ms>.log`
 `crates/core/src/error.rs:7` **enum** `Error`
 `crates/core/src/error.rs:35` **type** `Result`
 `crates/core/src/event.rs:9` **struct** `TabId`
@@ -955,7 +964,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/worker.rs:108` **fn** `drain_messages` — Drain all pending messages sent from worker threads to the main thread
 `crates/js/src/worker.rs:117` **fn** `install_worker_bindings` — Install native bindings (`_lumen_create_worker`, `_lumen_worker_post`,
 
-## lumen-knowledge  (46 symbols)
+## lumen-knowledge  (54 symbols)
 
 `crates/knowledge/src/fts.rs:28` **struct** `SearchHit` — Результат полнотекстового поиска
 `crates/knowledge/src/fts.rs:43` **struct** `HistoryFts` — FTS5-индекс над `(url, title, text)`. Открывается отдельной БД-файлом
@@ -988,6 +997,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/notes.rs:226` **fn** `search` — Полнотекстовый поиск по selection + comment
 `crates/knowledge/src/notes.rs:268` **fn** `count` — Общее число заметок
 `crates/knowledge/src/notes.rs:280` **fn** `clear` — Удалить все заметки. Триггеры notes_ad чистят FTS индекс
+`crates/knowledge/src/open_tabs.rs:36` **struct** `OpenTabHit` — Результат поиска по открытым вкладкам
+`crates/knowledge/src/open_tabs.rs:54` **struct** `OpenTabsIndex` — Живой in-memory FTS5-индекс над открытыми вкладками. Не персистится —
+`crates/knowledge/src/open_tabs.rs:67` **fn** `new` — Создать пустой in-memory индекс. По дизайну (§12.4) on-disk варианта
+`crates/knowledge/src/open_tabs.rs:88` **fn** `index_tab` — Добавить или обновить вкладку в индексе. `tab_id` — живой shell tab id;
+`crates/knowledge/src/open_tabs.rs:112` **fn** `remove_tab` — Убрать вкладку из индекса (при её закрытии). No-op, если вкладки нет
+`crates/knowledge/src/open_tabs.rs:129` **fn** `search` — Полнотекстовый поиск по `(url, title, text)` среди открытых вкладок,
+`crates/knowledge/src/open_tabs.rs:164` **fn** `count` — Текущее число проиндексированных открытых вкладок
+`crates/knowledge/src/open_tabs.rs:176` **fn** `clear` — Очистить весь индекс (например, при выходе или сбросе сессии)
 `crates/knowledge/src/read_later.rs:23` **enum** `ReadStatus` — Статус read-later записи
 `crates/knowledge/src/read_later.rs:53` **struct** `ReadLaterEntry` — Одна сохранённая страница
 `crates/knowledge/src/read_later.rs:69` **struct** `ReadLaterSearchHit`
@@ -2701,4 +2718,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2636 symbols in 20 crates*
+*Total: 2653 symbols in 20 crates*

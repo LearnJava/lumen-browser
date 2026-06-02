@@ -5,6 +5,7 @@
 //! только то, что нужно более чем одному модулю.
 
 pub mod capability;
+pub mod crash;
 pub mod error;
 pub mod event;
 pub mod ext;
@@ -22,6 +23,7 @@ pub mod url;
 pub mod web_storage;
 
 pub use capability::{Capability, CapabilityToken};
+pub use crash::{format_crash_dump, write_crash_dump, CrashRecorder};
 pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, RequestStage, SubresourceKind, TabId};
 pub use ext::{
