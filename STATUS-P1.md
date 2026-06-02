@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+p1-multifont-measurer: Multi-font TextMeasurer  branch: p1-multifont-measurer
+Next step: extend TextMeasurer trait + FontMeasurer impl  crates/engine/layout/src/lib.rs:100, crates/engine/paint/src/lib.rs:63
 
 ---
 
