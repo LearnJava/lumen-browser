@@ -1868,7 +1868,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
 `crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
-## lumen-shell  (478 symbols)
+## lumen-shell  (492 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2154,6 +2154,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/permission_panel.rs:207` **enum** `PermissionHit` — Result of a click inside the permission panel
 `crates/shell/src/panels/permission_panel.rs:220` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
 `crates/shell/src/panels/permission_panel.rs:262` **fn** `build_panel` — Build the display list for the permission floating panel
+`crates/shell/src/panels/pip_window.rs:60` **struct** `PipWindow` — Picture-in-picture window state
+`crates/shell/src/panels/pip_window.rs:83` **fn** `new` — Create an inactive PiP window positioned at the origin (re-anchored to the
+`crates/shell/src/panels/pip_window.rs:97` **fn** `open` — Open the PiP card for a `<video>` source, anchored to the bottom-right of
+`crates/shell/src/panels/pip_window.rs:115` **fn** `close` — Close the card (state is retained but no longer drawn)
+`crates/shell/src/panels/pip_window.rs:121` **fn** `toggle_play` — Flip the play / pause flag
+`crates/shell/src/panels/pip_window.rs:126` **fn** `default_pos` — Default bottom-right anchored top-left corner for a `win_w`×`win_h` window
+`crates/shell/src/panels/pip_window.rs:135` **fn** `clamp_to_window` — Clamp the card so it stays fully inside a `win_w`×`win_h` window, leaving
+`crates/shell/src/panels/pip_window.rs:143` **fn** `begin_drag` — Begin dragging the card: record the pointer offset from the card origin
+`crates/shell/src/panels/pip_window.rs:148` **fn** `dragging` — `true` while a title-bar drag is in progress
+`crates/shell/src/panels/pip_window.rs:154` **fn** `drag_to` — Update the card position from the pointer during a drag, clamped to the
+`crates/shell/src/panels/pip_window.rs:162` **fn** `end_drag` — End an in-progress drag
+`crates/shell/src/panels/pip_window.rs:177` **enum** `PipHit` — Result of a click inside the PiP card
+`crates/shell/src/panels/pip_window.rs:193` **fn** `hit_test` — Hit-test a click at window CSS-px `(x, y)` against the PiP card
+`crates/shell/src/panels/pip_window.rs:225` **fn** `build_panel` — Build the display list for the PiP overlay.  Empty when inactive
 `crates/shell/src/panels/privacy_panel.rs:79` **fn** `list_body_height` — Height in CSS px of the scrollable request-list area, given the full window
 `crates/shell/src/panels/privacy_panel.rs:88` **struct** `PrivacyPanel` — Privacy network panel (V5). Holds a snapshot of the shared [`NetworkLog`] and
 `crates/shell/src/panels/privacy_panel.rs:104` **fn** `new` — Create a new hidden panel backed by the given shared `log`
@@ -2755,4 +2769,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2690 symbols in 20 crates*
+*Total: 2704 symbols in 20 crates*
