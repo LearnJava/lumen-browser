@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+- **§16 roadmap audit (7A–7E)**  branch: `p1-roadmap-audit-s16`
+  Next step: флип stale ⬜→✅ в §16 (7A.1/7A.3/7A.4/7B.1/7B.3/7B.4/7C.2/7C.3/7C.4/7D.2/7D.3/7E.5), правка file-pointers, parent-маркеры — `lumen-plan.md:272`
 
 ---
 
