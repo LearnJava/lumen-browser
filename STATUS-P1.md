@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: meta-viewport  branch: p1-meta-viewport
+Next step: parse <meta name=viewport> in html-parser → Document; wire into layout media_context_from_viewport  layout/src/style.rs:13868
 
 ---
 
