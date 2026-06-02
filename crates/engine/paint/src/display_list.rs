@@ -8248,6 +8248,19 @@ mod tests {
         assert!(s.contains("scroll=(5.00,15.00)"), "scroll offsets must appear in serialization");
     }
 
+    #[test]
+    fn overflow_auto_emits_push_scroll_layer() {
+        // overflow:auto must produce PushScrollLayer just like overflow:scroll.
+        let dl = build(
+            r#"<div style="overflow:auto;width:100px;height:50px"><p>text</p></div>"#,
+            "",
+        );
+        let has_push = dl.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+        let has_pop  = dl.iter().any(|c| matches!(c, DisplayCommand::PopScrollLayer));
+        assert!(has_push, "overflow:auto must emit PushScrollLayer");
+        assert!(has_pop,  "overflow:auto must emit PopScrollLayer");
+    }
+
     // ── DrawScrollbar ─────────────────────────────────────────────────────────
 
     /// overflow:scroll with content taller than clip → vertical DrawScrollbar emitted.

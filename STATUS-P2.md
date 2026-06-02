@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**C4: `overflow: scroll` CSS wiring проверка**  branch: p2-overflow-scroll-wiring
+Next step: добавить 5 CSS unit-тестов в `layout/src/style.rs` + 1 в `paint/src/display_list.rs`  style.rs:22411
 
 ---
 
