@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Open-tabs full-text search (§12.4)  branch: p1-open-tabs-search
+Next step: реализован `OpenTabsIndex` в `crates/knowledge/src/open_tabs.rs` (live in-memory FTS5, ключ tab_id) — проверить clippy/тесты, обновить lumen-plan §16 + subsystems, handoff P3 для shell-wiring omnibox `@tabs`.
 
 ---
 

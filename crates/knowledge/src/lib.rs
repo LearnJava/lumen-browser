@@ -12,18 +12,19 @@
 //! здесь только FTS5-зеркало текстового содержимого для быстрого
 //! omnibox-поиска. Связь — через `rowid`, который равен `History.id`.
 //!
-//! Phase 1+ задачи: §12.2 аннотации/заметки (своя FTS5-таблица),
-//! §12.3 read-later (snapshot HTML + текст), §12.4 поиск по открытым
-//! вкладкам (live-индекс без disk-persistence). Все три предполагают
-//! отдельные модули в этом крейте, но контракт `KnowledgeStore` будет
-//! общим.
+//! Реализовано: §12.2 аннотации/заметки ([`notes`], своя FTS5-таблица),
+//! §12.3 read-later ([`read_later`], snapshot HTML + текст), §12.4 поиск
+//! по открытым вкладкам ([`open_tabs`], live-индекс без disk-persistence).
+//! Общий контракт `KnowledgeStore` (`lumen-core::ext`) — отдельная задача.
 
 pub mod fts;
 pub mod history;
 pub mod notes;
+pub mod open_tabs;
 pub mod read_later;
 
 pub use fts::{HistoryFts, SearchHit};
 pub use history::HistoryWithFts;
 pub use notes::{Note, NoteSearchHit, Notes};
+pub use open_tabs::{OpenTabHit, OpenTabsIndex};
 pub use read_later::{ReadLater, ReadLaterEntry, ReadLaterSearchHit, ReadStatus};
