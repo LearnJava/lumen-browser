@@ -5034,19 +5034,14 @@ impl Renderer {
                     }));
                     current_level -= 1;
                 }
-                // Scrollbar track (light) + thumb (dark): two fill quads drawn
-                // with the current clip/transform stack (parent's, NOT scroll layer's).
-                // CSS Scrollbars L1 §3 — `scrollbar-width` / `scrollbar-color` P4 wires.
-                DisplayCommand::DrawScrollbar { track_rect, thumb_rect, .. } => {
+                // Scrollbar track + thumb: two fill quads drawn with the current
+                // clip/transform stack (parent's, NOT scroll layer's).
+                // Colors from `scrollbar-color` (CSS Scrollbars L1 §3).
+                DisplayCommand::DrawScrollbar { track_rect, thumb_rect, track_color, thumb_color, .. } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    // Track: very light translucent background.
-                    const TRACK_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.08];
-                    // Thumb: semi-transparent dark pill.
-                    const THUMB_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.38];
-
-                    for (rect, color) in &[(*track_rect, TRACK_COLOR), (*thumb_rect, THUMB_COLOR)] {
+                    for (rect, color) in &[(*track_rect, *track_color), (*thumb_rect, *thumb_color)] {
                         let v_start = fill_vertices.len() as u32;
                         push_fill_quad(
                             &mut fill_vertices,

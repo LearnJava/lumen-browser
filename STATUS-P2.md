@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**C5: `scrollbar-width` / `scrollbar-color` CSS wiring**  branch: p2-scrollbar-width-color
+Next step: add `thumb_color`/`track_color`/`gutter_px` to `DrawScrollbar`, wire from `b.style` in emit, use in renderer  paint/src/display_list.rs:585
 
 ---
 
