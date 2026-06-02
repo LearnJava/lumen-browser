@@ -6,13 +6,14 @@
 
 ## In progress
 
-_(нет)_
+**Fullscreen API** (WHATWG Fullscreen Standard)  branch: p1-fullscreen-api
+Next step: JS shim + native bindings в `crates/js/src/dom.rs` + shell wiring
 
 ---
 
 ## Next
 
-_(нет — все задачи выполнены)_
+_(нет — после завершения текущей задачи)_
 
 ---
 
