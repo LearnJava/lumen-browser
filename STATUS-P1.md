@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+p1-eventsource: EventSource API (SSE wiring)  branch: p1-eventsource
+Next step: Add JsSseSession/JsSseProvider to lumen-core/src/ext.rs
 
 ---
 

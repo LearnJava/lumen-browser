@@ -28,9 +28,9 @@ use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, RequestStage, TabId};
 use lumen_core::ext::{
     ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
-    HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsWebSocketProvider,
-    JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink, RequestFilter, SseProvider,
-    SseSession, WebSocketProvider, WebSocketSession,
+    HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsSseEvent, JsSseProvider,
+    JsSseSession, JsWebSocketProvider, JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink,
+    RequestFilter, SseProvider, SseSession, WebSocketProvider, WebSocketSession,
 };
 use lumen_core::url::Url;
 
@@ -2394,6 +2394,96 @@ impl JsWebSocketProvider for HttpClient {
     }
 }
 
+// ── JsSseSession ──────────────────────────────────────────────────────────────
+
+/// Background-threaded SSE session for the JS runtime.
+///
+/// Spawns a receive thread that drains the blocking [`SseSession::next_event`]
+/// loop and pushes [`JsSseEvent`]s into a shared queue. JS calls `poll()` to
+/// drain the queue without blocking the script thread — mirroring
+/// [`JsWebSocketSessionImpl`].
+struct JsSseSessionImpl {
+    /// Buffered events produced by the background recv thread.
+    queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>>,
+    /// Set by `close()` to ask the background thread to stop reconnecting.
+    closed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl JsSseSessionImpl {
+    /// Create a new session, spawning a background thread that buffers events.
+    ///
+    /// The thread pushes [`JsSseEvent::Open`] first, then forwards every server
+    /// event until the stream ends ([`JsSseEvent::Close`]) or errors
+    /// ([`JsSseEvent::Error`]). The blocking [`SseSession::next_event`] cannot be
+    /// interrupted mid-call, so `close()` sets a flag the loop checks before each
+    /// read; an in-flight read finishes naturally when the server closes.
+    fn new(mut session: Box<dyn SseSession>) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+
+        let q2 = Arc::clone(&queue);
+        let c2 = Arc::clone(&closed);
+
+        std::thread::spawn(move || {
+            q2.lock().unwrap().push_back(JsSseEvent::Open);
+            loop {
+                if c2.load(Ordering::Relaxed) {
+                    session.close();
+                    break;
+                }
+                match session.next_event() {
+                    Ok(Some(ev)) => {
+                        q2.lock().unwrap().push_back(JsSseEvent::Message {
+                            event_type: ev.event_type,
+                            data: ev.data,
+                            id: ev.id,
+                        });
+                    }
+                    Ok(None) => {
+                        q2.lock().unwrap().push_back(JsSseEvent::Close);
+                        break;
+                    }
+                    Err(e) => {
+                        q2.lock().unwrap().push_back(JsSseEvent::Error(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self { queue, closed }
+    }
+}
+
+impl JsSseSession for JsSseSessionImpl {
+    fn poll(&self) -> Option<JsSseEvent> {
+        self.queue.lock().unwrap().pop_front()
+    }
+
+    fn close(&mut self) {
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl JsSseProvider for HttpClient {
+    fn connect_sse(&self, url: &str) -> Result<Box<dyn JsSseSession>> {
+        let parsed = Url::parse(url)
+            .map_err(|e| Error::Network(format!("sse: invalid URL: {e}")))?;
+        // Reuse the synchronous SseProvider path; the EventSource handshake runs
+        // here, then the background thread takes over event delivery.
+        let session = <Self as SseProvider>::connect_sse(
+            self,
+            &parsed,
+            lumen_core::event::TabId(0),
+            Arc::new(NoopEventSink),
+        )?;
+        Ok(Box::new(JsSseSessionImpl::new(session)))
+    }
+}
+
 // ── Service Worker in-memory interceptor (для тестов) ────────────────────────
 
 /// In-memory реализация `FetchInterceptor` для тестов без SQLite.
@@ -2444,6 +2534,60 @@ impl FetchInterceptor for InMemoryFetchInterceptor {
 mod tests {
     use super::*;
     use lumen_core::ext::{HttpAuthChallenge, HttpCredentials};
+
+    // ── JsSseSessionImpl (HTML Living Standard §9.2) ─────────────────────────
+
+    /// Mock `SseSession` yielding a fixed event sequence, then `Ok(None)` (close).
+    struct MockSseSession {
+        events: std::collections::VecDeque<lumen_core::ext::SseEvent>,
+    }
+    impl SseSession for MockSseSession {
+        fn next_event(&mut self) -> Result<Option<lumen_core::ext::SseEvent>> {
+            Ok(self.events.pop_front())
+        }
+        fn close(&mut self) {}
+    }
+
+    /// Drain the JS-side queue until `want` events are collected or a deadline hits.
+    fn drain_js_sse(sess: &JsSseSessionImpl, want: usize) -> Vec<JsSseEvent> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut out = Vec::new();
+        while out.len() < want && std::time::Instant::now() < deadline {
+            if let Some(ev) = sess.poll() {
+                out.push(ev);
+            } else {
+                std::thread::yield_now();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn js_sse_session_poll_delivers_open_message_close() {
+        use lumen_core::ext::SseEvent;
+        let mut events = std::collections::VecDeque::new();
+        events.push_back(SseEvent {
+            event_type: "message".into(),
+            data: "hi".into(),
+            id: Some("7".into()),
+            retry_ms: None,
+        });
+        let session: Box<dyn SseSession> = Box::new(MockSseSession { events });
+        let impl_ = JsSseSessionImpl::new(session);
+        // Expect: Open, Message{hi,7}, Close.
+        let evs = drain_js_sse(&impl_, 3);
+        assert_eq!(evs.len(), 3, "got {evs:?}");
+        assert_eq!(evs[0], JsSseEvent::Open);
+        assert_eq!(
+            evs[1],
+            JsSseEvent::Message {
+                event_type: "message".into(),
+                data: "hi".into(),
+                id: Some("7".into()),
+            }
+        );
+        assert_eq!(evs[2], JsSseEvent::Close);
+    }
 
     // ── ALPN (5A.1) ──────────────────────────────────────────────────────────
 

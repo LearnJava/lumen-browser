@@ -77,17 +77,19 @@ pub(crate) fn restore_js_context(
     let ls_store = crate::ls_store_for_base(&base, ls_storage);
     let idb = crate::idb_store_for_base(&base, idb_backend);
     let sw = crate::sw_store_for_base(&base, sw_backend);
-    let (fetch_provider, ws_provider) = match &base {
+    let (fetch_provider, ws_provider, sse_provider) = match &base {
         ResourceBase::Url(_) => {
             let client = base.http_client_for_subresource(event_sink);
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
             let wp: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> =
-                Some(arc_client as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
-            (fp, wp)
+                Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
+            let sp: Option<Arc<dyn lumen_core::ext::JsSseProvider>> =
+                Some(arc_client as Arc<dyn lumen_core::ext::JsSseProvider>);
+            (fp, wp, sp)
         }
-        ResourceBase::File(_) => (None, None),
+        ResourceBase::File(_) => (None, None, None),
     };
 
     let (doc_arc, _nav, js_ctx) = crate::run_scripts_with_dom(
@@ -96,6 +98,7 @@ pub(crate) fn restore_js_context(
         url,
         fetch_provider,
         ws_provider,
+        sse_provider,
         ls_store,
         idb,
         sw,
