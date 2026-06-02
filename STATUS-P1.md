@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: History / Navigation API runtime completeness (#32)  branch: p1-history-nav-api
-Next step: add HistoryUrlUpdate enum + bindings in dom.rs  crates/js/src/dom.rs:773
+_(нет)_
 
 ---
 
@@ -25,6 +24,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p1-history-nav-api** ✅ 2026-06-02 — History/Navigation API runtime completeness (задача #32). `history.pushState`/`replaceState` теперь обновляют URL-бар shell без перезагрузки страницы; Alt+Left/Right на same-document (pushState) записях фаерят `popstate` + обновляют location вместо полного reload; `history.state` round-trip и `history.length` работали. Новый `pub enum HistoryUrlUpdate { Push { url, new_state_json }, Replace { ... } }` в lumen-js. Биндинги `_lumen_history_push_url`/`_lumen_history_replace_url` + `_lumen_deliver_popstate` JS helper в WEB_API_SHIM. Shell: `NavEntry` + `same_doc_state_json: Option<String>` + `display_url: Option<String>`; `Lumen`/`PageSnapshot` + `display_url` + `current_history_state_json`; `PersistentJs` trait: `take_history_url_updates` + `fire_popstate`; дренирование в `about_to_wait`; переработаны `navigate_back`/`navigate_forward` под same-doc путь. Вспомогательный метод `current_display_url()` — адресная строка и bookmarks. 7 новых тестов. lumen-js: 837 тестов (было 830). lumen-shell: 879 тестов. Clippy чист. Без новых зависимостей.
 
 - **p1-web-animations** ✅ 2026-06-02 — Web Animations API JS runtime (задача #31). `element.animate(keyframes, options) → Animation`, `KeyframeEffect`, `Animation.play/pause/cancel/finish/reverse`, `getAnimations()`, `document.timeline`. Чистый JS-шим в WEB_API_SHIM без новых нативных биндингов. Интерполяция: opacity (scalar), transform (matched-pair функций с regex), color-свойства (RGBA lerp), scalar+unit (px/em/%/deg); easing linear/ease*/cubic-bezier/step-*. Animations применяют стили через `element.style[prop]` → DOM dirty → relayout/repaint. `_wa_current_time` обновляется в начале каждого `_lumen_run_raf_callbacks`. 19 unit-тестов. lumen-js: 831 lib (было 812). Clippy чист. Без новых зависимостей. Compositor offload (P2) и CSS animation-timeline (P4) — отдельные задачи.
 
