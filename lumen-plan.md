@@ -405,10 +405,10 @@
 | 10I.1 | ⬜ Schema: `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll, form_state, ts)` | `storage/migrations/0NN_tab_snapshots.sql` | — |
 | 10I.2 | ⬜ Async-save при T1→T2 (без блокирования UI) | `shell/src/tab_lifecycle/persist.rs` | — |
 | 10I.3 | ⬜ Async-load при T2→T0 (с indeterminate UI hint если > 100 ms) | `shell/src/tab_lifecycle/restore.rs` | — |
-| 10J | ⬜ **`[P3]` T3 hibernation: full DOM serialization** (Phase 2) | DOM в SQLite, в RAM только TabMetadata | `storage/src/tab_snapshot.rs` |
+| 10J | 🟡 **`[P1]` T3 hibernation: full DOM serialization** (Phase 2) | DOM в SQLite, в RAM только TabMetadata; bincode (zstd 10J.1 ещё ⬜) | `storage/src/tab_snapshot.rs` |
 | 10J.1 | ⬜ DOM arena → bincode → zstd → SQLite blob | `dom/src/serialize.rs` + `storage/src/tab_snapshot.rs` | uses 10B.2 |
-| 10J.2 | ⬜ `TabMetadata { url, title, scroll, favicon }` остаётся в RAM | `shell/src/tab_metadata.rs` | <200 KB target |
-| 10J.3 | ⬜ Restore: deserialize → re-run scripts → full layout+paint (target ≤ 1500 ms) | `shell/src/tab_lifecycle/restore.rs` | — |
+| 10J.2 | ✅ `TabMetadata { url, title, scroll, favicon }` остаётся в RAM | `shell/src/tab_lifecycle/restore.rs` (`TabMetadata`), scroll в SQLite | p1-session-persist |
+| 10J.3 | ✅ Restore: deserialize → re-run scripts → full layout+paint + new `PersistentJs` | `shell/src/tab_lifecycle/hibernate.rs` (`restore_js_context`) + `restore_hibernated_tab` | p1-tab-auto-archive |
 | 10K | ⬜ **`[P3]` UI affordance: индикация tier'а в tab strip** (Phase 2) | Пользователь видит, что вкладка спит | `shell/src/tabs/strip_ui.rs` |
 | 10K.1 | ⬜ Иконка "Z" / fade-opacity на T2/T3 tabs | `shell/src/tabs/strip_ui.rs` | — |
 | 10K.2 | ⬜ Tooltip "Вкладка спит — клик восстановит за ~1 сек" с показом tier'а | `shell/src/tabs/tooltip.rs` | — |
