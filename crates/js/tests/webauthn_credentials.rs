@@ -59,7 +59,7 @@ impl CredentialProvider for CannedAuthenticator {
 fn make_rt() -> QuickJsRuntime {
     let rt = QuickJsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
-    rt.install_dom(doc, "https://example.com/login", None, None, None, None, None)
+    rt.install_dom(doc, "https://example.com/login", None, None, None, None, None, None)
         .unwrap();
     rt
 }

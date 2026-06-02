@@ -1023,6 +1023,13 @@ pub(crate) trait PersistentJs {
     /// which drains `_lumen_ws_poll()` for every open handle.
     #[allow(dead_code)]
     fn pump_websockets(&self);
+    /// Poll all live `EventSource` instances and deliver queued SSE events to JS.
+    ///
+    /// Must be called on every event-loop step so that `onopen`/`onmessage`/
+    /// `onerror` handlers fire promptly. Calls `_lumen_pump_sse()` which drains
+    /// `_lumen_sse_poll()` for every open handle (HTML Living Standard §9.2).
+    #[allow(dead_code)]
+    fn pump_sse(&self);
     /// Deliver messages posted by Web Worker threads to their `Worker` JS instances.
     ///
     /// Must be called on every event-loop tick alongside `tick_timers()` so that
@@ -1189,6 +1196,9 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn pump_websockets(&self) {
         self.eval_js("if(typeof _lumen_pump_websockets==='function')_lumen_pump_websockets();");
+    }
+    fn pump_sse(&self) {
+        self.eval_js("if(typeof _lumen_pump_sse==='function')_lumen_pump_sse();");
     }
     fn pump_workers(&self) {
         self.rt.pump_workers();
@@ -2203,18 +2213,21 @@ fn parse_and_layout(
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
     // QuickJS + install_dom дают скриптам полный доступ к DOM-дереву.
-    // fetch_provider пробрасывается в window.fetch(); ws_provider — в new WebSocket().
-    let (fetch_provider, ws_provider) = match base {
+    // fetch_provider пробрасывается в window.fetch(); ws_provider — в new WebSocket();
+    // sse_provider — в new EventSource(). Все три используют один HttpClient.
+    let (fetch_provider, ws_provider, sse_provider) = match base {
         ResourceBase::Url(_) => {
             let client = base.http_client_for_subresource(Arc::clone(sink));
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
             let wp: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> =
-                Some(arc_client as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
-            (fp, wp)
+                Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
+            let sp: Option<Arc<dyn lumen_core::ext::JsSseProvider>> =
+                Some(arc_client as Arc<dyn lumen_core::ext::JsSseProvider>);
+            (fp, wp, sp)
         }
-        ResourceBase::File(_) => (None, None),
+        ResourceBase::File(_) => (None, None, None),
     };
     // URL страницы для инициализации window.location в JS.
     let page_url = match base {
@@ -2227,6 +2240,7 @@ fn parse_and_layout(
         &page_url,
         fetch_provider,
         ws_provider,
+        sse_provider,
         ls_store,
         idb_backend,
         sw_backend,
@@ -2837,6 +2851,7 @@ fn apply_iframe_sandbox_gates(doc: &Document) {
 /// `page_url` пробрасывается в `window.location` (инициализация).
 /// `fetch_provider` пробрасывается в `window.fetch()`.
 /// `ws_provider` пробрасывается в `new WebSocket(url)`.
+/// `sse_provider` пробрасывается в `new EventSource(url)`.
 /// `ls_store` — localStorage partition для текущего origin (persists across reloads).
 /// `None` = no network (sandboxed context или отключён quickjs feature).
 #[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
@@ -2847,6 +2862,7 @@ fn run_scripts_with_dom(
     page_url: &str,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
@@ -2878,7 +2894,7 @@ fn run_scripts_with_dom(
                 if deterministic {
                     rt.set_deterministic_mode();
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store, idb_backend, sw_backend) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 for src in &scripts {
@@ -2914,6 +2930,7 @@ fn run_scripts_with_dom(
         let _ = page_url;
         let _ = fetch_provider;
         let _ = ws_provider;
+        let _ = sse_provider;
         use lumen_core::ext::JsRuntime as _;
         for src in &scripts {
             match lumen_core::NullJsRuntime.eval(src) {
@@ -4199,6 +4216,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(js) = &self.js_ctx {
             js.tick_timers();
             js.pump_websockets();
+            js.pump_sse();
             js.pump_workers();
             js.pump_broadcast_channels();
             js.pump_shared_workers();

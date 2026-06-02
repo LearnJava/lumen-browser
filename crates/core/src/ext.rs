@@ -1354,6 +1354,56 @@ pub trait SseProvider: Send + Sync {
     ) -> Result<Box<dyn SseSession>>;
 }
 
+/// A single queued event from an SSE connection, ready for delivery to JS.
+///
+/// Produced by the background recv thread (which drains the blocking
+/// [`SseSession::next_event`]); consumed non-blocking by [`JsSseSession::poll`].
+/// Mirrors the WebSocket [`JsWsEvent`] design so the JS runtime can poll SSE
+/// without blocking the script execution thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsSseEvent {
+    /// Connection established (HTTP 200, `Content-Type: text/event-stream`).
+    Open,
+    /// A complete SSE event dispatched by the server.
+    Message {
+        /// Event name — `"message"` by default, overridden by the `event:` field.
+        event_type: String,
+        /// Event payload (joined `data:` lines, trailing `\n` stripped).
+        data: String,
+        /// Last event ID from the `id:` field, if the server set one.
+        id: Option<String>,
+    },
+    /// Connection closed (server closed the stream or reconnect exhausted).
+    Close,
+    /// Network or protocol error; the connection will not recover.
+    Error(String),
+}
+
+/// A live SSE connection from the JS runtime's perspective.
+///
+/// The implementation runs the blocking [`SseSession::next_event`] loop on a
+/// background thread and buffers events in a queue. JS calls [`poll`](Self::poll)
+/// to drain that queue without blocking script execution — mirroring the
+/// WebSocket [`JsWebSocketSession`] design.
+pub trait JsSseSession: Send {
+    /// Non-blocking: return the next queued event, or `None` if the queue is empty.
+    fn poll(&self) -> Option<JsSseEvent>;
+    /// Request the background thread to stop and close the connection.
+    fn close(&mut self);
+}
+
+/// Factory that opens SSE connections for the JS runtime.
+///
+/// Implemented by `lumen-network::HttpClient`; `lumen-js` references only this
+/// trait from `lumen-core`, keeping the crate dependency graph acyclic.
+pub trait JsSseProvider: Send + Sync {
+    /// Open an `http://` or `https://` SSE connection to `url`.
+    ///
+    /// The HTTP request runs on a background thread; the returned session begins
+    /// buffering [`JsSseEvent::Open`] followed by server events immediately.
+    fn connect_sse(&self, url: &str) -> Result<Box<dyn JsSseSession>>;
+}
+
 // ============================================================================
 // Service Worker fetch interception (HTML Living Standard §10.2.2).
 // ============================================================================

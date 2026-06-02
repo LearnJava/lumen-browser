@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
+use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
 use lumen_core::url::Url;
 use lumen_dom::{
     Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
@@ -166,6 +166,7 @@ pub struct PopupRequest {
 ///              it after all scripts have run.
 /// `fetch_provider` wires `window.fetch()` to the real HTTP stack.
 /// `ws_provider` wires `new WebSocket(url)` to the real WS stack.
+/// `sse_provider` wires `new EventSource(url)` to the real SSE stack.
 /// `ls_store` — shared localStorage partition for this origin; persists across
 ///              page reloads.  Pass a fresh `Arc<Mutex<WebStorage>>` per origin.
 /// `ss_store` — fresh sessionStorage for this page load; created by the caller.
@@ -188,6 +189,7 @@ pub fn install_dom_api(
     nav_out: Arc<Mutex<Option<NavigateRequest>>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
+    sse_provider: Option<Arc<dyn JsSseProvider>>,
     ls_store: Arc<Mutex<WebStorage>>,
     ss_store: Arc<Mutex<WebStorage>>,
     timer_wakeup: Arc<Mutex<Option<f64>>>,
@@ -207,7 +209,7 @@ pub fn install_dom_api(
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -252,6 +254,7 @@ fn install_primitives(
     nav_out: Arc<Mutex<Option<NavigateRequest>>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
+    sse_provider: Option<Arc<dyn JsSseProvider>>,
     ls_store: Arc<Mutex<WebStorage>>,
     ss_store: Arc<Mutex<WebStorage>>,
     timer_wakeup: Arc<Mutex<Option<f64>>>,
@@ -1154,6 +1157,100 @@ fn install_primitives(
                 })
             }
         );
+    }
+
+    // ── Server-Sent Events API (HTML Living Standard §9.2) ───────────────────
+    // Phase 0 model: background recv thread buffers events, JS polls.
+    // _lumen_sse_connect(url) → handle u32 (0 = error / no provider)
+    // _lumen_sse_poll(handle) → Option<String> (JSON event or null)
+    // _lumen_sse_close(handle)
+    {
+        use std::collections::HashMap;
+
+        /// JSON-escape a string into a quoted JSON string literal (`"..."`).
+        ///
+        /// Handles the characters that must be escaped per RFC 8259 §7:
+        /// `"`, `\`, and the C0 control set (`\n`/`\r`/`\t`/`\b`/`\f` plus `\u00XX`).
+        fn json_str(s: &str) -> String {
+            let mut out = String::with_capacity(s.len() + 2);
+            out.push('"');
+            for c in s.chars() {
+                match c {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    '\u{08}' => out.push_str("\\b"),
+                    '\u{0c}' => out.push_str("\\f"),
+                    c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
+
+        // Registry: handle → Box<dyn JsSseSession>
+        let registry: Arc<Mutex<HashMap<u32, Box<dyn lumen_core::ext::JsSseSession>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
+
+        let (reg_c, nid_c, sp) = (Arc::clone(&registry), Arc::clone(&next_id), sse_provider);
+        reg!("_lumen_sse_connect", move |url: String| -> u32 {
+            let Some(ref provider) = sp else { return 0 };
+            match provider.connect_sse(&url) {
+                Ok(session) => {
+                    let id = {
+                        let mut n = nid_c.lock().unwrap();
+                        let id = *n;
+                        *n = n.wrapping_add(1).max(1);
+                        id
+                    };
+                    reg_c.lock().unwrap().insert(id, session);
+                    id
+                }
+                Err(e) => {
+                    eprintln!("[JS SSE] connect error: {e}");
+                    0
+                }
+            }
+        });
+
+        let reg_c = Arc::clone(&registry);
+        reg!("_lumen_sse_poll", move |handle: u32| -> Option<String> {
+            let map = reg_c.lock().unwrap();
+            let sess = map.get(&handle)?;
+            sess.poll().map(|ev| match ev {
+                JsSseEvent::Open => r#"{"t":"open"}"#.to_string(),
+                JsSseEvent::Message {
+                    event_type,
+                    data,
+                    id,
+                } => {
+                    let id_json = id
+                        .as_deref()
+                        .map_or_else(|| "null".to_string(), json_str);
+                    format!(
+                        r#"{{"t":"message","event":{},"data":{},"id":{}}}"#,
+                        json_str(&event_type),
+                        json_str(&data),
+                        id_json
+                    )
+                }
+                JsSseEvent::Close => r#"{"t":"close"}"#.to_string(),
+                JsSseEvent::Error(e) => {
+                    format!(r#"{{"t":"error","message":{}}}"#, json_str(&e))
+                }
+            })
+        });
+
+        let reg_c = Arc::clone(&registry);
+        reg!("_lumen_sse_close", move |handle: u32| {
+            if let Some(mut sess) = reg_c.lock().unwrap().remove(&handle) {
+                sess.close();
+            }
+        });
     }
 
     // ── localStorage ─────────────────────────────────────────────────────────
@@ -4104,15 +4201,112 @@ var history = {
     },
 };
 
-function EventSource(url) {
+// ── Server-Sent Events API (HTML Living Standard §9.2) ─────────────────────
+// Phase 0 model: synchronous connect; background recv thread queues events;
+// JS polls via _lumen_pump_sse(). Mirrors the WebSocket polling model.
+
+var _sse_instances = [];
+
+function _lumen_sse_fire(es, type, ev) {
+    ev.target = es;
+    if (type === 'message' && typeof es.onmessage === 'function') {
+        try { es.onmessage(ev); } catch(e) {}
+    } else if (type === 'open' && typeof es.onopen === 'function') {
+        try { es.onopen(ev); } catch(e) {}
+    } else if (type === 'error' && typeof es.onerror === 'function') {
+        try { es.onerror(ev); } catch(e) {}
+    }
+    var arr = es._listeners[type];
+    if (arr) { for (var i = 0; i < arr.length; i++) { try { arr[i](ev); } catch(e) {} } }
+}
+
+function _lumen_sse_pump_one(es) {
+    if (!es._handle) return;
+    var raw;
+    while ((raw = _lumen_sse_poll(es._handle)) !== null && raw !== undefined) {
+        try {
+            var ev = JSON.parse(raw);
+            if (ev.t === 'open') {
+                if (es.readyState === 2) { continue; }
+                es.readyState = 1;
+                _lumen_sse_fire(es, 'open', new Event('open', { isTrusted: true }));
+            } else if (ev.t === 'message') {
+                if (es.readyState === 2) { continue; }
+                var type = ev.event || 'message';
+                var me = new MessageEvent(ev.data != null ? ev.data : '', { isTrusted: true });
+                me.type = type;
+                me.lastEventId = ev.id != null ? ev.id : '';
+                me.origin = es._origin;
+                if (me.lastEventId) { es._lastEventId = me.lastEventId; }
+                _lumen_sse_fire(es, type, me);
+            } else if (ev.t === 'close') {
+                es.readyState = 2;
+                _lumen_sse_close(es._handle);
+                es._handle = 0;
+                break;
+            } else if (ev.t === 'error') {
+                // Per spec a failed connection fires `error` and stays/transitions
+                // to CLOSED when no reconnection is attempted (Phase 0: no retry).
+                es.readyState = 2;
+                var err = new Event('error', { isTrusted: true });
+                err.message = ev.message;
+                _lumen_sse_fire(es, 'error', err);
+                es._handle = 0;
+                break;
+            }
+        } catch(ignore) {}
+    }
+}
+
+function _lumen_pump_sse() {
+    for (var i = _sse_instances.length - 1; i >= 0; i--) {
+        _lumen_sse_pump_one(_sse_instances[i]);
+        if (_sse_instances[i].readyState === 2 && !_sse_instances[i]._handle) {
+            _sse_instances.splice(i, 1);
+        }
+    }
+}
+
+function EventSource(url, opts) {
     this.url = String(url || '');
-    this.readyState = 0;
+    this.readyState = 0; // CONNECTING
+    this.withCredentials = !!(opts && opts.withCredentials);
     this.onopen = null;
     this.onmessage = null;
     this.onerror = null;
     this._listeners = {};
+    this._handle = 0;
+    this._lastEventId = '';
+    // Origin best-effort: scheme+host of the target URL (for MessageEvent.origin).
+    this._origin = '';
+    var _sep = this.url.indexOf('://');
+    if (_sep >= 0) {
+        var _rest = this.url.slice(_sep + 3);
+        var _end = _rest.length;
+        var _slash = _rest.indexOf('/'); if (_slash >= 0 && _slash < _end) _end = _slash;
+        var _q = _rest.indexOf('?'); if (_q >= 0 && _q < _end) _end = _q;
+        var _hash = _rest.indexOf('#'); if (_hash >= 0 && _hash < _end) _end = _hash;
+        this._origin = this.url.slice(0, _sep + 3) + _rest.slice(0, _end);
+    }
+    var self = this;
+    var h = _lumen_sse_connect(this.url);
+    if (!h) {
+        // No provider, or the connection could not be established: fail per spec.
+        this.readyState = 2; // CLOSED
+        setTimeout(function() {
+            var e = new Event('error', { isTrusted: true });
+            e.message = 'EventSource connection failed';
+            _lumen_sse_fire(self, 'error', e);
+        }, 0);
+        return;
+    }
+    this._handle = h;
+    _sse_instances.push(this);
+    // Phase 0: no persistent event loop — caller must invoke _lumen_pump_sse()
+    // after setting onopen/onmessage to receive queued events.
 }
 EventSource.prototype.addEventListener = function(type, fn) {
+    if (typeof fn !== 'function') return;
     if (!this._listeners[type]) this._listeners[type] = [];
     this._listeners[type].push(fn);
 };
@@ -4121,7 +4315,13 @@ EventSource.prototype.removeEventListener = function(type, fn) {
     var idx = this._listeners[type].indexOf(fn);
     if (idx >= 0) this._listeners[type].splice(idx, 1);
 };
-EventSource.prototype.close = function() { this.readyState = 2; };
+EventSource.prototype.close = function() {
+    if (this._handle) {
+        _lumen_sse_close(this._handle);
+        this._handle = 0;
+    }
+    this.readyState = 2; // CLOSED
+};
 EventSource.CONNECTING = 0;
 EventSource.OPEN = 1;
 EventSource.CLOSED = 2;
@@ -5506,6 +5706,7 @@ var window = {
     CloseEvent: CloseEvent,
     MessageEvent: MessageEvent,
     _lumen_pump_websockets: _lumen_pump_websockets,
+    _lumen_pump_sse: _lumen_pump_sse,
     caches: caches,
     document: document,
     console: console,
@@ -8104,7 +8305,7 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(doc, "", None, None, None, None, None).unwrap();
+        rt.install_dom(doc, "", None, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -9586,7 +9787,7 @@ mod tests {
     fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
         rt
     }
 
@@ -9651,7 +9852,7 @@ mod tests {
     fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
         rt
     }
 
@@ -9702,6 +9903,239 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("_lumen_ws_connect('ws://test')").unwrap();
         assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    // ── EventSource / Server-Sent Events (HTML Living Standard §9.2) ──────────
+
+    /// Mock SSE session feeding a preset event sequence via `poll()`.
+    struct MockSseSession {
+        queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsSseEvent>>,
+    }
+    impl lumen_core::ext::JsSseSession for MockSseSession {
+        fn poll(&self) -> Option<lumen_core::ext::JsSseEvent> {
+            self.queue.lock().unwrap().pop_front()
+        }
+        fn close(&mut self) {}
+    }
+
+    /// Mock SSE provider that queues a fixed event sequence on connect.
+    struct MockSseProvider {
+        events: Vec<lumen_core::ext::JsSseEvent>,
+    }
+    impl lumen_core::ext::JsSseProvider for MockSseProvider {
+        fn connect_sse(
+            &self,
+            _url: &str,
+        ) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsSseSession>> {
+            let q: std::collections::VecDeque<_> = self.events.iter().cloned().collect();
+            Ok(Box::new(MockSseSession {
+                queue: std::sync::Mutex::new(q),
+            }))
+        }
+    }
+
+    fn runtime_with_mock_sse(
+        doc: Arc<Mutex<Document>>,
+        events: Vec<lumen_core::ext::JsSseEvent>,
+    ) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let provider: Arc<dyn lumen_core::ext::JsSseProvider> =
+            Arc::new(MockSseProvider { events });
+        rt.install_dom(doc, "", None, None, Some(provider), None, None, None)
+            .unwrap();
+        rt
+    }
+
+    #[test]
+    fn eventsource_constructor_no_provider_sets_closed() {
+        // Without an sse_provider, _lumen_sse_connect returns 0 → readyState CLOSED.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("var es = new EventSource('https://x/sse'); es.readyState")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn eventsource_no_provider_connect_returns_zero() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_lumen_sse_connect('https://x/sse')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn eventsource_opens_on_sse_connect() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open]);
+        let r = rt
+            .eval(
+                "var opened = false;
+                 var es = new EventSource('https://x/sse');
+                 es.onopen = function() { opened = true; };
+                 _lumen_pump_sse();
+                 [es.readyState, opened]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                // readyState OPEN (1) and onopen fired.
+                assert_eq!(arr[0], lumen_core::JsValue::Number(1.0));
+                assert_eq!(arr[1], lumen_core::JsValue::Bool(true));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_delivers_message() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![
+                JsSseEvent::Open,
+                JsSseEvent::Message {
+                    event_type: "message".into(),
+                    data: "hello world".into(),
+                    id: Some("42".into()),
+                },
+            ],
+        );
+        let r = rt
+            .eval(
+                "var data = null; var lid = null;
+                 var es = new EventSource('https://x/sse');
+                 es.onmessage = function(e) { data = e.data; lid = e.lastEventId; };
+                 _lumen_pump_sse();
+                 [data, lid]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::String("hello world".into()));
+                assert_eq!(arr[1], lumen_core::JsValue::String("42".into()));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_delivers_typed_event() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![
+                JsSseEvent::Open,
+                JsSseEvent::Message {
+                    event_type: "ping".into(),
+                    data: "p".into(),
+                    id: None,
+                },
+            ],
+        );
+        // A named event must reach addEventListener('ping', ...), not onmessage.
+        let r = rt
+            .eval(
+                "var got = null; var onmsg = false;
+                 var es = new EventSource('https://x/sse');
+                 es.onmessage = function() { onmsg = true; };
+                 es.addEventListener('ping', function(e) { got = e.data; });
+                 _lumen_pump_sse();
+                 [got, onmsg]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::String("p".into()));
+                assert_eq!(arr[1], lumen_core::JsValue::Bool(false));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_close_sets_closed() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open]);
+        let r = rt
+            .eval(
+                "var es = new EventSource('https://x/sse');
+                 _lumen_pump_sse();
+                 es.close();
+                 es.readyState",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn eventsource_error_on_server_close() {
+        use lumen_core::ext::JsSseEvent;
+        // A Close event from the stream transitions to CLOSED (no reconnect, Phase 0).
+        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
+        let r = rt
+            .eval(
+                "var es = new EventSource('https://x/sse');
+                 _lumen_pump_sse();
+                 es.readyState",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn eventsource_error_event_fires_onerror() {
+        use lumen_core::ext::JsSseEvent;
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![JsSseEvent::Open, JsSseEvent::Error("boom".into())],
+        );
+        let r = rt
+            .eval(
+                "var errored = false; var msg = null;
+                 var es = new EventSource('https://x/sse');
+                 es.onerror = function(e) { errored = true; msg = e.message; };
+                 _lumen_pump_sse();
+                 [errored, msg, es.readyState]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::Bool(true));
+                assert_eq!(arr[1], lumen_core::JsValue::String("boom".into()));
+                assert_eq!(arr[2], lumen_core::JsValue::Number(2.0));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_poll_json_escapes_message() {
+        use lumen_core::ext::JsSseEvent;
+        // Data containing quotes/newlines must round-trip through JSON intact.
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![
+                JsSseEvent::Open,
+                JsSseEvent::Message {
+                    event_type: "message".into(),
+                    data: "line1\nline2 \"quoted\"".into(),
+                    id: None,
+                },
+            ],
+        );
+        let r = rt
+            .eval(
+                "var data = null;
+                 var es = new EventSource('https://x/sse');
+                 es.onmessage = function(e) { data = e.data; };
+                 _lumen_pump_sse();
+                 data",
+            )
+            .unwrap();
+        assert_eq!(
+            r,
+            lumen_core::JsValue::String("line1\nline2 \"quoted\"".into())
+        );
     }
 
     #[test]
@@ -9775,7 +10209,7 @@ mod tests {
     fn runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
         rt
     }
 
@@ -9832,7 +10266,7 @@ mod tests {
 
     fn runtime_with_url(url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), url, None, None, None, None, None).unwrap();
+        rt.install_dom(make_doc(), url, None, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -10013,7 +10447,7 @@ mod tests {
 
     fn runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, ls, None, None).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, ls, None, None).unwrap();
         rt
     }
 
@@ -11984,7 +12418,7 @@ mod tests {
 
     fn runtime_with_idb(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, Some(backend), None)
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, Some(backend), None)
             .unwrap();
         rt
     }
@@ -12305,7 +12739,7 @@ mod tests {
     fn runtime_with_fetch(provider: Arc<CaptureFetch>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None).unwrap();
         rt
     }
 
@@ -15056,7 +15490,7 @@ mod tests {
     fn runtime_deterministic(doc: Arc<Mutex<Document>>, url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         rt.set_deterministic_mode();
-        rt.install_dom(doc, url, None, None, None, None, None).unwrap();
+        rt.install_dom(doc, url, None, None, None, None, None, None).unwrap();
         rt
     }
 

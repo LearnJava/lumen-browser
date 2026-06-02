@@ -209,6 +209,7 @@ impl QuickJsRuntime {
     /// `page_url` initialises `window.location` with the current page URL.
     /// `fetch_provider` is forwarded to `window.fetch()`.
     /// `ws_provider` is forwarded to `new WebSocket(url)`.
+    /// `sse_provider` is forwarded to `new EventSource(url)`.
     /// `ls_store` — shared localStorage for this origin; persists across reloads.
     ///   Pass a fresh `Arc::new(Mutex::new(WebStorage::default()))` per origin.
     ///   A fresh `sessionStorage` is created automatically inside.
@@ -227,6 +228,7 @@ impl QuickJsRuntime {
         page_url: &str,
         fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
         ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+        sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
         ls_store: Option<Arc<Mutex<WebStorage>>>,
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
@@ -265,6 +267,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.nav_out),
                 fetch_provider,
                 ws_provider,
+                sse_provider,
                 ls,
                 ss,
                 Arc::clone(&self.timer_wakeup),
