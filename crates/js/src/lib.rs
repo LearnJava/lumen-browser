@@ -4,6 +4,7 @@ pub mod battery_bindings;
 pub mod broadcast_channel;
 pub mod clipboard;
 pub mod cookie_banner;
+pub mod credentials;
 pub mod dom;
 pub mod geolocation;
 pub mod navigator_bindings;
@@ -26,6 +27,7 @@ use std::sync::{
 };
 
 pub use clipboard::set_clipboard_provider;
+pub use credentials::set_credential_provider;
 pub use dom::NavigateRequest;
 pub use lumen_core::WebStorage;
 
@@ -340,6 +342,13 @@ impl QuickJsRuntime {
                 &self.broadcast_channels,
             ) {
                 eprintln!("BroadcastChannel bindings init failed: {}", e);
+            }
+
+            // Install navigator.credentials (WebAuthn / passkeys) — after DOM so
+            // atob/btoa, TextEncoder, Promise, DOMException, Uint8Array exist, and
+            // after the _lumen_webauthn_* native bindings are registered.
+            if let Err(e) = credentials::install_credentials_bindings(&ctx) {
+                eprintln!("Credentials bindings init failed: {}", e);
             }
 
             Ok(())

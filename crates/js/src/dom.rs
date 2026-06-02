@@ -970,6 +970,25 @@ fn install_primitives(
         crate::clipboard::write_text(&text);
     });
 
+    // ── WebAuthn / navigator.credentials ──────────────────────────────────────
+    // _lumen_webauthn_create(packed) → JSON   (attestation result or {ok:false})
+    // _lumen_webauthn_get(packed)    → JSON   (assertion result or {ok:false})
+    // _lumen_webauthn_uvpa()         → bool   (platform authenticator available)
+    //
+    // `packed` is a `|`-separated string of base64url fields (see crate::credentials).
+    // All forward to the process-global CredentialProvider installed by the shell
+    // (`lumen_js::set_credential_provider`). With no provider, create/get return
+    // {ok:false,error:"NotAllowedError"} so navigator.credentials still resolves.
+    reg!("_lumen_webauthn_create", |packed: String| -> String {
+        crate::credentials::create(packed)
+    });
+    reg!("_lumen_webauthn_get", |packed: String| -> String {
+        crate::credentials::get(packed)
+    });
+    reg!("_lumen_webauthn_uvpa", || -> bool {
+        crate::credentials::uvpa_available()
+    });
+
     // ── WebSocket API ─────────────────────────────────────────────────────────
     // Phase 0 model: synchronous connect, background recv thread, JS polls.
     // _lumen_ws_connect(url)  → handle u32 (0 = error)
