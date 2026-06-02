@@ -2,6 +2,7 @@
 //! page viewport (split view, vertical tabs, sidebar panels, etc.).
 
 pub mod bookmark_panel;
+pub mod command_palette;
 pub mod permission_panel;
 pub mod shields_panel;
 pub mod sidebar_panel;
