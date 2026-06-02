@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: p1-roadmap-audit-7b  branch: p1-roadmap-audit-7b
+Next step: обновить stale-маркеры 7B.2/7B.5 в lumen-plan.md  lumen-plan.md:278
 
 ---
 
