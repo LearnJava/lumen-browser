@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`image-set()` / `cross-fade()` — CSS Images L4  branch: p4-image-set
-Next step: add CrossFade variant to BackgroundImage, parse in apply_declaration + parse_single_bg_layer, emit DrawCrossFade  style.rs:3018
+_(none)_
 
 ## Workflow
 
@@ -201,6 +200,7 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-02 | `image-set()` / `cross-fade()` | CSS Images L4 §5/§4; BackgroundImage::CrossFade; 5 unit tests + graphic test 59; CPU snapshot 58+59 |
 | 2026-06-02 | `::first-letter` / `::first-line` | CSS Pseudo-elements L4 §5.3-5.4; segment split + first_line_style; 4 unit tests + graphic test 58 |
 | 2026-05-29 | `var()` full recursive substitution | expand_vars() recursive + @property + env(); 40 unit tests + graphic test 50 |
 | 2026-05-29 | `font-optical-sizing` | auto→opsz=font-size in variation axes; none skips; 5 tests |
