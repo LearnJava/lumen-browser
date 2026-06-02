@@ -60,10 +60,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
 `crates/engine/canvas/src/rasterize.rs:41` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
 
-## lumen-core  (180 symbols)
+## lumen-core  (189 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
+`crates/core/src/crash.rs:65` **struct** `CrashRecorder` — Рекордер событий с кольцевым буфером и дампом при панике
+`crates/core/src/crash.rs:79` **fn** `new` — Рекордер с ёмкостью буфера по умолчанию ([`DEFAULT_CAPACITY`]) и без
+`crates/core/src/crash.rs:86` **fn** `with_capacity` — Рекордер с заданной ёмкостью буфера и без downstream-sink-а
+`crates/core/src/crash.rs:101` **fn** `with_downstream` — Рекордер, форвардящий каждое событие дальше указанному sink-у после
+`crates/core/src/crash.rs:111` **fn** `recent_events` — Снимок текущего содержимого буфера в виде готовых строк дампа
+`crates/core/src/crash.rs:127` **fn** `total_recorded` — Сколько событий записано всего с момента старта (включая вытесненные
+`crates/core/src/crash.rs:142` **fn** `install_panic_hook` — Установить process-global panic-hook, который при панике пишет дамп
+`crates/core/src/crash.rs:192` **fn** `format_crash_dump` — Собрать текст crash-дампа из снимка событий и сообщения паники
+`crates/core/src/crash.rs:224` **fn** `write_crash_dump` — Записать готовый текст дампа в новый файл `lumen-crash-<unix_ms>.log`
 `crates/core/src/error.rs:7` **enum** `Error`
 `crates/core/src/error.rs:35` **type** `Result`
 `crates/core/src/event.rs:9` **struct** `TabId`
@@ -2684,4 +2693,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2619 symbols in 20 crates*
+*Total: 2628 symbols in 20 crates*

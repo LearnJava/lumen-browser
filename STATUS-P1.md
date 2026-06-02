@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(нет)_
+- **p1-crash-recorder** branch: `p1-crash-recorder` — Crash hook на `EventSink` (§9.6). `CrashRecorder` в `lumen-core::crash`. Next step: merge → move to Recent.
 
 ---
 

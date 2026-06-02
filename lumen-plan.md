@@ -1470,7 +1470,7 @@ Anti-detection покрывает **шесть слоёв**, потому что
 
 **Дополнения к `EventSink` (см. §9.6):**
 - ✅ **`RequestFailed { tab_id, url, stage, reason }`** — событие для DNS / connect / TLS-ошибок **до** `RequestCompleted`. Делает явным invariant «Started без Completed = failure»: ровно один из `RequestCompleted` / `RequestFailed` / `RequestBlocked` следует за каждым `RequestStarted`. `RequestStage` (`Dns` / `Tcp` / `Tls` / `Read`) в `lumen-core::event`, классификация по префиксу `Error::Network`-сообщения (`classify_failure_stage` в `lumen-network`), эмит симметрично `RequestStarted` на обоих `fetch_single` call-site (preflight + actual). Shell network-panel wiring (`record_failed`) — handoff P3.
-- ⬜ **Crash hook на `EventSink`** — последние 50 событий буферизуются in-memory; при panic-е дамп сохраняется в crash dump до завершения процесса.
+- ✅ **Crash hook на `EventSink`** — `CrashRecorder` (`lumen-core::crash`) — декоратор `EventSink` с кольцевым буфером последних 50 событий (configurable, опциональный downstream-sink). `install_panic_hook(dir)` ставит process-global `std::panic::set_hook`, который при панике пишет дамп (`format_crash_dump`: текст паники + snapshot буфера) в `lumen-crash-<unix_ms>.log` через `write_crash_dump`, затем вызывает прежний hook. Чистые куски (`format_crash_dump` / `write_crash_dump`) юнит-тестируемы отдельно от panic-hook. Shell wiring (`CrashRecorder::install_panic_hook` при старте, рекордер в цепочке `EventSink`) — handoff P3.
 
 **Чего НЕ делаем:**
 - ❌ Sentry / Bugsnag / любые SaaS crash-aggregator-ы.
