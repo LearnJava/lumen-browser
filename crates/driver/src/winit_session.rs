@@ -764,11 +764,13 @@ impl BrowserSession for WinitSession {
             let lumen_url = lumen_core::url::Url::parse(url)
                 .map_err(|e| Error::InvalidUrl(format!("{url}: {e}")))?;
             let sink = std::sync::Arc::new(lumen_core::ext::NoopEventSink);
+            // 9F.2: apply the per-context fingerprint profile to outgoing requests.
             let client = lumen_network::HttpClient::new()
                 .with_sink(sink)
                 .with_content_decoder(std::sync::Arc::new(
                     lumen_network::BrotliContentDecoder::new(),
-                ));
+                ))
+                .with_fingerprint_profile(self.context.fingerprint_profile().to_http_profile());
             let bytes = client.fetch(&lumen_url)?;
             return self.run_pipeline(&bytes, Some("text/html"), url.to_owned());
         }
