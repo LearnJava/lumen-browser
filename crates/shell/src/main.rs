@@ -485,7 +485,10 @@ fn do_print_to_pdf(
         margin_left: 48.0,
         margin_right: 48.0,
     };
-    let pages = paginate(&parsed.layout, &ctx);
+    let mut pages = paginate(&parsed.layout, &ctx);
+    let page_count_total = pages.len() as u32;
+    // Attach @page margin-box data: page N of M at bottom-center.
+    attach_page_boxes(&mut pages, page_count_total, &ctx);
     let cmds = build_print_display_list(&pages);
     let split_pages = split_at_page_breaks(cmds);
 
@@ -500,6 +503,51 @@ fn do_print_to_pdf(
     let pdf_bytes = encode_images_as_pdf(&images, PDF_PAGE_W, PDF_PAGE_H);
     std::fs::write(output, &pdf_bytes)?;
     Ok(page_count)
+}
+
+/// Attaches `PageBox` data to each page with default @page content: page N of M at bottom-center.
+///
+/// Uses a fixed-width measurer (8 px/char at any font size) for margin-box text layout,
+/// matching the Phase 0 text-measurement approach used in layout tests. Shell has no
+/// access to a real `TextMeasurer` outside the full layout pipeline, and margin-box
+/// text is short (page numbers) so the approximation is acceptable.
+fn attach_page_boxes(
+    pages: &mut [lumen_layout::pagination::Page],
+    total: u32,
+    ctx: &lumen_layout::PaginationContext,
+) {
+    use lumen_layout::{MarginBoxPosition, PageBox, PageProperties, TextMeasurer};
+
+    /// Fixed 8 px per character at any size — matches the Phase 0 layout test measurer.
+    struct Fixed8;
+    impl TextMeasurer for Fixed8 {
+        fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    }
+
+    let props = PageProperties {
+        width: ctx.page_width,
+        height: ctx.page_height,
+        orientation: if ctx.page_width > ctx.page_height { "landscape".to_string() } else { "portrait".to_string() },
+        margin_top: ctx.margin_top,
+        margin_bottom: ctx.margin_bottom,
+        margin_left: ctx.margin_left,
+        margin_right: ctx.margin_right,
+    };
+
+    for page in pages.iter_mut() {
+        let mut page_box = PageBox::new(page.number, props.clone());
+        page_box.layout_margin_boxes();
+
+        let label = format!("{} / {}", page.number + 1, total);
+        let font_size = 10.0_f32;
+        let line_height = font_size * 1.5;
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::BottomCenter) {
+            mb.content = Some(label.clone());
+            mb.layout_text(&label, font_size, line_height, &Fixed8);
+        }
+
+        page.page_box = Some(page_box);
+    }
 }
 
 /// Кодирует набор растровых изображений в PDF-файл (по одному на страницу).

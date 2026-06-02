@@ -1135,13 +1135,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/page.rs:831` **fn** `create_page_number_footer` — Common margin-box content preset: page number at bottom center
 `crates/engine/layout/src/page.rs:846` **fn** `create_page_number_header` — Common margin-box content preset: page number at top center
 `crates/engine/layout/src/page.rs:861` **fn** `create_header_footer` — Common margin-box content preset: custom header and footer
-`crates/engine/layout/src/pagination.rs:22` **struct** `PaginationContext` — Parameters for print pagination
-`crates/engine/layout/src/pagination.rs:46` **fn** `content_width` — Content box width: page width minus left and right margins
-`crates/engine/layout/src/pagination.rs:51` **fn** `content_height` — Content box height: page height minus top and bottom margins
-`crates/engine/layout/src/pagination.rs:56` **fn** `content_origin` — Top-left corner of content box within page
-`crates/engine/layout/src/pagination.rs:66` **struct** `Page` — A single page with positioned content
-`crates/engine/layout/src/pagination.rs:81` **struct** `PageFragment` — A fragment of layout tree content positioned on a page
-`crates/engine/layout/src/pagination.rs:105` **fn** `paginate` — Pagination algorithm: split LayoutBox tree into pages
+`crates/engine/layout/src/pagination.rs:23` **struct** `PaginationContext` — Parameters for print pagination
+`crates/engine/layout/src/pagination.rs:47` **fn** `content_width` — Content box width: page width minus left and right margins
+`crates/engine/layout/src/pagination.rs:52` **fn** `content_height` — Content box height: page height minus top and bottom margins
+`crates/engine/layout/src/pagination.rs:57` **fn** `content_origin` — Top-left corner of content box within page
+`crates/engine/layout/src/pagination.rs:67` **struct** `Page` — A single page with positioned content
+`crates/engine/layout/src/pagination.rs:88` **struct** `PageFragment` — A fragment of layout tree content positioned on a page
+`crates/engine/layout/src/pagination.rs:112` **fn** `paginate` — Pagination algorithm: split LayoutBox tree into pages
 `crates/engine/layout/src/property_trees.rs:39` **struct** `PropertyTreeNodeId` — Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
 `crates/engine/layout/src/property_trees.rs:45` **fn** `raw`
 `crates/engine/layout/src/property_trees.rs:54` **struct** `Mat4` — 4×4 матрица в column-major порядке (как принято в OpenGL / WebGPU)
@@ -1753,10 +1753,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:1275` **fn** `build_display_list_ordered_dpr` — Like [`build_display_list_ordered`] but resolves `image-set()` background
 `crates/engine/paint/src/display_list.rs:1317` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
 `crates/engine/paint/src/display_list.rs:1328` **fn** `build_display_list_ordered_with_anim_dpr` — Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
-`crates/engine/paint/src/display_list.rs:1370` **fn** `build_print_display_list` — Builds a print display list from paginated layout
-`crates/engine/paint/src/display_list.rs:1393` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
-`crates/engine/paint/src/display_list.rs:2117` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
-`crates/engine/paint/src/display_list.rs:2246` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
+`crates/engine/paint/src/display_list.rs:1375` **fn** `build_print_display_list` — Builds a print display list from paginated layout
+`crates/engine/paint/src/display_list.rs:1436` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
+`crates/engine/paint/src/display_list.rs:2160` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
+`crates/engine/paint/src/display_list.rs:2289` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
 `crates/engine/paint/src/fingerprint.rs:19` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
 `crates/engine/paint/src/fingerprint.rs:32` **fn** `from_adapter_info` — Create normalized GPU fingerprint from adapter info
 `crates/engine/paint/src/fingerprint.rs:40` **fn** `vendor` — Vendor string: always "WebKit"

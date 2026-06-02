@@ -13,6 +13,7 @@
 //! - Each Page contains positioned LayoutBox fragments that fit on it
 
 use crate::box_tree::LayoutBox;
+use crate::page::PageBox;
 use crate::style::BreakValue;
 
 /// Parameters for print pagination.
@@ -74,6 +75,12 @@ pub struct Page {
     /// Total height of content on this page (before clipping to page_height).
     /// Useful for debugging and detecting overfull pages.
     pub content_height: f32,
+
+    /// Optional @page margin-box data: 16 positioned boxes with pre-laid-out
+    /// text fragments (headers, footers, page numbers).
+    /// None when no @page content is configured (default print without headers).
+    /// Set by the caller after `paginate()` — pagination doesn't know CSS @page rules.
+    pub page_box: Option<PageBox>,
 }
 
 /// A fragment of layout tree content positioned on a page.
@@ -118,6 +125,7 @@ pub fn paginate(layout_box: &LayoutBox, context: &PaginationContext) -> Vec<Page
                 number: current_page_number,
                 fragments: current_fragments.clone(),
                 content_height: current_page_y,
+                page_box: None,
             });
             current_page_number += 1;
             current_page_y = 0.0;
@@ -143,6 +151,7 @@ pub fn paginate(layout_box: &LayoutBox, context: &PaginationContext) -> Vec<Page
                     number: current_page_number,
                     fragments: current_fragments.clone(),
                     content_height: current_page_y,
+                    page_box: None,
                 });
                 current_page_number += 1;
                 current_page_y = 0.0;
@@ -164,6 +173,7 @@ pub fn paginate(layout_box: &LayoutBox, context: &PaginationContext) -> Vec<Page
                         number: current_page_number,
                         fragments: current_fragments.clone(),
                         content_height: current_page_y,
+                        page_box: None,
                     });
                     current_page_number += 1;
                     current_fragments.clear();
@@ -182,6 +192,7 @@ pub fn paginate(layout_box: &LayoutBox, context: &PaginationContext) -> Vec<Page
                 number: current_page_number,
                 fragments: current_fragments.clone(),
                 content_height: current_page_y,
+                page_box: None,
             });
             current_page_number += 1;
             current_page_y = 0.0;
@@ -195,6 +206,7 @@ pub fn paginate(layout_box: &LayoutBox, context: &PaginationContext) -> Vec<Page
             number: current_page_number,
             fragments: current_fragments,
             content_height: current_page_y,
+            page_box: None,
         });
     }
 
@@ -204,6 +216,7 @@ pub fn paginate(layout_box: &LayoutBox, context: &PaginationContext) -> Vec<Page
             number: 0,
             fragments: vec![],
             content_height: 0.0,
+            page_box: None,
         });
     }
 
