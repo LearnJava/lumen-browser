@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`::first-letter` / `::first-line` wiring  branch: p4-first-letter-line
-Next step: extend BoxKind::InlineRun with first_line_style, fix compute_pseudo_element_style, wire in build_box/lay_out
+_(none)_
 
 ## Workflow
 
@@ -203,6 +202,7 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-02 | `::first-letter` / `::first-line` | CSS Pseudo-elements L4 §5.3-5.4; segment split + first_line_style; 4 unit tests + graphic test 58 |
 | 2026-05-29 | `var()` full recursive substitution | expand_vars() recursive + @property + env(); 40 unit tests + graphic test 50 |
 | 2026-05-29 | `font-optical-sizing` | auto→opsz=font-size in variation axes; none skips; 5 tests |
 
