@@ -62,6 +62,16 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 - **Entry points:** `lumen-layout/src/style.rs` `parse_single_bg_layer` (background-image token loop); paint resolution is already wired in `lumen-paint/src/display_list.rs` `emit_background_layer`.
 - **CSS comment location:** `display_list.rs` `emit_background_layer` `// CSS: image-set`.
 
+### `@media (prefers-color-scheme: dark)` visual restyle (P2 feature p2-dark-mode)
+- **Status:** Shell side done. The OS dark-mode preference is now detected (winit `Window::theme()` at window creation + `WindowEvent::ThemeChanged` refresh) and stored in `Lumen.dark_mode` (`shell/src/main.rs`). It is delivered to JS `matchMedia('(prefers-color-scheme: dark)')` via `deliver_media_query_changes(.., self.dark_mode)`. Helper: `shell/src/platform/dark_mode.rs::theme_prefers_dark(Option<Theme>) -> bool`. On theme change the shell calls `relayout()` + `request_redraw()`.
+- **Gap:** The **layout cascade still hardcodes `prefers_dark: false`** — `media_context_from_viewport(viewport)` in `lumen-layout/src/style.rs:13868` returns a `MediaContext` with `prefers_dark: false`, so CSS `@media (prefers-color-scheme: dark)` rules never match visually even when the OS is dark. JS matchMedia already reports dark correctly; only the visual cascade is inert.
+- **P4 task:**
+  1. Thread the shell's `dark_mode` boolean into `lumen_layout::layout_measured_hyp` (and `layout_measured`) so it reaches `compute_style` / `compute_pseudo_element_style` (the two `media_context_from_viewport(viewport)` call sites at `style.rs:4647` and `style.rs:4914`). Simplest: add a `prefers_dark: bool` field to a small `MediaContext`-like input threaded alongside `viewport`, or pass `prefers_dark` as a parameter through `build_box` / `lay_out` / `apply_container_styles`.
+  2. Update `media_context_from_viewport` to take `prefers_dark` instead of the hardcoded `false`.
+  3. Shell wiring: `parse_and_layout` / `relayout_page` (`shell/src/main.rs`) must forward `self.dark_mode` into the layout entry point. Both currently call `layout_measured_hyp(&d, &sheet, viewport, &measurer, hp)`.
+  4. **Keep the snapshot default `false`** — `lumen-driver` CPU snapshots and `--dump-*` headless modes must stay light to preserve cross-OS bit-identity (ADR-008). Only the interactive shell sets it from the OS.
+- **Entry points:** `lumen-layout/src/style.rs:13868` (`media_context_from_viewport`), `:4647` + `:4914` (call sites); `shell/src/main.rs` `parse_and_layout` / `relayout_page` (forward `dark_mode`).
+
 ### CSS 3D transforms — `perspective()` + 3D functions (P2 feature p2-css-3d-transforms)
 - **Status:** GPU/matrix primitive ready. `Mat4` has 3D constructors (`perspective(d)`, `rotate_x/rotate_y/rotate_z/rotate_3d`, `translate_3d`, `scale_3d`, `from_3d` for `matrix3d`, `project_point` for 4×4 + perspective divide, `is_2d_affine` fast-path flag) in `lumen-layout/src/property_trees.rs`. The renderer (`paint/src/renderer.rs`, `apply_affine_to_verts` / `apply_affine_to_rrect_verts`) now projects any **non-2D-affine** `PushTransform` matrix perspective-correctly (w-divide), so 3D matrices render as a flattened projection. Existing 2D output is bit-identical (fast path).
 - **P4 task:**

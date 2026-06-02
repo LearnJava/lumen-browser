@@ -308,6 +308,7 @@ fn run_window_mode(
         scroll_x: initial_scroll.0,
         content_height: 0.0,
         content_width: 0.0,
+        dark_mode: false,
         cursor_position: None,
         scroll_drag: None,
         scroll_anim: None,
@@ -2897,6 +2898,12 @@ struct Lumen {
     /// Полная ширина контента в CSS px — `max(rect.x + rect.width)` по
     /// текущему display list-у. Обновляется после load/reload. 0 — нет контента.
     content_width: f32,
+    /// OS-level `prefers-color-scheme` preference. `true` — система в тёмной теме.
+    /// Читается из winit `Window::theme()` при создании окна и обновляется на
+    /// `WindowEvent::ThemeChanged`. Прокидывается в JS `matchMedia` через
+    /// `deliver_media_query_changes(.., self.dark_mode)`. Default `false` (light)
+    /// до создания окна и в headless/deterministic-режимах (стабильность snapshot-ов).
+    dark_mode: bool,
     /// Последняя известная позиция курсора в **physical** пикселях (от winit).
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
@@ -3274,9 +3281,9 @@ impl Lumen {
                 js.update_viewport_size(viewport.width, viewport.height);
                 js.deliver_layout_observers();
                 // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
-                // viewport. Shell doesn't yet honour OS-level prefers-color-scheme,
-                // so dark = false until that preference is exposed.
-                js.deliver_media_query_changes(viewport.width, viewport.height, false);
+                // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
+                // read from winit at window creation / refreshed on ThemeChanged.
+                js.deliver_media_query_changes(viewport.width, viewport.height, self.dark_mode);
                 // After fresh rects are in JS: fire lazy-load proximity check.
                 // Images that entered the viewport+margin are queued by JS via
                 // _lumen_request_lazy_image_load; we drain and fetch them below.
@@ -3867,6 +3874,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
         }
 
+        // CSS Media Queries L5 §5.2 — read the OS `prefers-color-scheme` once the
+        // window exists. winit resolves it per platform (Win32 immersive dark mode,
+        // macOS NSAppearance, Linux portal/XSettings); `None` → light fallback.
+        // In deterministic/headless runs we keep light to preserve snapshot stability.
+        if !self.deterministic {
+            self.dark_mode = platform::dark_mode::theme_prefers_dark(window.theme());
+        }
+
         self.window = Some(window);
         self.renderer = Some(renderer);
 
@@ -4171,6 +4186,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::ModifiersChanged(new_mods) => {
                 self.modifiers = winit_modifiers_state(&new_mods);
+            }
+            WindowEvent::ThemeChanged(theme) => {
+                // OS switched light↔dark. Update the stored preference and re-run
+                // layout: relayout() re-evaluates `@media (prefers-color-scheme)`
+                // and pushes the new value to JS matchMedia listeners via
+                // deliver_media_query_changes(.., self.dark_mode).
+                let dark = platform::dark_mode::theme_prefers_dark(Some(theme));
+                if dark != self.dark_mode {
+                    self.dark_mode = dark;
+                    self.relayout();
+                    if let Some(w) = self.window.as_ref() {
+                        w.request_redraw();
+                    }
+                }
             }
             WindowEvent::KeyboardInput { event: ref key_event, .. } => {
                 self.handle_key(event_loop, key_event);
