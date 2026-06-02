@@ -405,8 +405,8 @@
 | 10I.1 | ⬜ Schema: `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll, form_state, ts)` | `storage/migrations/0NN_tab_snapshots.sql` | — |
 | 10I.2 | ⬜ Async-save при T1→T2 (без блокирования UI) | `shell/src/tab_lifecycle/persist.rs` | — |
 | 10I.3 | ⬜ Async-load при T2→T0 (с indeterminate UI hint если > 100 ms) | `shell/src/tab_lifecycle/restore.rs` | — |
-| 10J | 🟡 **`[P1]` T3 hibernation: full DOM serialization** (Phase 2) | DOM в SQLite, в RAM только TabMetadata; bincode (zstd 10J.1 ещё ⬜) | `storage/src/tab_snapshot.rs` |
-| 10J.1 | ⬜ DOM arena → bincode → zstd → SQLite blob | `dom/src/serialize.rs` + `storage/src/tab_snapshot.rs` | uses 10B.2 |
+| 10J | ✅ **`[P1]` T3 hibernation: full DOM serialization** (Phase 2) | DOM в SQLite, в RAM только TabMetadata; bincode → deflate-сжатие blob | `storage/src/tab_snapshot.rs` |
+| 10J.1 | ✅ DOM arena → bincode → deflate → SQLite blob | `storage/src/tab_snapshot.rs` (`compress_blob`/`decompress_blob`, magic `LZD1`, прозрачно в store/fetch; flate2/miniz_oxide, 3-5× shrink) | p1-hibernate-compress |
 | 10J.2 | ✅ `TabMetadata { url, title, scroll, favicon }` остаётся в RAM | `shell/src/tab_lifecycle/restore.rs` (`TabMetadata`), scroll в SQLite | p1-session-persist |
 | 10J.3 | ✅ Restore: deserialize → re-run scripts → full layout+paint + new `PersistentJs` | `shell/src/tab_lifecycle/hibernate.rs` (`restore_js_context`) + `restore_hibernated_tab` | p1-tab-auto-archive |
 | 10K | ⬜ **`[P3]` UI affordance: индикация tier'а в tab strip** (Phase 2) | Пользователь видит, что вкладка спит | `shell/src/tabs/strip_ui.rs` |
@@ -2263,7 +2263,7 @@ CI gate (задачи 9G.3 + 9G.5 в Roadmap): `cargo run -p lumen-bench --relea
   - **Espresso/Computer-use bridge для тестировщиков** — заранее закладывается accessibility-tree query API через MCP, аналогичный Playwright `getByRole`, чтобы тесты не зависели от CSS-классов и переживали DOM-рефакторы.
 - **Tab lifecycle Phase 2** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):
   - **T2 (JS heap snapshot)** — async-save в SQLite при T1→T2 (трек 10I); async-load с indeterminate UI hint при > 100ms; zstd compression; cap 5 MB/tab disk.
-  - **T3 (full hibernation)** — DOM serialization через `bincode + zstd` в SQLite (трек 10J); в RAM остаётся только `TabMetadata` (URL, title, scroll, favicon) <200 KB/tab.
+  - **T3 (full hibernation)** — DOM serialization через `bincode + deflate` в SQLite (трек 10J); в RAM остаётся только `TabMetadata` (URL, title, scroll, favicon) <200 KB/tab.
   - **GPU layer LRU + texture recycling** (трек 10F) — `wgpu::Texture` pool для off-viewport stacking contexts.
   - **Glyph atlas LRU eviction** (трек 10G).
   - **UI affordance** (трек 10K) — иконка "Z" / fade-opacity на спящих вкладках в tab strip, tooltip с tier-info, loading-spinner при restore > 200ms.

@@ -8,12 +8,65 @@
 //! On restore (T3 → T0 Active), the shell fetches the blob, calls
 //! `Document::from_bytes()`, re-parses the CSS, and re-runs layout+paint.
 //! Target SLO: ≤ 1 500 ms.
+//!
+//! The `dom_blob` is transparently deflate-compressed on the way in and
+//! inflated on the way out (ADR-008 §10J.1), so the in-RAM/on-disk footprint of
+//! hibernated tabs stays small. `HibernatedTabData::dom_blob` is always the raw
+//! bincode bytes — compression is an internal storage detail.
 
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
+use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
+
+/// Magic prefix tagging a deflate-compressed DOM blob (ADR-008 §10J.1).
+///
+/// `store()` prepends these 4 bytes before the zlib stream so `fetch()` can tell
+/// a compressed blob from a legacy raw-bincode one and pick the right path.
+/// "LZD1" = **L**umen **Z**lib **D**eflate, format version **1**.
+const BLOB_MAGIC: [u8; 4] = *b"LZD1";
+
+/// Compress a raw bincode `Document` blob for on-disk storage.
+///
+/// Returns [`BLOB_MAGIC`] followed by a zlib (deflate) stream of `raw`. DOM blobs
+/// are string-heavy (repeated tag/attribute names) and typically shrink 3-5×,
+/// directly serving the ADR-008 RAM/disk goal for hibernated tabs. On the
+/// (effectively impossible) encoder failure the raw bytes are stored unchanged
+/// so the snapshot is never lost.
+fn compress_blob(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len() / 3 + BLOB_MAGIC.len());
+    out.extend_from_slice(&BLOB_MAGIC);
+    let mut encoder = ZlibEncoder::new(out, Compression::default());
+    if encoder.write_all(raw).is_ok()
+        && let Ok(buf) = encoder.finish()
+    {
+        return buf;
+    }
+    // Fallback: never drop a snapshot — store raw (no magic ⇒ read as legacy).
+    raw.to_vec()
+}
+
+/// Inverse of [`compress_blob`].
+///
+/// If `stored` begins with [`BLOB_MAGIC`] the trailing zlib stream is inflated;
+/// otherwise the bytes are returned verbatim (legacy uncompressed blobs written
+/// before 10J.1, or the raw-fallback path above).
+fn decompress_blob(stored: Vec<u8>) -> Result<Vec<u8>> {
+    if stored.len() < BLOB_MAGIC.len() || stored[..BLOB_MAGIC.len()] != BLOB_MAGIC {
+        return Ok(stored);
+    }
+    let mut decoder = ZlibDecoder::new(&stored[BLOB_MAGIC.len()..]);
+    let mut raw = Vec::new();
+    decoder
+        .read_to_end(&mut raw)
+        .map_err(|e| Error::Storage(format!("tab_snapshot decompress: {e}")))?;
+    Ok(raw)
+}
 
 /// All data stored on disk for a hibernated tab.
 ///
@@ -92,6 +145,7 @@ impl TabSnapshotStore {
     /// Persist a hibernated tab snapshot.  Overwrites any previous entry for
     /// the same `tab_id` (upsert).
     pub fn store(&self, tab_id: i64, data: &HibernatedTabData) -> Result<()> {
+        let blob = compress_blob(&data.dom_blob);
         let conn = self.lock()?;
         conn.execute(
             "INSERT OR REPLACE INTO hibernated_tabs
@@ -99,7 +153,7 @@ impl TabSnapshotStore {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 tab_id,
-                data.dom_blob,
+                blob,
                 data.css_source,
                 data.url,
                 data.title,
@@ -116,23 +170,32 @@ impl TabSnapshotStore {
     /// Returns `Ok(None)` if no snapshot exists for that tab.
     pub fn fetch(&self, tab_id: i64) -> Result<Option<HibernatedTabData>> {
         let conn = self.lock()?;
-        conn.query_row(
-            "SELECT dom_blob, css_source, url, title, scroll_x, scroll_y
-             FROM hibernated_tabs WHERE tab_id = ?1",
-            params![tab_id],
-            |row| {
-                Ok(HibernatedTabData {
-                    dom_blob: row.get(0)?,
-                    css_source: row.get(1)?,
-                    url: row.get(2)?,
-                    title: row.get(3)?,
-                    scroll_x: row.get::<_, f64>(4)? as f32,
-                    scroll_y: row.get::<_, f64>(5)? as f32,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| Error::Storage(format!("tab_snapshot fetch: {e}")))
+        let row = conn
+            .query_row(
+                "SELECT dom_blob, css_source, url, title, scroll_x, scroll_y
+                 FROM hibernated_tabs WHERE tab_id = ?1",
+                params![tab_id],
+                |row| {
+                    Ok(HibernatedTabData {
+                        dom_blob: row.get(0)?,
+                        css_source: row.get(1)?,
+                        url: row.get(2)?,
+                        title: row.get(3)?,
+                        scroll_x: row.get::<_, f64>(4)? as f32,
+                        scroll_y: row.get::<_, f64>(5)? as f32,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| Error::Storage(format!("tab_snapshot fetch: {e}")))?;
+        // Inflate the stored blob back to raw bincode for the caller.
+        match row {
+            Some(mut data) => {
+                data.dom_blob = decompress_blob(data.dom_blob)?;
+                Ok(Some(data))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Remove the snapshot for `tab_id` (called after successful restore).
@@ -257,6 +320,64 @@ mod tests {
         s.delete(1).unwrap();
         assert!(s.fetch(1).unwrap().is_none());
         assert!(s.fetch(2).unwrap().is_some());
+    }
+
+    #[test]
+    fn compress_decompress_roundtrip() {
+        for raw in [
+            Vec::new(),
+            vec![1u8, 2, 3, 4, 5],
+            b"the quick brown fox".to_vec(),
+            vec![0u8; 4096],
+        ] {
+            let stored = compress_blob(&raw);
+            let back = decompress_blob(stored).unwrap();
+            assert_eq!(back, raw);
+        }
+    }
+
+    #[test]
+    fn compress_tags_with_magic_and_shrinks_repetitive() {
+        // bincode DOM blobs are string-heavy; emulate with a repetitive payload.
+        let raw: Vec<u8> = b"<div class=\"row\">".iter().cloned().cycle().take(64 * 1024).collect();
+        let stored = compress_blob(&raw);
+        assert_eq!(&stored[..BLOB_MAGIC.len()], &BLOB_MAGIC);
+        assert!(stored.len() < raw.len() / 4, "expected >4x shrink, got {} → {}", raw.len(), stored.len());
+        assert_eq!(decompress_blob(stored).unwrap(), raw);
+    }
+
+    #[test]
+    fn decompress_passes_through_legacy_raw_blob() {
+        // A pre-10J.1 uncompressed bincode blob has no magic prefix.
+        let legacy = vec![9u8, 8, 7, 6, 5, 4, 3, 2, 1, 0];
+        assert_eq!(decompress_blob(legacy.clone()).unwrap(), legacy);
+    }
+
+    #[test]
+    fn decompress_short_blob_passes_through() {
+        let short = vec![1u8, 2];
+        assert_eq!(decompress_blob(short.clone()).unwrap(), short);
+    }
+
+    #[test]
+    fn store_compresses_blob_on_disk() {
+        let s = make();
+        let raw: Vec<u8> = b"<span>text</span>".iter().cloned().cycle().take(128 * 1024).collect();
+        let data = HibernatedTabData { dom_blob: raw.clone(), ..sample_data() };
+        s.store(5, &data).unwrap();
+        // The on-disk column is the compressed form, much smaller than the input.
+        let on_disk_len: i64 = s
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT length(dom_blob) FROM hibernated_tabs WHERE tab_id = 5",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((on_disk_len as usize) < raw.len() / 4);
+        // fetch transparently inflates back to the original bytes.
+        assert_eq!(s.fetch(5).unwrap().unwrap().dom_blob, raw);
     }
 
     #[test]

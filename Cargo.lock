@@ -1743,7 +1743,10 @@ dependencies = [
 name = "lumen-storage"
 version = "0.0.1"
 dependencies = [
+ "flate2",
  "lumen-core",
+ "lumen-dom",
+ "lumen-html-parser",
  "psl",
  "rusqlite",
 ]
