@@ -34,7 +34,7 @@
 //! `Token::Text` (из-за chunk boundary), `apply_token` сливает их в
 //! один text-node.
 
-use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId, QualName};
+use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId, QualName, ViewportMeta, ViewportWidth};
 
 use crate::push_tokenizer::PushTokenizer;
 use crate::tokenizer::{Token, Tokenizer};
@@ -416,6 +416,9 @@ impl IncrementalTreeBuilder {
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
                 // Void: не push в open_elements.
+                if name == "meta" && let Some(meta) = parse_viewport_meta(attrs) {
+                    self.doc.set_viewport_meta(meta);
+                }
             }
             Token::StartTag {
                 ref name, ref attrs, ..
@@ -2549,6 +2552,41 @@ fn attrs_equal(a: &[(String, String)], b: &[(String, String)]) -> bool {
     a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v == v2))
 }
 
+/// Parse `<meta name="viewport" content="…">` attributes into a `ViewportMeta`.
+///
+/// Returns `None` if the tag is not a viewport meta (missing `name=viewport`
+/// or missing `content`). Silently ignores unrecognised directives.
+fn parse_viewport_meta(attrs: &[(String, String)]) -> Option<ViewportMeta> {
+    let name_val = attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("name"))?.1.as_str();
+    if !name_val.eq_ignore_ascii_case("viewport") {
+        return None;
+    }
+    let content = &attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("content"))?.1;
+    let mut meta = ViewportMeta::default();
+    for part in content.split(',') {
+        let part = part.trim();
+        let mut kv = part.splitn(2, '=');
+        let key = kv.next()?.trim();
+        let val = kv.next()?.trim();
+        match key.to_ascii_lowercase().as_str() {
+            "width" => {
+                meta.width = Some(if val.eq_ignore_ascii_case("device-width") {
+                    ViewportWidth::DeviceWidth
+                } else {
+                    ViewportWidth::Pixels(val.parse::<f32>().unwrap_or(980.0))
+                });
+            }
+            "initial-scale" => {
+                if let Ok(v) = val.parse::<f32>() && v > 0.0 {
+                    meta.initial_scale = v;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(meta)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3573,5 +3611,48 @@ mod tests {
         // The select must exist, confirming the mode switch didn't break parsing.
         let sel = find_element(&doc, "select");
         assert!(sel.is_some(), "select in table cell must be parsed correctly");
+    }
+
+    #[test]
+    fn viewport_meta_device_width_scale() {
+        let doc = parse(
+            r#"<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body></body></html>"#,
+        );
+        let vm = doc.viewport_meta().expect("viewport meta must be set");
+        assert!((vm.initial_scale - 1.0).abs() < 0.001);
+        assert_eq!(vm.width, Some(ViewportWidth::DeviceWidth));
+    }
+
+    #[test]
+    fn viewport_meta_custom_scale() {
+        let doc = parse(
+            r#"<html><head><meta name="viewport" content="width=device-width, initial-scale=2.0"></head><body></body></html>"#,
+        );
+        let vm = doc.viewport_meta().expect("viewport meta must be set");
+        assert!((vm.initial_scale - 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn viewport_meta_fixed_width() {
+        let doc = parse(
+            r#"<html><head><meta name="viewport" content="width=375, initial-scale=1"></head><body></body></html>"#,
+        );
+        let vm = doc.viewport_meta().expect("viewport meta must be set");
+        assert_eq!(vm.width, Some(ViewportWidth::Pixels(375.0)));
+        assert!((vm.initial_scale - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn viewport_meta_absent_returns_none() {
+        let doc = parse("<html><head></head><body></body></html>");
+        assert!(doc.viewport_meta().is_none(), "no meta → no viewport_meta");
+    }
+
+    #[test]
+    fn viewport_meta_non_viewport_meta_ignored() {
+        let doc = parse(
+            r#"<html><head><meta name="description" content="hello"></head><body></body></html>"#,
+        );
+        assert!(doc.viewport_meta().is_none(), "description meta must not set viewport_meta");
     }
 }

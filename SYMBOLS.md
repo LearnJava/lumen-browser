@@ -1868,7 +1868,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:395` **fn** `uniform4f` — `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
 `crates/engine/paint/src/webgl.rs:402` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
 
-## lumen-shell  (492 symbols)
+## lumen-shell  (550 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2310,6 +2310,64 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/scrollbar.rs:199` **fn** `scroll_for` — Желаемый `scroll_y` при текущей позиции курсора. Если scrollbar
 `crates/shell/src/session_persist.rs:31` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
 `crates/shell/src/session_persist.rs:43` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
+`crates/shell/src/surface/ctx.rs:22` **struct** `PaintCtx` — Read-only context for [`super::Panel::paint`]
+`crates/shell/src/surface/ctx.rs:39` **fn** `new` — Build a paint context with default (non-focused, non-hovered) hints
+`crates/shell/src/surface/ctx.rs:56` **struct** `EventCtx` — Side effects a panel may request while handling an event
+`crates/shell/src/surface/ctx.rs:69` **fn** `new` — A fresh context with no pending effects
+`crates/shell/src/surface/ctx.rs:74` **fn** `dispatch` — Queue a command to be applied after `on_event` returns
+`crates/shell/src/surface/ctx.rs:79` **fn** `request_repaint` — Mark this panel dirty so it repaints on the next frame
+`crates/shell/src/surface/ctx.rs:84` **fn** `set_cursor` — Ask the shell to show `cursor` while over this panel
+`crates/shell/src/surface/ctx.rs:89` **fn** `request_focus` — Ask to capture keyboard focus
+`crates/shell/src/surface/ctx.rs:94` **fn** `release_focus` — Ask to release keyboard focus
+`crates/shell/src/surface/ctx.rs:101` **fn** `commands` — Commands queued during this event, in dispatch order
+`crates/shell/src/surface/ctx.rs:106` **fn** `take_commands` — Take ownership of the queued commands, leaving the context empty
+`crates/shell/src/surface/ctx.rs:111` **fn** `wants_repaint` — Whether the panel requested a repaint
+`crates/shell/src/surface/ctx.rs:116` **fn** `requested_cursor` — The cursor the panel requested, if any
+`crates/shell/src/surface/ctx.rs:122` **fn** `requested_focus_change` — The focus change the panel requested: `Some(true)` to capture focus,
+`crates/shell/src/surface/manager.rs:41` **struct** `SlotRect` — Resolved window-space rect for a named docked slot
+`crates/shell/src/surface/manager.rs:49` **struct** `LayoutNode` — Informational snapshot of one slot in the docked layout tree
+`crates/shell/src/surface/manager.rs:75` **struct** `SurfaceManager` — Single coordinator for all shell UI panels (ADR-009 §SurfaceManager)
+`crates/shell/src/surface/manager.rs:87` **fn** `new` — Create an empty manager sized to `(width, height)` CSS px
+`crates/shell/src/surface/manager.rs:100` **fn** `register` — Register a panel.  Its rect is computed immediately; `on_mount` is called
+`crates/shell/src/surface/manager.rs:113` **fn** `composite` — Composite all visible panels into one `DisplayList` for the renderer
+`crates/shell/src/surface/manager.rs:148` **fn** `slot_rect` — Resolved rect for a named docked slot, or `None` if not present
+`crates/shell/src/surface/manager.rs:155` **fn** `layout_snapshot` — Snapshot of the docked layout tree (diagnostic / test helper)
+`crates/shell/src/surface/manager.rs:170` **fn** `on_resize` — Notify that the window was resized.  All panel rects are recomputed and
+`crates/shell/src/surface/manager.rs:186` **fn** `set_visible` — Show or hide a panel by id.  Triggers layout recomputation
+`crates/shell/src/surface/manager.rs:195` **fn** `set_theme` — Set the active `Theme` for all subsequent `paint()` calls
+`crates/shell/src/surface/manager.rs:200` **fn** `theme` — Active theme
+`crates/shell/src/surface/manager.rs:205` **fn** `has_panel` — Whether a panel with `id` is registered
+`crates/shell/src/surface/manager.rs:210` **fn** `panel_count` — Number of registered panels
+`crates/shell/src/surface/manager.rs:215` **fn** `window_size` — Current window size (CSS px)
+`crates/shell/src/surface/manager.rs:220` **fn** `panel_rect` — Rect of a registered panel, or `None` if not found / hidden
+`crates/shell/src/surface/manager.rs:232` **fn** `route_mouse_move` — Route a mouse-move event and return the combined response
+`crates/shell/src/surface/manager.rs:237` **fn** `route_mouse_down` — Route a mouse-down event
+`crates/shell/src/surface/manager.rs:242` **fn** `route_mouse_up` — Route a mouse-up event
+`crates/shell/src/surface/manager.rs:247` **fn** `route_click` — Route a click (press + release in the same panel)
+`crates/shell/src/surface/manager.rs:252` **fn** `route_scroll` — Route a scroll event
+`crates/shell/src/surface/mod.rs:48` **trait** `Panel` — A self-contained shell UI block
+`crates/shell/src/surface/theme.rs:21` **struct** `Theme` — All design tokens for one shell appearance
+`crates/shell/src/surface/theme.rs:90` **fn** `sand_indigo` — V1 / default: warm sand + indigo (light)
+`crates/shell/src/surface/theme.rs:121` **fn** `graphite_amber` — V2 / dark: graphite + amber
+`crates/shell/src/surface/theme.rs:152` **fn** `for_dark_mode` — Pick a built-in theme by OS dark-mode preference
+`crates/shell/src/surface/types.rs:28` **enum** `Surface` — Where and how a panel appears on screen
+`crates/shell/src/surface/types.rs:73` **fn** `is_docked` — `true` for [`Surface::Docked`]
+`crates/shell/src/surface/types.rs:78` **fn** `is_overlay` — `true` for floats and modals (anything on the overlay layer)
+`crates/shell/src/surface/types.rs:85` **enum** `Corner` — Window corner, used by [`FloatAnchor::Corner`]
+`crates/shell/src/surface/types.rs:98` **enum** `FloatAnchor` — Where a [`Surface::Float`] panel is positioned
+`crates/shell/src/surface/types.rs:117` **enum** `SizeRule` — How a panel (or slot) describes its desired extent along one axis
+`crates/shell/src/surface/types.rs:136` **fn** `resolve` — Resolve a concrete length against the `available` space along the axis
+`crates/shell/src/surface/types.rs:146` **fn** `is_flex` — `true` if this rule expands to fill leftover space
+`crates/shell/src/surface/types.rs:155` **enum** `MouseButton` — Mouse button identity
+`crates/shell/src/surface/types.rs:163` **struct** `ScrollDelta` — Scroll wheel / trackpad delta in CSS px
+`crates/shell/src/surface/types.rs:175` **enum** `PanelEvent` — An event delivered to a panel via [`super::Panel::on_event`]
+`crates/shell/src/surface/types.rs:206` **enum** `EventResponse` — What a panel returns from [`super::Panel::on_event`]
+`crates/shell/src/surface/types.rs:226` **enum** `Command` — State-changing intents a panel can emit
+`crates/shell/src/surface/types.rs:258` **enum** `CursorIcon` — Mouse cursor shape requested for a hit target
+`crates/shell/src/surface/types.rs:270` **enum** `HitElement` — Semantic identity of the element under the cursor
+`crates/shell/src/surface/types.rs:295` **struct** `HitTarget` — Result of [`super::Panel::hit_test`]: what is under a point and how the shell
+`crates/shell/src/surface/types.rs:308` **fn** `new` — A minimal hit target for `element` with a default cursor and no tooltip
+`crates/shell/src/surface/types.rs:334` **fn** `rect_contains` — `true` if `rect` contains `p` (left/top inclusive, right/bottom exclusive)
 `crates/shell/src/tab_lifecycle/manager.rs:14` **type** `TabId` — Opaque tab identifier. Callers create sequential IDs (0, 1, 2, …) or any u64
 `crates/shell/src/tab_lifecycle/manager.rs:18` **struct** `TierTransition` — A tier transition that occurred during `tick_idle` or `lru_evict`
 `crates/shell/src/tab_lifecycle/manager.rs:35` **struct** `TabLifecycleManager` — Manages lifecycle state for all open tabs
@@ -2769,4 +2827,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2704 symbols in 20 crates*
+*Total: 2762 symbols in 20 crates*
