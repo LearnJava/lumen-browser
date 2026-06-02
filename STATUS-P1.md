@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p1-heap-snapshot-compress** (10C.3) — deflate-сжатие + cap 5 MB/tab для QuickJS heap-снапшота.
+Next step: завершено, готово к merge в main. `crates/js/src/heap_snapshot.rs`
 
 ---
 

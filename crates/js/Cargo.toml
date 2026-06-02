@@ -27,5 +27,9 @@ getrandom = "0.2"
 # Security-critical; pure-JS alternatives are slower and harder to audit.
 sha2 = "0.10"
 sha1 = "0.10"
+# Provisional: deflate compression for QuickJS heap snapshots (ADR-008 §10C.3,
+# cap 5 MB/tab). Reuses the already-vendored flate2 (PNG iCCP path; also used by
+# lumen-storage for DOM-blob compression in §10J.1) — no new external dependency.
+flate2.workspace = true
 
 [dev-dependencies]

@@ -379,8 +379,8 @@
 | 10B.3 | ✅ Anti-pattern guard в `lumen-dom` | `dom/src/lib.rs` | — |
 | 10C | ✅ **`[P3]` Invariant 2: JsRuntime suspend/resume API** | `pause/unpause/suspend/resume` в `JsRuntime` trait + QuickJS impl | ADR-008 ✅ 2026-05-27 |
 | 10C.1 | ✅ `JsRuntime` trait: `pause()` / `unpause()` / `suspend()` / `resume()` | `core/src/ext/js.rs` | — |
-| 10C.2 | ✅ Имплементация для `rquickjs` через `JS_WriteObject` / `JS_ReadObject` | `js/src/quickjs/suspend.rs` | — |
-| 10C.3 | ⬜ zstd-сжатие heap snapshot; cap 5 MB/tab disk | `js/src/quickjs/snapshot.rs` | — |
+| 10C.2 | 🟡 Имплементация для `rquickjs`: `pause`/`suspend`/`resume` есть; полная сериализация heap через `JS_WriteObject`/`JS_ReadObject` заблокирована native-function bindings (их `JS_ReadObject` не восстанавливает). Шелл re-runs inline scripts на restore (`restore_js_context`), heap-контент не потребляется. | `js/src/lib.rs` | — |
+| 10C.3 | ✅ deflate-сжатие heap snapshot + cap 5 MB/tab (P1 2026-06-02): `heap_snapshot::compress_heap`/`decompress_heap`, magic `LJH1`, переиспользует vendored flate2; wired в `QuickJsRuntime::suspend`/`resume` | `js/src/heap_snapshot.rs` | — |
 | 10C.4 | ⬜ V8 compatibility note при миграции в Phase 3 | `docs/decisions/` | check before Phase 3 |
 | 10D | ✅ **`[P3+P1+P2]` Invariant 3: pure layout + paint** | 10D.1+10D.2+10D.3 ✅ | `lumen-layout` + `lumen-paint` |
 | 10D.1 | ✅ Audit `lumen-layout` — no `static MUT` / `lazy_static` / `OnceCell` в hot path | `layout/src/lib.rs` | ADR-008 Invariant 3 ✅ 2026-05-27 |
