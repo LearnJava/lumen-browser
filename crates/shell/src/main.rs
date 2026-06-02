@@ -39,6 +39,7 @@ mod notification;
 mod omnibox;
 mod panels;
 mod platform;
+pub mod surface;
 mod runtime;
 mod scroll;
 mod scroll_anim;
