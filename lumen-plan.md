@@ -327,7 +327,7 @@
 | 8G.2 | ✅ `Query::Role { role, name }` matching по a11y-tree (Playwright-стиль `getByRole`) | `driver/src/session.rs` `find_a11y_node`/`find_all_a11y_nodes` + `matches_query` | P1 done 2026-05-31 |
 | 8H | 🟡 **`[P3]` `lumen-bidi-server` крейт** (Phase 2) | Playwright/Selenium 5/Cypress «из коробки» | `crates/bidi/` |
 | 8H.1 | 🟡 WebSocket transport + W3C BiDi handshake | shell stub `shell/src/bidi/` (WS-кодек переиспользует `lumen-devtools::ws`); вынос в `bidi/src/transport.rs` отложен | — |
-| 8H.2 | 🟡 BiDi modules core: `session`, `browsingContext`, `script`, `network`, `input` | stub: `session.new/status/subscribe/end`, `browsingContext.getTree` + событие `browsingContext.created` в `shell/src/bidi/protocol.rs`; `script`/`network`/`input` отложены | W3C Working Draft, May 2026 |
+| 8H.2 | 🟡 BiDi modules core: `session`, `browsingContext`, `script`, `network`, `input` | `session.*` (status/new/subscribe/unsubscribe/end — реальное хранение подписок + event-gating), `browsingContext.*` (create/close/navigate/activate/getTree, multi-context state-machine, каскадное закрытие, вложенный getTree) в `shell/src/bidi/protocol.rs` (27 unit-тестов); `script`/`network`/`input` отложены | W3C Working Draft, May 2026 |
 | 8H.3 | ⬜ **Ship BiDi gaps** (см. ADR-006): response body, locale/timezone/offline, per-context UA, viewport-before-popup, preload per-context, download lifecycle, cookie change events, per-origin clear | `bidi/src/extensions.rs` | gap-mapping в `subsystems/lumen-bidi-server.md` |
 | 8H.4 | ✅ `lumen --bidi-port N` CLI flag | `shell/src/main.rs` (`extract_bidi_port` + `bidi::spawn`) | — |
 | 8I | ⬜ **`[P3]` `lumen-cdp-shim` крейт** (Phase 3+, **opt-in, по реальному запросу**) | Legacy Puppeteer-совместимость | `crates/cdp-shim/` |

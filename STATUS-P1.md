@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p1-bidi-contexts** — BiDi `browsingContext` multi-context state machine + хранение подписок (8H.2).
+Next step: merge — `crates/shell/src/bidi/protocol.rs` (27 тестов зелёные, clippy чист).
 
 ---
 
