@@ -8379,7 +8379,7 @@ mod tests {
         let texts: Vec<&str> = cmds.iter().filter_map(|c| {
             if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
         }).collect();
-        assert!(texts.iter().any(|&t| t == "1 / 1"), "expected '1 / 1' in DrawText, got: {:?}", texts);
+        assert!(texts.contains(&"1 / 1"), "expected '1 / 1' in DrawText, got: {:?}", texts);
     }
 
     /// Margin-box DrawText positioned at page-box coordinates (not inside content transform).

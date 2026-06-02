@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Task #34: WebGL GLSL shader execution  branch: p1-webgl-glsl-interp
+Next step: implement glsl.rs interpreter module  crates/engine/paint/src/glsl.rs
 
 ---
 

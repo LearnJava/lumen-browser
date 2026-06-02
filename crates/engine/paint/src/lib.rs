@@ -10,6 +10,7 @@
 
 pub mod atlas;
 pub mod backdrop_cache;
+pub mod glsl;
 pub mod compositor;
 pub mod display_list;
 pub mod fallback;
