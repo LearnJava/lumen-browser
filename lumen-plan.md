@@ -359,7 +359,7 @@
 | 9E.2 | ⬜ Variable inter-keystroke timing (Gaussian) | `shell/src/input/humanlike.rs` | — |
 | 9E.3 | ⬜ Pre-click dwell time | `shell/src/input/humanlike.rs` | — |
 | 9F | ⬜ **`[P3]` Layer 6: профили Standard/Strict/Tor** (Phase 2) | Per-profile config + per-context override через BrowserSession | `lumen-storage/src/profiles/fingerprint.rs` |
-| 9F.1 | ⬜ Профильный конфиг fingerprint (объединяет слои 2/3/4) | `storage/src/profiles/fingerprint.rs` | — |
+| 9F.1 | ✅ Профильный конфиг fingerprint (объединяет слои 2/3/4): `fingerprint.toml` → `FingerprintProfile` (http+tls profile, navigator/screen/timezone), apply к `HttpClient` + process-global `NavigatorProfile` | `shell/src/config.rs` | — |
 | 9F.2 | ⬜ `BrowserSession::set_fingerprint_profile(profile)` per-context override | `driver` + `core::ext` | связка с ADR-006 task 8F.3 |
 | 9F.3 | ⬜ Tor-mode профиль (Tor circuit + Tor Browser JA3/UA/screen/fonts pinning + no persistent state) | `storage` + `network` + `shell` | Phase 3, отдельная задача |
 | 9G | ⬜ **Red lines + perf gate — code-level enforcement** | Чтобы trigger-PR случайно не нарушил ADR-006 / ADR-007 | — |
