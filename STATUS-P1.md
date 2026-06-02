@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: Web Animations API JS runtime (задача #31)  branch: p1-web-animations
-Next step: реализовать KeyframeEffect + Animation + element.animate() в crates/js/src/dom.rs
+_(нет)_
 
 ---
 
@@ -17,7 +16,6 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Roadmap |
 |---|------|----------|--------|---------|
-| 31 | **Web Animations API JS runtime.** `element.animate(keyframes, options) → Animation`, `KeyframeEffect`, `Animation.play/pause/cancel/finish/reverse`, `getAnimations()`, `document.timeline`. Интерполяция значений в момент `t` поверх существующего `AnimationScheduler` (paint) для transform/opacity. P1 — value interpolation + JS-объекты; compositor offload (P2) и timeline scheduling (P4) — отдельно. | `lumen-js`, `lumen-shell` | L | lumen-plan.md:2293 / :513 (Web Animations API runtime, P1-доля) |
 | 32 | **History / Navigation API runtime completeness.** Дотянуть `history.pushState/replaceState` до обновления URL-бара shell; `popstate` на back/forward через session history; round-trip `history.state`; `history.length`. Типы `PopStateEvent` уже есть (`js/src/dom.rs:2050`) — нужно wiring со стеком навигации shell. | `lumen-js`, `lumen-shell` | M | lumen-plan.md (Phase 3, Navigation/History API runtime) |
 | 33 | **Print PDF inline content rendering** (переназначено от P2 2026-06-02). Сейчас `--print-to-pdf` рендерит геометрию страниц, но содержимое margin-box'ов (@page headers/footers) не печатается — 6.5 помечен «P2 inline content rendering pending». Дотянуть `build_print_display_list` (`paint/src/display_list.rs`) до эмиссии реального текста/inline-контента margin-box'ов в print-DL. | `lumen-paint`, `lumen-shell` | M | lumen-plan.md:192 (задача 6.5) |
 | 34 | **WebGL GLSL shader execution** (переназначено от P2 2026-06-02). `SoftwareWebGl` (`paint/src/webgl.rs`) сейчас заливает фрагмент плоским цветом из последнего `uniform4f` — GLSL не исполняется. Добавить минимальный интерпретатор GLSL ES (vertex: позиция/varyings; fragment: цвет из varyings+uniforms+texture sample), чтобы реальные шейдеры давали корректный результат. | `lumen-paint`, `lumen-js` | L | Phase 4 §7F (сейчас flat color) |
@@ -26,6 +24,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p1-web-animations** ✅ 2026-06-02 — Web Animations API JS runtime (задача #31). `element.animate(keyframes, options) → Animation`, `KeyframeEffect`, `Animation.play/pause/cancel/finish/reverse`, `getAnimations()`, `document.timeline`. Чистый JS-шим в WEB_API_SHIM без новых нативных биндингов. Интерполяция: opacity (scalar), transform (matched-pair функций с regex), color-свойства (RGBA lerp), scalar+unit (px/em/%/deg); easing linear/ease*/cubic-bezier/step-*. Animations применяют стили через `element.style[prop]` → DOM dirty → relayout/repaint. `_wa_current_time` обновляется в начале каждого `_lumen_run_raf_callbacks`. 19 unit-тестов. lumen-js: 831 lib (было 812). Clippy чист. Без новых зависимостей. Compositor offload (P2) и CSS animation-timeline (P4) — отдельные задачи.
 
 - **p1-request-failed-wiring** ✅ 2026-06-02 — `Event::RequestFailed` → network-panel wiring (задача #36). `NetworkLogSink` раньше игнорировал этот event — запись зависала в статусе «pending». Теперь: новое поле `NetworkEntry.failed: bool`; `NetworkLog::record_failed(url, stage, reason)` — ищет pending-запись по URL и маркирует failed + elapsed (или синтетическую при missed start); arm `Event::RequestFailed { url, stage, reason, .. } => guard.record_failed(...)` в `NetworkLogSink::emit`; `record_completed` фильтрует уже-failed записи; `status_label` показывает stage-префикс (dns/tcp/tls/read) красным; `timing_label` возвращает «—»; `FAILED_BG` (тёмно-оранжевый) подсвечивает строку; `main.rs` eprintln-логгер: `✗ {url} ({stage}: {reason})`. 7 новых тестов. lumen-shell: 879 тестов (было 865). Clippy чист. Без новых зависимостей.
 
