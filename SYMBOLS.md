@@ -1035,7 +1035,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/read_later.rs:346` **fn** `delete`
 `crates/knowledge/src/read_later.rs:356` **fn** `count`
 
-## lumen-layout  (402 symbols)
+## lumen-layout  (404 symbols)
 
 `crates/engine/layout/src/animation.rs:36` **struct** `AnimatedStyle` — Sparse animated values for one element — scheduler output per node per frame
 `crates/engine/layout/src/animation.rs:46` **struct** `AnimationFrame` — Output of `AnimationScheduler::tick` — per-node animated values for one frame
@@ -1091,21 +1091,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
 `crates/engine/layout/src/counters.rs:152` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
 `crates/engine/layout/src/image_gating.rs:42` **fn** `gate_image_requests` — Returns the set of [`NodeId`]s for `BoxKind::Image` boxes whose bounding
-`crates/engine/layout/src/lib.rs:100` **trait** `TextMeasurer`
-`crates/engine/layout/src/lib.rs:127` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:148` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:169` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:375` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
-`crates/engine/layout/src/lib.rs:403` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:462` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
-`crates/engine/layout/src/lib.rs:535` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
-`crates/engine/layout/src/lib.rs:553` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:578` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:710` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
-`crates/engine/layout/src/lib.rs:798` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
-`crates/engine/layout/src/lib.rs:823` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
-`crates/engine/layout/src/lib.rs:892` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
-`crates/engine/layout/src/lib.rs:918` **fn** `set_scroll_position` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/lib.rs:102` **trait** `TextMeasurer`
+`crates/engine/layout/src/lib.rs:129` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:150` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:171` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:377` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
+`crates/engine/layout/src/lib.rs:405` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:464` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
+`crates/engine/layout/src/lib.rs:537` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
+`crates/engine/layout/src/lib.rs:555` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:580` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:712` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
+`crates/engine/layout/src/lib.rs:800` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
+`crates/engine/layout/src/lib.rs:825` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
+`crates/engine/layout/src/lib.rs:894` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
+`crates/engine/layout/src/lib.rs:920` **fn** `set_scroll_position` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/motion_path.rs:22` **struct** `MotionTransform` — Result of resolving a motion offset along an `offset-path`
+`crates/engine/layout/src/motion_path.rs:39` **fn** `resolve_motion_transform` — Resolve the motion transform for an element with `offset-path: path(...)`
 `crates/engine/layout/src/page.rs:22` **struct** `MarginBoxTextFragment` — Text fragment within a margin-box after layout
 `crates/engine/layout/src/page.rs:49` **enum** `MarginBoxPosition` — Position of a margin-box relative to the page box
 `crates/engine/layout/src/page.rs:72` **fn** `all` — All 16 margin-box positions in layout order
@@ -2864,4 +2866,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2799 symbols in 20 crates*
+*Total: 2801 symbols in 20 crates*
