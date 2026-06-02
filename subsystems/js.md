@@ -154,6 +154,18 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Draw ops mark the canvas dirty; `QuickJsRuntime::flush_canvas_updates()` (→ `canvas2d::flush_dirty()`) drains `(nid, w, h, rgba)` once per frame. The shell registers each via `Renderer::register_image("canvas:{nid}", ...)` and requests a redraw. Unregistered canvases (no JS drawing, e.g. the cpu_raster snapshot driver which runs no JS) render as the transparent `DrawImage` placeholder.
   - 16 unit tests in `canvas2d.rs` (create/clamp/idempotent, fill/clear/stroke/path dirty-tracking, flush-once, line-width/alpha validation, resize, get_image_data, unknown-canvas no-ops, isolation) + 6 e2e tests in `dom.rs` (getContext object/caching, default 300×150, draw→flush, webgl→null, non-canvas→null). Graphic test `57-canvas-2d.html` + demo in `1000000-final.html`.
 
+- **HTML Popover API** (`crates/js/src/dom.rs`, WHATWG HTML §6.12). 2026-06-03.
+  - `showPopover/hidePopover/togglePopover` + `popover` getter/setter on every HTMLElement (in `_lumen_make_element`).
+  - Top-layer emulation: `showPopover()` sets `data-lumen-popover-open` sentinel (read by `is_closed_popover` in `layout/box_tree.rs` to skip hidden popovers) + applies `position:fixed;z-index:2147483647` inline style. `hidePopover()` removes sentinel + restores saved style.
+  - `popover="auto"` stack: opening a new auto-popover closes all previously open auto-popovers (newest-first). `popover="manual"` is independent.
+  - `beforetoggle` / `toggle` events with `oldState`/`newState` fired synchronously on show and hide.
+  - Click-outside capture handler: clicks outside all open auto-popovers close them from newest to oldest.
+  - Escape keydown: closes topmost auto-popover (dialog modal takes priority if present).
+  - `popovertarget`/`popovertargetaction` attributes on buttons: click dispatches to `showPopover`/`hidePopover`/`togglePopover` on the element with matching `id`. Default action is `toggle`.
+  - Layout side: `is_closed_popover(doc, id)` in `box_tree.rs` returns `true` when `popover` attribute is set but `data-lumen-popover-open` is absent → `BoxKind::Skip` (mirrors `<details>` child hiding pattern).
+  - 14 unit tests: getter/setter, show/hide/toggle, events, auto-stack, manual isolation, fixed style on show, style restore on hide, popovertarget button click.
+  - Note: `:popover-open` CSS pseudo-class (already parsed by css-parser) always returns `false` until P4 wires it to `data-lumen-popover-open` attribute.
+
 - **Heap-snapshot deflate compression + 5 MB cap** (`crates/js/src/heap_snapshot.rs`, ADR-008 §10C.3). 2026-06-02.
   - `compress_heap(&[u8]) -> Result<SuspendedHeap, HeapSnapshotError>` — `LJH1` magic prefix + zlib (deflate) stream; rejects with `HeapSnapshotError::TooLarge` when the compressed result exceeds `MAX_HEAP_SNAPSHOT_BYTES` (5 MiB).
   - `decompress_heap(&SuspendedHeap) -> Result<Vec<u8>, HeapSnapshotError>` — strips magic + inflates; payload without the magic prefix is returned verbatim (raw/legacy), empty → empty.

@@ -6,8 +6,7 @@
 
 ## In progress
 
-HTML Popover API (WHATWG HTML §6.12 `popover` attribute)  branch: p1-popover-api
-Next step: JS bindings showPopover/hidePopover/togglePopover + events + top-layer emulation  crates/js/src/dom.rs
+_(нет)_
 
 ---
 
@@ -18,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-popover-api** ✅ 2026-06-03 — HTML Popover API (WHATWG HTML §6.12 `popover` attribute). `showPopover/hidePopover/togglePopover` + `popover` getter/setter на всех HTMLElement. Top-layer emulation: `showPopover()` устанавливает `data-lumen-popover-open` sentinel (читается `is_closed_popover` в `box_tree.rs` — элементы с `popover` без sentinel скипаются как `BoxKind::Skip`, аналог `<details>` hide) + применяет `position:fixed; z-index:2147483647` inline. `hidePopover()` снимает sentinel + восстанавливает style. `popover="auto"` stack: открытие нового auto-поповера закрывает все предыдущие. `beforetoggle`/`toggle` события с `oldState`/`newState`. Click-outside (capture) и Escape handlers для auto-поповеров. `popovertarget`/`popovertargetaction` кнопки. **layout/box_tree.rs:** `is_closed_popover()` хелпер. 14 unit-тестов. lumen-js: 882 lib. Clippy чист. Без новых зависимостей. `:popover-open` CSS pseudo-class (уже парсируется css-parser) — P4 handoff: wire к `data-lumen-popover-open`.
 
 - **p1-multifont-measurer** ✅ 2026-06-02 — Multi-font TextMeasurer с поддержкой @font-face (CSS Fonts L4 §5.3). `FontMeasurer` поддерживал только bundled Inter — тексты с `font-family` отличным от Inter измерялись Inter-метриками, что ломало line-wrapping для страниц с @font-face шрифтами. **layout:** новый метод `TextMeasurer::char_width_with_families(ch, font_size, families)` с default-impl (игнорирует families → Inter fallback); `measure_text_w_families` — family-aware версия `measure_text_w`; все call-sites в `wrap_inline_run`/`widest_word`/`pretty_wrap`/`char_break_offset` переведены на неё. **paint:** `MultiFontMeasurer` — `OwnedFontMetrics` хранит cmap_data+advance_widths; cascade: первая семья из font-family list с глифом побеждает, иначе fallback → Inter; регистрация через `register_family(name, bytes)`. **font:** `FontRegistry::face_bytes_for_family` — даёт shell байты @font-face шрифта. **shell:** `parse_and_layout` создаёт `MultiFontMeasurer` вместо `FontMeasurer` и регистрирует все `@font-face` правила из `StyleSheet` перед layout. 7 unit-тестов (lumen-paint: 514 lib). Clippy чист. Без новых зависимостей.
 
