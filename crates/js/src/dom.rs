@@ -152,6 +152,22 @@ pub struct PopupRequest {
     pub height: u32,
 }
 
+/// A fullscreen API request emitted by JS `element.requestFullscreen()` or
+/// `document.exitFullscreen()`.
+///
+/// Captured in `fullscreen_requests` and drained by the shell in `about_to_wait`
+/// to toggle OS fullscreen via `winit::window::Window::set_fullscreen`.
+#[derive(Debug, Clone)]
+pub enum FullscreenRequest {
+    /// `element.requestFullscreen()` — enter OS fullscreen for the given element.
+    Enter {
+        /// Node index of the element requesting fullscreen.
+        nid: u32,
+    },
+    /// `document.exitFullscreen()` or Escape-key acknowledgement — exit OS fullscreen.
+    Exit,
+}
+
 // ─── public entry point ───────────────────────────────────────────────────────
 
 /// Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`.
@@ -208,8 +224,9 @@ pub fn install_dom_api(
     deterministic_seed: Option<u64>,
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
+    fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -274,6 +291,7 @@ fn install_primitives(
     deterministic_seed: Option<u64>,
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
+    fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -1457,6 +1475,21 @@ fn install_primitives(
                 wor.lock().unwrap().push(PopupRequest { url, target, width, height });
             }
         );
+    }
+
+    // ── Fullscreen API (WHATWG Fullscreen §4) ────────────────────────────────────
+    // Shell drains via `take_fullscreen_requests()` and calls `window.set_fullscreen()`.
+    {
+        let fs_req = Arc::clone(&fullscreen_requests);
+        reg!("_lumen_fs_enter", move |nid: u32| {
+            fs_req.lock().unwrap().push(FullscreenRequest::Enter { nid });
+        });
+    }
+    {
+        let fs_req = Arc::clone(&fullscreen_requests);
+        reg!("_lumen_fs_exit", move || {
+            fs_req.lock().unwrap().push(FullscreenRequest::Exit);
+        });
     }
 
     // ── Computed styles (window.getComputedStyle) ────────────────────────────────
@@ -3011,6 +3044,31 @@ function _lumen_make_element(nid) {
         showPopover:   function()      { _lumen_popover_show(nid); },
         hidePopover:   function()      { _lumen_popover_hide(nid); },
         togglePopover: function(force) { _lumen_popover_toggle(nid, force); },
+        // Fullscreen API (WHATWG Fullscreen §4.3)
+        requestFullscreen: function(options) {
+            var self = _obj;
+            return new Promise(function(resolve, reject) {
+                if (!document.fullscreenEnabled) {
+                    reject(new TypeError('Fullscreen not enabled'));
+                    return;
+                }
+                // Exit previous fullscreen element if it is a different node.
+                if (_fs_nid !== -1 && _fs_nid !== nid) {
+                    _lumen_remove_attr(_fs_nid, _FS_ATTR);
+                    var prev = _lumen_make_element(_fs_nid);
+                    if (prev) { prev.dispatchEvent(new Event('fullscreenchange', { bubbles: true })); }
+                }
+                _fs_nid = nid;
+                _lumen_set_attr(nid, _FS_ATTR, '');
+                // Notify shell to enter OS fullscreen.
+                if (typeof _lumen_fs_enter === 'function') { _lumen_fs_enter(nid); }
+                self.dispatchEvent(new Event('fullscreenchange', { bubbles: true }));
+                document.dispatchEvent(new Event('fullscreenchange'));
+                resolve();
+            });
+        },
+        onfullscreenchange: null,
+        onfullscreenerror:  null,
         appendChild:     function(c) {
             if (!c || c.__nid__ === undefined) return c;
             if (c.__isDocumentFragment__) {
@@ -3614,6 +3672,13 @@ var _lumen_selection = (function() {
     };
 }());
 
+// ── Fullscreen API (WHATWG Fullscreen §4) ────────────────────────────────────
+// Current fullscreen element NID (-1 = none).
+var _fs_nid = -1;
+// Sentinel attribute written by requestFullscreen() and read by the CSS cascade.
+// CSS: :fullscreen — P4 wires PseudoClass::Fullscreen to check this attr.
+var _FS_ATTR = 'data-lumen-fullscreen';
+
 // ── Page Visibility API + document.readyState state vars ─────────────────────
 // Declared before `document` because getters below capture these by name.
 var _doc_hidden = false;
@@ -3699,6 +3764,28 @@ var document = {
     // Web Animations API (WAAPI Level 1) — document.timeline and document.getAnimations().
     get timeline() { return _wa_doc_timeline; },
     getAnimations: function() { return _wa_doc_get_animations(); },
+    // Fullscreen API (WHATWG Fullscreen §4) — document-level surface.
+    get fullscreenElement() {
+        return _fs_nid !== -1 ? _lumen_make_element(_fs_nid) : null;
+    },
+    get fullscreenEnabled() { return true; },
+    exitFullscreen: function() {
+        return new Promise(function(resolve) {
+            if (_fs_nid !== -1) {
+                var old = _fs_nid;
+                _lumen_remove_attr(_fs_nid, _FS_ATTR);
+                _fs_nid = -1;
+                // Notify shell to exit OS fullscreen.
+                if (typeof _lumen_fs_exit === 'function') { _lumen_fs_exit(); }
+                var prev = _lumen_make_element(old);
+                if (prev) { prev.dispatchEvent(new Event('fullscreenchange', { bubbles: true })); }
+                document.dispatchEvent(new Event('fullscreenchange'));
+            }
+            resolve();
+        });
+    },
+    onfullscreenchange: null,
+    onfullscreenerror:  null,
 };
 
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
@@ -8193,6 +8280,21 @@ document.addEventListener('click', function(evt) {
         el = el.parentElement;
     }
 });
+
+// ── Fullscreen API helpers ────────────────────────────────────────────────────
+// Called by the shell (via eval_js) when fullscreen is exited externally, e.g.
+// the user pressed Escape or the OS window manager exited fullscreen mode.
+// This keeps JS state consistent with reality — _fs_nid → -1, fires events.
+function _lumen_notify_fullscreen_exit() {
+    if (_fs_nid !== -1) {
+        var old = _fs_nid;
+        _lumen_remove_attr(_fs_nid, _FS_ATTR);
+        _fs_nid = -1;
+        var prev = _lumen_make_element(old);
+        if (prev) { prev.dispatchEvent(new Event('fullscreenchange', { bubbles: true })); }
+        document.dispatchEvent(new Event('fullscreenchange'));
+    }
+}
 
 // ── Web Animations API (WAAPI Level 1) ────────────────────────────────────────
 // element.animate(keyframes, options) → Animation
@@ -16648,6 +16750,130 @@ mod tests {
                  result[0] === 1 && result[4] === 5",
             )
             .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Fullscreen API tests (WHATWG Fullscreen §4) ───────────────────────────
+
+    #[test]
+    fn fullscreen_enabled_is_true() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.fullscreenEnabled === true").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fullscreen_element_initially_null() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.fullscreenElement === null").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn request_fullscreen_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var body = document.body; \
+             var p = body.requestFullscreen(); \
+             typeof p === 'object' && typeof p.then === 'function'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn request_fullscreen_sets_fullscreen_element() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var body = document.body; \
+             body.requestFullscreen(); \
+             _lumen_drain_microtasks(); \
+             document.fullscreenElement !== null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn request_fullscreen_sets_sentinel_attr() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var body = document.body; \
+             body.requestFullscreen(); \
+             _lumen_drain_microtasks(); \
+             body.hasAttribute('data-lumen-fullscreen')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn request_fullscreen_fires_fullscreenchange_event() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fired = false; \
+             document.addEventListener('fullscreenchange', function() { fired = true; }); \
+             document.body.requestFullscreen(); \
+             _lumen_drain_microtasks(); \
+             fired"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn exit_fullscreen_clears_fullscreen_element() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "document.body.requestFullscreen(); \
+             _lumen_drain_microtasks(); \
+             document.exitFullscreen(); \
+             _lumen_drain_microtasks(); \
+             document.fullscreenElement === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn exit_fullscreen_removes_sentinel_attr() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var body = document.body; \
+             body.requestFullscreen(); \
+             _lumen_drain_microtasks(); \
+             document.exitFullscreen(); \
+             _lumen_drain_microtasks(); \
+             !body.hasAttribute('data-lumen-fullscreen')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn notify_fullscreen_exit_clears_state() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "document.body.requestFullscreen(); \
+             _lumen_drain_microtasks(); \
+             _lumen_notify_fullscreen_exit(); \
+             _lumen_drain_microtasks(); \
+             document.fullscreenElement === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_has_onfullscreenchange_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "'onfullscreenchange' in document.body && \
+             'onfullscreenerror' in document.body"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_has_onfullscreenchange_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "'onfullscreenchange' in document && \
+             'onfullscreenerror' in document"
+        ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
