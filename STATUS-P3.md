@@ -20,9 +20,11 @@ _(никто ничего не зарезервировал)_
 
 При падении `cargo test -p lumen-paint` или `cargo test -p lumen-layout` — исправить немедленно.
 
-### 3. Shell wiring (handoff от P1)
+### 3. Shell wiring
 
-- **`Event::RequestFailed` → network-panel** (от p1-request-failed-event). Новый событийный вариант `Event::RequestFailed { tab_id, url, stage: RequestStage, reason }` уже эмитится в `lumen-network` симметрично `RequestStarted` (DNS/TCP/TLS/Read-сбои до получения HTTP-статуса). Сейчас `crates/shell/src/devtools/network_panel.rs:202` ловит его в `_ => {}` — запись в логе остаётся «висящей» как started. Wiring: добавить arm `Event::RequestFailed { url, stage, .. } => guard.record_failed(url.as_str(), stage)` + метод `record_failed` (по аналогии с `record_blocked`), показать `stage.as_str()` + reason в строке лога. Аналогично `main.rs:119` eprintln-логгер (`✗ {url} ({stage}: {reason})`).
+_(нет — handoff-задачи перераспределены на P1/P2)_
+
+> Перенесено 2026-06-02: `Event::RequestFailed` → network-panel **→ P2** (задача #30, владеет `devtools/network_panel.rs`). P3 фокусируется только на баг-фиксах и регрессиях (см. CLAUDE.md «Bug ownership: P3 only»).
 
 ### Постоянно
 

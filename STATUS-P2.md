@@ -14,17 +14,12 @@ _(нет)_
 
 Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
 
-| # | Task | Crate(s) | Effort | Blocker |
+| # | Task | Crate(s) | Effort | Roadmap |
 |---|------|----------|--------|---------|
-| ~~16~~ | ✅ **DONE by P1 (p1-font-fallback-wiring, 2026-06-02)** — Font fallback. Реализовано как активация существующей codepoint-cascade (`Renderer::preload_curated_fallbacks()` в shell), а не per-range `FontDb`. Находка: bundled Inter уже покрывает кириллицу, реальный пробел — CJK/emoji/RTL. См. STATUS-P1 Recent. | — | — | — |
-| ~~19~~ | ✅ **DONE (p2-bidi-stub, 2026-06-02)** — WebDriver BiDi stub. См. Recent. | — | — | — |
-| ~~20~~ | ✅ **DONE by P1 (p1-fingerprint-config, 2026-06-02)** — Fingerprint profile config (9F.1). `shell/src/config.rs`: `FingerprintProfile` (http+tls profile, screen/timezone/hw/languages), hand-rolled `fingerprint.toml`-парсер, `apply_http()` на все `HttpClient`-билдеры + process-global `lumen_js::NavigatorProfile` через `install_navigator()`. См. STATUS-P1 Recent. | — | — | — |
-| ~~21~~ | ✅ **DONE (p2-pip-window, 2026-06-02)** — Picture-in-picture video window. См. Recent. | — | — | — |
-| ~~22~~ | ✅ **DONE (p2-bookmark-panel, 2026-06-02)** — Bookmark manager panel. См. Recent. | — | — | — |
-| ~~23~~ | ✅ **DONE (p2-command-palette, 2026-06-02)** — Command palette. См. Recent. | — | — | — |
-| ~~24~~ | ✅ **DONE (p2-dark-mode, 2026-06-02)** — `@media prefers-color-scheme` dark mode (shell side). См. Recent. | — | — | — |
-| ~~25~~ | ✅ **DONE (p2-focus-mode, 2026-06-02)** — Focus mode + Pomodoro timer (V4). См. Recent. | — | — | — |
-| ~~26~~ | ✅ **DONE (p2-privacy-panel, 2026-06-02)** — Privacy network panel (V5). См. Recent. | — | — | — |
+| 27 | **Print PDF inline content rendering.** Сейчас `--print-to-pdf` рендерит геометрию страниц, но содержимое margin-box'ов (@page headers/footers) не печатается — 6.5 помечен «P2 inline content rendering pending». Дотянуть `build_print_display_list` (`paint/src/display_list.rs`) до эмиссии реального текста/inline-контента margin-box'ов в print-DL. | `lumen-paint`, `lumen-shell` | M | lumen-plan.md:192 (задача 6.5) |
+| 28 | **WebGL GLSL shader execution.** `SoftwareWebGl` (`paint/src/webgl.rs`) сейчас заливает фрагмент плоским цветом из последнего `uniform4f` — GLSL не исполняется. Добавить минимальный интерпретатор GLSL ES (vertex: позиция/varyings; fragment: цвет из varyings+uniforms+texture sample), чтобы реальные шейдеры давали корректный результат. | `lumen-paint`, `lumen-js` | L | Phase 4 §7F (сейчас flat color) |
+| 29 | **ICC profile extraction в lumen-image (decode-side).** Paint-сторона color management (Display-P3/Rec2020) помечена ✅ (3A), но `lumen-image` всегда отдаёт `icc_profile: None` — профиль не извлекается из PNG (`iCCP`) / JPEG (`APP2` multi-segment), поэтому P3-фото рендерятся как sRGB. Извлекать ICC и прокидывать в существующий paint color-management путь. | `lumen-image`, `lumen-paint` | L | lumen-plan.md:2298 / :518 (Color management ICC, P2) |
+| 30 | **`Event::RequestFailed` → network-panel wiring** (переназначено от P3, исходный handoff от p1-request-failed-event). Событие `Event::RequestFailed { tab_id, url, stage: RequestStage, reason }` уже эмитится в `lumen-network` симметрично `RequestStarted` (DNS/TCP/TLS/Read-сбои до HTTP-статуса), но `network_panel.rs:202` ловит его в `_ => {}` — запись остаётся «висящей» как started. Добавить arm `Event::RequestFailed { url, stage, .. } => guard.record_failed(url.as_str(), stage)` + метод `record_failed` (по аналогии с `record_blocked`), показать `stage.as_str()` + reason в строке лога; аналогично eprintln-логгер `main.rs:119` (`✗ {url} ({stage}: {reason})`). **P2 владеет `devtools/network_panel.rs`** (p2-network-panel). | `lumen-shell` | S | lumen-plan.md §9.6:1472 |
 
 ---
 
