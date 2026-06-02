@@ -31,7 +31,7 @@ use lumen_font::{
     Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex,
     maybe_decode_font,
 };
-use lumen_image::{Image, PixelFormat};
+use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
 use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Length, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
 use winit::window::Window;
 
@@ -3136,7 +3136,12 @@ impl Renderer {
         // Загружаем оригинал в GPU (без resize — используется только когда
         // layout-size == intrinsic-size, т.е. для object-fit:none / scale-down
         // на маленьких картинках).
-        let rgba = convert_to_rgba(image);
+        let mut rgba = convert_to_rgba(image);
+        // Apply ICC colour correction before GPU upload so wide-gamut (Display P3,
+        // Rec2020) photos render correctly on sRGB displays.
+        if let Some(ref profile) = image.icc_profile {
+            correct_rgba_pixels(&mut rgba, profile);
+        }
         let gi = self.make_gpu_image_entry(&rgba, image.width, image.height);
         self.images.insert(src, gi);
         Ok(())
@@ -3189,7 +3194,11 @@ impl Renderer {
                 } else {
                     resize_bilinear(&raw, tw, th)
                 };
-                let rgba = convert_to_rgba(&resized);
+                let mut rgba = convert_to_rgba(&resized);
+                // ICC profile is on the original `raw`; resize_* drops it.
+                if let Some(ref profile) = raw.icc_profile {
+                    correct_rgba_pixels(&mut rgba, profile);
+                }
                 let gi = self.make_gpu_image_entry(&rgba, tw, th);
                 self.images.insert(gpu_key, gi);
             }

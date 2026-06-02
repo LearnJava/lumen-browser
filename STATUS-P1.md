@@ -6,17 +6,14 @@
 
 ## In progress
 
-_(нет)_
+**ICC profile extraction в lumen-image (decode-side)** — задача #35  branch: p1-icc-profile
+Next step: parse_jpeg_icc_profile (APP2 multi-segment) + IccGamut detection + pixel correction + renderer.rs wiring
 
 ---
 
 ## Next
 
-Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
-
-| # | Task | Crate(s) | Effort | Roadmap |
-|---|------|----------|--------|---------|
-| 35 | **ICC profile extraction в lumen-image (decode-side)** (переназначено от P2 2026-06-02). Paint-сторона color management (Display-P3/Rec2020) помечена ✅ (3A), но `lumen-image` всегда отдаёт `icc_profile: None` — профиль не извлекается из PNG (`iCCP`) / JPEG (`APP2` multi-segment), поэтому P3-фото рендерятся как sRGB. Извлекать ICC и прокидывать в существующий paint color-management путь. | `lumen-image`, `lumen-paint` | L | lumen-plan.md:2298 / :518 (Color management ICC) |
+_(нет — задача #35 в работе)_
 
 ---
 
