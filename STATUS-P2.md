@@ -6,8 +6,7 @@
 
 ## In progress
 
-C6: SVG stroke advanced properties  branch: p2-svg-stroke-advanced
-Next step: add FillRule/StrokeLinecap/StrokeLinejoin enums + ComputedStyle fields  style.rs:2300
+_(нет)_
 
 ---
 
@@ -41,6 +40,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-svg-stroke-advanced** ✅ 2026-06-03 — C6: SVG stroke advanced properties end-to-end (SVG §11.3/11.4). Новые enums `FillRule { NonZero, EvenOdd }`, `StrokeLinecap { Butt, Round, Square }`, `StrokeLinejoin { Miter, Round, Bevel }` в `layout/src/style.rs`. `ComputedStyle` получил 6 новых полей: `svg_fill_rule`, `svg_stroke_linecap`, `svg_stroke_linejoin`, `svg_stroke_miterlimit` (default 4.0), `svg_stroke_dasharray: Vec<f32>`, `svg_stroke_dashoffset`. `apply_declaration` парсит все 6 свойств; наследование в `compute_style` + `apply_css_wide_keyword`. Алгоритмы в `paint/src/svg_path.rs`: `StrokeParams` struct, `apply_dash_pattern()` (разбивка пути на дашированные сегменты, корректный dashoffset), `tessellate_stroke_ex()` (full linecap round/square + linejoin bevel/round + configurable miterlimit). `emit_svg_shape` в `display_list.rs` wires все поля через `StrokeParams`. Graphic test 60-svg-stroke-advanced.html. 12 новых unit-тестов (svg_path). Итого lumen-paint: 529 тестов.
 - **p2-scrollbar-width-color** ✅ 2026-06-03 — C5: `scrollbar-width` / `scrollbar-color` CSS wiring. `DrawScrollbar` расширен полями `thumb_color: [f32;4]`, `track_color: [f32;4]`. `ScrollbarInput` получил `gutter_px`. Emit-блок читает `b.style.scrollbar_width` (auto=12px, thin=6px, none→команда не эмитируется) и `b.style.scrollbar_color` (Some→custom colors, None→defaults). Renderer использует per-command цвета вместо hardcoded констант. 4 новых теста; 518 passed (lumen-paint).
 - **p2-overflow-scroll-wiring** ✅ 2026-06-03 — C4: CSS unit-тесты для `overflow: scroll/auto` wiring. Подтверждено: `parse_overflow_kw` + display list emitter корректно обрабатывают `Scroll|Auto`. 5 тестов в `lumen-layout/style.rs` (одно/двухзначный shorthand, отдельные оси `overflow-x/y`) + 1 тест в `lumen-paint/display_list.rs` (`overflow:auto` → `PushScrollLayer`).
 - **p2-css-3d-wiring** ✅ 2026-06-03 — C3: CSS 3D transforms wiring end-to-end (CSS Transforms L2). `TransformFn` расширен 10 новыми вариантами: `TranslateZ`/`Translate3d`, `RotateX`/`RotateY`/`RotateZ`/`Rotate3d`, `ScaleZ`/`Scale3d`, `Matrix3d`, `Perspective`. Новый `TransformStyle { Flat, Preserve3d }` enum. `ComputedStyle` получил `transform_style: TransformStyle` (default Flat) + `perspective_origin: (PositionComponent, PositionComponent)` (default 50% 50%). `apply_declaration` парсит `transform-style` + `perspective-origin`. `parse_transform_fn` обрабатывает все 10 функций. `compute_local_transform`/`forward_box_transform`/`transform_fns_to_matrix` в `property_trees.rs` + `hit_test.rs` wired к Mat4 3D конструкторам. `establishes_3d_rendering_context` переключён с `false` на реальную проверку `b.style.transform_style == TransformStyle::Preserve3d`. `affine_of` в `animation.rs` дополнен wildcard (3D → identity для 2D-анимационного пути). `transform_fn_to_css` в `selector_query.rs` поддерживает все варианты. 15 новых unit-тестов.

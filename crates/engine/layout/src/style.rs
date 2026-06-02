@@ -10826,10 +10826,10 @@ fn apply_declaration(
             }
         }
         "stroke-miterlimit" => {
-            if let Ok(v) = val.trim().parse::<f32>() {
-                if v >= 1.0 {
-                    style.svg_stroke_miterlimit = v;
-                }
+            if let Ok(v) = val.trim().parse::<f32>()
+                && v >= 1.0
+            {
+                style.svg_stroke_miterlimit = v;
             }
         }
         "stroke-dasharray" => {

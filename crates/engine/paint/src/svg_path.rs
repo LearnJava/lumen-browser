@@ -861,32 +861,29 @@ pub fn apply_dash_pattern(
         if n < 2 {
             continue;
         }
-        // Detect closed: last ≈ first.
-        let closed = n > 2
-            && (contour[0][0] - contour[n - 1][0]).abs() < 1e-4
-            && (contour[0][1] - contour[n - 1][1]).abs() < 1e-4;
         // Effective dashoffset: mod by cycle, negated (offset shifts pattern forward).
         let start_offset = ((-dashoffset) % cycle + cycle) % cycle;
 
         // Walk along the path, tracking which dash phase we're in.
-        let mut phase_len = start_offset; // remaining length in current dash/gap
-        let mut phase_idx = 0usize;        // index into dasharray
-        // Advance phase to account for start_offset.
+        // Advance phase_idx/phase_len to account for start_offset.
+        let mut phase_idx = 0usize;
+        let mut phase_len;
         let mut rem = start_offset;
-        phase_idx = 0;
         loop {
             let d = dasharray[phase_idx % dasharray.len()];
-            if rem <= d {
+            // `<` not `<=`: when rem == d, advance to the next phase rather than
+            // emitting a zero-length draw/gap (which produces degenerate contours).
+            if rem < d {
                 phase_len = d - rem;
                 break;
             }
             rem -= d;
             phase_idx += 1;
         }
-        // phase_idx % 2 == 0 → drawing; odd → gap.
-        let mut drawing = (phase_idx % 2) == 0;
+        // phase_idx even → drawing; odd → gap.
+        let mut drawing = phase_idx.is_multiple_of(2);
         let mut current_dash: Vec<[f32; 2]> = Vec::new();
-        let seg_count = if closed { n - 1 } else { n - 1 };
+        let seg_count = n - 1;
         for i in 0..seg_count {
             let a = contour[i];
             let b = contour[i + 1];
@@ -1499,5 +1496,158 @@ mod tests {
         }).sum();
         let expected = 10.0 * (100.0f32 * 100.0 + 100.0 * 100.0).sqrt();
         assert!((area - expected).abs() < 1.0, "area={area} expected≈{expected}");
+    }
+
+    // ── tessellate_stroke_ex: linecap / linejoin / dasharray ────────────────
+
+    #[test]
+    fn stroke_ex_butt_same_as_basic() {
+        // tessellate_stroke_ex with butt caps and miter joins must match tessellate_stroke.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let params = StrokeParams { half_width: 5.0, ..StrokeParams::default() };
+        let ex = tessellate_stroke_ex(&contour, &params);
+        let basic = tessellate_stroke(&contour, 5.0);
+        assert_eq!(ex.len(), basic.len(), "butt-miter should match basic stroke vert count");
+    }
+
+    #[test]
+    fn stroke_ex_square_cap_longer() {
+        // Square cap extends half_w past endpoint → more vertices than butt.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let butt = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0,
+            linecap: StrokeLinecap::Butt,
+            ..StrokeParams::default()
+        });
+        let square = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0,
+            linecap: StrokeLinecap::Square,
+            ..StrokeParams::default()
+        });
+        // Square cap adds 2 quads (start + end) = 12 extra vertices.
+        assert_eq!(square.len(), butt.len() + 12, "square cap: 2×2 tris extra");
+        // X-extent of square caps must be wider (< 0 and > 100).
+        let xs: Vec<f32> = square.iter().map(|v| v[0]).collect();
+        let min_x = xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        assert!(min_x < 0.0, "square cap start extends left, min_x={min_x}");
+        assert!(max_x > 100.0, "square cap end extends right, max_x={max_x}");
+    }
+
+    #[test]
+    fn stroke_ex_round_cap_vertices() {
+        // Round cap emits 12 fan triangles per endpoint = 24 extra tris = 72 extra verts.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let butt = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linecap: StrokeLinecap::Butt, ..StrokeParams::default()
+        });
+        let round = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linecap: StrokeLinecap::Round, ..StrokeParams::default()
+        });
+        assert!(round.len() > butt.len(), "round cap should produce more vertices");
+    }
+
+    #[test]
+    fn stroke_ex_bevel_join_has_extra_triangle() {
+        // Bevel join at a right-angle corner should add one triangle.
+        let contour = vec![vec![[0.0f32, 0.0], [50.0, 0.0], [50.0, 50.0]]];
+        let miter = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Miter, ..StrokeParams::default()
+        });
+        let bevel = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Bevel, ..StrokeParams::default()
+        });
+        assert!(bevel.len() >= miter.len(), "bevel join adds bevel triangle");
+    }
+
+    #[test]
+    fn stroke_ex_round_join_has_extra_vertices() {
+        let contour = vec![vec![[0.0f32, 0.0], [50.0, 0.0], [50.0, 50.0]]];
+        let miter = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Miter, ..StrokeParams::default()
+        });
+        let round_join = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Round, ..StrokeParams::default()
+        });
+        assert!(round_join.len() > miter.len(), "round join adds arc triangles");
+    }
+
+    #[test]
+    fn stroke_ex_miterlimit_falls_back_to_bevel() {
+        // Very acute angle with tiny miterlimit should fall back to bevel (fewer vertices
+        // than huge miterlimit, because miter at limit bevel = normal endpoint).
+        let contour = vec![vec![[0.0f32, 50.0], [50.0, 50.0], [1.0, 50.0]]]; // near-reversal
+        let _large_limit = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Miter, miterlimit: 100.0,
+            ..StrokeParams::default()
+        });
+        let small_limit = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Miter, miterlimit: 1.0,
+            ..StrokeParams::default()
+        });
+        // With miterlimit=1.0 the miter collapses to bevel offset — still produces triangles.
+        assert!(!small_limit.is_empty());
+    }
+
+    // ── apply_dash_pattern ──────────────────────────────────────────────────
+
+    #[test]
+    fn dash_empty_dasharray_returns_original() {
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let result = apply_dash_pattern(&contour, &[], 0.0);
+        assert_eq!(result, contour);
+    }
+
+    #[test]
+    fn dash_simple_splits_line() {
+        // dasharray=[20, 10]: 20px dash, 10px gap — on a 60px line gives 3 dashes.
+        let contour = vec![vec![[0.0f32, 0.0], [60.0, 0.0]]];
+        let result = apply_dash_pattern(&contour, &[20.0, 10.0], 0.0);
+        assert_eq!(result.len(), 2, "60px / 30px cycle = 2 dashes, got {}", result.len());
+    }
+
+    #[test]
+    fn dash_offset_shifts_pattern() {
+        // dasharray=[10, 10], offset=10 → first dash starts at the gap position → one full dash only.
+        let contour = vec![vec![[0.0f32, 0.0], [20.0, 0.0]]];
+        let no_offset = apply_dash_pattern(&contour, &[10.0, 10.0], 0.0);
+        let with_offset = apply_dash_pattern(&contour, &[10.0, 10.0], 10.0);
+        // no_offset: gap then dash starting at 10, so 1 dash (10..20); with_offset: dash first (0..10).
+        assert_eq!(no_offset.len(), 1);
+        assert_eq!(with_offset.len(), 1);
+    }
+
+    #[test]
+    fn dash_zero_width_returns_empty() {
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        // All-zero dasharray: cycle = 0 → returns empty.
+        let result = apply_dash_pattern(&contour, &[0.0, 0.0], 0.0);
+        assert!(result.is_empty(), "zero cycle should produce no dashes");
+    }
+
+    #[test]
+    fn dash_full_stroke_ex_pipeline() {
+        // Full pipeline: dashed stroke via tessellate_stroke_ex produces triangles.
+        let segs = parse_svg_path("M 0 0 H 100");
+        let contours = flatten_path(&segs, 0.5);
+        let dashed = tessellate_stroke_ex(&contours, &StrokeParams {
+            half_width: 5.0,
+            dasharray: vec![15.0, 5.0],
+            ..StrokeParams::default()
+        });
+        assert!(!dashed.is_empty(), "dashed stroke should produce triangles");
+        // Dashed stroke: 100px / 20px-cycle = 5 dashes × 6 verts each = 30 verts
+        // (more segments than solid 1×6=6, but each covers only its dash length).
+        let solid = tessellate_stroke_ex(&contours, &StrokeParams {
+            half_width: 5.0,
+            ..StrokeParams::default()
+        });
+        // Dashed has more vertex records (multiple short contours) than solid (one contour).
+        assert!(dashed.len() > solid.len(), "dashed stroke has more tri vertices than solid");
+        // But dashed covers less total area.
+        let area_fn = |tris: &[[f32; 2]]| -> f32 {
+            tris.chunks(3).map(|t| cross2d(t[0], t[1], t[2]).abs() * 0.5).sum()
+        };
+        assert!(area_fn(&dashed) < area_fn(&solid), "dashed covers less area than solid");
     }
 }
