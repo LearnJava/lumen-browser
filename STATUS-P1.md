@@ -12,7 +12,17 @@ _(нет)_
 
 ## Next
 
-_(нет — P1 queue пуст, следующая задача определяется при старте новой сессии)_
+- **ADR для crypto-зависимостей** (заведено P5, health-свип 2026-06-03). Коммит
+  `1bd82f0 p1-subtle-crypto` добавил `hmac v0.12` + `aes-gcm v0.10` (Provisional)
+  без строки «Why this dependency» в теле коммита и без критерия выпуска
+  (graduation criterion), как требует CLAUDE.md §«No new dep without justification».
+  Категории зафиксированы только в STATUS-P1.md «Recent» (стр. ~35), не формально.
+  Нужно: оформить ADR в `docs/decisions/` (категория Provisional, trait-anchor
+  `SubtleCrypto`, критерий graduation — когда hmac/aes-gcm станут permanent или
+  заменятся на собственную реализацию), обновить индекс `docs/decisions/README.md`.
+  `p256` — уже permanent (используется в lumen-network), отдельного ADR не требует.
+
+_(остальная P1 queue пуста — следующая задача определяется при старте новой сессии)_
 
 ---
 
