@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**A-3: WebUSB API stub**  
+Branch: `p1-webusb-api-stub`  
+Next step: Create `crates/js/src/webusb.rs`, implement `navigator.usb.requestDevice({filters})` stub that returns reject, `USBDevice` class with open/close/selectConfiguration/claimInterface/transferIn/Out/controlTransferIn/Out methods, `USBConnectionEvent`. Add unit tests. Export to window.
 
 ---
 
