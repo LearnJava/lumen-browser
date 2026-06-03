@@ -6,8 +6,7 @@
 
 ## In progress
 
-RB-6: `FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов)  branch: p2-rb6-femtovg-full
-Next step: реализовать render_command для всех no-op команд  femtovg_backend.rs
+_(нет)_
 
 ---
 
@@ -36,7 +35,7 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 | ~~RB-3~~ | ~~Feature-флаги в `lumen-paint/Cargo.toml`~~ — **выполнено** (p2-rb3-feature-flags, 2026-06-03) | — | — | — |
 | ~~RB-4~~ | ~~Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var~~ — **выполнено** (p2-rb4-backend-factory, 2026-06-03) | — | — | — |
 | ~~RB-5~~ | ~~`FemtovgBackend` скелет + базовые команды~~ — **выполнено** (p2-rb5-femtovg-backend, 2026-06-03) | — | — | — |
-| RB-6 | `FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов) | `lumen-paint` | L | ADR-010 |
+| ~~RB-6~~ | ~~`FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов)~~ — **выполнено** (p2-rb6-femtovg-full, 2026-06-03) | — | — | — |
 | RB-7 | `VelloBackend` заглушка (компилируется, логирует, ничего не рисует) | `lumen-paint` | S | ADR-010 |
 | RB-8 | `CompareBackend` + тест-раннер в `lumen-driver` (pixel diff двух бэкендов) — совместно с P3 | `lumen-paint`, `lumen-driver` | M | ADR-010 |
 | RB-9 | `FemtovgBackend` → default; `WgpuBackend` → fallback | `lumen-paint`, `lumen-shell` | S | ADR-010 |
@@ -45,6 +44,8 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 ---
 
 ## Recent merges
+
+- **p2-rb6-femtovg-full** ✅ 2026-06-03 — RB-6: `FemtovgBackend` полный — все ~30 `DisplayCommand` вариантов (ADR-010 Phase 2). `DrawImage`/`DrawBackgroundImage` → `Paint::image()` + серый placeholder. `DrawLinearGradient` → `linear_gradient_stops()` с CSS-angle → (start,end) математикой (аналог WgpuBackend). `DrawRadialGradient` → `radial_gradient_stops()`, farthest-corner радиус. `DrawConicGradient` → triangle fan (≥36 сегментов) с `interp_conic_color` (нет нативной поддержки в OpenGL ES 2.0). `DrawOutline` → 4 fill_rect снаружи box. `DrawScrollbar` → track fill + thumb `rounded_rect`. `DrawSvgPath` → chunks(3) → femtovg Path triangle fan. `DrawCrossFade` → два `Paint::image` с complementary alpha. `DrawLayerSnapshot` → `snapshots: HashMap<u64, ImageId>`. `BoxModelOverlay` → 4 полупрозрачных FillRect (Chrome DevTools палитра). `PushOpacity` → `set_global_alpha`. `PushBlendMode` → `global_composite_operation` (Normal/PlusLighter; прочие CSS blend modes → SourceOver, ограничение GL ES). `PushTransform` → `set_transform(Transform2D)` из Mat4 2D-аффинной части. `PushFilter` → global_alpha для Opacity; blur/color-matrix — save/restore (нет GPU colour-matrix в femtovg). `PushBackdropFilter` → save/restore (нет backdrop в GL ES). `PushMask*` / `PushMaskLayer` → scissor по rect (аппроксимация). `BeginStickyLayer` → `sticky_offset_dy/dx` + translate; стек `sticky_stack`. `PageBreak` → no-op. 19 новых unit-тестов; 567 OK с backend-femtovg. Clippy чист.
 
 - **p2-rb5-femtovg-backend** ✅ 2026-06-03 — RB-5: `FemtovgBackend` скелет + 5 базовых команд (ADR-010 Phase 2). Новый `FemtovgBackend` в `paint::backends::femtovg_backend`: glutin OpenGL context init (EglThenWgl/Cgl/Egl по платформе), femtovg Canvas, bundled font. Базовые команды: `FillRect`/`FillRoundedRect` → femtovg Path fill; `DrawBorder` → 4 fill_rect; `DrawText` → fill_text (≈80% baseline); `PushClipRect`/`PopClip` → save+scissor/restore. Scroll-layer: scissor + translate. Push*/Pop* стек → save/restore canvas. Остальные ~25 команд → no-op (RB-6). `register_image` через `imgref::ImgRef<RGBA8>` + `ImageSource::Rgba`. `backends/mod.rs` и `lib.rs` гейтированы через cfg. Shell feature `backend-femtovg = ["lumen-paint/backend-femtovg"]`. `backend_factory.rs`: `LUMEN_BACKEND=femtovg` → FemtovgBackend с fallback на wgpu. `unsafe impl Send` (single-threaded usage invariant). Новые deps: femtovg 0.9, glutin 0.32, glutin-winit 0.5, imgref 1.10, rgb 0.8 (Provisional). 8 новых unit-тестов + 556 OK. Clippy чист.
 
