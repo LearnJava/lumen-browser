@@ -487,6 +487,29 @@
 - 🟡 **`[P3]` Mixed-content blocking + `<iframe sandbox>`.** Classifier-ы реализованы (`lumen-network::classify_subresource_request` для blockable/optionally + `SandboxFlags`/`parse_sandbox_value` для всех 14 keyword-ов). Остаётся: enforcement в HttpClient (блочить blockable до TCP) + DOM-применение sandbox в shell.
 - **`[P1+P3]` Preload scanner.** ✅ **Готово полностью.** P1: `lumen_html_parser::preload_scanner::scan_preload_hints`. P3: интегрирован в shell streaming pipeline — `LoadEvent::EarlyPreloadHints` эмитируется из background-потока ДО первого `HtmlChunk` (скан первых STREAM_CHUNK_BYTES байт, обычно весь `<head>`). `dispatch_preload_hints` принимает `seen: &mut HashSet<String>` для cross-call дедупликации. Phase 0: prefetch блокирующий; параллельный fetch — будущая задача.
 
+#### RenderBackend abstraction (ADR-010) — Phase 2–3
+
+> Full design — [ADR-010](docs/decisions/ADR-010-render-backend-abstraction.md) · Implementation state — [subsystems/paint.md](subsystems/paint.md) «Planned: RenderBackend abstraction»
+
+| # | Задача | Владелец | Статус |
+|---|---|---|---|
+| RB-1 | `RenderBackend` trait + `RenderError` в `paint::backend` | P2 | ⬜ |
+| RB-2 | `WgpuBackend` — обёртка над текущим `Renderer` | P2 | ⬜ |
+| RB-3 | Feature-флаги в `lumen-paint/Cargo.toml` | P2 | ⬜ |
+| RB-4 | Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var | P2 | ⬜ |
+| RB-5 | `FemtovgBackend` скелет + базовые команды (`FillRect`, `FillRoundedRect`, `DrawText`, `DrawBorder`, `PushClipRect`) | P2 | ⬜ |
+| RB-6 | `FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов) | P2 | ⬜ |
+| RB-7 | `VelloBackend` заглушка (компилируется, логирует, ничего не рисует) | P2 | ⬜ |
+| RB-8 | `CompareBackend` + тест-раннер в `lumen-driver` (pixel diff двух бэкендов) | P2+P3 | ⬜ |
+| RB-9 | `FemtovgBackend` → default; `WgpuBackend` → fallback | P2 | ⬜ |
+| RB-10 | `VelloBackend` полный (когда vello API стабилизируется) | P2 | ⬜ Phase 3+ |
+
+**Принцип изоляции vello:** все `vello::*` импорты только в `backends/vello_backend.rs`. При обновлении vello API — правим только этот файл. Остальной код (trait, shell, layout) не знает о vello.
+
+**Параллельное использование:** `CompareBackend` рендерит одну страницу двумя бэкендами и считает pixel diff. Используется для валидации нового бэкенда перед промоутингом в default. Запуск: `cargo test -p lumen-driver --features compare-femtovg-vello`.
+
+**Путь миграции:** wgpu (сейчас) → femtovg (Phase 2 default) → vello (Phase 3 default, когда API стабильно). Каждый предыдущий бэкенд остаётся как fallback.
+
 #### Phase 2 (Interactive) — без этого современный веб не функционален
 
 - 🟡 **`[P1+P3]` Shadow DOM + custom elements + `<template>` + `<slot>`.** **P1 done** — `ShadowRootMode`, `NodeData::ShadowRoot`, `Document::attach_shadow/shadow_root_of/is_shadow_host`, `FlatTree` + `build_flat_tree` (slot assignment, fallback content, zero-alloc fast path), layout wiring (`build_box`/`collect_inline_segments` use `flat.children_of`). **P3** — JS bindings (`Element.attachShadow`, `customElements.define`) + lifecycle dispatch. **P4** — `:host`, `::slotted` CSS pseudo-classes (marked with `// CSS: :host, ::slotted` in `build_box`).

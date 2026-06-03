@@ -39,6 +39,94 @@
 - **Deferred:** GPU-pipeline for shadows, exact breakdown of `build_display_list_ordered` into phases BlockBackgrounds / Floats / InlineContent, `BorderStyle::Groove` / `Ridge` / `Inset` / `Outset`, exact polygon masking for clip-path (Phase 1: stencil buffer), border-radius elliptical (rx≠ry). CPU cpu_raster deferred: `PushMaskLayer`/`PopMaskLayer` (SVG mask sources with `MaskMode`; gradient `mask-image` is done, only the SVG-mask-source path remains). WebGL deferred: GLSL execution (per-vertex colour/texture sampling — currently flat `uniform4f` fill), `drawElements`/indexed draws, real textures.
 - 340 unit tests + 21 snapshot tests = 361 tests (default build); 464 tests with `--features cpu-render`.
 
+## Planned: RenderBackend abstraction (ADR-010, Phase 2–3)
+
+See [ADR-010](../docs/decisions/ADR-010-render-backend-abstraction.md) for full rationale.
+
+### Goal
+
+Replace the single concrete `Renderer` (wgpu) with a `RenderBackend` trait so that
+femtovg, vello, wgpu, and the existing cpu_raster are interchangeable at compile time
+and testable side-by-side at runtime.
+
+### Stable contract — `RenderBackend` trait
+
+```rust
+// crates/engine/paint/src/backend.rs
+pub trait RenderBackend: Send {
+    fn render(&mut self, content: &[DisplayCommand], overlay: &[DisplayCommand],
+              scroll_y: f32, scroll_x: f32) -> Result<(), RenderError>;
+    fn resize(&mut self, width: u32, height: u32);
+    fn set_scale_factor(&mut self, scale: f64);
+    fn register_image(&mut self, src: String, image: &Image) -> Result<(), String>;
+    fn clear_images(&mut self);
+    fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>);
+    fn screenshot_rgba(&mut self) -> Option<Vec<u8>> { None }  // headless only
+}
+```
+
+`DisplayCommand` does not change. Layout and shell code never sees GPU-API types.
+
+### Backends
+
+| File | Feature flag | Status | Notes |
+|---|---|---|---|
+| `backends/wgpu_backend.rs` | `backend-wgpu` | ✅ exists (current `Renderer`) | wrapped, stays as fallback |
+| `backends/femtovg_backend.rs` | `backend-femtovg` | ⬜ Phase 2 | new default; OpenGL ES 2.0; no custom shaders |
+| `backends/vello_backend.rs` | `backend-vello` | ⬜ Phase 3 | compute-based; stub until vello API stabilises |
+| `backends/cpu_backend.rs` | `backend-cpu` | ✅ exists (`cpu_raster`) | CI / no-GPU |
+| `backends/compare_backend.rs` | `compare` | ⬜ Phase 2 | renders with two backends, pixel diff |
+
+### Feature flags
+
+```toml
+default        = ["backend-femtovg"]
+backend-wgpu   = ["dep:wgpu"]
+backend-femtovg = ["dep:femtovg", "dep:glutin"]
+backend-vello  = ["dep:vello", "dep:wgpu"]
+backend-cpu    = []
+compare        = []   # requires two other backend features
+```
+
+### vello isolation strategy
+
+ALL vello imports are confined to `backends/vello_backend.rs`. The file has two
+internal functions: `translate_to_scene(&[DisplayCommand]) -> vello::Scene` and
+`submit_scene(scene, renderer, surface)`. When vello releases a breaking API change,
+only these two functions change — zero impact on trait, shell, or layout code.
+
+### CompareBackend — parallel rendering
+
+`CompareBackend { primary, secondary }` renders the same `DisplayCommand` slice with
+both backends, calls `screenshot_rgba()` on each, and computes pixel diff percent.
+Used in `lumen-driver` compare tests to validate a new backend against the current
+reference before promoting it to default.
+
+```bash
+# validate vello against femtovg across all 57 snapshot pages
+cargo test -p lumen-driver --features compare-femtovg-vello
+```
+
+### Migration path
+
+```
+Phase 1 (now):  wgpu (DX12 on Win, BUG-057 fix)  fallback: cpu
+Phase 2:        femtovg default                    fallback: wgpu → cpu
+Phase 3:        vello default (once API stable)    fallback: femtovg → wgpu → cpu
+```
+
+Shell reads `LUMEN_BACKEND` env var to override at runtime.
+
+### Backend selection at runtime (shell)
+
+```
+LUMEN_BACKEND=wgpu    cargo run -p lumen-shell
+LUMEN_BACKEND=femtovg cargo run -p lumen-shell
+LUMEN_BACKEND=vello   cargo run -p lumen-shell
+LUMEN_BACKEND=cpu     cargo run -p lumen-shell
+```
+
 ## Gotchas
 
 - **Tests in `lumen-paint::display_list` and `lumen-paint::atlas`** are unit tests. `renderer.rs` is visual, no auto-tests — verify via `cargo run`. Display list snapshot tests live in `tests/snapshot_tests.rs`.
+- **BUG-057 (FIXED 2026-06-03):** wgpu Vulkan double-panic on first render (Windows). Fix: `Backends::DX12` default in `new_async` + `new_headless_async`. `WGPU_BACKEND` env var overrides.
