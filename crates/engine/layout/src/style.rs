@@ -4838,6 +4838,39 @@ pub fn compute_style(
             next_rule_idx += 1;
         }
     }
+    // CSS Cascade L6 §5 — @scope rules: apply only when node is in scope.
+    for scope_rule in &sheet.scope_rules {
+        if !node_is_in_scope(doc, node, &scope_rule.root) {
+            next_rule_idx += scope_rule.rules.len();
+            continue;
+        }
+        // Scope limit: if `to (<limit>)` is set, skip nodes that are
+        // descendants of the limit selector *within* this scope.
+        if let Some(ref limit_sel) = scope_rule.limit
+            && node_is_in_scope(doc, node, limit_sel) {
+            next_rule_idx += scope_rule.rules.len();
+            continue;
+        }
+        for rule in &scope_rule.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
+        }
+    }
     // Inline-style declarations подключаются с `is_inline = true` и
     // synthetic specificity = default (Cascade L4 §6.4.3 — реальная
     // specificity inline-стиля игнорируется в сортировке: за порядок
@@ -7721,6 +7754,31 @@ pub fn set_interactive_state(
 /// Clears hover/focus/active state after layout.
 pub fn clear_interactive_state() {
     set_interactive_state(None, None, None);
+}
+
+/// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
+/// matching any selector in `root_sel_str`. Empty `root_sel_str` → always true
+/// (implicit scope = document root, i.e. the rule applies everywhere).
+fn node_is_in_scope(doc: &Document, node: NodeId, root_sel_str: &str) -> bool {
+    if root_sel_str.trim().is_empty() {
+        return true;
+    }
+    let selectors = lumen_css_parser::parse_selector_list(root_sel_str);
+    if selectors.is_empty() {
+        return false;
+    }
+    // Walk node and its ancestors; return true if any matches the scope root.
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        if n == doc.root() { break; }
+        for complex in &selectors {
+            if matches_complex(complex, doc, n) {
+                return true;
+            }
+        }
+        cur = doc.get(n).parent;
+    }
+    false
 }
 
 /// Returns `true` if `ancestor` is `node` itself, or a proper ancestor of `node` in the tree.
@@ -23028,5 +23086,43 @@ mod tests {
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         // Color stays default (black) because rule was filtered out.
         assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn scope_rule_applies_to_descendant() {
+        // @scope (.wrapper) { color: blue; } applies to .child inside .wrapper.
+        let doc = lumen_html_parser::parse(
+            r#"<style>@scope (.wrapper) { .child { color: blue; } }</style>
+            <div class="wrapper"><span class="child">x</span></div>"#
+        );
+        let sheet = lumen_css_parser::parse(r#"@scope (.wrapper) { .child { color: blue; } }"#);
+        let root = ComputedStyle::root();
+        // Find .child
+        let wrapper = doc.get(doc.body().unwrap()).children[0];
+        let child = doc.get(wrapper).children[0];
+        let style = compute_style(&doc, child, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(style.color.b, 255, "scope rule should apply to .child inside .wrapper");
+    }
+
+    #[test]
+    fn scope_rule_does_not_apply_outside() {
+        // @scope (.wrapper) { color: blue; } does NOT apply to .child outside .wrapper.
+        let doc = lumen_html_parser::parse(r#"<div class="child">x</div>"#);
+        let sheet = lumen_css_parser::parse(r#"@scope (.wrapper) { .child { color: blue; } }"#);
+        let root = ComputedStyle::root();
+        let child = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, child, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(style.color.b, 0, "scope rule should NOT apply outside .wrapper");
+    }
+
+    #[test]
+    fn scope_rule_empty_root_applies_everywhere() {
+        // @scope { color: red; } (no root) applies to any element.
+        let doc = lumen_html_parser::parse(r#"<span>x</span>"#);
+        let sheet = lumen_css_parser::parse(r#"@scope { span { color: red; } }"#);
+        let root = ComputedStyle::root();
+        let span = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, span, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(style.color.r, 255, "empty-root scope should apply everywhere");
     }
 }
