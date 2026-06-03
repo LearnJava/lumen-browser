@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-css-supports** — `CSS.supports()` JS API + `@supports` wiring в каскад  
+branch: p1-css-supports  
+Next step: добавить `SUPPORTED_PROPERTIES` в css-parser, затем wiring в layout/style.rs, затем JS-шим
 
 ---
 
