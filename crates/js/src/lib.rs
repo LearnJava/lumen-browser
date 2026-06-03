@@ -19,6 +19,7 @@ pub mod surface_api;
 pub mod video_bindings;
 pub mod view_transitions;
 pub mod subtle_crypto;
+pub mod temporal_api;
 pub mod webgl_bindings;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
@@ -426,6 +427,12 @@ impl QuickJsRuntime {
             // host QuickJS build ever provides one.
             if let Err(e) = intl_bindings::install_intl_bindings(&ctx) {
                 eprintln!("Intl bindings init failed: {}", e);
+            }
+
+            // Install TC39 Temporal API shim (Stage 4 / ES2025) — after Intl so the
+            // timezone helpers can leverage Date internals. Pure JS, no native bindings.
+            if let Err(e) = temporal_api::install_temporal_api(&ctx) {
+                eprintln!("Temporal API init failed: {}", e);
             }
 
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
