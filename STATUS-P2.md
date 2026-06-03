@@ -6,8 +6,7 @@
 
 ## In progress
 
-Mouse & Pointer Events shell integration  branch: p2-mouse-pointer-events
-Next step: Add _lumen_dispatch_pointer_event in dom.rs, then wire mousedown/mouseup/mouseover/mouseout/mouseenter/mouseleave + pointer events in main.rs
+_(нет)_
 
 ---
 
@@ -28,6 +27,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p2-mouse-pointer-events** ✅ 2026-06-03 — Mouse Events + W3C Pointer Events Level 2 (UI Events §17 + Pointer Events L2 §10). Shell теперь диспатчит полный набор событий: `mousedown`/`mouseup` при нажатии/отпускании левой кнопки мыши на DOM-элементе; `mouseover`/`mouseout` при смене hover (bubbles); `mouseenter`/`mouseleave` нон-бабблинг; `pointermove` рядом с `mousemove` (fires first per spec); `pointerdown`/`pointerup`/`pointerover`/`pointerout`/`pointerenter`/`pointerleave` — зеркалируют mouse-события с `PointerEvent` (pointerId=1, pointerType='mouse', isPrimary=true). JS: `_lumen_dispatch_pointer_event` в `dom.rs` создаёт `PointerEvent`; non-bubbling types имеют `bubbles:false` per spec. Shell: helper-методы `js_mouse_event`/`js_pointer_event`/`mod_flags` (`#[cfg(quickjs)]`); `CursorLeft` диспатчит leave-события перед очисткой `hovered_nid`. 5 новых unit-тестов (dom::tests). lumen-js: 1093 тестов (+5). Clippy чист.
 
 - **p2-querySelector-compound** ✅ 2026-06-03 — querySelector/querySelectorAll/matches/closest полный CSS-движок (CSS Selectors L3+L4). Заменяет Phase 0 заглушку (только #id/.class/tagname) на lumen_layout::query_all — поддерживает compound-селекторы (div.class, p#id), комбинаторы (> + ~), псевдо-классы (:first-child, :not, :nth-child и др.), атрибутные селекторы ([attr=val]). element.matches() и element.closest() используют новый _lumen_node_matches_selector (per-node проверка через matches_selector из selector_query.rs). lumen-layout: pub fn matches_selector добавлена. lumen-js: 1058 тестов (+12).
 
