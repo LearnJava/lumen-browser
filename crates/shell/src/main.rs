@@ -420,6 +420,7 @@ fn run_window_mode(
         fullscreen_nid: None,
         view_transition: None,
         archive: tabs::archive::TabArchive::new(),
+        restore_spinner_start_ms: None,
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -3620,6 +3621,11 @@ struct Lumen {
     /// opens a fresh navigation to that URL.  The archive button (rightmost 36 px
     /// of the tab bar) shows a count badge and toggles the archive panel.
     archive: tabs::archive::TabArchive,
+    /// Timestamp (wall ms) when restore of a hibernated tab began.
+    ///
+    /// `Some(ms)` = spinner overlay is active; `None` = no restoration in progress.
+    /// Set at the start of `restore_hibernated_tab` and cleared when restore completes.
+    restore_spinner_start_ms: Option<f64>,
 }
 
 /// State for an in-progress CSS View Transition cross-fade (CSS View Transitions L1).
@@ -6255,6 +6261,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut pip_cmds);
                 }
 
+                // Loading spinner for hibernated tab restore >200ms (10K.3).
+                if let Some(start_ms) = self.restore_spinner_start_ms {
+                    let elapsed_ms = now_ms - start_ms;
+                    let win_w = self.viewport_width_css();
+                    let win_h =
+                        self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    if let Some(mut spinner) =
+                        panels::restore_spinner::build_spinner(elapsed_ms, win_w, win_h)
+                    {
+                        overlay_buf.append(&mut spinner);
+                        // Keep animating the spinner while it's visible.
+                        self.request_redraw();
+                    }
+                }
+
                 // Build the split-view combined DL before borrowing renderer,
                 // so the immutable borrow of self.split_view ends first.
                 let split_combined: Option<lumen_paint::DisplayList> = {
@@ -8648,7 +8669,14 @@ impl Lumen {
     /// layout+paint.  Returns `true` on success so `switch_tab` knows
     /// whether to fall back to a blank tab.
     fn restore_hibernated_tab(&mut self, tab_id: usize) -> bool {
+        // Start spinner timer for long restore operations (>200ms).
+        self.restore_spinner_start_ms = Some(self.epoch.elapsed().as_secs_f64() * 1000.0);
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+
         let Some(meta) = self.hibernated_tabs.remove(&tab_id) else {
+            self.restore_spinner_start_ms = None;
             return false;
         };
 
@@ -8661,11 +8689,13 @@ impl Lumen {
                 eprintln!("tab {tab_id}: snapshot missing (url={})", meta.url);
                 // Put metadata back so the strip still shows Hibernated.
                 self.hibernated_tabs.insert(tab_id, meta);
+                self.restore_spinner_start_ms = None;
                 return false;
             }
             Err(e) => {
                 eprintln!("tab {tab_id}: snapshot read error (url={}): {e}", meta.url);
                 self.hibernated_tabs.insert(tab_id, meta);
+                self.restore_spinner_start_ms = None;
                 return false;
             }
         };
@@ -8676,6 +8706,7 @@ impl Lumen {
             Err(e) => {
                 eprintln!("Ошибка десериализации DOM вкладки {tab_id}: {e}");
                 self.hibernated_tabs.insert(tab_id, meta);
+                self.restore_spinner_start_ms = None;
                 return false;
             }
         };
@@ -8748,6 +8779,9 @@ impl Lumen {
 
         // Remove the SQLite entry — it is no longer needed.
         let _ = self.tab_snapshots.delete(tab_id as i64);
+
+        // Restore complete — hide the spinner overlay.
+        self.restore_spinner_start_ms = None;
 
         true
     }

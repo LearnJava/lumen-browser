@@ -8,6 +8,7 @@ pub mod permission_panel;
 pub mod pip_window;
 pub mod privacy_panel;
 pub mod read_later_panel;
+pub mod restore_spinner;
 pub mod shields_panel;
 pub mod sidebar_panel;
 pub mod split_view;
