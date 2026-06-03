@@ -2,18 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Lumen — 33 multi-column layout + column-rule</title>
+  <title>Lumen — 33 multi-column layout + column-rule + column-span + column-fill</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
-    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 16px; overflow: hidden; }
 
     /* ── Multi-column containers ── */
-    .mc { margin: 0 0 20px 0; }
-    .col { background: #2d3748; height: 80px; }
+    .mc { margin: 0 0 12px 0; }
+    .col { background: #2d3748; height: 52px; }
+    .col-sm { background: #2d3748; height: 36px; }
 
     /* label strip used to identify each group visually */
-    .strip { height: 8px; width: 100%; margin-bottom: 4px; }
+    .strip { height: 6px; width: 100%; margin-bottom: 3px; }
   </style>
 </head>
 <body>
@@ -21,7 +22,7 @@
 
     <!-- 1) column-count:2, no rule -->
     <div class="strip" style="background:#4a5568;"></div>
-    <div class="mc" style="column-count:2; column-gap:20px; width:480px; height:60px; background:#2d3748;">
+    <div class="mc" style="column-count:2; column-gap:20px; width:480px; height:52px; background:#2d3748;">
       <div class="col"></div>
       <div class="col"></div>
     </div>
@@ -30,7 +31,7 @@
     <div class="strip" style="background:#fc8181;"></div>
     <div class="mc" style="column-count:3; column-gap:30px;
                             column-rule:4px solid #fc8181;
-                            width:690px; height:60px; background:#2d3748;">
+                            width:690px; height:52px; background:#2d3748;">
       <div class="col"></div>
       <div class="col"></div>
       <div class="col"></div>
@@ -40,7 +41,7 @@
     <div class="strip" style="background:#76e4f7;"></div>
     <div class="mc" style="column-count:4; column-gap:20px;
                             column-rule:3px dashed #76e4f7;
-                            width:740px; height:60px; background:#2d3748;">
+                            width:740px; height:52px; background:#2d3748;">
       <div class="col"></div>
       <div class="col"></div>
       <div class="col"></div>
@@ -51,36 +52,42 @@
     <div class="strip" style="background:#fbd38d;"></div>
     <div class="mc" style="column-count:2; column-gap:60px;
                             column-rule:2px dotted #fbd38d;
-                            width:480px; height:60px; background:#2d3748;">
+                            width:480px; height:52px; background:#2d3748;">
       <div class="col"></div>
       <div class="col"></div>
     </div>
 
-    <!-- 5) column-width:150px auto-count, green solid rule -->
+    <!-- 5) column-span:all — spanning element breaks out of columns -->
     <div class="strip" style="background:#68d391;"></div>
-    <div class="mc" style="column-width:150px; column-gap:20px;
-                            column-rule:4px solid #68d391;
-                            width:680px; height:60px; background:#2d3748;">
-      <div class="col"></div>
-      <div class="col"></div>
-      <div class="col"></div>
-      <div class="col"></div>
+    <div class="mc" style="column-count:3; column-gap:12px;
+                            column-rule:2px solid #68d391;
+                            width:660px; background:#1a202c;">
+      <!-- two column-aware children -->
+      <div class="col-sm" style="background:#2d3748;"></div>
+      <div class="col-sm" style="background:#2d3748;"></div>
+      <!-- spanning separator -->
+      <div style="column-span:all; height:8px; background:#68d391; margin:4px 0;"></div>
+      <!-- two more column children below span -->
+      <div class="col-sm" style="background:#2d3748;"></div>
+      <div class="col-sm" style="background:#2d3748;"></div>
     </div>
 
-    <!-- 6) column-count:2 rule wider than gap (clamp to gap center) -->
+    <!-- 6) column-fill:auto — fills columns sequentially to container height -->
     <div class="strip" style="background:#b794f4;"></div>
-    <div class="mc" style="column-count:2; column-gap:10px;
-                            column-rule:8px solid #b794f4;
-                            width:320px; height:60px; background:#2d3748;">
-      <div class="col"></div>
-      <div class="col"></div>
+    <div class="mc" style="column-count:3; column-gap:12px;
+                            column-rule:2px solid #b794f4;
+                            width:660px; height:80px;
+                            column-fill:auto; background:#1a202c;">
+      <div class="col-sm" style="background:#553c9a;"></div>
+      <div class="col-sm" style="background:#553c9a;"></div>
+      <div class="col-sm" style="background:#44337a;"></div>
     </div>
 
     <!-- 7) column-count:5, thin solid white rule -->
     <div class="strip" style="background:#e2e8f0;"></div>
     <div class="mc" style="column-count:5; column-gap:16px;
                             column-rule:1px solid #e2e8f0;
-                            width:900px; height:60px; background:#2d3748;">
+                            width:900px; height:52px; background:#2d3748;">
       <div class="col"></div>
       <div class="col"></div>
       <div class="col"></div>
