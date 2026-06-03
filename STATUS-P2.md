@@ -6,8 +6,7 @@
 
 ## In progress
 
-RB-4: Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var  branch: p2-rb4-backend-factory
-Next step: extend RenderBackend trait + create backend_factory  crates/engine/paint/src/backend.rs
+_(нет)_
 
 ---
 
@@ -34,7 +33,7 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 | ~~RB-1~~ | ~~`RenderBackend` trait + `RenderError` в `paint::backend`~~ — **выполнено** (p2-render-backend-trait) | — | — | — |
 | ~~RB-2~~ | ~~`WgpuBackend` — обёртка над текущим `Renderer`~~ — **выполнено** (p2-wgpu-backend, 2026-06-03) | — | — | — |
 | ~~RB-3~~ | ~~Feature-флаги в `lumen-paint/Cargo.toml`~~ — **выполнено** (p2-rb3-feature-flags, 2026-06-03) | — | — | — |
-| RB-4 | Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var | `lumen-paint`, `lumen-shell` | M | ADR-010 |
+| ~~RB-4~~ | ~~Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var~~ — **выполнено** (p2-rb4-backend-factory, 2026-06-03) | — | — | — |
 | RB-5 | `FemtovgBackend` скелет + базовые команды (FillRect/FillRoundedRect/DrawText/DrawBorder/PushClipRect) | `lumen-paint` | M | ADR-010 |
 | RB-6 | `FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов) | `lumen-paint` | L | ADR-010 |
 | RB-7 | `VelloBackend` заглушка (компилируется, логирует, ничего не рисует) | `lumen-paint` | S | ADR-010 |
@@ -45,6 +44,8 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 ---
 
 ## Recent merges
+
+- **p2-rb4-backend-factory** ✅ 2026-06-03 — RB-4: Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var (ADR-010). `RenderBackend` трейт расширен 4 методами с дефолтами: `viewport_size()`, `scale_factor()`, `preload_curated_fallbacks()`, `on_layer_memory_pressure(level)`. `WgpuBackend` реализует все через делегирование в Renderer. Shell: новый модуль `backend_factory` с `create_backend(window, font_bytes)` — читает `LUMEN_BACKEND` env var; Phase 1: всегда wgpu, femtovg/vello → warning + fallback. `Lumen.renderer: Option<Renderer>` → `Option<Box<dyn RenderBackend>>`. Глобальный импорт `Renderer` убран из shell (остался только в `do_print_to_pdf` local scope). `renderer.layer_cache_mut().on_memory_pressure(level)` → `renderer.on_layer_memory_pressure(level)`. +4 backend unit-tests + 2 factory unit-tests. lumen-paint backend: 19 тестов OK. lumen-shell: 917 тестов OK. Clippy clean.
 
 - **p2-rb3-feature-flags** ✅ 2026-06-03 — RB-3: feature-флаги в `lumen-paint/Cargo.toml` (ADR-010). `wgpu` и `winit` стали `optional = true`. Новые фичи: `backend-wgpu` (default, Phase 1, гейтирует `dep:wgpu + dep:winit`), `backend-femtovg` (Phase 2 stub), `backend-vello` (Phase 3 stub), `backend-cpu`, `compare`. Сохранена совместимость `cpu-render` для `lumen-driver`. Гейтированы: `pub mod renderer`, `pub mod backends`, `pub use backends::WgpuBackend`, `pub use renderer::*` в `lib.rs`; `PooledTexture` в `texture_pool.rs`; `from_adapter_info` в `fingerprint.rs`. wgpu-free код (display_list, atlas, compositor и др.) без изменений. 544 тестов lumen-paint. Clippy чист.
 
