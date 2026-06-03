@@ -6,8 +6,8 @@
 
 ## In progress
 
-A-1 CSS Properties & Values API (Houdini)  branch: p2-css-prop-values-api
-Phase 0: RegisterProperty JS API + @property at-rule parsing + initial-value fallback wiring
+A-2 CSS Custom Highlight API  branch: p2-css-custom-highlight
+Phase 0: `CSS.highlights` registry + `Highlight` class + `::highlight(name)` pseudo-element parsing
 
 ---
 
