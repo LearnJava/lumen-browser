@@ -6,9 +6,7 @@
 
 ## In progress
 
-**p1-css-supports** — `CSS.supports()` JS API + `@supports` wiring в каскад  
-branch: p1-css-supports  
-Next step: добавить `SUPPORTED_PROPERTIES` в css-parser, затем wiring в layout/style.rs, затем JS-шим
+_(нет)_
 
 ---
 
@@ -19,6 +17,10 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-css-supports** ✅ 2026-06-03 — CSS.supports() JS API + @supports cascade wiring (CSS Conditional Rules L3 §6). `SUPPORTED_PROPERTIES` const в lumen-css-parser: полный список всех свойств layout engine (200+ свойств). `SupportsCondition::evaluate(known_props)` использует список для CSS Conditional Rules L3 §2. `compute_style()` + `compute_pseudo_element_style()` итерируют `sheet.supports_rules`: evaluate() → пропускаем если false, иначе матчим селекторы (та же семантика как @media). `window.CSS`: `CSS.supports(property, value)` (двухаргументная форма, проверка по имени свойства через `_lumen_css_supports_prop`) + `CSS.supports(conditionText)` (одноаргументная, full parse+evaluate через `parse_supports_condition`) + `CSS.escape(ident)` (WhatWG CSS OM §4.2). 12 JS-тестов (dom::tests::css_*) + 2 layout-теста (at_supports_known_property_applies_rules, at_supports_unknown_property_skips_rules). lumen-js: 944 lib. Clippy чист. Без новых зависимостей.
+
+
 
 - **p1-web-locks** ✅ 2026-06-03 — Web Locks API (W3C §5) + compat stubs: `navigator.locks.request(name[,opts],cb)` / `query()` — чистый JS-шим, per-context, без новых зависимостей; exclusive/shared режимы, FIFO-очередь с корректным drain (exclusive блокирует всё, shared пропускает параллельных читателей), опции mode/signal/ifAvailable/steal. `window.LockManager`, `window.Lock` экспортированы. **Screen Wake Lock** (W3C §6.5): `navigator.wakeLock.request('screen')` → `WakeLockSentinel{type, released, release()}` с onrelease + addEventListener. **Network Information API**: `navigator.connection {effectiveType:'4g', downlink:10, rtt:100, saveData:false, type:'wifi'}`. **navigator.userActivation**: `{isActive:true, hasBeenActive:true}`. **Web Share API stub**: `navigator.share()`/`canShare()` → всегда reject/false. **window.reportError(err)**: fires `ErrorEvent` на window. **Бонус:** `window.addEventListener` расширен — `'error'` + generic `_other_win_listeners{}` (fallback для любых типов); `window.dispatchEvent` теперь доставляет любой тип событий. 21 новый тест, lumen-js: 933 lib. Clippy чист. Без новых зависимостей.
 
