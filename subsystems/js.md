@@ -181,6 +181,29 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Patches existing `<iframe>` elements at load time + intercepts `document.createElement('iframe')`.
   - 10 unit tests: install_succeeds, src getter/setter, contentDocument null, contentWindow null, name getter/setter, width/height attrs, sandbox reflects, getSVGDocument null, src default empty string. **922 lumen-js lib tests total.**
 
+- **Gamepad API** (`crates/js/src/gamepad.rs`, W3C Gamepad Level 2 §4, P1 2026-06-03).
+  - `navigator.getGamepads()` → sparse array of 4 null slots (Phase 0, no hardware polling).
+  - `Gamepad` class: id/index/connected/timestamp/mapping/axes(4)/buttons(17)/vibrationActuator/hapticActuators.
+  - `GamepadButton` class: pressed/touched/value.
+  - `GamepadHapticActuator` stub: type, `playEffect(type, params) → Promise<'complete'>`, `reset() → Promise<'complete'>`.
+  - `GamepadEvent` class: gamepad property.
+  - Shell integration helpers: `_lumen_gamepad_connect(index, id, mapping)` fires `gamepadconnected`; `_lumen_gamepad_disconnect(index)` fires `gamepaddisconnected`. P3 shell calls these when polling OS gamepad APIs.
+  - `window.Gamepad`, `window.GamepadButton`, `window.GamepadHapticActuator`, `window.GamepadEvent` exported as globals.
+  - 15 unit tests. **1086 lumen-js lib tests total** (after combining with speech task's 1071 base).
+
+- **MediaSession API** (`crates/js/src/media_session.rs`, W3C Media Session API L1/L2 §5, P1 2026-06-03).
+  - `navigator.mediaSession` singleton.
+  - `MediaMetadata` class: title/artist/album/artwork[].
+  - `mediaSession.metadata` getter/setter (accepts MediaMetadata or null).
+  - `mediaSession.playbackState` getter/setter: "none" | "paused" | "playing" (invalid values ignored).
+  - `mediaSession.setActionHandler(action, cb)`: play/pause/stop/seekbackward/seekforward/seekto/previoustrack/nexttrack/skipad/togglemicrophone/togglecamera/hangup/togglecaptionstrack/enterpictureinpicture. Passing `null` removes handler.
+  - `mediaSession.setPositionState(state)`: duration/playbackRate/position; `null` resets.
+  - `mediaSession.setCameraActive(active)` / `setMicrophoneActive(active)` (L2 §5.4).
+  - Shell integration: `_lumen_take_media_session_update()` → JSON snapshot (returns null if no change since last call, detected by sequence counter). P3 shell polls this to forward metadata to OS (SMTC/MPRIS/Now Playing).
+  - OS → JS direction: `_lumen_fire_media_action(action, details)` invokes the registered handler (e.g. OS media keys trigger play/pause).
+  - `window.MediaMetadata` exported as global.
+  - 16 unit tests. **1101 lumen-js lib tests total.**
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
