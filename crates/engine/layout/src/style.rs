@@ -5651,7 +5651,7 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // элементов, поднятых через `Element.requestFullscreen()`. JS API
         // реализован (p1-fullscreen-api); sentinel — `data-lumen-fullscreen`.
         // CSS: :fullscreen — P4: check doc.get_attr(node.id,"data-lumen-fullscreen").is_some()
-        PseudoClass::Fullscreen => false,
+        PseudoClass::Fullscreen => doc.get(node).get_attr("data-lumen-fullscreen").is_some(),
         // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` после
         // `dialog.showModal()` (но не `dialog.show()` non-modal) или
         // элемент в fullscreen top-layer. Runtime-only: атрибут `open`
@@ -5662,7 +5662,7 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // после `element.showPopover()` / клика по `popovertarget`.
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
         // состояние. Phase 0 без Popover API runtime — всегда `false`.
-        PseudoClass::PopoverOpen => false,
+        PseudoClass::PopoverOpen => doc.get(node).get_attr("data-lumen-popover-open").is_some(),
         // CSS Selectors L4 §11.4 time-dimensional pseudo-classes —
         // `:current` / `:past` / `:future` matches на active / elapsed /
         // upcoming моменты в timed-text потоке (WebVTT cue rendering при
@@ -23124,5 +23124,30 @@ mod tests {
         let span = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, span, &sheet, &root, Size::new(400.0, 400.0), false);
         assert_eq!(style.color.r, 255, "empty-root scope should apply everywhere");
+    }
+
+    #[test]
+    fn fullscreen_pseudo_matches_sentinel_attr() {
+        let html = r#"<div id="el" data-lumen-fullscreen="">x</div>"#;
+        let css = r#":fullscreen { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_eq!(style.color.r, 255, ":fullscreen rule should apply when sentinel attr present");
+    }
+
+    #[test]
+    fn popover_open_pseudo_matches_sentinel_attr() {
+        let html = r#"<div id="p" data-lumen-popover-open="">x</div>"#;
+        let css = r#":popover-open { color: blue; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_eq!(style.color.b, 255, ":popover-open rule should apply when sentinel attr present");
+        assert_eq!(style.color.r, 0);
     }
 }
