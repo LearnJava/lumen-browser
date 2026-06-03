@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-subtle-crypto** — Web Crypto SubtleCrypto API (W3C WebCryptography API §14)
+branch: p1-subtle-crypto
+Next step: implement `_lumen_subtle_*` native bindings + JS shim in crates/js/src/dom.rs
 
 ---
 
