@@ -196,7 +196,7 @@ pub fn register_anchor(registry: &mut AnchorRegistry, name: String, node: NodeId
 /// function makes the property behave as `auto`).
 ///
 /// # Example
-/// ```
+/// ```text
 /// // Evaluate: top: anchor(--my-anchor bottom);
 /// let top = resolve_anchor_function(&registry, "--my-anchor", AnchorSide::Bottom, false);
 /// ```
