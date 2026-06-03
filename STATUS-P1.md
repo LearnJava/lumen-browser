@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**A-6: URL Pattern API**  branch: `p1-url-pattern-api`
+Next step: `crates/js/src/url_pattern.rs:1` — реализовать JS модуль с `URLPattern` классом, методами `.test()` и `.exec()` с поддержкой wildcard `*`, `:named` групп, `{optional?}` конструкций
 
 ---
 
