@@ -6,8 +6,7 @@
 
 ## In progress
 
-RB-8: `CompareBackend` + тест-раннер в `lumen-driver`  branch: p2-rb8-compare-backend
-Next step: CpuBackend + CompareBackend в lumen-paint/src/backends/; тест compare_backends.rs
+_(нет)_
 
 ---
 
@@ -38,13 +37,15 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 | ~~RB-5~~ | ~~`FemtovgBackend` скелет + базовые команды~~ — **выполнено** (p2-rb5-femtovg-backend, 2026-06-03) | — | — | — |
 | ~~RB-6~~ | ~~`FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов)~~ — **выполнено** (p2-rb6-femtovg-full, 2026-06-03) | — | — | — |
 | ~~RB-7~~ | ~~`VelloBackend` заглушка (компилируется, логирует, ничего не рисует)~~ — **выполнено** (p2-rb7-vello-stub, 2026-06-03) | — | — | — |
-| RB-8 | `CompareBackend` + тест-раннер в `lumen-driver` (pixel diff двух бэкендов) — совместно с P3 | `lumen-paint`, `lumen-driver` | M | ADR-010 |
+| ~~RB-8~~ | ~~`CompareBackend` + тест-раннер в `lumen-driver` (pixel diff двух бэкендов)~~ — **выполнено** (p2-rb8-compare-backend, 2026-06-03) | — | — | — |
 | RB-9 | `FemtovgBackend` → default; `WgpuBackend` → fallback | `lumen-paint`, `lumen-shell` | S | ADR-010 |
 | RB-10 | `VelloBackend` полный (когда vello API стабилизируется) | `lumen-paint` | L | ADR-010 (Phase 3+) |
 
 ---
 
 ## Recent merges
+
+- **p2-rb8-compare-backend** ✅ 2026-06-03 — RB-8: `CompareBackend` + `CpuBackend` + тест-раннер в `lumen-driver` (ADR-010 RB-8). `CpuBackend` (`backends/cpu_backend.rs`, feature `backend-cpu = ["cpu-render"]`): реализует `RenderBackend` через `rasterize_cpu` (tiny-skia); `screenshot_rgba()` возвращает RGBA8-пиксели; 9 unit-тестов. `CompareBackend` (`backends/compare_backend.rs`, feature `compare = ["backend-cpu"]`): держит `primary + secondary Box<dyn RenderBackend>`; `render()` вызывает оба и вычисляет `DiffResult` (diff_pixels / total_pixels / diff_percent / format); `resize()` сбрасывает diff; 11 unit-тестов. `lumen-driver`: feature `compare-backends = ["lumen-paint/compare"]`; `InProcessSession::display_list_for_compare()`; `tests/compare_backends.rs` (6 тестов: cpu vs cpu = 0% diff на 9 страницах). Итого 26 новых тестов. lumen-paint с feature compare: 604 тестов. Clippy чист.
 
 - **p2-rb7-vello-stub** ✅ 2026-06-03 — RB-7: `VelloBackend` заглушка (ADR-010 Phase 3). Новый модуль `paint::backends::vello_backend`: `VelloBackend` реализует `RenderBackend` — компилируется, логирует через `eprintln!`, ничего не рисует. `render()` → Ok(()); `screenshot_rgba()` → `Some(прозрачный буфер размера width×height×4)` для совместимости с будущим `CompareBackend` (RB-8). `viewport_size()` и `scale_factor()` делегируют к хранимым полям. Без новых зависимостей (feature `backend-vello = []`). `backends/mod.rs`: `pub mod vello_backend` + re-export `VelloBackend`. `lib.rs`: `backends` компилируется при любом из трёх backend-* фичей. `backend_factory.rs`: `LUMEN_BACKEND=vello` создаёт `VelloBackend` через `create_vello(window)`. 13 новых unit-тестов; lumen-paint: 561 тест. Clippy чист.
 
