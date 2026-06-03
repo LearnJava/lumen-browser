@@ -28,6 +28,7 @@ pub mod webgl_bindings;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
 pub mod webhid;
+pub mod webusb;
 pub mod webtransport;
 pub mod worker;
 
@@ -402,6 +403,13 @@ impl QuickJsRuntime {
             // operations reject with NotSupportedError (no USB/HID support).
             if let Err(e) = webhid::install_webhid_bindings(&ctx) {
                 eprintln!("WebHID bindings init failed: {}", e);
+            }
+
+            // Install WebUSB API (W3C WebUSB §2–3) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: all device
+            // operations reject with NotSupportedError (no USB support).
+            if let Err(e) = webusb::install_webusb_bindings(&ctx) {
+                eprintln!("WebUSB bindings init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
