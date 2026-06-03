@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+- **`shape-outside: circle()` в FloatContext** — branch: `p1-shape-outside-circle`
+  - Next step: Расширить FloatContext struct (`crates/engine/layout/src/box_tree.rs:2740`) и добавить parse_circle_px
 
 ---
 
