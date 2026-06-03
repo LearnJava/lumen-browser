@@ -34,5 +34,15 @@ sha1 = "0.10"
 # cap 5 MB/tab). Reuses the already-vendored flate2 (PNG iCCP path; also used by
 # lumen-storage for DOM-blob compression in §10J.1) — no new external dependency.
 flate2.workspace = true
+# Permanent (crypto exception #3): ECDSA P-256 for SubtleCrypto.generateKey/sign/verify/
+# importKey/exportKey. Same crate already used in lumen-network (WebAuthn, 9F).
+# pkcs8 feature: spki/pkcs8 key import/export formats.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+# Provisional: HMAC-SHA256/384/512 for SubtleCrypto.sign/verify/generateKey/importKey.
+# Pure-Rust, minimal; graduation criterion: remove if built-in sha2-based MAC suffices.
+hmac = { version = "0.12", features = [] }
+# Provisional: AES-GCM 128/256 for SubtleCrypto.encrypt/decrypt/generateKey/importKey.
+# Standard AEAD for modern web crypto; pure-Rust via aes + ghash; no native code.
+aes-gcm = "0.10"
 
 [dev-dependencies]

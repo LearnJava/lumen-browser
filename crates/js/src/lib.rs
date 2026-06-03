@@ -18,6 +18,7 @@ pub mod shared_worker;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod view_transitions;
+pub mod subtle_crypto;
 pub mod webgl_bindings;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
