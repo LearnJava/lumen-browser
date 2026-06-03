@@ -2,6 +2,7 @@ pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
 pub mod esm;
+pub mod gamepad;
 pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
@@ -13,6 +14,7 @@ pub mod geolocation;
 pub mod heap_snapshot;
 pub mod intl_bindings;
 pub mod media_devices;
+pub mod media_session;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod shared_worker;
@@ -507,6 +509,22 @@ impl QuickJsRuntime {
             // SpeechRecognition always rejects with service-not-allowed.
             if let Err(e) = speech::install_speech_bindings(&ctx) {
                 eprintln!("Speech bindings init failed: {}", e);
+            }
+
+            // Install Gamepad API (W3C Gamepad L2 §4) — after DOM so `navigator`,
+            // `Promise`, and `Event` are available.
+            // Phase 0: navigator.getGamepads() returns 4 null slots; no hardware polling.
+            // Shell integration (P3) calls _lumen_gamepad_connect/disconnect to notify.
+            if let Err(e) = gamepad::install_gamepad_bindings(&ctx) {
+                eprintln!("Gamepad bindings init failed: {}", e);
+            }
+
+            // Install MediaSession API (W3C Media Session §5) — after DOM so `navigator`,
+            // `Promise`, and `Event` are available.
+            // Phase 0: metadata/playbackState stored in JS; OS forwarding via
+            // _lumen_take_media_session_update() is a P3 shell integration task.
+            if let Err(e) = media_session::install_media_session_bindings(&ctx) {
+                eprintln!("MediaSession bindings init failed: {}", e);
             }
 
             Ok(())

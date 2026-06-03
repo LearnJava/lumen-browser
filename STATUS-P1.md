@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Gamepad API + MediaSession API  branch: p1-gamepad-mediasession
+Next step: wire install calls in lib.rs, run tests  crates/js/src/lib.rs:504
 
 ---
 
