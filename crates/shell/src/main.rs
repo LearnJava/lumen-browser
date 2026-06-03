@@ -1135,16 +1135,6 @@ pub(crate) trait PersistentJs {
     fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent>;
 }
 
-/// CSS View Transitions L1 — event kind emitted by `document.startViewTransition`.
-#[derive(Debug)]
-#[allow(dead_code)]
-enum ViewTransitionEvent {
-    /// Callback is about to run — shell should snapshot the current frame.
-    Begin,
-    /// Callback finished — shell should relayout and start the cross-fade animation.
-    End,
-}
-
 #[cfg(feature = "quickjs")]
 struct QuickPersistentJs {
     rt: lumen_js::QuickJsRuntime,
@@ -1320,7 +1310,7 @@ impl PersistentJs for QuickPersistentJs {
             .into_iter()
             .map(|ev| match ev {
                 lumen_js::ViewTransitionEvent::Begin => ViewTransitionEvent::Begin,
-                lumen_js::ViewTransitionEvent::End   => ViewTransitionEvent::End,
+                lumen_js::ViewTransitionEvent::End => ViewTransitionEvent::End,
             })
             .collect()
     }
@@ -2387,6 +2377,7 @@ fn parse_and_layout(
             measurer.register_family(&rule.family, bytes);
         }
     }
+    // Move font_registry into Arc after using it above (face_bytes_for_family).
     let font_provider: Arc<dyn lumen_core::FontProvider> = Arc::new(font_registry);
 
     let layout = {
@@ -3549,10 +3540,20 @@ struct Lumen {
 struct ViewTransitionState {
     /// Display list captured before the JS callback mutated the DOM.
     old_dl: lumen_paint::DisplayList,
-    /// Wall-clock epoch offset (ms) when the animation started.
+    /// Wall-clock epoch offset (ms) when the cross-fade animation started.
     start_ms: f64,
-    /// Total cross-fade duration in milliseconds.
+    /// Total cross-fade duration in milliseconds (currently 300 ms).
     duration_ms: f64,
+}
+
+/// CSS View Transitions L1 — event kind emitted by `document.startViewTransition`.
+#[derive(Debug)]
+#[allow(dead_code)]
+enum ViewTransitionEvent {
+    /// Callback is about to run — shell should snapshot the current frame.
+    Begin,
+    /// Callback finished — shell should relayout and start the cross-fade animation.
+    End,
 }
 
 impl Lumen {
@@ -5595,9 +5596,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let scroll_x = self.scroll_x;
 
                 // CSS View Transitions: fade old display list over new content.
-                // The old_dl is wrapped in PushOpacity(1-progress)/PopOpacity so it
+                // Renders old_dl wrapped in PushOpacity(1-progress)/PopOpacity so it
                 // fades out while the new display list (rendered underneath) fades in.
-                // Runs at most 300 ms; after that, view_transition is cleared.
+                // Runs at most `duration_ms`; after that, view_transition is cleared.
                 let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
                 if let Some(ref vt) = self.view_transition {
                     let elapsed = now_ms - vt.start_ms;
@@ -5611,13 +5612,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Prepend so old content renders before (under) UI panels.
                         vt_cmds.append(&mut overlay_buf);
                         overlay_buf = vt_cmds;
-                        // Keep animating until transition completes.
                         if let Some(w) = self.window.as_ref() {
                             w.request_redraw();
                         }
                     }
                 }
-                // Clear completed transition.
+                // Clear completed transition (separate borrow from the block above).
                 let transition_done = self
                     .view_transition
                     .as_ref()

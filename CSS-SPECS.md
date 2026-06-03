@@ -117,7 +117,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Functions & Mixins | [css-mixins-1](https://www.w3.org/TR/css-mixins-1/) | ⬜ | @function rule | **#54** |
 | Scroll-driven Animations | [scroll-animations-1](https://www.w3.org/TR/scroll-animations-1/) | 🟡 | scroll-timeline; animation-timeline | **#55** |
 | CSS Anchor Positioning | [css-anchor-position-1](https://www.w3.org/TR/css-anchor-position-1/) | ⬜ | anchor-name; position-anchor; inset-area | **#56** |
-| CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | ⬜ | view-transition-name (needs JS) | **#57** |
+| CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | 🟡 | `document.startViewTransition` JS API + 300 ms cross-fade ✅ 2026-06-03; `view-transition-name`/`::view-transition-*` pseudo P4 | **#57** |
 | CSS Fill & Stroke L3 | [fill-stroke-3](https://www.w3.org/TR/fill-stroke-3/) | 🟡 | fill/stroke/fill-opacity/stroke-opacity/stroke-width ✅ 2026-05-27; fill-rule/stroke-dasharray ⬜ | **#58** |
 | CSS Scroll Snap L2 | [css-scroll-snap-2](https://www.w3.org/TR/css-scroll-snap-2/) | ⬜ | snapChanging/snapChanged events | **#59** |
 

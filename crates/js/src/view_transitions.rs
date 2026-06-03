@@ -103,7 +103,7 @@ mod tests {
         (rt, ctx)
     }
 
-    fn install(ctx: &rquickjs::Ctx, events: Arc<Mutex<Vec<ViewTransitionEvent>>>) {
+    fn setup(ctx: &Ctx<'_>, events: Arc<Mutex<Vec<ViewTransitionEvent>>>) {
         ctx.eval::<(), _>("var document = {};").unwrap();
         install_view_transition_bindings(ctx, events).unwrap();
     }
@@ -112,9 +112,7 @@ mod tests {
     fn install_succeeds() {
         let (_rt, ctx) = make_ctx();
         let ev = Arc::new(Mutex::new(Vec::new()));
-        ctx.with(|ctx| {
-            install(&ctx, Arc::clone(&ev));
-        });
+        ctx.with(|ctx| setup(&ctx, Arc::clone(&ev)));
     }
 
     #[test]
@@ -122,19 +120,18 @@ mod tests {
         let (_rt, ctx) = make_ctx();
         let ev = Arc::new(Mutex::new(Vec::new()));
         ctx.with(|ctx| {
-            install(&ctx, Arc::clone(&ev));
+            setup(&ctx, Arc::clone(&ev));
             let ty: String = ctx.eval("typeof document.startViewTransition").unwrap();
             assert_eq!(ty, "function");
         });
     }
 
     #[test]
-    fn callback_is_called() {
+    fn callback_is_called_synchronously() {
         let (_rt, ctx) = make_ctx();
         let ev = Arc::new(Mutex::new(Vec::new()));
         ctx.with(|ctx| {
-            install(&ctx, Arc::clone(&ev));
-            // The callback should run synchronously and set a flag.
+            setup(&ctx, Arc::clone(&ev));
             let called: bool = ctx
                 .eval(
                     "(function() { \
@@ -153,7 +150,7 @@ mod tests {
         let (_rt, ctx) = make_ctx();
         let ev = Arc::new(Mutex::new(Vec::new()));
         ctx.with(|ctx| {
-            install(&ctx, Arc::clone(&ev));
+            setup(&ctx, Arc::clone(&ev));
             let has_props: bool = ctx
                 .eval(
                     "(function() { \
@@ -165,7 +162,10 @@ mod tests {
                      })()",
                 )
                 .unwrap();
-            assert!(has_props, "ViewTransition must expose updateCallbackDone/ready/finished/skipTransition");
+            assert!(
+                has_props,
+                "ViewTransition must expose updateCallbackDone/ready/finished/skipTransition"
+            );
         });
     }
 
@@ -174,8 +174,9 @@ mod tests {
         let (_rt, ctx) = make_ctx();
         let ev: Arc<Mutex<Vec<ViewTransitionEvent>>> = Arc::new(Mutex::new(Vec::new()));
         ctx.with(|ctx| {
-            install(&ctx, Arc::clone(&ev));
-            ctx.eval::<(), _>("document.startViewTransition(function() {});").unwrap();
+            setup(&ctx, Arc::clone(&ev));
+            ctx.eval::<(), _>("document.startViewTransition(function() {});")
+                .unwrap();
         });
         let events = std::mem::take(&mut *ev.lock().unwrap());
         assert_eq!(events.len(), 2, "expect Begin + End events");
@@ -188,8 +189,7 @@ mod tests {
         let (_rt, ctx) = make_ctx();
         let ev = Arc::new(Mutex::new(Vec::new()));
         ctx.with(|ctx| {
-            install(&ctx, Arc::clone(&ev));
-            // startViewTransition with no callback should not throw.
+            setup(&ctx, Arc::clone(&ev));
             let ok: bool = ctx
                 .eval(
                     "(function() { \
@@ -199,6 +199,27 @@ mod tests {
                 )
                 .unwrap();
             assert!(ok, "startViewTransition() without callback must not throw");
+        });
+    }
+
+    #[test]
+    fn skip_transition_is_no_op() {
+        let (_rt, ctx) = make_ctx();
+        let ev = Arc::new(Mutex::new(Vec::new()));
+        ctx.with(|ctx| {
+            setup(&ctx, Arc::clone(&ev));
+            let ok: bool = ctx
+                .eval(
+                    "(function() { \
+                       try { \
+                         var vt = document.startViewTransition(function() {}); \
+                         vt.skipTransition(); \
+                         return true; \
+                       } catch(e) { return false; } \
+                     })()",
+                )
+                .unwrap();
+            assert!(ok, "skipTransition() must not throw");
         });
     }
 }

@@ -154,10 +154,11 @@ pub struct QuickJsRuntime {
     /// Each `Enter` causes the shell to call `window.set_fullscreen(Borderless)`;
     /// each `Exit` calls `window.set_fullscreen(None)`.
     fullscreen_requests: Arc<Mutex<Vec<dom::FullscreenRequest>>>,
-    /// View Transition events from `document.startViewTransition`.
+    /// CSS View Transition events from `document.startViewTransition` (CSS VT L1).
     ///
-    /// `Begin` is pushed before the callback runs; `End` after.
-    /// Drained by the shell in `about_to_wait` to drive snapshot + cross-fade.
+    /// `Begin` is pushed before the user callback runs (shell captures old display list).
+    /// `End` is pushed after the callback (shell relayouts and starts 300 ms cross-fade).
+    /// Drained by the shell in `about_to_wait` via `take_view_transition_events()`.
     view_transition_events: Arc<Mutex<Vec<view_transitions::ViewTransitionEvent>>>,
 }
 
@@ -316,14 +317,6 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install View Transitions API (CSS View Transitions L1) — after DOM.
-            if let Err(e) = view_transitions::install_view_transition_bindings(
-                &ctx,
-                Arc::clone(&self.view_transition_events),
-            ) {
-                eprintln!("View Transitions bindings init failed: {}", e);
-            }
-
             // Install Battery Status API disable (ADR-007 Layer 4, 9D.4) — after DOM.
             if let Err(e) = battery_bindings::install_battery_bindings(&ctx) {
                 eprintln!("Battery bindings init failed: {}", e);
@@ -432,6 +425,15 @@ impl QuickJsRuntime {
             // host QuickJS build ever provides one.
             if let Err(e) = intl_bindings::install_intl_bindings(&ctx) {
                 eprintln!("Intl bindings init failed: {}", e);
+            }
+
+            // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
+            // so `document` is defined and Promise/queueMicrotask are available.
+            if let Err(e) = view_transitions::install_view_transition_bindings(
+                &ctx,
+                Arc::clone(&self.view_transition_events),
+            ) {
+                eprintln!("View Transitions bindings init failed: {}", e);
             }
 
             Ok(())
