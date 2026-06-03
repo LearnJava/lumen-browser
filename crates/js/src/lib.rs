@@ -39,6 +39,7 @@ pub mod worker;
 pub mod url_pattern;
 pub mod navigation_api;
 pub mod typed_om_api;
+pub mod trusted_types;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
