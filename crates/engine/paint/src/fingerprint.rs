@@ -9,9 +9,11 @@
 //! - Tor: same as Standard
 
 /// Normalized GPU vendor string across all profiles.
+#[cfg(any(feature = "backend-wgpu", test))]
 const NORMALIZED_VENDOR: &str = "WebKit";
 
 /// Normalized GPU renderer string across all profiles.
+#[cfg(any(feature = "backend-wgpu", test))]
 const NORMALIZED_RENDERER: &str = "Generic GPU";
 
 /// GPU fingerprint info: normailzed vendor and renderer strings.

@@ -1,3 +1,5 @@
+// Requires `backend-wgpu` feature (uses Renderer directly).
+#![cfg(feature = "backend-wgpu")]
 /// GPU headless render tests — require a real GPU adapter.
 ///
 /// Marked `#[ignore]` by default so they don't run in CPU-only CI.

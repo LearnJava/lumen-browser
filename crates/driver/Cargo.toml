@@ -26,7 +26,8 @@ lumen-html-parser = { workspace = true }
 lumen-css-parser = { workspace = true }
 lumen-dom = { workspace = true }
 lumen-layout = { workspace = true }
-lumen-paint = { workspace = true }
+# backend-wgpu: driver uses Renderer directly for headless GPU snapshots (WinitSession).
+lumen-paint = { workspace = true, features = ["backend-wgpu"] }
 lumen-a11y = { workspace = true }
 lumen-font = { workspace = true }
 lumen-image = { workspace = true }

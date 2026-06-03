@@ -16,10 +16,15 @@ path = "src/main.rs"
 # falls back to NullJsRuntime which silently ignores all inline scripts.
 quickjs = ["dep:lumen-js"]
 
-# femtovg rendering backend (Phase 2, ADR-010). Activates lumen-paint/backend-femtovg.
-# Use: cargo run -p lumen-shell --features backend-femtovg
-# Or:  LUMEN_BACKEND=femtovg cargo run -p lumen-shell --features backend-femtovg
+# femtovg rendering backend — Phase 2 default (ADR-010 RB-9).
+# Shell inherits this through lumen-paint's default = ["backend-femtovg"].
+# Listed explicitly here to allow: cargo run -p lumen-shell --features backend-femtovg
 backend-femtovg = ["lumen-paint/backend-femtovg"]
+
+# wgpu rendering backend — Phase 1 / Phase 2 fallback (ADR-010 §Migration path).
+# Use when femtovg is unavailable or LUMEN_BACKEND=wgpu is set.
+# cargo run -p lumen-shell --no-default-features --features backend-wgpu,quickjs
+backend-wgpu = ["lumen-paint/backend-wgpu"]
 
 [dependencies]
 lumen-core.workspace = true
@@ -32,7 +37,9 @@ lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true
 lumen-dom.workspace = true
 lumen-layout.workspace = true
-lumen-paint.workspace = true
+# Phase 2 default: shell uses femtovg backend (ADR-010 RB-9).
+# wgpu is kept as compile-time fallback via backend-wgpu feature.
+lumen-paint = { workspace = true, features = ["backend-femtovg", "backend-wgpu"] }
 lumen-font.workspace = true
 lumen-encoding.workspace = true
 lumen-image.workspace = true

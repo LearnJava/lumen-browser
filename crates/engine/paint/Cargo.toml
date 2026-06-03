@@ -19,12 +19,12 @@ lumen-image.workspace = true
 winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
-# femtovg + glutin — Phase 2 rendering backend (ADR-010 RB-5).
+# femtovg + glutin — Phase 2 default rendering backend (ADR-010 RB-9).
 # Why this dependency: femtovg is a stable 2D GPU renderer (OpenGL ES 2.0) that covers
 # every DisplayCommand natively (paths, gradients, text, clips, layers). It eliminates
-# hand-written WGSL shaders. Provisional tier — promoted to permanent when femtovg
-# becomes default backend (Phase 2). glutin provides cross-platform OpenGL context
-# creation; glutin-winit bridges glutin with winit 0.30 windows.
+# hand-written WGSL shaders. Promoted to permanent tier as Phase 2 default (RB-9).
+# glutin provides cross-platform OpenGL context creation; glutin-winit bridges glutin
+# with winit 0.30 windows.
 femtovg = { version = "0.9", optional = true, default-features = false }
 glutin = { version = "0.32", optional = true }
 glutin-winit = { version = "0.5", optional = true }
@@ -42,13 +42,13 @@ lumen-layout.workspace = true
 lumen-core.workspace = true
 
 [features]
-# Phase 1 (текущий): wgpu DX12/Vulkan/Metal
-default = ["backend-wgpu"]
+# Phase 2 (текущий): femtovg OpenGL ES 2.0 (ADR-010 §Migration path, RB-9)
+default = ["backend-femtovg"]
 
-# wgpu-бэкенд — текущий Phase 1 бэкенд (ADR-010 §Migration path)
+# wgpu-бэкенд — Phase 1 / fallback для Phase 2 (ADR-010 §Migration path)
 backend-wgpu = ["dep:wgpu", "dep:winit"]
 
-# femtovg-бэкенд — Phase 2 default (ADR-010 §Migration path, RB-5)
+# femtovg-бэкенд — Phase 2 default (ADR-010 §Migration path, RB-9)
 backend-femtovg = ["dep:femtovg", "dep:glutin", "dep:glutin-winit", "dep:winit", "dep:imgref", "dep:rgb"]
 
 # vello-бэкенд — Phase 3 default (dep:vello добавляется в RB-10)

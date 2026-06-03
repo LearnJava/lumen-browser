@@ -1851,10 +1851,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:1442` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
 `crates/engine/paint/src/display_list.rs:2166` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
 `crates/engine/paint/src/display_list.rs:2295` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/fingerprint.rs:19` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
-`crates/engine/paint/src/fingerprint.rs:34` **fn** `from_adapter_info` — Create normalized GPU fingerprint from wgpu adapter info
-`crates/engine/paint/src/fingerprint.rs:42` **fn** `vendor` — Vendor string: always "WebKit"
-`crates/engine/paint/src/fingerprint.rs:47` **fn** `renderer` — Renderer string: always "Generic GPU"
+`crates/engine/paint/src/fingerprint.rs:21` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
+`crates/engine/paint/src/fingerprint.rs:36` **fn** `from_adapter_info` — Create normalized GPU fingerprint from wgpu adapter info
+`crates/engine/paint/src/fingerprint.rs:44` **fn** `vendor` — Vendor string: always "WebKit"
+`crates/engine/paint/src/fingerprint.rs:49` **fn** `renderer` — Renderer string: always "Generic GPU"
 `crates/engine/paint/src/glsl.rs:32` **enum** `Val` — Runtime value inside the GLSL interpreter
 `crates/engine/paint/src/glsl.rs:49` **fn** `to_float` — Convert any numeric-ish value to a scalar f32
 `crates/engine/paint/src/glsl.rs:63` **fn** `to_vec4` — Convert any value to vec4 (broadcasting rules)
@@ -1887,12 +1887,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:175` **fn** `is_empty` — Check if cache is empty
 `crates/engine/paint/src/layer_cache.rs:180` **fn** `contains` — Check if a specific layer is in cache
 `crates/engine/paint/src/layer_cache.rs:189` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:83` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:93` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/lib.rs:176` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:185` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:197` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family`
-`crates/engine/paint/src/lib.rs:204` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:84` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:94` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/lib.rs:177` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:186` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:198` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family`
+`crates/engine/paint/src/lib.rs:205` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1331` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`

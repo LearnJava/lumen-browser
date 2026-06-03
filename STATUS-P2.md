@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+RB-9: `FemtovgBackend` → default; `WgpuBackend` → fallback  branch: p2-rb9-femtovg-default
+Next step: cargo check + clippy + tests  crates/shell/src/backend_factory.rs + crates/engine/paint/Cargo.toml
 
 ---
 
