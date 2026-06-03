@@ -11,6 +11,7 @@
 
 pub mod atlas;
 pub mod backend;
+pub mod backends;
 pub mod backdrop_cache;
 pub mod glsl;
 pub mod compositor;
@@ -30,6 +31,7 @@ pub mod cpu_raster;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use backend::{RenderBackend, RenderError};
+pub use backends::WgpuBackend;
 pub use backdrop_cache::BackdropCache;
 pub use fallback::CURATED_FALLBACK_FAMILIES;
 pub use compositor::{
