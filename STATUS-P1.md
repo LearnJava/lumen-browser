@@ -6,15 +6,15 @@
 
 ## In progress
 
-**p1-esmodule-support** — `<script type=module>` ES Module support  
-branch: `p1-esmodule-support`  
-Next step: Implement `LumenLoader/LumenResolver` in `crates/js/src/esm.rs`, wire into `QuickJsRuntime::new()`
+**p1-read-later-ui** — §12.3 Read-later panel + offline reader  
+branch: `p1-read-later-ui`  
+Next step: commit current implementation (panel, background fetch, offline load), then update lumen-plan.md + SYMBOLS.md
 
 ---
 
 ## Next
 
-_(нет — все задачи выполнены)_
+_(нет — следующая задача после p1-read-later-ui будет определена при завершении)_
 
 ---
 
