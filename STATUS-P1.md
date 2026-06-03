@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty — A-9 завершена)
+A-10: Sanitizer API stub  branch: p1-a10-sanitizer
+Next step: Create crates/js/src/sanitizer.rs  Implement Sanitizer class + sanitizeFor method + element.setHTML integration
 
 ---
 
