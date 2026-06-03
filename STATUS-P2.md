@@ -6,9 +6,7 @@
 
 ## In progress
 
-**RB-2: WgpuBackend** — обёртка над `Renderer` в `paint::backends::wgpu_backend`  
-Branch: `p2-wgpu-backend`  
-Next step: создать `backends/mod.rs` + `backends/wgpu_backend.rs`, обновить `lib.rs`
+_(нет)_
 
 ---
 
@@ -32,8 +30,8 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 
 | # | Задача | Crate(s) | Effort | Roadmap |
 |---|--------|----------|--------|---------|
-| RB-1 | `RenderBackend` trait + `RenderError` в `paint::backend` | `lumen-paint` | S | ADR-010 |
-| RB-2 | `WgpuBackend` — обёртка над текущим `Renderer` | `lumen-paint` | M | ADR-010 |
+| ~~RB-1~~ | ~~`RenderBackend` trait + `RenderError` в `paint::backend`~~ — **выполнено** (p2-render-backend-trait) | — | — | — |
+| ~~RB-2~~ | ~~`WgpuBackend` — обёртка над текущим `Renderer`~~ — **выполнено** (p2-wgpu-backend, 2026-06-03) | — | — | — |
 | RB-3 | Feature-флаги в `lumen-paint/Cargo.toml` | `lumen-paint` | S | ADR-010 |
 | RB-4 | Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var | `lumen-paint`, `lumen-shell` | M | ADR-010 |
 | RB-5 | `FemtovgBackend` скелет + базовые команды (FillRect/FillRoundedRect/DrawText/DrawBorder/PushClipRect) | `lumen-paint` | M | ADR-010 |
@@ -46,6 +44,8 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 ---
 
 ## Recent merges
+
+- **p2-wgpu-backend** ✅ 2026-06-03 — RB-2: `WgpuBackend` в `paint::backends::wgpu_backend` (ADR-010). Тонкая обёртка над `Renderer`, реализующая `RenderBackend`. `backends/mod.rs` + `backends/wgpu_backend.rs`. Трансляция ошибок: `wgpu::SurfaceError` → `RenderError` (Lost/Outdated/Timeout → SurfaceLost; OutOfMemory → DeviceLost; Other → Other); `ImageRegisterError` → `String`. `new(window, font_bytes)` оконный + `new_headless(font_bytes, w, h)` headless-режим. `renderer()/renderer_mut()` — доступ к Renderer для операций вне трейта. `screenshot_rgba()` → None для windowed. `lib.rs`: `pub mod backends` + `pub use backends::WgpuBackend`. 7 unit-тестов (все 5 вариантов SurfaceError + Send bound). 544 тестов lumen-paint (было 538, +7 новых минус некоторые уже учтённые). Clippy чист.
 
 - **p2-render-backend-trait** ✅ 2026-06-03 — RB-1: `RenderBackend` trait + `RenderError` в `paint::backend` (ADR-010). `backend.rs`: `RenderError` enum (SurfaceLost/DeviceLost/ShaderError/Other) + impl Display + std::error::Error. `RenderBackend` trait: render/resize/set_scale_factor/register_image/clear_images/set_font_provider + default screenshot_rgba() → None. `lib.rs`: pub mod backend + pub use. 9 unit-тестов: Display форматирование, Clone/PartialEq, object-safety (NullBackend как Box<dyn RenderBackend>), register_image, screenshot_rgba. 538 тестов lumen-paint. Clippy чист.
 
