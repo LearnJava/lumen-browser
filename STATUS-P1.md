@@ -6,8 +6,7 @@
 
 ## In progress
 
-**p1-color-mix** branch: `p1-color-mix`
-Next step: implement `color_mix.rs` in `crates/engine/layout/src/color_mix.rs`
+_(нет)_
 
 ---
 
@@ -18,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-color-mix** ✅ 2026-06-03 — CSS `color-mix()` algorithm stub (CSS Color L5 §10.2). Новый модуль `crates/engine/layout/src/color_mix.rs`: `MixColorSpace` enum (Srgb/SrgbLinear/Hsl/Hwb/Lab/Lch/Oklab/Oklch/XyzD65/XyzD50) + `from_css()`. `mix_colors(space, c1, w1, c2, w2) -> [f32; 4]` — входные/выходные данные sRGB [0..1]; нормализация весов; alpha в sRGB; premultiply/unpremultiply. Polar spaces (Hsl/Hwb/Lch/Oklch) — shortest-arc hue interpolation. Конверсии: sRGB↔linear (IEC 61966-2-1), sRGB↔HSL (CSS Color L4 §3.3), sRGB↔HWB (§3.4), sRGB↔CIE XYZ D65/D50 (Bradford CA), sRGB↔Lab D50 (§10.7), sRGB↔LCH (polar Lab), sRGB↔Oklab (Ottosson M1+M2), sRGB↔Oklch (polar Oklab). P4 handoff: `style.rs:15030` — `// CSS: color-mix()` comment + полный чеклист в STATUS-P4.md "Needs wiring". CSS-SPECS.md color-mix() ⬜→🟡 (CSS Color L4 + L5). 25 unit-тестов. Без новых зависимостей. BUG-055 pre-existing.
 
 - **p1-anchor-positioning** ✅ 2026-06-03 — CSS Anchor Positioning L1 algorithm stub (CSS Anchor Positioning §2-5). Новый модуль `crates/engine/layout/src/anchor.rs`: `AnchorRegistry` (HashMap anchor-name → `AnchorEntry { node, rect }`), `collect_anchors(root) -> AnchorRegistry` (двухфазный сбор), `register_anchor`, `resolve_anchor_function(registry, name, side, is_horizontal) -> Option<f32>` (резолвит `anchor()` функцию — стороны Top/Right/Bottom/Left/Center/Start/End/Percentage, cross-axis → None), `resolve_inset_area(registry, name, row, col, cb_rect) -> Option<AnchoredPosition>` (маппинг InsetAreaKeyword: Start/Center/End/SpanStart/SpanEnd/SpanAll/SelfStart/SelfEnd → (top, left, width, height)). 21 unit-тест. P4 handoff: anchor-name/position-anchor/inset-area в ComputedStyle + anchor() парсинг → STATUS-P4.md "Needs wiring". CSS-SPECS.md CSS Anchor Positioning ⬜→🟡. subsystems/layout.md обновлён. Без новых зависимостей.
 
