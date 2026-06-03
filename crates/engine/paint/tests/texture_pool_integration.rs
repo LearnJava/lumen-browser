@@ -1,3 +1,5 @@
+// Requires `backend-wgpu` feature (TexturePool is wgpu-specific).
+#![cfg(feature = "backend-wgpu")]
 //! Integration tests for texture pool recycling (Phase 2 ADR-008).
 //!
 //! Tests verify that TexturePool integrates correctly with Renderer:

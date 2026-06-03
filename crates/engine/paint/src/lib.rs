@@ -28,6 +28,7 @@ pub mod layer_cache;
 pub mod renderer;
 pub mod scroll_snap;
 pub mod svg_path;
+#[cfg(feature = "backend-wgpu")]
 pub mod texture_pool;
 pub mod webgl;
 

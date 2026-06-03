@@ -43,7 +43,10 @@ lumen-html-parser = { path = "crates/engine/html-parser" }
 lumen-css-parser = { path = "crates/engine/css-parser" }
 lumen-dom = { path = "crates/engine/dom" }
 lumen-layout = { path = "crates/engine/layout" }
-lumen-paint = { path = "crates/engine/paint" }
+# default-features = false: each crate opts in to the backend it needs.
+# Shell opts in to backend-femtovg (Phase 2 default, ADR-010 RB-9).
+# Driver/bench/js opt in to nothing (they don't need a windowed GPU backend).
+lumen-paint = { path = "crates/engine/paint", default-features = false }
 lumen-font = { path = "crates/engine/font" }
 lumen-encoding = { path = "crates/engine/encoding" }
 lumen-image = { path = "crates/engine/image" }
