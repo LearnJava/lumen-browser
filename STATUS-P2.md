@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**A-1: CSS Properties & Values API (Houdini)**  
+Branch: `p2-css-properties-values-api`  
+Next step: Create `crates/js/src/css_properties_values_api.rs`, implement `CSS.registerProperty` stub, `@property` at-rule parsing in css-parser, `StyleSheet.registered_properties`, wiring in `compute_style`. Add 8 unit tests.
 
 ---
 

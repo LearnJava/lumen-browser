@@ -4223,8 +4223,8 @@ mod tests {
         let s = parse(":hover { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];
         match p {
-            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) => assert_eq!(n, "hover"),
-            _ => panic!("expected unsupported pseudo-class"),
+            SimpleSelector::PseudoClass(PseudoClass::Hover) => {},
+            _ => panic!("expected Hover pseudo-class"),
         }
     }
 

@@ -1,7 +1,7 @@
-/// CSS Custom Highlight API (CSS Highlight API L1, https://drafts.csswg.org/css-highlight-api-1/)
-///
-/// Provides `CSS.highlights` registry for custom text highlights with
-/// `Highlight` objects containing ranges and priority, styled via `::highlight(name)` pseudo-element.
+//! CSS Custom Highlight API (CSS Highlight API L1, https://drafts.csswg.org/css-highlight-api-1/)
+//!
+//! Provides `CSS.highlights` registry for custom text highlights with
+//! `Highlight` objects containing ranges and priority, styled via `::highlight(name)` pseudo-element.
 
 use rquickjs::Ctx;
 
@@ -70,7 +70,7 @@ mod tests {
             let result: bool = ctx.eval(
                 "CSS.highlights instanceof Map && CSS.highlights.constructor.name === 'HighlightRegistry'"
             ).unwrap();
-            assert_eq!(result, true);
+            assert!(result);
         });
     }
 
@@ -82,7 +82,7 @@ mod tests {
             let result: bool = ctx.eval(
                 "const h = new CSS.Highlight(); h.add('range1'); h.size === 1"
             ).unwrap();
-            assert_eq!(result, true);
+            assert!(result);
         });
     }
 
@@ -120,7 +120,7 @@ mod tests {
                  CSS.highlights.set('search', h); \
                  CSS.highlights.get('search') === h"
             ).unwrap();
-            assert_eq!(result, true);
+            assert!(result);
         });
     }
 
@@ -134,7 +134,7 @@ mod tests {
                  CSS.highlights.set('test', h); \
                  CSS.highlights.has('test')"
             ).unwrap();
-            assert_eq!(result, true);
+            assert!(result);
         });
     }
 
@@ -149,7 +149,7 @@ mod tests {
                  CSS.highlights.delete('test'); \
                  !CSS.highlights.has('test')"
             ).unwrap();
-            assert_eq!(result, true);
+            assert!(result);
         });
     }
 
@@ -164,7 +164,7 @@ mod tests {
                  CSS.highlights.clear(); \
                  CSS.highlights.size === 0"
             ).unwrap();
-            assert_eq!(result, true);
+            assert!(result);
         });
     }
 }
