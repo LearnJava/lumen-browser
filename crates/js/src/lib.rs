@@ -4,6 +4,7 @@ pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
 pub mod gamepad;
+pub mod highlight_api;
 pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
@@ -11,6 +12,7 @@ pub mod clipboard;
 pub mod cookie_banner;
 pub mod credentials;
 pub mod dom;
+pub mod filesystem_access;
 pub mod geolocation;
 pub mod heap_snapshot;
 pub mod intl_bindings;
@@ -23,13 +25,17 @@ pub mod speech;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod view_transitions;
+pub mod bluetooth;
 pub mod subtle_crypto;
 pub mod temporal_api;
 pub mod webgl_bindings;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
+pub mod webhid;
+pub mod webusb;
 pub mod webtransport;
 pub mod worker;
+pub mod url_pattern;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -381,6 +387,12 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
+            // Install CSS Custom Highlight API (CSS Highlight API L1) — after DOM.
+            // Phase 0: CSS.highlights registry + Highlight class; visual rendering in Phase 1.
+            if let Err(e) = highlight_api::install_highlight_api_bindings(&ctx) {
+                eprintln!("Highlight API bindings init failed: {}", e);
+            }
+
             // Install Battery Status API disable (ADR-007 Layer 4, 9D.4) — after DOM.
             if let Err(e) = battery_bindings::install_battery_bindings(&ctx) {
                 eprintln!("Battery bindings init failed: {}", e);
@@ -402,6 +414,27 @@ impl QuickJsRuntime {
             // requests reject with NotAllowedError; enumerateDevices returns [].
             if let Err(e) = media_devices::install_media_devices_bindings(&ctx) {
                 eprintln!("MediaDevices bindings init failed: {}", e);
+            }
+
+            // Install WebHID API (W3C WebHID §3–5) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: all device
+            // operations reject with NotSupportedError (no USB/HID support).
+            if let Err(e) = webhid::install_webhid_bindings(&ctx) {
+                eprintln!("WebHID bindings init failed: {}", e);
+            }
+
+            // Install WebUSB API (W3C WebUSB §2–3) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: all device
+            // operations reject with NotSupportedError (no USB support).
+            if let Err(e) = webusb::install_webusb_bindings(&ctx) {
+                eprintln!("WebUSB bindings init failed: {}", e);
+            }
+
+            // Install Web Bluetooth API (W3C Web Bluetooth §3–4) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: all device
+            // operations reject with NotSupportedError (no BLE support).
+            if let Err(e) = bluetooth::install_bluetooth_bindings(&ctx) {
+                eprintln!("Bluetooth bindings init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
@@ -501,6 +534,12 @@ impl QuickJsRuntime {
             // timezone helpers can leverage Date internals. Pure JS, no native bindings.
             if let Err(e) = temporal_api::install_temporal_api(&ctx) {
                 eprintln!("Temporal API init failed: {}", e);
+            }
+
+            // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
+            // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
+            if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {
+                eprintln!("URL Pattern API init failed: {}", e);
             }
 
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
