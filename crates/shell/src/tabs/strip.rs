@@ -369,6 +369,58 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
     out
 }
 
+/// Build a small tooltip overlay for a tab with a non-Active tier badge.
+///
+/// Returns `None` if the hovered tab has no tier badge (Active / BackgroundRecent).
+/// Tooltip displays above the tab bar with context about the tab state.
+pub fn build_tab_tooltip(
+    tab: &TabEntry,
+    tab_center_x: f32,
+    tab_bar_bottom: f32,
+) -> Option<DisplayList> {
+    let msg = match tab.tab_state {
+        TabState::BackgroundOld => "Вкладка фоновая — потребляет меньше памяти",
+        TabState::Hibernated => "Вкладка спит — клик восстановит (~1 сек)",
+        _ => return None,
+    };
+
+    const TT_W: f32 = 240.0;
+    const TT_H: f32 = 28.0;
+    const PAD: f32 = 8.0;
+    const RADIUS: f32 = 4.0;
+    const FONT_SZ: f32 = 11.0;
+
+    let x = (tab_center_x - TT_W / 2.0).max(4.0);
+    let y = tab_bar_bottom + 4.0;
+
+    let bg = Color { r: 38, g: 38, b: 42, a: 235 };
+    let text_color = Color { r: 255, g: 255, b: 255, a: 255 };
+
+    let mut cmds = DisplayList::with_capacity(2);
+
+    // Background rounded rect.
+    cmds.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(x, y, TT_W, TT_H),
+        radii: CornerRadii { tl: RADIUS, tl_y: RADIUS, tr: RADIUS, tr_y: RADIUS, br: RADIUS, br_y: RADIUS, bl: RADIUS, bl_y: RADIUS },
+        color: bg,
+    });
+
+    // Text.
+    cmds.push(DisplayCommand::DrawText {
+        rect: Rect::new(x + PAD, y + TT_H / 2.0 - FONT_SZ * 0.4, TT_W - 2.0 * PAD, FONT_SZ * 1.2),
+        text: msg.to_string(),
+        font_size: FONT_SZ,
+        color: text_color,
+        font_family: Vec::new(),
+        font_weight: FontWeight::NORMAL,
+        font_style: FontStyle::Normal,
+        font_variation_axes: Vec::new(),
+        tab_size: 0.0,
+    });
+
+    Some(cmds)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -642,5 +694,47 @@ mod tests {
         let work_color = ContainerKind::Work.border_color().expect("Work has colour");
         // Exactly one Work-coloured strip (tab 1); tabs 0 and 2 have None.
         assert_eq!(count_container_strips(&dl, work_color), 1);
+    }
+
+    #[test]
+    fn tooltip_none_for_active_tab() {
+        let tab = TabEntry {
+            id: 0,
+            title: "Test".to_owned(),
+            tab_state: TabState::Active,
+            opener_id: None,
+            container: ContainerKind::None,
+            last_activated_ms: 0.0,
+        };
+        assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_none());
+    }
+
+    #[test]
+    fn tooltip_some_for_hibernated_tab() {
+        let tab = TabEntry {
+            id: 0,
+            title: "Test".to_owned(),
+            tab_state: TabState::Hibernated,
+            opener_id: None,
+            container: ContainerKind::None,
+            last_activated_ms: 0.0,
+        };
+        let cmds = build_tab_tooltip(&tab, 100.0, 36.0);
+        assert!(cmds.is_some());
+        // Tooltip must have at least background + text.
+        assert!(cmds.unwrap().len() >= 2);
+    }
+
+    #[test]
+    fn tooltip_some_for_background_old() {
+        let tab = TabEntry {
+            id: 0,
+            title: "Test".to_owned(),
+            tab_state: TabState::BackgroundOld,
+            opener_id: None,
+            container: ContainerKind::None,
+            last_activated_ms: 0.0,
+        };
+        assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_some());
     }
 }

@@ -321,6 +321,7 @@ fn run_window_mode(
         dark_mode: false,
         cursor_position: None,
         hovered_nid: None,
+        hovered_tab_idx: None,
         active_nid: None,
         scroll_drag: None,
         scroll_anim: None,
@@ -3226,6 +3227,10 @@ struct Lumen {
     /// Updated on every `CursorMoved`; triggers relayout when it changes so
     /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
     hovered_nid: Option<NodeId>,
+    /// Tab bar: index of the hovered tab for displaying tier-tooltip. Updated on
+    /// every `CursorMoved` when cursor is over the tab bar (y < TAB_BAR_HEIGHT).
+    /// `None` when cursor is outside the tab bar or no tabs exist.
+    hovered_tab_idx: Option<usize>,
     /// DOM node whose mouse button is currently held down (CSS `:active` target).
     /// Set on `MouseInput(Pressed)`, cleared on `MouseInput(Released)`.
     active_nid: Option<NodeId>,
@@ -4878,9 +4883,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
                 }
+                // Tab bar: update hovered_tab_idx for tooltip rendering.
+                {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let win_w = self.viewport_width_css();
+                    self.hovered_tab_idx = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, win_w) {
+                            tabs::strip::TabHit::Tab(idx) => Some(idx),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
+                self.hovered_tab_idx = None;
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
                     // Dispatch leave events before clearing hovered state.
@@ -6169,6 +6194,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut tab_cmds =
                         tabs::strip::build_tab_bar(&self.tab_strip, tab_area_w);
                     overlay_buf.append(&mut tab_cmds);
+                    // Tab tier tooltip on hover.
+                    if let Some(idx) = self.hovered_tab_idx {
+                        if let Some(tab) = self.tab_strip.tabs.get(idx) {
+                            let tab_w = tab_area_w / self.tab_strip.tabs.len().max(1) as f32;
+                            let tab_center_x = (idx as f32 + 0.5) * tab_w;
+                            if let Some(mut tooltip_cmds) = tabs::strip::build_tab_tooltip(
+                                tab,
+                                tab_center_x,
+                                tabs::strip::TAB_BAR_HEIGHT,
+                            ) {
+                                overlay_buf.append(&mut tooltip_cmds);
+                            }
+                        }
+                    }
                     // Archive toolbar button (rightmost 36 px of tab bar).
                     let mut arch_btn = tabs::archive::build_button(
                         &self.archive,
