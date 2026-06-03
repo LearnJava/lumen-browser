@@ -6,8 +6,7 @@
 
 ## In progress
 
-**A-4: WebBluetooth API stub** — branch: `p1-webbluetooth-api`
-Next step: добавить JS-шим в `crates/js/src/bluetooth.rs`
+_(нет)_
 
 ---
 
@@ -15,6 +14,7 @@ Next step: добавить JS-шим в `crates/js/src/bluetooth.rs`
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-4: WebBluetooth API stub | Phase 0 JS-шим: navigator.bluetooth.requestDevice({filters}) → reject NotSupportedError, navigator.bluetooth.getAvailability() → Promise<false>, BluetoothDevice (id/name/uuids/gatt), BluetoothRemoteGATTServer (connect/disconnect/getPrimaryService(s) → reject), watchAdvertisements/unwatchAdvertisements/forget → reject. 7 unit-тестов. lumen-js: 1116 тестов. |
 | 2026-06-04 | A-3: WebUSB API stub | Phase 0 JS-шим: navigator.usb.requestDevice({filters}) → reject, navigator.usb.getDevices() → Promise<[]>, USBDevice (vendorId/productId/productName/manufacturerName/serialNumber, open/close/selectConfiguration/claimInterface/releaseInterface/transferIn/Out/controlTransferIn/Out/clearHalt/reset → reject), USBConnectionEvent, USBManager extends EventTarget, USBConfiguration/Interface/AlternateInterface/Endpoint, USBTransferInResult/OutResult. 8 unit-тестов. lumen-js: 1109 тестов. |
 | 2026-06-04 | A-2: WebHID API stub | Phase 0 JS-шим: navigator.hid.requestDevice({filters}) → reject, navigator.hid.getDevices() → Promise<[]>, HIDDevice (vendorId/productId/productName/collections/opened, open/close/sendReport/receiveFeatureReport → reject), HIDConnectionEvent, HIDManager extends EventTarget, HIDCollectionInfo, HIDReportItem. 7 unit-тестов. lumen-js: 1101 тестов. |
 | 2026-06-04 | A-1: WebTransport API stub | Phase 0 JS-шим: WebTransport(url), datagrams.readable/writable, createBidirectionalStream/createUnidirectionalStream, все операции reject. WebTransportError класс. 1 unit-тест. lumen-js: 1094 тестов. |
@@ -30,9 +30,9 @@ Ordered by priority. Сгруппированы по домену.
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~A-1~~ | ~~**WebTransport API stub**~~ — **выполнено** | S | `lumen-js` |
-| A-2 | **WebHID API stub** — `navigator.hid.requestDevice({filters})` → reject NotSupportedError (Phase 0), `HIDDevice` (open/close/sendReport/receiveFeatureReport/oninputreport), `HIDConnectionEvent`. | S | `lumen-js` |
-| A-3 | **WebUSB API stub** — `navigator.usb.requestDevice({filters})` → reject, `USBDevice` (open/close/selectConfiguration/claimInterface/transferIn/Out/controlTransferIn/Out), `USBConnectionEvent`. | S | `lumen-js` |
-| A-4 | **WebBluetooth API stub** — `navigator.bluetooth.requestDevice({filters})` → reject NotSupportedError, `BluetoothRemoteGATTServer.connect()` → reject, `BluetoothDevice.gatt`, `getAvailability()` → false. | S | `lumen-js` |
+| ~~A-2~~ | ~~**WebHID API stub**~~ — **выполнено** | S | `lumen-js` |
+| ~~A-3~~ | ~~**WebUSB API stub**~~ — **выполнено** | S | `lumen-js` |
+| ~~A-4~~ | ~~**WebBluetooth API stub**~~ — **выполнено** | S | `lumen-js` |
 | A-5 | **File System Access API** — `showOpenFilePicker/showSaveFilePicker/showDirectoryPicker` через нативный диалог (PowerShell/zenity/osascript), `FileSystemFileHandle.getFile()/createWritable()`, `FileSystemDirectoryHandle.getDirectoryHandle()`. Реальное чтение/запись файла. | M | `lumen-js`, `lumen-shell` |
 | A-6 | **URL Pattern API** (WHATWG URLPattern §3) — `new URLPattern({pathname, search, hash, hostname})`, `.test(input)`, `.exec(input)` → именованные группы, wildcard `*`, `:named`, `{optional?}`. Чистый JS-шим. | S | `lumen-js` |
 | A-7 | **Navigation API** (HTML LS §7.8) — `window.navigation`, `NavigationHistoryEntry {url/key/id/index/getState()}`, `.currentEntry/entries()`, `.navigate/back/forward/traverseTo()`, события navigate/navigatesuccess/navigateerror/currententrychange, `NavigateEvent.intercept()`. | M | `lumen-js`, `lumen-shell` |
