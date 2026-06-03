@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p1-media-devices** — MediaDevices API (W3C Media Capture §4): `navigator.mediaDevices.getUserMedia` / `getDisplayMedia` / `enumerateDevices` / `getSupportedConstraints` + `MediaStream` / `MediaStreamTrack` / `MediaDeviceInfo` интерфейсы.  branch: p1-media-devices
+Next step: создать `crates/js/src/media_devices.rs`, подключить в `crates/js/src/lib.rs:14`
 
 ---
 
