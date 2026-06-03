@@ -29,7 +29,12 @@ pub mod style;
 pub mod text_iter;
 pub(crate) mod vertical;
 
-pub use counters::{format_counter, precompute_counters, CounterMap, CounterSnapshot};
+pub use counters::{
+    format_counter, format_counter_with_registry, precompute_counters,
+    build_counter_style_registry,
+    CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
+    CounterSystem, CounterRange, RangeBound,
+};
 pub use image_gating::gate_image_requests;
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,

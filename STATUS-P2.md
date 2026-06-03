@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**C7: `@counter-style` custom counters** — branch: p2-c7-counter-style
+Next step: реализовать `CounterStyleRegistry` + threading в `build_box`/`content_to_inline_segments` — `layout/src/counters.rs`
 
 ---
 
@@ -18,7 +19,6 @@ _(нет)_
 
 | # | Task | Crate(s) | Effort |
 |---|------|----------|--------|
-| C6 | **SVG stroke advanced properties.** `fill_rule`/`stroke_linecap`/`stroke_linejoin`/`stroke_miterlimit`/`stroke_dasharray`/`stroke_dashoffset` в `ComputedStyle`; parse; wire в `tessellate_stroke` + `emit_svg_shape`. Entry: `paint/src/svg_path.rs:548`, `paint/src/display_list.rs:3263`. | `lumen-layout`, `lumen-paint` | M |
 | C7 | **`@counter-style` кастомные счётчики.** Parse at-rule `@counter-style`; дескрипторы `system`/`symbols`/`prefix`/`suffix`/`range`/`pad`/`negative`; resolve в `counter()`/`counters()` значениях. | `lumen-layout` | M |
 | C8 | **`column-rule` / `column-span` / `column-fill`.** Поля `column_rule_*` + `column_span: ColumnSpan` + `column_fill: ColumnFill`; parse; wire в multi-column layout engine. | `lumen-layout` | S |
 | C9 | **`::marker` рендеринг.** `compute_pseudo_element_style("::marker")`; `content`/color/font поддержка; emit перед list-item боксом в display list. | `lumen-layout`, `lumen-paint` | S |
