@@ -12,9 +12,67 @@ _(нет)_
 
 ## Next
 
-Ordered by priority. Каждая задача имеет подробный файл с точным кодом для Haiku.
+Ordered by priority. Сгруппированы по домену.
 
-_(нет)_
+### A — Web API (JS + Rust bindings)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| A-1 | **WebTransport API stub** — `new WebTransport(url)`, `datagrams.readable/writable`, `createBidirectionalStream()`, фазы connecting/connected/closed, всё reject (нет QUIC). `WebTransportError`. | S | `lumen-js` |
+| A-2 | **WebHID API stub** — `navigator.hid.requestDevice({filters})` → reject NotSupportedError (Phase 0), `HIDDevice` (open/close/sendReport/receiveFeatureReport/oninputreport), `HIDConnectionEvent`. | S | `lumen-js` |
+| A-3 | **WebUSB API stub** — `navigator.usb.requestDevice({filters})` → reject, `USBDevice` (open/close/selectConfiguration/claimInterface/transferIn/Out/controlTransferIn/Out), `USBConnectionEvent`. | S | `lumen-js` |
+| A-4 | **WebBluetooth API stub** — `navigator.bluetooth.requestDevice({filters})` → reject NotSupportedError, `BluetoothRemoteGATTServer.connect()` → reject, `BluetoothDevice.gatt`, `getAvailability()` → false. | S | `lumen-js` |
+| A-5 | **File System Access API** — `showOpenFilePicker/showSaveFilePicker/showDirectoryPicker` через нативный диалог (PowerShell/zenity/osascript), `FileSystemFileHandle.getFile()/createWritable()`, `FileSystemDirectoryHandle.getDirectoryHandle()`. Реальное чтение/запись файла. | M | `lumen-js`, `lumen-shell` |
+| A-6 | **URL Pattern API** (WHATWG URLPattern §3) — `new URLPattern({pathname, search, hash, hostname})`, `.test(input)`, `.exec(input)` → именованные группы, wildcard `*`, `:named`, `{optional?}`. Чистый JS-шим. | S | `lumen-js` |
+| A-7 | **Navigation API** (HTML LS §7.8) — `window.navigation`, `NavigationHistoryEntry {url/key/id/index/getState()}`, `.currentEntry/entries()`, `.navigate/back/forward/traverseTo()`, события navigate/navigatesuccess/navigateerror/currententrychange, `NavigateEvent.intercept()`. | M | `lumen-js`, `lumen-shell` |
+| A-8 | **Import Maps** (HTML LS §8.1.6.2) — парсинг `<script type="importmap">` в html-parser, `ImportMap {imports, scopes}`, интеграция в `LumenResolver` для ESM: ключ `"react"` → `"/vendor/react.js"`. | S | `lumen-html-parser`, `lumen-js` |
+| A-9 | **Trusted Types API stub** (W3C TT §3) — `trustedTypes.createPolicy(name, rules)`, `TrustedHTML/Script/ScriptURL` wrappers, `trustedTypes.defaultPolicy`, Phase 0: без enforcement (политика проверяется, не блокирует). | S | `lumen-js` |
+| A-10 | **Sanitizer API stub** (W3C Sanitizer API §3) — `new Sanitizer(config)`, `sanitizer.sanitizeFor(element, string)` удаляет `<script>` + event handlers, `element.setHTML(html, {sanitizer})`. | S | `lumen-js` |
+| A-11 | **Storage Access API** — `document.requestStorageAccess()` → granted Promise (Phase 0: всегда yes), `document.hasStorageAccess()` → true, `document.requestStorageAccessFor(origin)`, `hasUnpartitionedCookieAccess()`. | XS | `lumen-js` |
+| A-12 | **Shape Detection API stub** — `FaceDetector.detect()` → [], `BarcodeDetector.getSupportedFormats()` → [], `TextDetector.detect()` → [], Phase 0. `window.FaceDetector/BarcodeDetector/TextDetector` exports. | XS | `lumen-js` |
+| A-13 | **Document Picture-in-Picture API** — `documentPictureInPicture.requestWindow({width, height})` → Panel overlay с DOM-контентом (расширение `pip_window.rs`), `.window` accessor, `onenter` event, `document.pictureInPictureElement`. | M | `lumen-js`, `lumen-shell` |
+| A-14 | **Screen Orientation API** — `screen.orientation {type, angle}`, `.lock(orientation)` → Promise (winit `set_fullscreen`), `.unlock()`, `onchange`, `ScreenOrientation` событие (landscape-primary/portrait-primary/any). | S | `lumen-js`, `lumen-shell` |
+| A-15 | **Pointer Lock API** — `element.requestPointerLock()` → Promise (winit `set_cursor_grab(Locked)`), `document.exitPointerLock()`, `document.pointerLockElement`, `pointerlockchange`/`pointerlockerror`, `movementX/Y` в MouseEvent из winit raw delta. | S | `lumen-js`, `lumen-shell` |
+| A-16 | **Device Orientation/Motion API stub** — `DeviceOrientationEvent {alpha, beta, gamma, absolute}`, `requestPermission()` → granted, `addEventListener('deviceorientation')` фаерит `{0,0,0}` один раз, `DeviceMotionEvent {acceleration, rotationRate, interval}` аналогично. | XS | `lumen-js` |
+| A-17 | **Eye Dropper API** — `new EyeDropper()`, `dropper.open()` → `Promise<{sRGBHex}>` через платформенный пикер (PowerShell `ColorDialog` / `zenity --color-selection` / `osascript`), `AbortSignal` support в опциях. | S | `lumen-js`, `lumen-shell` |
+| A-18 | **WebOTP API stub** — `navigator.credentials.get({otp: {transport:['sms']}})` → reject NotSupportedError, `OTPCredential {code}` тип, интеграция в существующий `credentials.rs`. | XS | `lumen-js` |
+| A-19 | **CSS Scroll Snap L2 events** — `snapChanging`/`snapChanged` события при snap-переходе: `_lumen_fire_snap_changing/changed(nid)` биндинги, shell генерирует при `apply_page_y_snap` когда snap-точка меняется. `SnapChangeEvent {snapTargetBlock, snapTargetInline}`. | S | `lumen-js`, `lumen-shell` |
+| A-20 | **PerformanceObserver: LCP + CLS** — `largest-contentful-paint` (регистрация при первом рендере img/текста >500px² из shell pipeline) и `layout-shift` (CLS: суммирует смещения layout boxes при reflow >5px). `PerformanceLCPEntry`, `LayoutShiftAttribution`. | S | `lumen-js`, `lumen-shell` |
+| A-21 | **Contact Picker API stub** — `navigator.contacts.select(['name','email','tel'], {multiple})` → reject NotSupportedError (нет contact store на desktop), `navigator.contacts.getProperties()` → ['name','email','tel'], `ContactsManager` тип. | XS | `lumen-js` |
+| A-22 | **Payment Request API stub** — `new PaymentRequest(methodData, details, options)`, `.show()` → reject NotSupportedError, `.canMakePayment()` → false, `.abort()`, `PaymentResponse` тип, `window.PaymentRequest` export. | XS | `lumen-js` |
+
+### B — Сеть
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| B-1 | **DNS over HTTPS** — `DohResolver` в `lumen-network`: GET `https://cloudflare-dns.com/dns-query?name=X&type=A` (RFC 8484), JSON-wire format, TTL-aware кеш A/AAAA, конфиг `doh_url` в `fingerprint.toml`, fallback → system DNS. 8 тестов. | M | `lumen-network` |
+| B-2 | **HTTP Proxy** — `--proxy http://host:port` CLI флаг, `HttpProxy {host, port, auth}` в `HttpClient`, CONNECT-туннель для HTTPS, `Proxy-Authorization: Basic`, прямой GET для HTTP. Wired в shell `main.rs`. 6 тестов. | M | `lumen-network`, `lumen-shell` |
+| B-3 | **HSTS preload list** — `HstsPreloadList` из embedded JSON (10k+ доменов, chromium формат), `is_preloaded(host) → bool` с eTLD+1 + include_subdomains, HTTP→HTTPS upgrade в `HttpClient::fetch` без редиректа. 6 тестов. | S | `lumen-network` |
+| B-4 | **Background Sync API stub** — `registration.sync.register('tag')`, `SyncManager.getTags()`, `sync` SW-событие на следующей навигации, `_lumen_sw_sync_register/get_tags/clear_tag` биндинги, `SwBackend::pending_syncs` расширение. | S | `lumen-js`, `lumen-storage` |
+| B-5 | **Push API stub** — `registration.pushManager.subscribe({userVisibleOnly, applicationServerKey})` → `PushSubscription {endpoint, getKey()}` Phase 0 (статический endpoint), `unsubscribe()`, `getSubscription()`, `permissionState()` → granted. | S | `lumen-js` |
+
+### C — Layout algorithm stubs (// CSS: handoff для P4)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| C-1 | **CSS Table layout** — `layout/src/table.rs`: `TableContext`, анонимные row/cell боксы (CSS Tables §17), `lay_out_table()` (fixed + auto table-layout), `collect_table_structure()`. `// CSS: table-layout, border-collapse, border-spacing, caption-side, empty-cells`. 12 тестов. | L | `lumen-layout` |
+| C-2 | **CSS Ruby layout stub** — `layout/src/ruby.rs`: `RubyBox {base_boxes, ruby_text, position: Over/Under}`, `lay_out_ruby()` стекает base + ruby-text с выравниванием по центру, inter-character spacing. `// CSS: ruby-align, ruby-merge, ruby-position`. 8 тестов. | M | `lumen-layout` |
+| C-3 | **MathML Core layout stub** — `layout/src/mathml.rs`: распознаёт `<math>/<mi>/<mn>/<mo>/<mrow>/<mfrac>/<msqrt>/<msup>/<msub>`, базовая фракция / sqrt-наклон / sup-sub offset. `// CSS: math-style, math-depth`. 8 тестов. | M | `lumen-layout` |
+| C-4 | **CSS logical properties resolver** — `resolve_logical_properties(style, writing_mode)` в `style.rs`: `inline-size`→`width/height`, `block-size`, `inset-inline-*`, `margin-inline/block`, `padding-inline/block`, `border-inline/block`. `// CSS: inline-size, block-size, inset-*`. 10 тестов. | M | `lumen-layout` |
+| C-5 | **CSS shape-outside: polygon + ellipse** — расширение `FloatContext`: `ShapePolygon {points}` + `ShapeEllipse {cx,cy,rx,ry}`, `parse_shape_polygon_px()`/`parse_shape_ellipse_px()`, ray-intersection в `left_edge_at/right_edge_at`. `// CSS: shape-outside, shape-margin`. 8 тестов. | M | `lumen-layout` |
+
+### D — Shell / UI
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| D-1 | **Certificate viewer panel** — `Ctrl+Shift+C`: `panels/cert_panel.rs`, из `TlsHandshakeInfo`: subject CN/O, issuer, not-before/after, SHA-256 fingerprint, SAN list, TLS version. Per-tab `cert_info: Option<TlsHandshakeInfo>` в `PageSnapshot`. 10 тестов. | S | `lumen-shell` |
+| D-2 | **Page source viewer** — `view-source:` URI схема в `navigate_to`: fetch raw bytes → `PageSource::Source(html)` → layout как `<pre>` с 4-цветным syntax highlight (тег/атрибут/строка/комментарий). `KeyCommand::ViewSource` + `Ctrl+U`. | S | `lumen-shell` |
+| D-3 | **Reader View** — `Ctrl+Shift+R`: `extract_article(doc) → Option<ArticleContent>` ищет `<article>/role=main/<main>`, удаляет nav/aside/header/footer/script, переоборачивает в clean HTML (max-width:680px, font 1.1rem, line-height:1.6). Toggle → оригинал. | M | `lumen-js`, `lumen-shell` |
+| D-4 | **Keyboard shortcuts settings panel** — `panels/shortcuts_panel.rs` (360×500px), список всех `KeyCommand` + бинд, клик → rebind mode (ожидание нажатия), `lumen-storage::KeyboardShortcuts` SQLite `(command, modifier, key)`, загрузка при старте. 12 тестов. | M | `lumen-shell`, `lumen-storage` |
+| D-5 | **Browser history panel** — `Ctrl+H`: `panels/history_panel.rs` full-page overlay, список из `HistoryFts` (50/стр., пагинация), группировка по дате, поиск, клик → navigate, delete entry, "Очистить всё". Wheel scroll + keyboard nav. 12 тестов. | M | `lumen-shell` |
+| D-6 | **Extension system stub** — `shell/src/extensions/`: `ExtensionManifest {name, version, permissions, content_scripts}`, `ExtensionRegistry`, загрузка из `~/.config/lumen/extensions/<id>/manifest.json`, инъекция `content_scripts` как `extra_scripts`, `chrome.runtime.sendMessage()` stub. 10 тестов. | M | `lumen-shell` |
+| D-7 | **Settings page** — `about:settings`: `panels/settings_panel.rs` full-page overlay, секции General (homepage, search engine) / Privacy (shields, fingerprint, DoH) / Appearance (font-size, theme) / Downloads (default path), `lumen-storage::BrowserSettings` SQLite. 10 тестов. | M | `lumen-shell`, `lumen-storage` |
+| D-8 | **Encoding API streaming** — `TextDecoder {stream: true}`: `decode(chunk, {stream: true})` не сбрасывает частичный многобайтовый символ, финальный `decode()` flush. `TextDecoderStream` использует streaming decode. 6 тестов. | XS | `lumen-js` |
 
 ---
 
