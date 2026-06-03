@@ -355,6 +355,26 @@ fn query_all_rec(
     }
 }
 
+// ──────────────── matches_selector ────────────────
+
+/// Returns `true` if `node` matches **any** selector in `sel`.
+///
+/// Uses the full CSS3 selector engine: tag, `.class`, `#id`, attribute
+/// selectors, compound selectors, descendant/child/sibling combinators,
+/// `:nth-child`, `:not()`, `:is()`, `:where()`.
+///
+/// Returns `false` when `sel` is empty, all selectors are invalid, or `node`
+/// does not match. Non-element nodes always return `false`.
+///
+/// Implements `element.matches()` semantics.
+pub fn matches_selector(doc: &Document, node: NodeId, sel: &str) -> bool {
+    let selectors = parse_selector_list(sel);
+    if selectors.is_empty() {
+        return false;
+    }
+    node_matches(node, doc, &selectors)
+}
+
 // ──────────────── CSS computed style serialisation ────────────────
 
 /// Serialises a single CSS pixel value as a CSS string (`"16px"`, `"0px"`).

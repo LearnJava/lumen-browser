@@ -4,8 +4,8 @@
 //! evaluates the `WEB_API_SHIM` JavaScript that builds standard `document`,
 //! `window`, `console` globals on top of those primitives.
 //!
-//! Phase 0 selector support: `#id`, `.class`, `tagname`, `*`.
-//! Compound selectors (e.g. `div.foo`) are not supported in Phase 0.
+//! Full CSS selector support via lumen_layout::query_all / matches_selector:
+//! tag, .class, #id, compound (div.foo), combinators ( > + ~), pseudo-classes.
 
 use std::collections::HashMap;
 use std::sync::{
@@ -19,6 +19,7 @@ use lumen_dom::{
     Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
+use lumen_layout::{matches_selector, query_all};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
 use lumen_core::WebStorage;
@@ -422,17 +423,26 @@ fn install_primitives(
         let d = Arc::clone(&doc);
         reg!("_lumen_query_selector", move |sel: String| -> Option<u32> {
             let doc = d.lock().unwrap();
-            find_first_matching(&doc, doc.root(), &|node| selector_matches(node, &sel))
-                .map(|n| n.index() as u32)
+            query_all(&doc, &sel).into_iter().next().map(|n| n.index() as u32)
         });
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_query_selector_all",
             move |sel: String| -> Vec<u32> {
                 let doc = d.lock().unwrap();
-                let mut out = Vec::new();
-                collect_matching(&doc, doc.root(), &|node| selector_matches(node, &sel), &mut out);
-                out.into_iter().map(|n| n.index() as u32).collect()
+                query_all(&doc, &sel)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_node_matches_selector",
+            move |node_id: u32, sel: String| -> bool {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                matches_selector(&doc, nid, &sel)
             }
         );
     }
@@ -2021,44 +2031,6 @@ fn find_first_matching(
     None
 }
 
-fn collect_matching(
-    doc: &Document,
-    start: NodeId,
-    pred: &dyn Fn(&lumen_dom::Node) -> bool,
-    out: &mut Vec<NodeId>,
-) {
-    let node = doc.get(start);
-    if pred(node) {
-        out.push(start);
-    }
-    for &child in &node.children.clone() {
-        collect_matching(doc, child, pred, out);
-    }
-}
-
-/// Phase 0 selector matching: `#id`, `.class`, `tagname`, `*`.
-fn selector_matches(node: &lumen_dom::Node, selector: &str) -> bool {
-    let NodeData::Element { name, .. } = &node.data else {
-        return false;
-    };
-    let sel = selector.trim();
-    if let Some(id) = sel.strip_prefix('#') {
-        node.get_attr("id") == Some(id)
-    } else if let Some(cls) = sel.strip_prefix('.') {
-        has_class(node, cls)
-    } else if sel == "*" {
-        true
-    } else {
-        name.local.eq_ignore_ascii_case(sel)
-    }
-}
-
-fn has_class(node: &lumen_dom::Node, cls: &str) -> bool {
-    node.get_attr("class")
-        .map(|c| c.split_ascii_whitespace().any(|t| t == cls))
-        .unwrap_or(false)
-}
-
 fn collect_text_content(doc: &Document, id: NodeId) -> String {
     let mut out = String::new();
     collect_text_inner(doc, id, &mut out);
@@ -3137,9 +3109,7 @@ function _lumen_make_element(nid) {
             return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
         },
         matches: function(sel) {
-            // Phase 0: query the DOM and check if the result matches this nid.
-            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
-            return n !== null && n === nid;
+            return _lumen_node_matches_selector(nid, String(sel));
         },
         addEventListener:    function(type, fn) { _lumen_add_listener(nid, type, fn); },
         removeEventListener: function(type, fn) { _lumen_rm_listener(nid, type, fn); },
@@ -3151,8 +3121,7 @@ function _lumen_make_element(nid) {
         closest: function(sel) {
             var cur = nid;
             while (cur !== undefined && cur !== null) {
-                var n = _lumen_u2n(_lumen_query_selector(String(sel)));
-                if (n !== null && n === cur) return _lumen_make_element(cur);
+                if (_lumen_node_matches_selector(cur, String(sel))) return _lumen_make_element(cur);
                 var pid = _lumen_u2n(_lumen_get_parent(cur));
                 cur = pid !== null ? pid : null;
             }
@@ -9636,6 +9605,105 @@ mod tests {
             .eval("document.querySelectorAll('span').length")
             .unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn query_selector_compound_tag_and_id() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('div#main') !== null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn query_selector_compound_wrong_tag_returns_null() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('span#main') === null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn query_selector_compound_tag_and_class() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('span.highlight') !== null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn query_selector_child_combinator() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('div > span') !== null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn query_selector_descendant_combinator() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('body span') !== null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn query_selector_id_child_class() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('#main > .highlight') !== null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_matches_compound() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('span').matches('span.highlight')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_matches_wrong_compound_returns_false() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('span').matches('div.highlight')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn element_closest_finds_ancestor() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('span').closest('div') !== null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_closest_id_selector() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('span').closest('#main') !== null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn query_selector_attribute_selector() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('[id=\"main\"]') !== null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 
     #[test]
