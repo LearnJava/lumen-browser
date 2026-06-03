@@ -24,6 +24,23 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | ~~40~~ | ~~View Transitions API~~ — **выполнено P2** (p2-view-transitions, 2026-06-03) | — | — | — |
 | ~~41~~ | ~~Tab auto-archive (7A.5)~~ — **выполнено P2** (p2-tab-auto-archive, 2026-06-03) | — | — | — |
 
+### GPU / RenderBackend (ADR-010, Phase 2–3)
+
+GPU-слой — домен P2 (владение крейтом `lumen-paint` + wgpu/WGSL). Задачи берутся **сверху вниз**: RenderBackend trait сначала, бэкенды после. Полный дизайн — [ADR-010](docs/decisions/ADR-010-render-backend-abstraction.md); состояние — [subsystems/paint.md](subsystems/paint.md) «Planned: RenderBackend abstraction»; источник — [lumen-plan.md:496](lumen-plan.md).
+
+| # | Задача | Crate(s) | Effort | Roadmap |
+|---|--------|----------|--------|---------|
+| RB-1 | `RenderBackend` trait + `RenderError` в `paint::backend` | `lumen-paint` | S | ADR-010 |
+| RB-2 | `WgpuBackend` — обёртка над текущим `Renderer` | `lumen-paint` | M | ADR-010 |
+| RB-3 | Feature-флаги в `lumen-paint/Cargo.toml` | `lumen-paint` | S | ADR-010 |
+| RB-4 | Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var | `lumen-paint`, `lumen-shell` | M | ADR-010 |
+| RB-5 | `FemtovgBackend` скелет + базовые команды (FillRect/FillRoundedRect/DrawText/DrawBorder/PushClipRect) | `lumen-paint` | M | ADR-010 |
+| RB-6 | `FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов) | `lumen-paint` | L | ADR-010 |
+| RB-7 | `VelloBackend` заглушка (компилируется, логирует, ничего не рисует) | `lumen-paint` | S | ADR-010 |
+| RB-8 | `CompareBackend` + тест-раннер в `lumen-driver` (pixel diff двух бэкендов) — совместно с P3 | `lumen-paint`, `lumen-driver` | M | ADR-010 |
+| RB-9 | `FemtovgBackend` → default; `WgpuBackend` → fallback | `lumen-paint`, `lumen-shell` | S | ADR-010 |
+| RB-10 | `VelloBackend` полный (когда vello API стабилизируется) | `lumen-paint` | L | ADR-010 (Phase 3+) |
+
 ---
 
 ## Recent merges
