@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**A-8: Import Maps**  
+Branch: `p1-import-maps`  
+Next step: Реализовать парсинг `<script type="importmap">` в html-parser, создать структуру `ImportMap {imports, scopes}`, интегрировать в `LumenResolver` для ESM-резолюции.
 
 ---
 
