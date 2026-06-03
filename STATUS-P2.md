@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-4: OffscreenCanvas** — `new OffscreenCanvas(w, h)`, `getContext('2d')` → Context2D, `transferToImageBitmap()` → ImageBitmap, `createImageBitmap()` из Blob/ImageData. 8 тестов. branch: `p2-offscreen-canvas`
-
-Next step: реализовать OffscreenCanvas bindings в `crates/js/src/offscreen_canvas.rs`
+_(нет)_
 
 ---
 
@@ -91,6 +89,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-offscreen-canvas** ✅ 2026-06-04 — A-4: OffscreenCanvas API Phase 0. `crates/js/src/offscreen_canvas.rs`: `OffscreenCanvas` struct с thread-local registry для off-DOM canvas-ов с уникальными ID. Native bindings для всех Context2D методов (fillRect, clearRect, strokeRect, arc, fill, stroke, property setters). `install_offscreen_canvas_bindings` регистрирует `_lumen_offscreen_canvas_*` функции + JS shim, определяющий класс OffscreenCanvas: `new OffscreenCanvas(w, h)`, `getContext('2d')` → Context2D прокси, `transferToImageBitmap()` → {width, height, data}, `convertToBlob()` стаб. Phase 0: чистый JS-шим. Phase 1 (future): createImageBitmap() из Canvas/ImageData/Blob. 13 новых unit-тестов (6 Rust + 7 JS интеграционных: constructor clamping/uniqueness, getContext caching, invalid types, fillRect, transferToImageBitmap). lumen-js: 1150 ✅ (+13).
 
 - **p2-css-typed-om** ✅ 2026-06-04 — A-3: CSS Typed OM Phase 0 (CSS Typed Object Model L1). `crates/js/src/typed_om_api.rs`: `CSSStyleValue` base class, `CSSKeywordValue` для ключевых слов, `CSSUnitValue` для числовых значений с единицами (px/em/%), `CSSNumericValue.to(unit)` конверсия единиц (same unit only). `install_typed_om_api(ctx)` шим регистрирует классы в глобальной области видимости. `Element.prototype.attributeStyleMap` с get/set/has/delete/entries/keys/values методами; `Element.prototype.computedStyleMap()` возвращает read-only map. Phase 0: JS shim only, значения работают через строки стилей. Phase 1 (future P4): Direct layout/computed property wiring для performance. 11 новых unit-тестов (CSSUnitValue/CSSKeywordValue creation, value accessors, unit conversion, inheritance chain, parsing разных юнитов и отрицательных чисел). lumen-js: 1150 ✅ (+11). Clippy чист в typed_om_api.rs.
 
