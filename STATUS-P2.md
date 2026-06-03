@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**RB-2: WgpuBackend** — обёртка над `Renderer` в `paint::backends::wgpu_backend`  
+Branch: `p2-wgpu-backend`  
+Next step: создать `backends/mod.rs` + `backends/wgpu_backend.rs`, обновить `lib.rs`
 
 ---
 
