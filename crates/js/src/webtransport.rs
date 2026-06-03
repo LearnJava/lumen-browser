@@ -1,6 +1,5 @@
 /// WebTransport API stub (W3C WebTransport §3-5)
 /// Phase 0: all operations reject (no QUIC support)
-
 use rquickjs::Ctx;
 
 pub fn install_webtransport_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
