@@ -20,6 +20,7 @@ pub mod media_devices;
 pub mod media_session;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
+pub mod offscreen_canvas;
 pub mod shared_worker;
 pub mod speech;
 pub mod surface_api;
@@ -351,6 +352,11 @@ impl QuickJsRuntime {
             // calls these `_lumen_canvas2d_*` functions keyed by node index.
             if let Err(e) = canvas2d::install_canvas2d_bindings(&ctx) {
                 eprintln!("Canvas 2D bindings init failed: {}", e);
+            }
+
+            // Install OffscreenCanvas bindings (HTML LS §4.12.14).
+            if let Err(e) = offscreen_canvas::install_offscreen_canvas_bindings(&ctx) {
+                eprintln!("OffscreenCanvas bindings init failed: {}", e);
             }
 
             // Install AudioContext stub with per-session fingerprint noise (ADR-007 Layer 4, 9D.3).
