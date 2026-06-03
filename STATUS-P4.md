@@ -37,7 +37,7 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 | 4 | `@counter-style` custom counter definitions | M | none |
 | 5 | `justify-items` / `justify-self` for grid (Box Alignment L3) | S | none |
 | 6 | `column-rule` rendering + `column-span` + `column-fill` | S | none |
-| 7 | Scroll snap shell integration (`scroll-snap-type` / `scroll-snap-align`) | M | shell scroll |
+| ~~7~~ | ~~Scroll snap shell integration~~ — **выполнено P2** (p2-scroll-snap, 2026-06-03) | — | — |
 | 8 | `::selection` pseudo-element | S | none |
 | 9 | `::marker` rendering | S | none |
 | 10 | `cq*` container query units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`) | M | none |

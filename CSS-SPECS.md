@@ -81,7 +81,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
-| CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | 🟡 | shell scroll integration | **#26** |
+| CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | ✅ | scroll-snap-type (y/x/both mandatory+proximity), scroll-snap-align (start/end/center), scroll-snap-stop (always); shell integration: collect_snap_containers + find_snap_target wired to start_smooth_scroll/scroll_x_by with viewport snap-port 2026-06-03 | **#26** |
 | CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | 🟡 | column-rule rendering; column-span; column-fill | **#27** |
 | CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | content-visibility skip-content; cq* units | **#28** |
 | CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | 🟡 | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ⬜ | **#29** |

@@ -713,5 +713,49 @@
 </script>
 
 </div><!-- /card -->
+
+<!-- CSS Scroll Snap L1 -->
+<div class="card">
+<div class="label">CSS Scroll Snap L1 (shell integration)</div>
+<style>
+  .snap-demo { display: flex; gap: 8px; height: 120px; }
+  .snap-demo-y {
+    width: 100px; height: 120px; overflow-y: scroll;
+    scroll-snap-type: y mandatory; scrollbar-width: none;
+    border: 1px solid #4a5568; border-radius: 3px;
+  }
+  .snap-demo-y .snap-section {
+    width: 100%; height: 120px; flex-shrink: 0;
+    scroll-snap-align: start;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; color: white;
+  }
+  .snap-demo-x {
+    flex: 1; height: 120px; overflow-x: scroll;
+    scroll-snap-type: x mandatory; scrollbar-width: none;
+    border: 1px solid #4a5568; border-radius: 3px;
+    display: flex;
+  }
+  .snap-demo-x .snap-panel {
+    flex-shrink: 0; width: 100%; height: 100%;
+    scroll-snap-align: start;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: white;
+  }
+</style>
+<div class="snap-demo">
+  <div class="snap-demo-y">
+    <div class="snap-section" style="background:#e94560">A</div>
+    <div class="snap-section" style="background:#0f3460">B</div>
+    <div class="snap-section" style="background:#16213e">C</div>
+  </div>
+  <div class="snap-demo-x">
+    <div class="snap-panel" style="background:#2d6a4f">1</div>
+    <div class="snap-panel" style="background:#52b788">2</div>
+    <div class="snap-panel" style="background:#1b4332">3</div>
+  </div>
+</div>
+</div><!-- /card -->
+
 </body>
 </html>

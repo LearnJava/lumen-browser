@@ -8896,6 +8896,125 @@ mod tests {
         assert_eq!(p.scroll_snap_type.axis, ScrollSnapAxis::None);
     }
 
+    // ──────── collect_snap_containers / find_snap_target ────────
+
+    fn make_snap_container(
+        w: f32,
+        h: f32,
+        axis: ScrollSnapAxis,
+        strictness: ScrollSnapStrictness,
+    ) -> SnapContainer {
+        SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type: ScrollSnapType { axis, strictness },
+            rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: w, height: h },
+            points: Vec::new(),
+        }
+    }
+
+    fn snap_pt(y: f32) -> SnapPoint {
+        SnapPoint { node: lumen_dom::NodeId::from_index(1), snap_x: None, snap_y: Some(y), stop_always: false }
+    }
+
+    #[test]
+    fn find_snap_target_mandatory_y() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![snap_pt(0.0), snap_pt(720.0), snap_pt(1440.0)];
+        // Target 400 → nearest is 0 (dist=160000) vs 720 (dist=102400) → snap 720.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 400.0));
+        assert!(result.is_some());
+        let (_, sy) = result.unwrap();
+        assert!((sy - 720.0).abs() < 1e-3, "expected 720, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_mandatory_first_section() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![snap_pt(0.0), snap_pt(720.0), snap_pt(1440.0)];
+        // Target 300 → nearest is 0 (dist=90000) vs 720 (dist=176400) → snap 0.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 300.0));
+        assert!(result.is_some());
+        let (_, sy) = result.unwrap();
+        assert!((sy - 0.0).abs() < 1e-3, "expected 0, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_proximity_within_threshold() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Proximity,
+        );
+        sc.points = vec![snap_pt(720.0)];
+        // Proximity threshold = 720 * 0.5 = 360. Target 450 → dist from 720 = 270 ≤ 360 → snaps.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 450.0));
+        assert!(result.is_some());
+        let (_, sy) = result.unwrap();
+        assert!((sy - 720.0).abs() < 1e-3, "expected 720, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_proximity_out_of_threshold() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Proximity,
+        );
+        sc.points = vec![snap_pt(720.0)];
+        // Proximity threshold = 360. Target 200 → dist from 720 = 520 > 360 → no snap.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 200.0));
+        assert!(result.is_none(), "should not snap when beyond proximity threshold");
+    }
+
+    #[test]
+    fn find_snap_target_stop_always_barrier_viewport() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![
+            SnapPoint { node: lumen_dom::NodeId::from_index(1), snap_x: None, snap_y: Some(720.0), stop_always: true },
+            snap_pt(1440.0),
+        ];
+        // Scrolling from 0 to 1500 would pass 720 (stop_always) → forced to 720.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 1500.0));
+        assert!(result.is_some());
+        let (_, sy) = result.unwrap();
+        assert!((sy - 720.0).abs() < 1e-3, "stop_always barrier should force snap to 720, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_no_points_returns_none() {
+        let sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        assert!(find_snap_target(&sc, (0.0, 0.0), (0.0, 400.0)).is_none());
+    }
+
+    #[test]
+    fn collect_snap_containers_empty_when_no_snap_type() {
+        let root = lay(
+            "<div><p>first</p><p>second</p></div>",
+            "div { width: 1024px; height: 720px; overflow: scroll; }",
+        );
+        // No scroll-snap-type → empty containers list.
+        let containers = collect_snap_containers(&root);
+        assert!(containers.is_empty(), "expected no snap containers");
+    }
+
+    #[test]
+    fn collect_snap_containers_finds_y_mandatory() {
+        let root = lay(
+            "<div><p>first</p><p>second</p></div>",
+            "div { width: 1024px; height: 720px; overflow: scroll; scroll-snap-type: y mandatory; } p { height: 720px; scroll-snap-align: start; }",
+        );
+        let containers = collect_snap_containers(&root);
+        // At least one snap container should be found (the div).
+        assert!(!containers.is_empty(), "expected a snap container");
+        let sc = &containers[0];
+        assert_eq!(sc.snap_type.axis, ScrollSnapAxis::Y);
+        assert_eq!(sc.snap_type.strictness, ScrollSnapStrictness::Mandatory);
+    }
+
     // ──────── mask-* + scrollbar-* ────────
 
     #[test]
