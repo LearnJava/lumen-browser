@@ -22,6 +22,7 @@ pub mod speech;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod view_transitions;
+pub mod bluetooth;
 pub mod subtle_crypto;
 pub mod temporal_api;
 pub mod webgl_bindings;
@@ -410,6 +411,13 @@ impl QuickJsRuntime {
             // operations reject with NotSupportedError (no USB support).
             if let Err(e) = webusb::install_webusb_bindings(&ctx) {
                 eprintln!("WebUSB bindings init failed: {}", e);
+            }
+
+            // Install Web Bluetooth API (W3C Web Bluetooth §3–4) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: all device
+            // operations reject with NotSupportedError (no BLE support).
+            if let Err(e) = bluetooth::install_bluetooth_bindings(&ctx) {
+                eprintln!("Bluetooth bindings init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
