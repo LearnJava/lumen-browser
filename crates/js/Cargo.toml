@@ -51,5 +51,8 @@ hmac = { version = "0.12", features = [] }
 # Provisional: AES-GCM 128/256 for SubtleCrypto.encrypt/decrypt/generateKey/importKey.
 # Standard AEAD for modern web crypto; pure-Rust via aes + ghash; no native code.
 aes-gcm = "0.10"
+# Import Maps (HTML LS §8.1.6.2) JSON parsing for <script type="importmap">.
+# Lightweight JSON parser; reuses serde which is already in the workspace.
+serde_json = "1.0"
 
 [dev-dependencies]

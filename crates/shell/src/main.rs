@@ -2884,10 +2884,10 @@ fn collect_inline_scripts(
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "script"
     {
-        let is_module = node
-            .get_attr("type")
-            .map(|t| t.trim().eq_ignore_ascii_case("module"))
-            .unwrap_or(false);
+        let script_type = node.get_attr("type").map(|t| t.trim());
+        let is_module = script_type.is_some_and(|t| t.eq_ignore_ascii_case("module"));
+        let is_importmap = script_type.is_some_and(|t| t.eq_ignore_ascii_case("importmap"));
+
         let mut text = String::new();
         for &child in &node.children {
             if let NodeData::Text(s) = &doc.get(child).data {
@@ -2895,7 +2895,10 @@ fn collect_inline_scripts(
             }
         }
         if !text.trim().is_empty() {
-            if is_module {
+            if is_importmap {
+                // Import maps are handled separately by the caller
+                // For now, skip them here; caller will collect them separately
+            } else if is_module {
                 module_scripts.push(text);
             } else {
                 scripts.push(text);
@@ -2906,6 +2909,46 @@ fn collect_inline_scripts(
     for &child in &node.children {
         collect_inline_scripts(doc, child, scripts, module_scripts);
     }
+}
+
+/// Collect the first `<script type="importmap">` import map from the document.
+///
+/// Returns the parsed ImportMap if found, or None if not present or invalid JSON.
+#[cfg(feature = "quickjs")]
+fn collect_import_map(doc: &Document) -> Option<lumen_js::esm::ImportMap> {
+    collect_import_map_impl(doc, doc.root())
+}
+
+#[cfg(feature = "quickjs")]
+fn collect_import_map_impl(
+    doc: &Document,
+    id: NodeId,
+) -> Option<lumen_js::esm::ImportMap> {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "script"
+    {
+        let script_type = node.get_attr("type").map(|t| t.trim());
+        let is_importmap = script_type.is_some_and(|t| t.eq_ignore_ascii_case("importmap"));
+
+        if is_importmap {
+            let mut text = String::new();
+            for &child in &node.children {
+                if let NodeData::Text(s) = &doc.get(child).data {
+                    text.push_str(s);
+                }
+            }
+            if let Some(map) = lumen_js::esm::ImportMap::parse(&text) {
+                return Some(map);
+            }
+        }
+    }
+    for &child in &node.children {
+        if let Some(map) = collect_import_map_impl(doc, child) {
+            return Some(map);
+        }
+    }
+    None
 }
 
 /// Применить sandbox-ограничения для всех `<iframe sandbox>` элементов документа.

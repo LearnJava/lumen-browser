@@ -36,6 +36,90 @@ pub fn new_registry() -> ModuleRegistry {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// Import map: specifier mappings for bare specifiers and scoped paths.
+///
+/// Parsed from `<script type="importmap">` JSON per WHATWG Import Maps spec.
+/// Supports `imports` (global mappings) and `scopes` (context-specific mappings).
+#[derive(Debug, Clone, Default)]
+pub struct ImportMap {
+    /// Global import mappings: specifier → resolved URL.
+    pub imports: HashMap<String, String>,
+    /// Scoped mappings: scope URL → { specifier → resolved URL }.
+    pub scopes: HashMap<String, HashMap<String, String>>,
+}
+
+impl ImportMap {
+    /// Parse an import map from a JSON string.
+    ///
+    /// Returns `None` if the JSON is invalid or missing required fields.
+    /// Silently ignores unknown keys and invalid entries.
+    pub fn parse(json_str: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(json_str).ok()?;
+        let mut map = ImportMap::default();
+
+        // Parse "imports" object
+        if let Some(imports_obj) = value.get("imports").and_then(|v| v.as_object()) {
+            for (key, val) in imports_obj {
+                if let Some(url) = val.as_str() {
+                    map.imports.insert(key.clone(), url.to_string());
+                }
+            }
+        }
+
+        // Parse "scopes" object
+        if let Some(scopes_obj) = value.get("scopes").and_then(|v| v.as_object()) {
+            for (scope_key, scope_val) in scopes_obj {
+                if let Some(scope_map) = scope_val.as_object() {
+                    let mut scope_imports = HashMap::new();
+                    for (key, val) in scope_map {
+                        if let Some(url) = val.as_str() {
+                            scope_imports.insert(key.clone(), url.to_string());
+                        }
+                    }
+                    if !scope_imports.is_empty() {
+                        map.scopes.insert(scope_key.clone(), scope_imports);
+                    }
+                }
+            }
+        }
+
+        Some(map)
+    }
+
+    /// Resolve a specifier using this import map.
+    ///
+    /// Returns the resolved URL if found, or `None` if the specifier is not in the map.
+    pub fn resolve(&self, specifier: &str, _scope_url: Option<&str>) -> Option<String> {
+        // Try exact match in imports
+        if let Some(url) = self.imports.get(specifier) {
+            return Some(url.clone());
+        }
+
+        // Try longest prefix match in imports for packages like "lodash" → "lodash/index.js"
+        // when specifier is "lodash/foo.js"
+        let mut best_prefix = "";
+        let mut best_url = None;
+        for (prefix, url) in &self.imports {
+            if specifier.starts_with(prefix) && prefix.len() > best_prefix.len() {
+                // Ensure we match on package boundary: "lodash" matches "lodash/foo.js"
+                // but not "lodashing"
+                let rest = &specifier[prefix.len()..];
+                if rest.is_empty() || rest.starts_with('/') {
+                    best_prefix = prefix;
+                    best_url = Some((prefix, url));
+                }
+            }
+        }
+
+        if let Some((prefix, url)) = best_url {
+            let rest = &specifier[prefix.len()..];
+            return Some(format!("{}{}", url, rest));
+        }
+
+        None
+    }
+}
+
 /// URL resolver: normalises module specifiers into canonical keys for the registry.
 ///
 /// Relative specifiers are resolved against `base` (the importer's specifier).
@@ -51,6 +135,8 @@ pub fn new_registry() -> ModuleRegistry {
 pub struct LumenResolver {
     /// Base page URL; used as fallback base when the import base is empty or virtual.
     pub page_url: SharedPageUrl,
+    /// Import map: global mappings for bare specifiers.
+    pub import_map: Arc<Mutex<ImportMap>>,
 }
 
 impl LumenResolver {
@@ -58,7 +144,17 @@ impl LumenResolver {
     /// The returned `SharedPageUrl` can be updated later (e.g. from `install_dom`).
     pub fn new(initial_page_url: &str) -> (Self, SharedPageUrl) {
         let shared = Arc::new(Mutex::new(initial_page_url.to_owned()));
-        (Self { page_url: Arc::clone(&shared) }, shared)
+        (Self {
+            page_url: Arc::clone(&shared),
+            import_map: Arc::new(Mutex::new(ImportMap::default())),
+        }, shared)
+    }
+
+    /// Set the import map for this resolver.
+    pub fn set_import_map(&self, map: ImportMap) {
+        if let Ok(mut guard) = self.import_map.lock() {
+            *guard = map;
+        }
     }
 
     /// Resolve `name` relative to `base` using simplified URL resolution rules.
@@ -68,7 +164,7 @@ impl LumenResolver {
     /// 2. Absolute HTTP/HTTPS URL (starts with `https://` or `http://`) — unchanged.
     /// 3. `./` or `../` prefix — resolve relative to `base`.
     ///    If `base` is empty or a virtual `lumen://` specifier, fall back to `page_url`.
-    /// 4. Bare specifier — return unchanged (must be pre-registered by this exact name).
+    /// 4. Bare specifier — try import map, fall back to returning unchanged.
     pub fn resolve_specifier(&self, base: &str, name: &str) -> String {
         // (1) data: and blob: — pass through
         if name.starts_with("data:") || name.starts_with("blob:") {
@@ -90,7 +186,13 @@ impl LumenResolver {
             };
             return resolve_relative(&effective_base, name);
         }
-        // (4) Bare specifier — return as-is
+        // (4) Bare specifier — try import map
+        if let Ok(map) = self.import_map.lock() {
+            if let Some(resolved) = map.resolve(name, Some(base)) {
+                return resolved;
+            }
+        }
+        // Fall back to returning as-is
         name.to_owned()
     }
 }
@@ -199,6 +301,72 @@ mod tests {
 
     fn make_resolver(page_url: &str) -> LumenResolver {
         LumenResolver::new(page_url).0
+    }
+
+    #[test]
+    fn import_map_parse_basic() {
+        let json = r#"{ "imports": { "react": "/vendor/react.js" } }"#;
+        let map = ImportMap::parse(json).unwrap();
+        assert_eq!(map.imports.get("react"), Some(&"/vendor/react.js".to_string()));
+    }
+
+    #[test]
+    fn import_map_parse_multiple() {
+        let json = r#"{
+            "imports": {
+                "react": "/vendor/react.js",
+                "lodash": "/vendor/lodash/index.js"
+            }
+        }"#;
+        let map = ImportMap::parse(json).unwrap();
+        assert_eq!(map.imports.len(), 2);
+        assert_eq!(map.imports.get("react"), Some(&"/vendor/react.js".to_string()));
+        assert_eq!(map.imports.get("lodash"), Some(&"/vendor/lodash/index.js".to_string()));
+    }
+
+    #[test]
+    fn import_map_parse_with_scopes() {
+        let json = r#"{
+            "imports": { "react": "/vendor/react.js" },
+            "scopes": {
+                "/app/": { "utils": "/app/utils.js" }
+            }
+        }"#;
+        let map = ImportMap::parse(json).unwrap();
+        assert_eq!(map.imports.get("react"), Some(&"/vendor/react.js".to_string()));
+        assert!(map.scopes.contains_key("/app/"));
+    }
+
+    #[test]
+    fn import_map_parse_invalid_json() {
+        let json = "{ invalid }";
+        assert!(ImportMap::parse(json).is_none());
+    }
+
+    #[test]
+    fn import_map_resolve_exact() {
+        let json = r#"{ "imports": { "react": "/vendor/react.js" } }"#;
+        let map = ImportMap::parse(json).unwrap();
+        assert_eq!(map.resolve("react", None), Some("/vendor/react.js".to_string()));
+        assert_eq!(map.resolve("missing", None), None);
+    }
+
+    #[test]
+    fn import_map_resolve_package_path() {
+        let json = r#"{ "imports": { "lodash": "/vendor/lodash/index.js" } }"#;
+        let map = ImportMap::parse(json).unwrap();
+        assert_eq!(
+            map.resolve("lodash/map", None),
+            Some("/vendor/lodash/index.js/map".to_string())
+        );
+    }
+
+    #[test]
+    fn import_map_resolve_package_boundary() {
+        let json = r#"{ "imports": { "lodash": "/vendor/lodash/index.js" } }"#;
+        let map = ImportMap::parse(json).unwrap();
+        // "lodashing" should NOT match "lodash" — must be package boundary
+        assert_eq!(map.resolve("lodashing", None), None);
     }
 
     #[test]
