@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+RB-5: `FemtovgBackend` скелет + базовые команды  branch: p2-rb5-femtovg-backend
+Next step: femtovg_backend.rs — init + 5 команд  crates/engine/paint/src/backends/femtovg_backend.rs
 
 ---
 
