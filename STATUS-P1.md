@@ -6,9 +6,7 @@
 
 ## In progress
 
-**p1-web-speech-api** — Web Speech API: SpeechSynthesis + SpeechRecognition stub (W3C Web Speech §3–4)
-branch: `p1-web-speech-api`
-Next step: commit implementation, update lumen-plan.md + CSS-SPECS.md
+_(нет)_
 
 ---
 
@@ -19,6 +17,8 @@ _(нет — P1 queue пуст, следующая задача определя
 ---
 
 ## Recent merges
+
+- **p1-web-speech-api** ✅ 2026-06-03 — Web Speech API (W3C Web Speech §3–4). Новый модуль `crates/js/src/speech.rs`: `SpeechSynthesis` singleton (`speak/cancel/pause/resume/getVoices`), `SpeechSynthesisUtterance` (text/lang/voice/volume/rate/pitch, `onstart/onend/onerror` события, `addEventListener`), `SpeechSynthesisVoice` (один голос «Lumen Voice» en-US, localService, default). Платформенный TTS через нативный биндинг `_lumen_speech_speak(text)` — fire-and-forget в фоновом потоке: PowerShell SAPI 5 (`System.Speech.Synthesis`) на Windows (текст через env-var `LUMEN_TTS_TEXT`), `espeak`/`spd-say` на Linux, `say` на macOS. `speak()` фаерит `start`-событие синхронно, затем через setTimeout (пропорционально длину текста) — `end`. `SpeechRecognition` / `webkitSpeechRecognition` stub — `start()` отвечает `service-not-allowed`. Экспорт на `window.*` + `globalThis.*`. 25 интеграционных тестов в `crates/js/tests/speech_api.rs`. lumen-js: 1071 тест (было 1046). Clippy чист. Без новых зависимостей.
 
 - **p1-read-later-ui** ✅ 2026-06-03 — §12.3 Read-later панель + офлайн-чтение. `crates/shell/src/panels/read_later_panel.rs`: новый floating overlay 420×456 px, Ctrl+Shift+R toggle. Список сохранённых страниц: title + host + дата + status badge (Unread/Read). Клик → открыть офлайн HTML-снапшот (PageSource::Snapshot), × → удалить. `Lumen`: `read_later_store: lumen_knowledge::ReadLater` (in-memory SQLite + FTS5), mpsc-канал `read_later_tx/rx` для фоновых fetch-ов. `@read-later <url>` → background thread: `HttpClient::fetch` + `extract_title_from_html` → `save()` + панель автообновляется. `about_to_wait` дренирует `read_later_rx`. `KeyCommand::ToggleReadLater` + Ctrl+Shift+R. refresh_read_later() получает Unread+Read, max 50 записей каждого. 15 unit-тестов (hit_test/title/date/truncate). lumen-shell: 915 тестов. Clippy чист. Без новых зависимостей.
 
