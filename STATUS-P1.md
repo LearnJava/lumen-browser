@@ -6,8 +6,7 @@
 
 ## In progress
 
-**p1-css-subgrid** — CSS Grid L2 §9 Subgrid algorithm stub  branch: p1-css-subgrid  
-Next step: Add `GridTrackSize::Subgrid` + parse `subgrid` keyword (`style.rs:3490`), then thread-local track inheritance in `lay_out_grid` (`box_tree.rs:4586`)
+_(нет)_
 
 ---
 
@@ -18,6 +17,8 @@ _(нет — P1 queue пуст, следующая задача определя
 ---
 
 ## Recent merges
+
+- **p1-css-subgrid** ✅ 2026-06-03 — CSS Grid L2 §9 Subgrid алгоритм. `GridTrackSize::Subgrid` вариант в enum + парсинг `subgrid` keyword. Новый модуль `crates/engine/layout/src/subgrid.rs`: `SubgridContext` (sizes/offsets/gap), `SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX` thread-locals, `SubgridContextGuard` RAII-очиститель. `lay_out_grid` в `box_tree.rs` читает thread-locals в начале, использует наследованные track-sizes; при обнаружении subgrid-child устанавливает контекст через guard перед `lay_out`. Публичный API: `collect_subgrid_items(root) -> Vec<SubgridItem>`. 9 новых тестов (5 SubgridContext API + 2 parse + 1 layout + 1 collect). CSS-SPECS.md CSS Grid L2 ⬜→🟡. STATUS-P4.md #14 зачёркнут + handoff-инструкция. Clippy чист. Без новых зависимостей. lumen-layout: 2266 тестов (без pre-existing BUG-055).
 
 - **p1-gamepad-mediasession** ✅ 2026-06-03 — Gamepad API (W3C Gamepad L2 §4) + MediaSession API (W3C Media Session §5). `crates/js/src/gamepad.rs`: `navigator.getGamepads()` → массив из 4 null-слотов (Phase 0, без опроса железа); `Gamepad` (id/index/connected/timestamp/mapping/axes×4/buttons×17/vibrationActuator); `GamepadButton` (pressed/touched/value); `GamepadHapticActuator` stub (`playEffect`/`reset` → `Promise<'complete'>`); `GamepadEvent` (gamepad property); хелперы `_lumen_gamepad_connect/disconnect` для будущей P3 shell-интеграции; экспорт на window. `crates/js/src/media_session.rs`: `navigator.mediaSession` singleton; `MediaMetadata` (title/artist/album/artwork); `playbackState` get/set (валидация: none/paused/playing); `setActionHandler` (14 actions: play/pause/stop/seek*/previoustrack/nexttrack/skipad/togglemic/cam/hangup/captions/pip); `setPositionState`; `setCameraActive`/`setMicrophoneActive` (L2 §5.4); `_lumen_take_media_session_update()` snapshot (sequence counter, возвращает null если без изменений) для P3 OS-форвардинга (SMTC/MPRIS/Now Playing); `_lumen_fire_media_action(action)` — доставка от ОС (кнопки медиа-управления). 15 gamepad + 16 media_session = 31 новый тест. lumen-js: 1101 тест (было 1071). Clippy чист. Без новых зависимостей.
 
