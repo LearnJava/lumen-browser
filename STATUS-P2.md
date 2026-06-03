@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+A-1: CSS Properties & Values API (Houdini)
+  Branch: worktree-p2-css-properties-values
+  Next step: реализовать CSS.registerProperty() в lumen-js/src/css_properties_values_api.rs
 
 ---
 
