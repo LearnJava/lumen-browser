@@ -6,12 +6,19 @@
 
 ## In progress
 
-**p1-anchor-positioning** — CSS Anchor Positioning L1 algorithm stub  branch: p1-anchor-positioning
-Next step: write anchor.rs, update lib.rs, STATUS-P4.md, subsystems/lumen-layout.md  anchor.rs:1
+_(нет)_
+
+---
+
+## Next
+
+_(нет — все задачи выполнены)_
 
 ---
 
 ## Recent merges
+
+- **p1-anchor-positioning** ✅ 2026-06-03 — CSS Anchor Positioning L1 algorithm stub (CSS Anchor Positioning §2-5). Новый модуль `crates/engine/layout/src/anchor.rs`: `AnchorRegistry` (HashMap anchor-name → `AnchorEntry { node, rect }`), `collect_anchors(root) -> AnchorRegistry` (двухфазный сбор), `register_anchor`, `resolve_anchor_function(registry, name, side, is_horizontal) -> Option<f32>` (резолвит `anchor()` функцию — стороны Top/Right/Bottom/Left/Center/Start/End/Percentage, cross-axis → None), `resolve_inset_area(registry, name, row, col, cb_rect) -> Option<AnchoredPosition>` (маппинг InsetAreaKeyword: Start/Center/End/SpanStart/SpanEnd/SpanAll/SelfStart/SelfEnd → (top, left, width, height)). 21 unit-тест. P4 handoff: anchor-name/position-anchor/inset-area в ComputedStyle + anchor() парсинг → STATUS-P4.md "Needs wiring". CSS-SPECS.md CSS Anchor Positioning ⬜→🟡. subsystems/layout.md обновлён. Без новых зависимостей.
 
 - **p1-subtle-crypto** ✅ 2026-06-03 — Web Crypto SubtleCrypto API (W3C WebCryptography API §14). Новый модуль `crates/js/src/subtle_crypto.rs`: per-thread `CryptoKeyStore` (thread_local HashMap<u32, CryptoKeyEntry>), реализация `generate_key`/`import_key`/`export_key`/`sign_data`/`verify_signature`/`aes_gcm_encrypt`/`aes_gcm_decrypt`. **Алгоритмы:** ECDSA P-256 (IEEE P1363 r||s подпись, SPKI/PKCS8/JWK форматы), HMAC-SHA256/384/512 (constant-time verify), AES-GCM 128/256 (AAD + auth tag 16 байт). **JS shim:** заменён минимальный `subtle { digest }` на полный SubtleCrypto с `CryptoKey` (opaque `__ckid`, type/algorithm/extractable/usages). **Бонус:** `URL.canParse()` + `URL.parse()` (URL LS §6.1); `AbortSignal.timeout(ms)` + `AbortSignal.any(signals)` (WHATWG Fetch §3.1). 15 Rust unit-тестов (subtle_crypto::tests) + 12 JS e2e (dom::tests). lumen-js: 1001 тест (было 976, +25). Clippy чист. Новые deps: `p256 v0.13` (Permanent, уже в lumen-network), `hmac v0.12` + `aes-gcm v0.10` (Provisional).
 
