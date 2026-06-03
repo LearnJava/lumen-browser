@@ -71,7 +71,8 @@ use lumen_dom::{
     collect_iframes, check_popup_gate,
 };
 use std::collections::HashMap;
-use lumen_layout::{LayoutBox, Mat4, PaintOrder, StackingTree, TransitionScheduler};
+use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, TransitionScheduler};
+use lumen_layout::{collect_snap_containers, find_snap_target};
 #[cfg(feature = "quickjs")]
 use lumen_layout::{collect_computed_styles, collect_scroll_containers, set_scroll_position};
 use lumen_layout::style::ComputedStyle;
@@ -305,6 +306,7 @@ fn run_window_mode(
         prev_styles: HashMap::new(),
         anim_frame: None,
         layout_box: None,
+        snap_containers: Vec::new(),
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
@@ -3118,6 +3120,12 @@ struct Lumen {
     /// Layout-дерево текущей страницы — нужен scheduler-у для обхода узлов
     /// и извлечения animation-longhands. Обновляется при load/reload/relayout.
     layout_box: Option<lumen_layout::LayoutBox>,
+    /// CSS Scroll Snap L1 containers collected from `layout_box` after every
+    /// layout update. Used by `start_smooth_scroll` / `scroll_x_by` to apply
+    /// snap positions. Empty when `layout_box` is `None` or the page has no
+    /// `scroll-snap-type` declarations. Cleared on navigation, recomputed on
+    /// relayout / tab switch.
+    snap_containers: Vec<SnapContainer>,
     /// Эпоха для rAF-timestamp-ов в миллисекундах от старта shell-а
     /// (DOMHighResTimeStamp — HTML §8.1.5.1: «timestamp passed to callback
     /// should be the current high resolution time»).
@@ -3587,6 +3595,7 @@ impl Lumen {
         }
         self.prev_styles = new_styles;
         self.layout_box = Some(lb);
+        self.update_snap_containers();
         self.animation_scheduler.clear();
         // Do NOT reset transition_scheduler here: active transitions must survive
         // relayout (viewport resize, DOM mutations) so that in-flight animations
@@ -3823,6 +3832,7 @@ impl Lumen {
                 self.prev_styles.clear();
                 collect_box_styles(&page.layout_box, &mut self.prev_styles);
                 self.layout_box = Some(page.layout_box);
+                self.update_snap_containers();
                 // Push initial layout geometry so JS can query bounding rects
                 // immediately after page load (before the first relayout).
                 #[cfg(feature = "quickjs")]
@@ -4029,6 +4039,7 @@ impl Lumen {
         self.content_width = content_width_of(&dl);
         self.display_list = dl;
         self.layout_box = Some(layout);
+        self.update_snap_containers();
 
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
@@ -4051,6 +4062,7 @@ impl Lumen {
         self.prev_styles.clear();
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
+        self.update_snap_containers();
         self.title = page.title.clone();
         if let Some(t) = &self.title {
             self.tab_strip.set_active_title(t.as_str());
@@ -7611,11 +7623,89 @@ impl Lumen {
         (self.content_width - self.page_content_width_css()).max(0.0)
     }
 
+    /// Rebuild `snap_containers` from the current `layout_box`.
+    ///
+    /// Called whenever `layout_box` changes (relayout, page load, tab switch).
+    /// Cheap when the page has no `scroll-snap-type` declarations (returns empty).
+    fn update_snap_containers(&mut self) {
+        match &self.layout_box {
+            Some(lb) => self.snap_containers = collect_snap_containers(lb),
+            None => self.snap_containers.clear(),
+        }
+    }
+
+    /// Apply CSS Scroll Snap L1 to a proposed page-level Y scroll offset.
+    ///
+    /// Finds the snap container whose node matches the root layout box (html
+    /// element), overrides its rect with the viewport dimensions (the snap port
+    /// for page scroll is the viewport, not the full document), then calls
+    /// `find_snap_target`. Returns `target_y` unchanged if no snap applies.
+    fn apply_page_y_snap(&self, target_y: f32) -> f32 {
+        let root_node = match &self.layout_box {
+            Some(lb) => lb.node,
+            None => return target_y,
+        };
+        let vw = self.viewport_width_css();
+        let vh = self.viewport_height_css();
+        for sc in &self.snap_containers {
+            if sc.node == root_node {
+                // Proximity threshold uses viewport size, not full document size.
+                let mut sc_viewport = sc.clone();
+                sc_viewport.rect = lumen_core::geom::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: vw,
+                    height: vh,
+                };
+                if let Some((_, sy)) = find_snap_target(
+                    &sc_viewport,
+                    (self.scroll_x, self.scroll_y),
+                    (self.scroll_x, target_y),
+                ) {
+                    return clamp_scroll(sy, self.max_scroll());
+                }
+            }
+        }
+        target_y
+    }
+
+    /// Apply CSS Scroll Snap L1 to a proposed page-level X scroll offset.
+    ///
+    /// Mirror of `apply_page_y_snap` for horizontal scroll.
+    fn apply_page_x_snap(&self, target_x: f32) -> f32 {
+        let root_node = match &self.layout_box {
+            Some(lb) => lb.node,
+            None => return target_x,
+        };
+        let vw = self.viewport_width_css();
+        let vh = self.viewport_height_css();
+        for sc in &self.snap_containers {
+            if sc.node == root_node {
+                let mut sc_viewport = sc.clone();
+                sc_viewport.rect = lumen_core::geom::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: vw,
+                    height: vh,
+                };
+                if let Some((sx, _)) = find_snap_target(
+                    &sc_viewport,
+                    (self.scroll_x, self.scroll_y),
+                    (target_x, self.scroll_y),
+                ) {
+                    return clamp_scroll(sx, self.max_scroll_x());
+                }
+            }
+        }
+        target_x
+    }
+
     /// Горизонтальный скролл на delta CSS px (инстантный).
     fn scroll_x_by(&mut self, delta: f32) {
         let clamped = clamp_scroll(self.scroll_x + delta, self.max_scroll_x());
-        if (clamped - self.scroll_x).abs() > f32::EPSILON {
-            self.scroll_x = clamped;
+        let snapped = self.apply_page_x_snap(clamped);
+        if (snapped - self.scroll_x).abs() > f32::EPSILON {
+            self.scroll_x = snapped;
             self.request_redraw();
         }
     }
@@ -7640,10 +7730,14 @@ impl Lumen {
 
     /// Запустить smooth-scroll к target Y. Cancel-ит активную анимацию.
     /// Target клампится. Если target == текущему scroll_y — анимация не
-    /// стартует (и текущая сбрасывается).
+    /// стартует (и текущая сбрасывается). Применяет CSS Scroll Snap L1 если
+    /// страница объявляет `scroll-snap-type` на корневом элементе.
     fn start_smooth_scroll(&mut self, target: f32) {
         let max = self.max_scroll();
         let target_clamped = clamp_scroll(target, max);
+        // Apply page-level CSS Scroll Snap L1: snap to the nearest declared
+        // snap point before starting the animation.
+        let target_clamped = self.apply_page_y_snap(target_clamped);
         if (target_clamped - self.scroll_y).abs() <= f32::EPSILON {
             self.scroll_anim = None;
             return;

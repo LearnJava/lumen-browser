@@ -180,3 +180,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 
 - **image-set()** — ✅ реализован (CSS Images L4 §5): raw функция хранится в BackgroundImage::Url, paint выбирает лучший вариант по DPR через select_image_set_url; -webkit-image-set() тоже поддержан; тест 59
 - **cross-fade()** — ✅ реализован (CSS Images L4 §4): BackgroundImage::CrossFade { a, b, t } вариант; при двух URL-sides эмитирует DrawCrossFade; -webkit-cross-fade() тоже поддержан; тест 59
+
+- **scroll-snap-type** — ✅ shell integration реализована (CSS Scroll Snap L1 §3.1): collect_snap_containers + find_snap_target подключены к shell scroll handler; page-level snap (y/x mandatory + proximity) применяется в start_smooth_scroll/scroll_x_by с корректным viewport snap-port; snap_containers кэшируется и обновляется после каждого layout; тест 62
+- **scroll-snap-align** — ✅ shell integration реализована (CSS Scroll Snap L1 §6.1): start/end/center keyword alignment на обоих осях; тест 62
+- **scroll-snap-stop** — ✅ shell integration реализована (CSS Scroll Snap L1 §6.2): always barrier корректно останавливает fling-scroll; тест 62
