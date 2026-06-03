@@ -22,7 +22,9 @@ lumen-canvas = { workspace = true }
 lumen-css-parser = { workspace = true }
 # Permanent #5 (§5): JS engine. QuickJS for Phase 0–1; rusty_v8 planned for v1.0+.
 # Rationale: writing a JS engine from scratch is not in scope for Lumen.
-rquickjs = "0.11"
+# `loader` feature: enables ES6 module resolver/loader API (Resolver + Loader traits +
+# Runtime::set_loader) required for <script type=module> support.
+rquickjs = { version = "0.11", features = ["loader"] }
 # Permanent: OS CSPRNG bytes for Web Crypto API (getRandomValues/randomUUID).
 # Minimal dep — delegates directly to OS (CryptGenRandom/getrandom syscall).
 getrandom = "0.2"
