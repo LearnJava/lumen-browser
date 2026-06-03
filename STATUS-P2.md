@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+RB-3: Feature-флаги в `lumen-paint/Cargo.toml`  branch: p2-rb3-feature-flags
+Next step: wgpu/winit → optional, gate backends/renderer/texture_pool/fingerprint  `crates/engine/paint/Cargo.toml:1`
 
 ---
 

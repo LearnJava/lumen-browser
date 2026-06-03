@@ -14,9 +14,10 @@ lumen-layout.workspace = true
 lumen-font.workspace = true
 lumen-image.workspace = true
 
-# Exception #1 + #2 из §5: paint держит wgpu-surface, привязанный к winit-окну.
-winit.workspace = true
-wgpu.workspace = true
+# Exception #1 + #2 из §5: wgpu-surface привязан к winit-окну; оба опциональны
+# и гейтируются фичей backend-wgpu (ADR-010).
+winit = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true }
 
 # CPU-рендеринг для детерминистичных тестов без GPU (8A.5)
 tiny-skia = { version = "0.11", optional = true }
@@ -28,4 +29,23 @@ lumen-layout.workspace = true
 lumen-core.workspace = true
 
 [features]
+# Phase 1 (текущий): wgpu DX12/Vulkan/Metal
+default = ["backend-wgpu"]
+
+# wgpu-бэкенд — текущий Phase 1 бэкенд (ADR-010 §Migration path)
+backend-wgpu = ["dep:wgpu", "dep:winit"]
+
+# femtovg-бэкенд — Phase 2 default (dep:femtovg, dep:glutin добавляются в RB-5)
+backend-femtovg = []
+
+# vello-бэкенд — Phase 3 default (dep:vello добавляется в RB-10)
+backend-vello = []
+
+# CPU-рендеринг (tiny-skia) — CI без GPU и CompareBackend (ADR-010)
+backend-cpu = []
+
+# CompareBackend: параллельный рендер двумя бэкендами + pixel diff (RB-8)
+compare = []
+
+# Обратная совместимость: lumen-driver использует lumen-paint/cpu-render
 cpu-render = ["tiny-skia"]

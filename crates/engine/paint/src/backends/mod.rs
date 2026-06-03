@@ -5,7 +5,10 @@
 //!
 //! | Модуль | Feature | Статус |
 //! |---|---|---|
-//! | [`wgpu_backend`] | всегда | Phase 1 (текущий) |
+//! | [`wgpu_backend`] | `backend-wgpu` | Phase 1 (текущий) |
+//! | `femtovg_backend` | `backend-femtovg` | Phase 2 (RB-5) |
+//! | `vello_backend` | `backend-vello` | Phase 3 (RB-10) |
+//! | `compare_backend` | `compare` | тестовый (RB-8) |
 
 pub mod wgpu_backend;
 
