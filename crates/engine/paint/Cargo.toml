@@ -54,11 +54,15 @@ backend-femtovg = ["dep:femtovg", "dep:glutin", "dep:glutin-winit", "dep:winit",
 # vello-бэкенд — Phase 3 default (dep:vello добавляется в RB-10)
 backend-vello = []
 
-# CPU-рендеринг (tiny-skia) — CI без GPU и CompareBackend (ADR-010)
-backend-cpu = []
+# CPU-бэкенд (tiny-skia) — headless CI без GPU; реализует RenderBackend (ADR-010 RB-8)
+backend-cpu = ["cpu-render"]
 
 # CompareBackend: параллельный рендер двумя бэкендами + pixel diff (RB-8)
-compare = []
+# Требует два бэкенда с screenshot_rgba(); по умолчанию подтягивает backend-cpu.
+compare = ["backend-cpu"]
 
 # Обратная совместимость: lumen-driver использует lumen-paint/cpu-render
 cpu-render = ["tiny-skia"]
+
+# Составная фича для lumen-driver: compare (backend-cpu) + backend-cpu
+compare-cpu = ["compare"]

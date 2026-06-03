@@ -261,6 +261,21 @@ impl InProcessSession {
         lumen_image::encode_png_rgba8(&image)
             .map_err(|e| Error::Other(format!("PNG encoding: {e}")))
     }
+
+    /// Строит [`lumen_paint::DisplayList`] из текущего состояния страницы.
+    ///
+    /// Используется в `CompareBackend` тестах (ADR-010 RB-8): тест загружает страницу
+    /// через InProcessSession, получает display list, затем рендерит его двумя
+    /// бэкендами через [`lumen_paint::CompareBackend`].
+    ///
+    /// # Errors
+    /// Возвращает `Err` если сессия не инициализирована (navigate() не вызывался).
+    pub fn display_list_for_compare(
+        &self,
+    ) -> Result<Vec<lumen_paint::DisplayCommand>> {
+        let state = self.state()?;
+        Ok(lumen_paint::build_display_list(&state.layout_root))
+    }
 }
 
 impl Default for InProcessSession {

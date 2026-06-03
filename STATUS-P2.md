@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+RB-8: `CompareBackend` + тест-раннер в `lumen-driver`  branch: p2-rb8-compare-backend
+Next step: CpuBackend + CompareBackend в lumen-paint/src/backends/; тест compare_backends.rs
 
 ---
 
