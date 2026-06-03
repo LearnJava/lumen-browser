@@ -6,8 +6,7 @@
 
 ## In progress
 
-- **A-5: File System Access API** — branch: `p1-file-system-api`
-  - Next step: Implement JS shim in `crates/js/src/filesystem_access.rs`
+_(нет)_
 
 ---
 
@@ -15,6 +14,7 @@
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-5: File System Access API | Phase 0 JS-шим: showOpenFilePicker/showSaveFilePicker/showDirectoryPicker via нативных диалогов (PowerShell Windows, zenity Linux, osascript macOS). Возвращают stub handle objects с __id, __path, name. Реестр handles в thread-local. 2 unit-теста. lumen-js: 1118 тестов. |
 | 2026-06-04 | A-4: WebBluetooth API stub | Phase 0 JS-шим: navigator.bluetooth.requestDevice({filters}) → reject NotSupportedError, navigator.bluetooth.getAvailability() → Promise<false>, BluetoothDevice (id/name/uuids/gatt), BluetoothRemoteGATTServer (connect/disconnect/getPrimaryService(s) → reject), watchAdvertisements/unwatchAdvertisements/forget → reject. 7 unit-тестов. lumen-js: 1116 тестов. |
 | 2026-06-04 | A-3: WebUSB API stub | Phase 0 JS-шим: navigator.usb.requestDevice({filters}) → reject, navigator.usb.getDevices() → Promise<[]>, USBDevice (vendorId/productId/productName/manufacturerName/serialNumber, open/close/selectConfiguration/claimInterface/releaseInterface/transferIn/Out/controlTransferIn/Out/clearHalt/reset → reject), USBConnectionEvent, USBManager extends EventTarget, USBConfiguration/Interface/AlternateInterface/Endpoint, USBTransferInResult/OutResult. 8 unit-тестов. lumen-js: 1109 тестов. |
 | 2026-06-04 | A-2: WebHID API stub | Phase 0 JS-шим: navigator.hid.requestDevice({filters}) → reject, navigator.hid.getDevices() → Promise<[]>, HIDDevice (vendorId/productId/productName/collections/opened, open/close/sendReport/receiveFeatureReport → reject), HIDConnectionEvent, HIDManager extends EventTarget, HIDCollectionInfo, HIDReportItem. 7 unit-тестов. lumen-js: 1101 тестов. |
