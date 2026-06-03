@@ -6,8 +6,7 @@
 
 ## In progress
 
-RB-5: `FemtovgBackend` скелет + базовые команды  branch: p2-rb5-femtovg-backend
-Next step: femtovg_backend.rs — init + 5 команд  crates/engine/paint/src/backends/femtovg_backend.rs
+_(нет)_
 
 ---
 
@@ -35,7 +34,7 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 | ~~RB-2~~ | ~~`WgpuBackend` — обёртка над текущим `Renderer`~~ — **выполнено** (p2-wgpu-backend, 2026-06-03) | — | — | — |
 | ~~RB-3~~ | ~~Feature-флаги в `lumen-paint/Cargo.toml`~~ — **выполнено** (p2-rb3-feature-flags, 2026-06-03) | — | — | — |
 | ~~RB-4~~ | ~~Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var~~ — **выполнено** (p2-rb4-backend-factory, 2026-06-03) | — | — | — |
-| RB-5 | `FemtovgBackend` скелет + базовые команды (FillRect/FillRoundedRect/DrawText/DrawBorder/PushClipRect) | `lumen-paint` | M | ADR-010 |
+| ~~RB-5~~ | ~~`FemtovgBackend` скелет + базовые команды~~ — **выполнено** (p2-rb5-femtovg-backend, 2026-06-03) | — | — | — |
 | RB-6 | `FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов) | `lumen-paint` | L | ADR-010 |
 | RB-7 | `VelloBackend` заглушка (компилируется, логирует, ничего не рисует) | `lumen-paint` | S | ADR-010 |
 | RB-8 | `CompareBackend` + тест-раннер в `lumen-driver` (pixel diff двух бэкендов) — совместно с P3 | `lumen-paint`, `lumen-driver` | M | ADR-010 |
@@ -45,6 +44,8 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 ---
 
 ## Recent merges
+
+- **p2-rb5-femtovg-backend** ✅ 2026-06-03 — RB-5: `FemtovgBackend` скелет + 5 базовых команд (ADR-010 Phase 2). Новый `FemtovgBackend` в `paint::backends::femtovg_backend`: glutin OpenGL context init (EglThenWgl/Cgl/Egl по платформе), femtovg Canvas, bundled font. Базовые команды: `FillRect`/`FillRoundedRect` → femtovg Path fill; `DrawBorder` → 4 fill_rect; `DrawText` → fill_text (≈80% baseline); `PushClipRect`/`PopClip` → save+scissor/restore. Scroll-layer: scissor + translate. Push*/Pop* стек → save/restore canvas. Остальные ~25 команд → no-op (RB-6). `register_image` через `imgref::ImgRef<RGBA8>` + `ImageSource::Rgba`. `backends/mod.rs` и `lib.rs` гейтированы через cfg. Shell feature `backend-femtovg = ["lumen-paint/backend-femtovg"]`. `backend_factory.rs`: `LUMEN_BACKEND=femtovg` → FemtovgBackend с fallback на wgpu. `unsafe impl Send` (single-threaded usage invariant). Новые deps: femtovg 0.9, glutin 0.32, glutin-winit 0.5, imgref 1.10, rgb 0.8 (Provisional). 8 новых unit-тестов + 556 OK. Clippy чист.
 
 - **p2-rb4-backend-factory** ✅ 2026-06-03 — RB-4: Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var (ADR-010). `RenderBackend` трейт расширен 4 методами с дефолтами: `viewport_size()`, `scale_factor()`, `preload_curated_fallbacks()`, `on_layer_memory_pressure(level)`. `WgpuBackend` реализует все через делегирование в Renderer. Shell: новый модуль `backend_factory` с `create_backend(window, font_bytes)` — читает `LUMEN_BACKEND` env var; Phase 1: всегда wgpu, femtovg/vello → warning + fallback. `Lumen.renderer: Option<Renderer>` → `Option<Box<dyn RenderBackend>>`. Глобальный импорт `Renderer` убран из shell (остался только в `do_print_to_pdf` local scope). `renderer.layer_cache_mut().on_memory_pressure(level)` → `renderer.on_layer_memory_pressure(level)`. +4 backend unit-tests + 2 factory unit-tests. lumen-paint backend: 19 тестов OK. lumen-shell: 917 тестов OK. Clippy clean.
 
