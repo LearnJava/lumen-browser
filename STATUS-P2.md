@@ -6,37 +6,30 @@
 
 ## In progress
 
-_(нет)_
+View Transitions API (#40)  branch: p2-view-transitions
+Next step: install_view_transition_bindings in lumen-js + ViewTransitionState in shell/src/main.rs  crates/js/src/view_transitions.rs
 
 ---
 
 ## Next
 
-### CSS wiring (приоритет — переданы от P4, 2026-06-02)
-
-Алгоритмы реализованы P2. P4 передал CSS-обвязку P2. Детали реализации — STATUS-P4.md «Needs wiring».
-
-| # | Task | Crate(s) | Effort |
-|---|------|----------|--------|
-| C9 | **`::marker` рендеринг.** `compute_pseudo_element_style("::marker")`; `content`/color/font поддержка; emit перед list-item боксом в display list. | `lumen-layout`, `lumen-paint` | S |
-| C10 | **`cq*` container query units** (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`). Resolve против ближайшего `container` предка в `compute_length_to_px`. | `lumen-layout` | M |
-| C11 | **`mask-image` CSS wiring.** Parse `mask-image`/`mask-repeat`/`mask-size`/`mask-position`/`mask-mode` в `ComputedStyle`; emit `PushMaskLayer`/`PopMaskLayer` из display list walk. GPU compositing pass (`p2-mask-image-layer`) готов. Entry: `paint/src/display_list.rs` walk. | `lumen-layout`, `lumen-paint` | L |
-
-### Roadmap (фичи, после CSS wiring)
+### Roadmap (фичи)
 
 Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
 
 | # | Task | Crate(s) | Effort | Roadmap |
 |---|------|----------|--------|---------|
-| 37 | **Intersection Observer API** (W3C IntersectionObserver L2). `new IntersectionObserver(cb, {rootMargin, threshold, root})`, `observe()/unobserve()/disconnect()/takeRecords()`. `IntersectionObserverEntry`: `boundingClientRect`, `intersectionRatio`, `isIntersecting`, `target`, `time`. Shell: poll в `about_to_wait` через запросы layout rect. Нужен для lazy loading, scroll-triggered animations, ads visibility. | `lumen-js`, `lumen-shell` | M | lumen-plan.md Phase 2 web APIs |
-| 38 | **Resize Observer API** (W3C ResizeObserver). `new ResizeObserver(cb)`, `observe(el, {box})`, `unobserve(el)`, `disconnect()`. `ResizeObserverEntry`: `contentRect`, `borderBoxSize`, `contentBoxSize`, `devicePixelContentBoxSize`. Shell: fire на `relayout()` когда border-box элементов меняется. Нужен для responsive компонентов. | `lumen-js`, `lumen-shell` | M | lumen-plan.md Phase 2 web APIs |
+| ~~37~~ | ~~Intersection Observer API~~ — **выполнено P3** (p3-observers-api) | — | — | — |
+| ~~38~~ | ~~Resize Observer API~~ — **выполнено P3** (p3-observers-api) | — | — | — |
 | ~~39~~ | ~~HTML Popover API~~ — **взято P1** (p1-popover-api, 2026-06-03) | — | — | — |
-| 40 | **View Transitions API** (CSS View Transitions L1). `document.startViewTransition(callback)` → `ViewTransition { ready, finished, updateCallbackDone }`, `::view-transition*` псевдо-элементы (stub), cross-fade между снапшотами через существующий `DrawCrossFade` GPU-пасс (`p2-cross-fade-gpu`). | `lumen-js`, `lumen-paint` | L | lumen-plan.md Phase 3 |
+| ~~40~~ | ~~View Transitions API~~ — **в работе P2** (p2-view-transitions, 2026-06-03) | — | — | — |
 
 ---
 
 ## Recent merges
 
+- **p1-cq-units** ✅ 2026-06-03 — C10: `cq*` container query units (CSS Container Queries L1 §6.2, выполнено P1). `Length::Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax` варианты в `Length` enum. Парсинг в `compute_length_to_px` / `parse_length_unit`. Резолв через `CONTAINER_CQ` thread-local в `resolve()`. `set_cq_context` / `clear_cq_context` публичные функции. 4 unit-теста (parse/resolve/inline-size/calc). CSS-SPECS.md #25/#28 ⬜→✅.
+- **p4-mask-image + p2-mask-image-layer** ✅ 2026-06-03 — C11: `mask-image` CSS wiring (CSS Masking L1 §4, выполнено P4+P2). `ComputedStyle` получил `mask_image`/`mask_repeat`/`mask_size`. `apply_declaration` парсит все три свойства. `emit_push_mask` в `paint/src/display_list.rs` эмитит `PushMaskImage`/`PushMaskLinearGradient`/`PushMaskRadialGradient`/`PushMaskConicGradient` по типу маски. GPU composite pass (`p2-mask-image-layer`): `PushMaskLayer`/`PopMaskLayer` с `MaskMode::Alpha/Luminance`.
 - **p2-c9-marker-rendering** ✅ 2026-06-03 — C9: `::marker` рендеринг (CSS Lists L3 §2.1). Фикс корневой причины: `compute_pseudo_element_style` возвращал `None` при `matched.is_empty()`, подавляя `::marker` боксы у всех list-item без явного `li::marker { ... }` CSS-правила. Маркеры (disc/circle/square/decimal/roman/alpha) не создавались совсем, несмотря на наличие всего рендер-кода. Фикс: ранний `return None` заменён на `return Some(style)` для `pseudo == "marker"` — маркер наследует list-style-type/color/font из родителя и рендерится с дефолтным содержимым; `content: none` по-прежнему подавляет маркер. +2 теста box_tree (font-size override + наследование без CSS-правила); 2196 тестов lumen-layout (1 pre-existing BUG-055). Graphic test 32 расширён: секции `::marker { color }` и `::marker { content }`.
 - **p2-c8-column-extras** ✅ 2026-06-03 — C8: `column-span:all` + `column-fill:auto` wiring в multi-column layout (CSS Multi-column L1 §6.1/§4). `lay_out_multicol_children` получил параметр `container_h: Option<f32>`. `column-span:all` — flow-дети разбиваются на сегменты по span-all элементам; span-all элемент размещается на полной ширине контейнера, дети до/после — в своих колонках. `column-fill:auto` — когда `balance=false` и `container_h` задан, `target_h = container_h` вместо `total/n_cols`; колонки заполняются последовательно. Caller передаёт `children_available_height` (вычислен из `s.height`). 4 новых unit-теста; lumen-layout: 2189 (BUG-055 pre-existing). Graphic test 33 обновлён: добавлены секции column-span:all (зелёный) и column-fill:auto (фиолетовый).
 - **p2-c7-counter-style** ✅ 2026-06-03 — C7: `@counter-style` custom counters end-to-end (CSS Counter Styles L3). `CounterStyleDef` struct с дескрипторами `system`/`symbols`/`additive-symbols`/`prefix`/`suffix`/`range`/`pad`/`negative`/`fallback`. `CounterStyleRegistry = HashMap<String, CounterStyleDef>`. `build_counter_style_registry(sheet)` строит реестр из `sheet.counter_styles`. Алгоритмы: `cyclic` (rem_euclid), `numeric` (positional base-N), `alphabetic` (bijective base-N, как spreadsheet-колонки), `symbolic` (повтор символа), `additive` (weighted sum, как Roman numerals), `fixed` (конечный range), `extends` (делегирует). Парсинг CSS-строк с Unicode-escape `\XXXXXX`. Реестр строится внутри `layout`/`layout_measured`/`layout_measured_hyp` и пробрасывается через `build_box`→`collect_inline_segments`→`inject_pseudo`→`content_to_inline_segments`. `format_counter_with_registry` заменяет `format_counter` — custom стили первичны, встроенные — fallback. Публичный API `layout_measured/layout_measured_hyp` не изменён. 34 новых unit-теста; итого lumen-layout: 2186 (1 pre-existing BUG-055).
