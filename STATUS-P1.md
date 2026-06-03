@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-web-speech-api** — Web Speech API: SpeechSynthesis + SpeechRecognition stub (W3C Web Speech §3–4)
+branch: `p1-web-speech-api`
+Next step: commit implementation, update lumen-plan.md + CSS-SPECS.md
 
 ---
 
