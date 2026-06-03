@@ -14,6 +14,7 @@ _(нет)_
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-6: URL Pattern API | WHATWG URLPattern §3: `new URLPattern({pathname, search, hash, hostname})`, методы `.test(input)` → bool, `.exec(input)` → groups object | null. Поддержка wildcard `*`, named groups `:id`, optional patterns. Чистый JS-шим в `crates/js/src/url_pattern.rs`. 5 unit-тестов. lumen-js: 1123 теста. |
 | 2026-06-04 | A-5: File System Access API | Phase 0 JS-шим: showOpenFilePicker/showSaveFilePicker/showDirectoryPicker via нативных диалогов (PowerShell Windows, zenity Linux, osascript macOS). Возвращают stub handle objects с __id, __path, name. Реестр handles в thread-local. 2 unit-теста. lumen-js: 1118 тестов. |
 | 2026-06-04 | A-4: WebBluetooth API stub | Phase 0 JS-шим: navigator.bluetooth.requestDevice({filters}) → reject NotSupportedError, navigator.bluetooth.getAvailability() → Promise<false>, BluetoothDevice (id/name/uuids/gatt), BluetoothRemoteGATTServer (connect/disconnect/getPrimaryService(s) → reject), watchAdvertisements/unwatchAdvertisements/forget → reject. 7 unit-тестов. lumen-js: 1116 тестов. |
 | 2026-06-04 | A-3: WebUSB API stub | Phase 0 JS-шим: navigator.usb.requestDevice({filters}) → reject, navigator.usb.getDevices() → Promise<[]>, USBDevice (vendorId/productId/productName/manufacturerName/serialNumber, open/close/selectConfiguration/claimInterface/releaseInterface/transferIn/Out/controlTransferIn/Out/clearHalt/reset → reject), USBConnectionEvent, USBManager extends EventTarget, USBConfiguration/Interface/AlternateInterface/Endpoint, USBTransferInResult/OutResult. 8 unit-тестов. lumen-js: 1109 тестов. |
@@ -34,8 +35,8 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-2~~ | ~~**WebHID API stub**~~ — **выполнено** | S | `lumen-js` |
 | ~~A-3~~ | ~~**WebUSB API stub**~~ — **выполнено** | S | `lumen-js` |
 | ~~A-4~~ | ~~**WebBluetooth API stub**~~ — **выполнено** | S | `lumen-js` |
-| A-5 | **File System Access API** — `showOpenFilePicker/showSaveFilePicker/showDirectoryPicker` через нативный диалог (PowerShell/zenity/osascript), `FileSystemFileHandle.getFile()/createWritable()`, `FileSystemDirectoryHandle.getDirectoryHandle()`. Реальное чтение/запись файла. | M | `lumen-js`, `lumen-shell` |
-| A-6 | **URL Pattern API** (WHATWG URLPattern §3) — `new URLPattern({pathname, search, hash, hostname})`, `.test(input)`, `.exec(input)` → именованные группы, wildcard `*`, `:named`, `{optional?}`. Чистый JS-шим. | S | `lumen-js` |
+| ~~A-5~~ | ~~**File System Access API**~~ — **выполнено** | M | `lumen-js`, `lumen-shell` |
+| ~~A-6~~ | ~~**URL Pattern API**~~ — **выполнено** | S | `lumen-js` |
 | A-7 | **Navigation API** (HTML LS §7.8) — `window.navigation`, `NavigationHistoryEntry {url/key/id/index/getState()}`, `.currentEntry/entries()`, `.navigate/back/forward/traverseTo()`, события navigate/navigatesuccess/navigateerror/currententrychange, `NavigateEvent.intercept()`. | M | `lumen-js`, `lumen-shell` |
 | A-8 | **Import Maps** (HTML LS §8.1.6.2) — парсинг `<script type="importmap">` в html-parser, `ImportMap {imports, scopes}`, интеграция в `LumenResolver` для ESM: ключ `"react"` → `"/vendor/react.js"`. | S | `lumen-html-parser`, `lumen-js` |
 | A-9 | **Trusted Types API stub** (W3C TT §3) — `trustedTypes.createPolicy(name, rules)`, `TrustedHTML/Script/ScriptURL` wrappers, `trustedTypes.defaultPolicy`, Phase 0: без enforcement (политика проверяется, не блокирует). | S | `lumen-js` |

@@ -528,6 +528,12 @@ impl QuickJsRuntime {
                 eprintln!("Temporal API init failed: {}", e);
             }
 
+            // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
+            // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
+            if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {
+                eprintln!("URL Pattern API init failed: {}", e);
+            }
+
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
             // so `document` is defined and Promise/queueMicrotask are available.
             if let Err(e) = view_transitions::install_view_transition_bindings(
