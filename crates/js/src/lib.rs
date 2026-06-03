@@ -1,6 +1,7 @@
 pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
+pub mod css_properties_values_api;
 pub mod esm;
 pub mod gamepad;
 pub mod highlight_api;
@@ -35,6 +36,8 @@ pub mod webusb;
 pub mod webtransport;
 pub mod worker;
 pub mod url_pattern;
+pub mod navigation_api;
+pub mod typed_om_api;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -47,6 +50,7 @@ use std::sync::{
 
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
+pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest};
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
@@ -401,6 +405,18 @@ impl QuickJsRuntime {
                 eprintln!("Navigator bindings init failed: {}", e);
             }
 
+            // Install CSS Properties & Values API (Houdini) — after DOM/navigator so that CSS object is available.
+            // Enables CSS.registerProperty() for custom property definitions.
+            if let Err(e) = css_properties_values_api::install_css_properties_values_api(&ctx) {
+                eprintln!("CSS Properties & Values API init failed: {}", e);
+            }
+
+            // Install CSS Typed OM (CSS Typed Object Model L1) — after DOM so that Element.prototype is available.
+            // Enables element.attributeStyleMap, element.computedStyleMap(), CSSStyleValue, CSSUnitValue, CSSKeywordValue.
+            if let Err(e) = typed_om_api::install_typed_om_api(&ctx) {
+                eprintln!("CSS Typed OM init failed: {}", e);
+            }
+
             // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
             // Promise, DOMException, and navigator are available. Phase 0: all capture
             // requests reject with NotAllowedError; enumerateDevices returns [].
@@ -532,6 +548,12 @@ impl QuickJsRuntime {
             // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
             if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {
                 eprintln!("URL Pattern API init failed: {}", e);
+            }
+
+            // Install Navigation API (HTML LS §7.8) — pure JS implementation.
+            // Provides window.navigation singleton with currentEntry, navigate(), back(), forward(), traverseTo().
+            if let Err(e) = navigation_api::install_navigation_api(&ctx) {
+                eprintln!("Navigation API init failed: {}", e);
             }
 
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
