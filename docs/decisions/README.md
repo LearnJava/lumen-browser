@@ -22,3 +22,4 @@ For new decisions use [TEMPLATE.md](TEMPLATE.md). Numbering is sequential; do no
 | [ADR-008](ADR-008-tab-lifecycle-memory-tiers.md) | Tab lifecycle and memory tiers (T0–T4 model; DOM arena / JS suspend / pure layout invariants; per-tier RAM budgets and restore SLOs) | Accepted | 2026-05-27 |
 | [ADR-009](ADR-009-shell-panel-system.md) | Shell UI — Panel/Surface system (retained display list, no external GUI framework) | Accepted | 2026-05-31 |
 | [ADR-010](ADR-010-render-backend-abstraction.md) | RenderBackend abstraction — femtovg (Phase 2), vello (Phase 3), wgpu/cpu fallbacks, compare mode | Accepted | 2026-06-03 |
+| [ADR-011](ADR-011-crypto-deps.md) | Provisional crypto deps — hmac + aes-gcm (SubtleCrypto API) | Accepted | 2026-06-03 |
