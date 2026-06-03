@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+RB-7: `VelloBackend` заглушка  branch: p2-rb7-vello-stub
+Next step: коммит + merge в main
 
 ---
 

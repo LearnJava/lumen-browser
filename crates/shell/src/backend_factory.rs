@@ -17,6 +17,8 @@ use lumen_paint::RenderBackend;
 use lumen_paint::WgpuBackend;
 #[cfg(feature = "backend-femtovg")]
 use lumen_paint::FemtovgBackend;
+#[cfg(feature = "backend-vello")]
+use lumen_paint::VelloBackend;
 use winit::window::Window;
 
 /// Создаёт windowed рендер-бэкенд для окна `window`.
@@ -25,7 +27,8 @@ use winit::window::Window;
 /// или содержит неизвестное значение — используется wgpu (Phase 1 default).
 ///
 /// При `LUMEN_BACKEND=femtovg` создаёт `FemtovgBackend` (RB-5+, ADR-010 Phase 2).
-/// При неудаче инициализации femtovg — fallback на wgpu.
+/// При `LUMEN_BACKEND=vello` создаёт `VelloBackend` (RB-7 заглушка, ADR-010 Phase 3).
+/// При неудаче инициализации — fallback на wgpu.
 ///
 /// # Errors
 /// Возвращает `Err` если GPU-адаптер недоступен или инициализация всех бэкендов
@@ -54,8 +57,16 @@ pub fn create_backend(
             }
         }
         "vello" => {
-            eprintln!("LUMEN_BACKEND=vello: VelloBackend ещё не реализован (RB-10), используется wgpu");
-            create_wgpu(window, font_bytes)
+            #[cfg(feature = "backend-vello")]
+            {
+                eprintln!("LUMEN_BACKEND=vello: VelloBackend (RB-7 заглушка — ничего не рисует)");
+                create_vello(window)
+            }
+            #[cfg(not(feature = "backend-vello"))]
+            {
+                eprintln!("LUMEN_BACKEND=vello: скомпилировано без backend-vello, используется wgpu");
+                create_wgpu(window, font_bytes)
+            }
         }
         "cpu" => {
             Err("LUMEN_BACKEND=cpu: CpuBackend недоступен как windowed-бэкенд. \
@@ -86,6 +97,18 @@ fn create_femtovg(
     font_bytes: Vec<u8>,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
     Ok(Box::new(FemtovgBackend::new(window, font_bytes)?))
+}
+
+/// Создаёт `VelloBackend` (Phase 3 заглушка, ADR-010 RB-7).
+///
+/// Читает размер окна для начальной конфигурации поверхности.
+/// Заглушка не требует `font_bytes` — текст не рендерится.
+#[cfg(feature = "backend-vello")]
+fn create_vello(
+    window: Arc<Window>,
+) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
+    let size = window.inner_size();
+    Ok(Box::new(VelloBackend::new(size.width.max(1), size.height.max(1))))
 }
 
 // Fallback: если компилируем без backend-wgpu (не должно происходить в production,
