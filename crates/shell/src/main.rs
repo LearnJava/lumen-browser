@@ -291,6 +291,8 @@ fn run_window_mode(
     };
     let load_proxy = event_loop.create_proxy();
     let (input_tx, input_rx) = input::channel();
+    let (read_later_tx, read_later_rx) =
+        std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
     let mut app = Lumen {
         display_list: Vec::new(),
         title: None,
@@ -391,7 +393,11 @@ fn run_window_mode(
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
         notes: Vec::new(),
-        read_later: Vec::new(),
+        read_later_store: lumen_knowledge::ReadLater::open_in_memory()
+            .expect("read_later in-memory"),
+        read_later_panel: panels::read_later_panel::ReadLaterPanel::new(),
+        read_later_rx,
+        read_later_tx,
         cookie_banner_dismiss: true,
         gc_tick: gc_tick::GcTick::new(),
         memory_poll: memory_poll::MemoryPollTick::new(memory_poll::platform_source()),
@@ -1663,6 +1669,8 @@ enum KeyCommand {
     TogglePrivacy,
     /// Открыть/закрыть picture-in-picture окно видео (Ctrl+Shift+V, task #21).
     TogglePip,
+    /// Показать/скрыть панель Read-later (Ctrl+Shift+R, §12.3).
+    ToggleReadLater,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1789,6 +1797,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+V — toggle picture-in-picture video window (task #21)
         KeyCode::KeyV if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::TogglePip)
+        }
+        // Ctrl+Shift+R — toggle Read-later panel (§12.3)
+        KeyCode::KeyR if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleReadLater)
         }
         // Ctrl+= — zoom in
         KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
@@ -3207,6 +3219,13 @@ struct Lumen {
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
     cursor_position: Option<winit::dpi::PhysicalPosition<f64>>,
+    /// DOM node currently under the mouse pointer (CSS `:hover` target).
+    /// Updated on every `CursorMoved`; triggers relayout when it changes so
+    /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
+    hovered_nid: Option<NodeId>,
+    /// DOM node whose mouse button is currently held down (CSS `:active` target).
+    /// Set on `MouseInput(Pressed)`, cleared on `MouseInput(Released)`.
+    active_nid: Option<NodeId>,
     /// Активный drag scrollbar-thumb-а: `Some` пока зажата левая кнопка после
     /// click-а по thumb-у. `MouseInput Released` или `CursorLeft` сбрасывают
     /// в `None`. Снапшот `(start_scroll_y, start_mouse_y)` фиксирован на момент
@@ -3485,11 +3504,22 @@ struct Lumen {
     /// Persisted in-memory for the session; each entry is a raw text string.
     /// Displayed nowhere yet — UI is a future task.
     notes: Vec<String>,
-    /// In-session read-later list created via `@read-later <url>` in the omnibox.
+    /// §12.3 Read-later storage: persists HTML snapshots of saved pages.
     ///
-    /// Each entry is a URL string.  Persisted in-memory; future task wires this
-    /// to the bookmarks backend with a `read-later` tag.
-    read_later: Vec<String>,
+    /// Populated by the `@read-later <url>` omnibox command: a background thread
+    /// fetches the page HTML and calls `save()`. In-memory only (no SQLite path
+    /// for the first ship — drop-in replacement once a `read_later.db` path is
+    /// wired through the profile directory).
+    read_later_store: lumen_knowledge::ReadLater,
+    /// §12.3 Read-later panel state (Ctrl+Shift+R).
+    read_later_panel: panels::read_later_panel::ReadLaterPanel,
+    /// Channel receiver for completed background read-later fetches.
+    ///
+    /// Background threads send `(url, title, html_bytes)` here when done.
+    /// Drained in `about_to_wait` to call `read_later_store.save()`.
+    read_later_rx: std::sync::mpsc::Receiver<(String, String, Vec<u8>)>,
+    /// Sender half of the read-later fetch channel (cloned into each background thread).
+    read_later_tx: std::sync::mpsc::Sender<(String, String, Vec<u8>)>,
     /// Cookie-banner auto-dismiss preference (7C.3).
     ///
     /// When `true` (default) the JS shim in `lumen-js` auto-clicks consent-banner
@@ -4477,6 +4507,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
 
+        // §12.3 Read-later: drain completed background page fetches and persist.
+        while let Ok((url, title, html)) = self.read_later_rx.try_recv() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let _ = self.read_later_store.save(&url, &title, &html, "", &[], now);
+            self.refresh_read_later();
+            self.request_redraw();
+        }
+
         // Web Notifications API: deliver pending OS notifications queued by JS.
         if let Some(js) = &self.js_ctx {
             for (title, body) in js.take_notification_requests() {
@@ -5132,6 +5173,54 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // §12.3 Read-later panel (Ctrl+Shift+R): right-docked overlay.
+                    if self.read_later_panel.visible {
+                        use panels::read_later_panel::ReadLaterHit;
+                        let win_w = self.viewport_width_css();
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let px = win_w - panels::read_later_panel::PANEL_W - 4.0;
+                        let py = tab_h + 4.0;
+                        let hit = panels::read_later_panel::hit_test(
+                            x_css,
+                            y_css,
+                            px,
+                            py,
+                            &self.read_later_panel.entries,
+                            self.read_later_panel.scroll_offset,
+                        );
+                        match hit {
+                            ReadLaterHit::Close => {
+                                self.read_later_panel.visible = false;
+                                self.request_redraw();
+                            }
+                            ReadLaterHit::Open(id) => {
+                                // Load from offline HTML snapshot.
+                                if let Ok(Some(entry)) = self.read_later_store.get(id) {
+                                    let html = String::from_utf8_lossy(&entry.html_snapshot)
+                                        .into_owned();
+                                    let base_url = entry.url.clone();
+                                    let _ = self.read_later_store.set_status(
+                                        id,
+                                        lumen_knowledge::ReadStatus::Read,
+                                    );
+                                    self.read_later_panel.visible = false;
+                                    self.navigate_to(PageSource::Snapshot { html, base_url });
+                                }
+                            }
+                            ReadLaterHit::Delete(id) => {
+                                let _ = self.read_later_store.delete(id);
+                                self.refresh_read_later();
+                                self.request_redraw();
+                            }
+                            ReadLaterHit::Inside => { /* swallow */ }
+                            ReadLaterHit::Outside => {
+                                self.read_later_panel.visible = false;
+                                self.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
                     // Bookmark manager panel (task #22): floating overlay.
                     if self.bookmark_panel.visible {
                         let (ax, ay) = self.bookmark_anchor();
@@ -5358,6 +5447,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.network_panel.scroll_up(lines.abs().ceil() as usize);
                     } else if lines < 0.0 {
                         self.network_panel.scroll_down(lines.abs().ceil() as usize);
+                    }
+                    self.request_redraw();
+                    return;
+                }
+                // §12.3 Read-later panel intercepts the wheel while visible.
+                if self.read_later_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    let max_scroll = self.read_later_panel.max_scroll();
+                    if lines > 0.0 {
+                        self.read_later_panel.scroll_up();
+                    } else if lines < 0.0 {
+                        self.read_later_panel.scroll_down(max_scroll);
                     }
                     self.request_redraw();
                     return;
@@ -5937,6 +6041,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut bm_cmds =
                         panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay);
                     overlay_buf.append(&mut bm_cmds);
+                }
+
+                // §12.3 Read-later panel: right-docked overlay.
+                if self.read_later_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let mut rl_cmds = panels::read_later_panel::build_panel(
+                        &self.read_later_panel,
+                        win_w,
+                        tab_h,
+                    );
+                    overlay_buf.append(&mut rl_cmds);
                 }
 
                 // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
@@ -6747,6 +6863,13 @@ impl Lumen {
                 self.toggle_pip();
                 self.request_redraw();
             }
+            KeyCommand::ToggleReadLater => {
+                self.read_later_panel.toggle();
+                if self.read_later_panel.visible {
+                    self.refresh_read_later();
+                }
+                self.request_redraw();
+            }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
                 self.relayout();
@@ -7108,7 +7231,21 @@ impl Lumen {
                     self.notes.push(text);
                 }
                 omnibox::AliasAction::SaveReadLater(url) => {
-                    self.read_later.push(url.clone());
+                    // Spawn a background thread to fetch the page HTML and title.
+                    // The result is sent back through `read_later_tx` and processed
+                    // in `about_to_wait` via `read_later_rx`.
+                    let tx = self.read_later_tx.clone();
+                    let url_clone = url.clone();
+                    std::thread::spawn(move || {
+                        use lumen_core::ext::NetworkTransport;
+                        use lumen_core::url::Url;
+                        use lumen_network::HttpClient;
+                        let Ok(parsed) = Url::parse(&url_clone) else { return };
+                        let Ok(html) = HttpClient::new().fetch(&parsed) else { return };
+                        let title = panels::read_later_panel::extract_title_from_html(&html);
+                        let title = if title.is_empty() { url_clone.clone() } else { title };
+                        let _ = tx.send((url_clone, title, html));
+                    });
                     // Also persist into the bookmark store under a dedicated
                     // folder so the bookmark manager panel shows it.
                     let now = std::time::SystemTime::now()
@@ -7526,6 +7663,23 @@ impl Lumen {
     ///
     /// Call this after every bookmark mutation (add / delete / move) so the
     /// panel renders up-to-date rows on the next redraw.
+    /// Reload the read-later entry list from the in-memory store into the panel cache.
+    ///
+    /// Called after every save/delete and when the panel opens.  Shows the 50
+    /// most recent items (unread first, then read, then archived).
+    fn refresh_read_later(&mut self) {
+        let mut entries = self
+            .read_later_store
+            .list_by_status(lumen_knowledge::ReadStatus::Unread, 50)
+            .unwrap_or_default();
+        entries.extend(
+            self.read_later_store
+                .list_by_status(lumen_knowledge::ReadStatus::Read, 50)
+                .unwrap_or_default(),
+        );
+        self.read_later_panel.refresh(entries);
+    }
+
     fn refresh_bookmarks(&mut self) {
         let entries = self
             .bookmarks
@@ -9479,12 +9633,11 @@ mod tests {
     }
 
     #[test]
-    fn keybinding_ctrl_shift_r_is_none() {
-        // Shift+Ctrl+R обычно «force-reload» в web-браузерах. Не делаем
-        // сейчас (нет cache), но и не путаем с обычным reload.
+    fn keybinding_ctrl_shift_r_is_read_later() {
+        // Ctrl+Shift+R → toggle Read-later panel (§12.3).
         assert_eq!(
             keybinding_for(KeyCode::KeyR, ModifiersState::CONTROL | ModifiersState::SHIFT),
-            None,
+            Some(KeyCommand::ToggleReadLater),
         );
     }
 

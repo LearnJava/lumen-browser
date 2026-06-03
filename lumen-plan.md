@@ -68,7 +68,7 @@
 - ✅ Tab session export / import (§12.7) — JSON export/import (2C) + cross-restart SQLite session persist (10I): `SessionStore` (`storage/src/session_store.rs`) хранит все открытые вкладки (URL + scroll + DOM blob) на close; авто-restore при запуске без аргумента — активная вкладка грузится свежей, фоновые паркуются как hibernated. `shell/src/session_persist.rs`
 - ✅ Полнотекстовый поиск по истории (§12.1) — FTS5 + bm25 + omnibox-интеграция: `@history` prefix, dropdown до 7 строк, ArrowUp/Down, SearchHistory record; Porter-stemmer (Phase 2)
 - 🟡 Аннотации и заметки (§12.2) — `lumen-knowledge::Notes` storage layer готов; Range API для восстановления highlight-наложений на странице — отложено
-- 🟡 Read-later / офлайн-чтение (§12.3) — `lumen-knowledge::ReadLater` storage layer готов (status, tags, FTS5); фоновый downloader для ресурсов при save и UI отложены
+- ✅ Read-later / офлайн-чтение (§12.3) — storage layer + фоновая HTTP-загрузка + панель Ctrl+Shift+R (P1 2026-06-03). `@read-later <url>` → background thread → html_snapshot → `ReadLater::save`. Панель 420 px: Unread/Read, click → offline `PageSource::Snapshot`, × → delete.
 - ✅ Поиск по содержимому открытых вкладок (§12.4) — `OpenTabsIndex` (live in-memory FTS5, ключ tab_id) в `lumen-knowledge::open_tabs`; shell-wiring omnibox `@tabs` — handoff P3
 - ✅ Focus mode (§12.6) — `shell/src/panels/focus_panel.rs`: Ctrl+Shift+F distraction-free режим (скрывает tab bar) + Pomodoro-таймер с arc progress ring overlay
 - ⬜ Кастомизация UI (drag&drop, темы) (§12.10) — Phase 2-3
