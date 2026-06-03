@@ -6,19 +6,19 @@
 
 ## In progress
 
-**p1-read-later-ui** — §12.3 Read-later panel + offline reader  
-branch: `p1-read-later-ui`  
-Next step: commit current implementation (panel, background fetch, offline load), then update lumen-plan.md + SYMBOLS.md
+_(нет)_
 
 ---
 
 ## Next
 
-_(нет — следующая задача после p1-read-later-ui будет определена при завершении)_
+_(нет — P1 queue пуст, следующая задача определяется при старте новой сессии)_
 
 ---
 
 ## Recent merges
+
+- **p1-read-later-ui** ✅ 2026-06-03 — §12.3 Read-later панель + офлайн-чтение. `crates/shell/src/panels/read_later_panel.rs`: новый floating overlay 420×456 px, Ctrl+Shift+R toggle. Список сохранённых страниц: title + host + дата + status badge (Unread/Read). Клик → открыть офлайн HTML-снапшот (PageSource::Snapshot), × → удалить. `Lumen`: `read_later_store: lumen_knowledge::ReadLater` (in-memory SQLite + FTS5), mpsc-канал `read_later_tx/rx` для фоновых fetch-ов. `@read-later <url>` → background thread: `HttpClient::fetch` + `extract_title_from_html` → `save()` + панель автообновляется. `about_to_wait` дренирует `read_later_rx`. `KeyCommand::ToggleReadLater` + Ctrl+Shift+R. refresh_read_later() получает Unread+Read, max 50 записей каждого. 15 unit-тестов (hit_test/title/date/truncate). lumen-shell: 915 тестов. Clippy чист. Без новых зависимостей.
 
 - **p1-esmodule-support** ✅ 2026-06-03 — `<script type=module>` ES Module support (HTML LS §8.1.3). Новый модуль `crates/js/src/esm.rs`: `LumenResolver` (URL-resolution: относительные `./foo.js` против base, абсолютные HTTP/data/blob без изменений), `LumenLoader` (загрузка из in-memory `ModuleRegistry = Arc<Mutex<HashMap<String,String>>>`). rquickjs `loader` feature включён. `QuickJsRuntime::eval_module(source)` — вызывает `Module::evaluate` (QuickJS `JS_EVAL_TYPE_MODULE`), дренирует микро-задачи. `register_module_source(specifier, source)` — предрегистрация модулей для `import`. В `JsRuntime` trait добавлены `eval_module` и `register_module_source` с дефолтными no-op/fallback реализациями. Shell: `collect_inline_scripts` разделяет classic (`<script>`) и module (`<script type=module>`) — модули запускаются после классических скриптов (HTML LS §8.1.3 deferred порядок). Dynamic `import()` резолвит из registry. `import.meta.url` = `lumen://inline-N`. 8 esm unit-тестов + 5 `eval_module` runtime-тестов + 1 shell-тест. lumen-js: 1044 lib (+5), lumen-shell: 900 (+1). Clippy чист. Новая зависимость: `rquickjs` feature `loader` (часть уже подключённого постоянного `rquickjs = "0.11"`).
 
