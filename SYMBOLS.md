@@ -105,70 +105,70 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:440` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
 `crates/core/src/ext.rs:479` **fn** `match_face_no_stretch` — Legacy функция match_face для backward compatibility (без stretch)
 `crates/core/src/ext.rs:779` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
-`crates/core/src/ext.rs:832` **struct** `SuspendedHeap` — Serialized JS heap snapshot for T2→T3 hibernation (ADR-008, Invariant 2)
-`crates/core/src/ext.rs:839` **fn** `new` — Create a new suspended heap from compressed bytes
-`crates/core/src/ext.rs:844` **fn** `len` — Get the size in bytes of the compressed snapshot
-`crates/core/src/ext.rs:849` **fn** `is_empty` — Check if the snapshot is empty
-`crates/core/src/ext.rs:856` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
-`crates/core/src/ext.rs:869` **fn** `object` — Хелпер: построить object из key-value пар
-`crates/core/src/ext.rs:879` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
-`crates/core/src/ext.rs:900` **type** `JsResult`
-`crates/core/src/ext.rs:905` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
-`crates/core/src/ext.rs:955` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
-`crates/core/src/ext.rs:980` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
-`crates/core/src/ext.rs:1008` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
-`crates/core/src/ext.rs:1018` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
-`crates/core/src/ext.rs:1043` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
-`crates/core/src/ext.rs:1064` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
-`crates/core/src/ext.rs:1090` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
-`crates/core/src/ext.rs:1105` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
-`crates/core/src/ext.rs:1136` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
-`crates/core/src/ext.rs:1154` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
-`crates/core/src/ext.rs:1179` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
-`crates/core/src/ext.rs:1206` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
-`crates/core/src/ext.rs:1220` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
-`crates/core/src/ext.rs:1237` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
-`crates/core/src/ext.rs:1248` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
-`crates/core/src/ext.rs:1265` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
-`crates/core/src/ext.rs:1281` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
-`crates/core/src/ext.rs:1297` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1315` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
-`crates/core/src/ext.rs:1331` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
-`crates/core/src/ext.rs:1348` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1364` **enum** `JsSseEvent` — A single queued event from an SSE connection, ready for delivery to JS
-`crates/core/src/ext.rs:1388` **trait** `JsSseSession` — A live SSE connection from the JS runtime's perspective
-`crates/core/src/ext.rs:1399` **trait** `JsSseProvider` — Factory that opens SSE connections for the JS runtime
-`crates/core/src/ext.rs:1425` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
-`crates/core/src/ext.rs:1437` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
-`crates/core/src/ext.rs:1456` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
-`crates/core/src/ext.rs:1491` **trait** `ClipboardProvider` — Synchronous access to the host platform clipboard for the JS runtime
-`crates/core/src/ext.rs:1512` **enum** `WebAuthnError` — Failure reason from a [`CredentialProvider`] operation
-`crates/core/src/ext.rs:1530` **fn** `dom_exception_name` — The `DOMException` name `lumen-js` should reject the promise with
-`crates/core/src/ext.rs:1546` **struct** `WebAuthnCreateRequest` — A WebAuthn credential-creation (registration) request
-`crates/core/src/ext.rs:1576` **struct** `WebAuthnCreateResponse` — The result of a successful [`CredentialProvider::create`]
-`crates/core/src/ext.rs:1599` **struct** `WebAuthnGetRequest` — A WebAuthn assertion (authentication) request
-`crates/core/src/ext.rs:1616` **struct** `WebAuthnGetResponse` — The result of a successful [`CredentialProvider::get`]
-`crates/core/src/ext.rs:1646` **trait** `CredentialProvider` — Provider of WebAuthn / passkey credentials, backing `navigator.credentials`
-`crates/core/src/ext.rs:1666` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
-`crates/core/src/ext.rs:1696` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
-`crates/core/src/ext.rs:1711` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
-`crates/core/src/ext.rs:1738` **trait** `IdbBackend` — Persistence boundary for the IndexedDB JS shim
-`crates/core/src/ext.rs:1761` **trait** `SwBackend` — Per-origin Service Worker registration persistence
-`crates/core/src/ext.rs:1785` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
-`crates/core/src/ext.rs:1857` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
-`crates/core/src/ext.rs:1957` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
-`crates/core/src/ext.rs:1977` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
-`crates/core/src/ext.rs:1984` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
-`crates/core/src/ext.rs:2006` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:2040` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:2046` **fn** `new` — Create an empty registry
-`crates/core/src/ext.rs:2051` **fn** `register` — Register a cache. Caches are notified in registration order
-`crates/core/src/ext.rs:2056` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
-`crates/core/src/ext.rs:2063` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
-`crates/core/src/ext.rs:2071` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
-`crates/core/src/ext.rs:2080` **fn** `clear_all` — Evict all entries in every registered cache
-`crates/core/src/ext.rs:2087` **fn** `len` — Number of registered caches
-`crates/core/src/ext.rs:2092` **fn** `is_empty` — `true` if no caches are registered
+`crates/core/src/ext.rs:845` **struct** `SuspendedHeap` — Serialized JS heap snapshot for T2→T3 hibernation (ADR-008, Invariant 2)
+`crates/core/src/ext.rs:852` **fn** `new` — Create a new suspended heap from compressed bytes
+`crates/core/src/ext.rs:857` **fn** `len` — Get the size in bytes of the compressed snapshot
+`crates/core/src/ext.rs:862` **fn** `is_empty` — Check if the snapshot is empty
+`crates/core/src/ext.rs:869` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
+`crates/core/src/ext.rs:882` **fn** `object` — Хелпер: построить object из key-value пар
+`crates/core/src/ext.rs:892` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
+`crates/core/src/ext.rs:913` **type** `JsResult`
+`crates/core/src/ext.rs:918` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
+`crates/core/src/ext.rs:968` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
+`crates/core/src/ext.rs:993` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
+`crates/core/src/ext.rs:1021` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
+`crates/core/src/ext.rs:1031` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
+`crates/core/src/ext.rs:1056` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
+`crates/core/src/ext.rs:1077` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
+`crates/core/src/ext.rs:1103` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
+`crates/core/src/ext.rs:1118` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
+`crates/core/src/ext.rs:1149` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
+`crates/core/src/ext.rs:1167` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
+`crates/core/src/ext.rs:1192` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
+`crates/core/src/ext.rs:1219` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
+`crates/core/src/ext.rs:1233` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
+`crates/core/src/ext.rs:1250` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
+`crates/core/src/ext.rs:1261` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
+`crates/core/src/ext.rs:1278` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
+`crates/core/src/ext.rs:1294` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
+`crates/core/src/ext.rs:1310` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1328` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
+`crates/core/src/ext.rs:1344` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
+`crates/core/src/ext.rs:1361` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1377` **enum** `JsSseEvent` — A single queued event from an SSE connection, ready for delivery to JS
+`crates/core/src/ext.rs:1401` **trait** `JsSseSession` — A live SSE connection from the JS runtime's perspective
+`crates/core/src/ext.rs:1412` **trait** `JsSseProvider` — Factory that opens SSE connections for the JS runtime
+`crates/core/src/ext.rs:1438` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
+`crates/core/src/ext.rs:1450` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
+`crates/core/src/ext.rs:1469` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
+`crates/core/src/ext.rs:1504` **trait** `ClipboardProvider` — Synchronous access to the host platform clipboard for the JS runtime
+`crates/core/src/ext.rs:1525` **enum** `WebAuthnError` — Failure reason from a [`CredentialProvider`] operation
+`crates/core/src/ext.rs:1543` **fn** `dom_exception_name` — The `DOMException` name `lumen-js` should reject the promise with
+`crates/core/src/ext.rs:1559` **struct** `WebAuthnCreateRequest` — A WebAuthn credential-creation (registration) request
+`crates/core/src/ext.rs:1589` **struct** `WebAuthnCreateResponse` — The result of a successful [`CredentialProvider::create`]
+`crates/core/src/ext.rs:1612` **struct** `WebAuthnGetRequest` — A WebAuthn assertion (authentication) request
+`crates/core/src/ext.rs:1629` **struct** `WebAuthnGetResponse` — The result of a successful [`CredentialProvider::get`]
+`crates/core/src/ext.rs:1659` **trait** `CredentialProvider` — Provider of WebAuthn / passkey credentials, backing `navigator.credentials`
+`crates/core/src/ext.rs:1679` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
+`crates/core/src/ext.rs:1709` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
+`crates/core/src/ext.rs:1724` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
+`crates/core/src/ext.rs:1751` **trait** `IdbBackend` — Persistence boundary for the IndexedDB JS shim
+`crates/core/src/ext.rs:1774` **trait** `SwBackend` — Per-origin Service Worker registration persistence
+`crates/core/src/ext.rs:1798` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
+`crates/core/src/ext.rs:1870` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
+`crates/core/src/ext.rs:1970` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
+`crates/core/src/ext.rs:1990` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
+`crates/core/src/ext.rs:1997` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
+`crates/core/src/ext.rs:2019` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:2053` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:2059` **fn** `new` — Create an empty registry
+`crates/core/src/ext.rs:2064` **fn** `register` — Register a cache. Caches are notified in registration order
+`crates/core/src/ext.rs:2069` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
+`crates/core/src/ext.rs:2076` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
+`crates/core/src/ext.rs:2084` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
+`crates/core/src/ext.rs:2093` **fn** `clear_all` — Evict all entries in every registered cache
+`crates/core/src/ext.rs:2100` **fn** `len` — Number of registered caches
+`crates/core/src/ext.rs:2105` **fn** `is_empty` — `true` if no caches are registered
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -895,7 +895,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-js  (91 symbols)
+## lumen-js  (101 symbols)
 
 `crates/js/src/audio_bindings.rs:25` **fn** `new_session_seed` — Generate a unique per-session noise seed
 `crates/js/src/audio_bindings.rs:37` **fn** `install_audio_bindings` — Install AudioContext stub with fingerprint noise into the JS context
@@ -920,6 +920,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/dom.rs:143` **struct** `PopupRequest` — A popup window request emitted by JS `window.open(url, target, features)`
 `crates/js/src/dom.rs:161` **enum** `FullscreenRequest` — A fullscreen API request emitted by JS `element.requestFullscreen()` or
 `crates/js/src/dom.rs:201` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
+`crates/js/src/esm.rs:25` **type** `SharedPageUrl` — Shared, late-writable page URL used by `LumenResolver` to resolve relative
+`crates/js/src/esm.rs:32` **type** `ModuleRegistry` — Shared module source registry: specifier → source code
+`crates/js/src/esm.rs:35` **fn** `new_registry` — Creates an empty `ModuleRegistry`
+`crates/js/src/esm.rs:51` **struct** `LumenResolver` — URL resolver: normalises module specifiers into canonical keys for the registry
+`crates/js/src/esm.rs:59` **fn** `new` — Create a resolver; `page_url` is the initial fallback base (may be empty)
+`crates/js/src/esm.rs:72` **fn** `resolve_specifier` — Resolve `name` relative to `base` using simplified URL resolution rules
+`crates/js/src/esm.rs:117` **struct** `LumenLoader` — Module loader backed by `ModuleRegistry`
+`crates/js/src/esm.rs:123` **fn** `new` — Create a loader backed by `registry`
 `crates/js/src/geolocation.rs:25` **struct** `FakeCoords` — Fake geographic coordinates injected into the Geolocation API
 `crates/js/src/geolocation.rs:43` **fn** `install_geolocation_bindings` — Install the Geolocation API stub into the JS context
 `crates/js/src/heap_snapshot.rs:40` **enum** `HeapSnapshotError` — Error from the heap-snapshot compression layer
@@ -927,35 +935,37 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/heap_snapshot.rs:97` **fn** `decompress_heap` — Inverse of [`compress_heap`]: strip the [`HEAP_MAGIC`] prefix and inflate
 `crates/js/src/iframe_element.rs:30` **fn** `install_iframe_element_bindings` — Install HTMLIFrameElement stubs into the JS context
 `crates/js/src/intl_bindings.rs:42` **fn** `install_intl_bindings` — Install the `Intl` shim into the JS context
-`crates/js/src/lib.rs:48` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:62` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:179` **fn** `new`
-`crates/js/src/lib.rs:246` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:449` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:458` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:470` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:495` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
-`crates/js/src/lib.rs:509` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:534` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:553` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:563` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:574` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
-`crates/js/src/lib.rs:582` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
-`crates/js/src/lib.rs:590` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:599` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:608` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:617` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:625` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:634` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:646` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:655` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:664` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:675` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:684` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:693` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:703` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:721` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:733` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:49` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:63` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:192` **fn** `new`
+`crates/js/src/lib.rs:233` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
+`crates/js/src/lib.rs:244` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
+`crates/js/src/lib.rs:299` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:505` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:514` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:526` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:551` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
+`crates/js/src/lib.rs:565` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:590` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:609` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:619` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:630` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
+`crates/js/src/lib.rs:638` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
+`crates/js/src/lib.rs:646` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:655` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:664` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:673` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:681` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:690` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:702` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:711` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:720` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:731` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:740` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:749` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:759` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:777` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:789` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
 `crates/js/src/media_devices.rs:26` **fn** `install_media_devices_bindings` — Install MediaDevices API shim into the JS context
 `crates/js/src/navigator_bindings.rs:36` **struct** `NavigatorProfile` — High-entropy `navigator` / `screen` / timezone values exposed to JavaScript
 `crates/js/src/navigator_bindings.rs:86` **fn** `set_navigator_profile` — Install a process-wide navigator profile (9F.1). Subsequent calls to the
@@ -1949,7 +1959,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (555 symbols)
+## lumen-shell  (572 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2475,6 +2485,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle/state.rs:136` **fn** `advance_tier` — Advance to the next tier. Returns `true` if a transition occurred
 `crates/shell/src/tab_lifecycle/state.rs:150` **fn** `should_transition_on_idle` — Returns `true` if the idle timeout for the current tier has elapsed
 `crates/shell/src/tab_lifecycle/state.rs:167` **fn** `suggested_pressure_state` — If memory pressure justifies an earlier-than-scheduled tier advance, returns
+`crates/shell/src/tabs/archive.rs:58` **struct** `ArchivedTab` — A tab that was auto-archived and removed from the visible tab strip
+`crates/shell/src/tabs/archive.rs:74` **enum** `ArchiveHit` — Hit result from the archive button or panel
+`crates/shell/src/tabs/archive.rs:86` **struct** `TabArchive` — State of the tab archive system
+`crates/shell/src/tabs/archive.rs:103` **fn** `new` — Create an empty archive with the panel closed
+`crates/shell/src/tabs/archive.rs:108` **fn** `push` — Push a newly-archived tab (prepend — newest entry shown first)
+`crates/shell/src/tabs/archive.rs:113` **fn** `take` — Remove and return the archived entry with the given original tab `id`
+`crates/shell/src/tabs/archive.rs:119` **fn** `count` — Number of archived entries
+`crates/shell/src/tabs/archive.rs:124` **fn** `toggle` — Toggle panel open/closed; resets scroll on open
+`crates/shell/src/tabs/archive.rs:132` **fn** `close` — Close panel without clearing entries
+`crates/shell/src/tabs/archive.rs:138` **fn** `scroll_up` — Scroll up by one row (clamped at zero)
+`crates/shell/src/tabs/archive.rs:144` **fn** `scroll_down` — Scroll down by one row (clamped at last page)
+`crates/shell/src/tabs/archive.rs:157` **fn** `archive_btn_x` — Pixel x-coordinate where the archive button begins (right of all tabs)
+`crates/shell/src/tabs/archive.rs:177` **fn** `hit_test_button` — Hit-test the archive toolbar button area
+`crates/shell/src/tabs/archive.rs:185` **fn** `hit_test_panel` — Hit-test the archive panel when it is open
+`crates/shell/src/tabs/archive.rs:238` **fn** `build_button` — Build the archive toolbar button appended to the right of the tab bar
+`crates/shell/src/tabs/archive.rs:309` **fn** `build_panel` — Build the drop-down archive panel anchored below the archive button
 `crates/shell/src/tabs/containers.rs:44` **enum** `ContainerKind` — Kind of tab container. Drives the border-top colour in the tab strip
 `crates/shell/src/tabs/containers.rs:65` **fn** `border_color` — Border-top strip colour, or `None` for [`ContainerKind::None`]
 `crates/shell/src/tabs/containers.rs:82` **fn** `name` — Human-readable container name for UI labels
@@ -2485,18 +2511,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/containers.rs:150` **fn** `len` — Number of `(origin, container)` mappings tracked
 `crates/shell/src/tabs/containers.rs:156` **fn** `is_empty` — `true` if no mapping has been allocated yet
 `crates/shell/src/tabs/strip.rs:56` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:85` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:96` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:111` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:116` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:133` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:152` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:160` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:172` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:182` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:193` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:213` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:244` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:92` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:103` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:119` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:127` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:148` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:166` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:178` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:186` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:198` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:208` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:219` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:239` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:270` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -2913,4 +2940,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2848 symbols in 20 crates*
+*Total: 2875 symbols in 20 crates*

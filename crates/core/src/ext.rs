@@ -780,6 +780,19 @@ pub trait JsRuntime: Send + Sync {
     /// Выполнить script-text и вернуть результат последнего выражения.
     fn eval(&self, script: &str) -> JsResult<JsValue>;
 
+    /// Evaluate `source` as an ES module (`<script type=module>`, HTML LS §8.1.3).
+    ///
+    /// Default implementation falls back to `eval` for runtimes without module support.
+    /// Implementations that support modules (QuickJS with `loader` feature) override this.
+    fn eval_module(&self, source: &str) -> JsResult<()> {
+        self.eval(source).map(|_| ())
+    }
+
+    /// Pre-register an ES module `source` by `specifier` so it can be `import`-ed.
+    ///
+    /// Default: no-op for runtimes without module support.
+    fn register_module_source(&self, _specifier: &str, _source: &str) {}
+
     /// Записать глобальную переменную в текущий runtime context.
     fn set_global(&self, name: &str, value: JsValue) -> JsResult<()>;
 

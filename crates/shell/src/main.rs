@@ -2852,11 +2852,25 @@ fn extract_style_blocks(doc: &Document) -> String {
     out
 }
 
-fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
+/// Collect `<script>` elements from the DOM, separating classic from module scripts.
+///
+/// `scripts` receives classic `<script>` bodies (no `type` attribute, or `type=text/javascript`).
+/// `module_scripts` receives `<script type=module>` bodies (HTML LS §8.1.3.1).
+/// Both skip `<script src="...">` (external-only) and empty inline bodies.
+fn collect_inline_scripts(
+    doc: &Document,
+    id: NodeId,
+    scripts: &mut Vec<String>,
+    module_scripts: &mut Vec<String>,
+) {
     let node = doc.get(id);
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "script"
     {
+        let is_module = node
+            .get_attr("type")
+            .map(|t| t.trim().eq_ignore_ascii_case("module"))
+            .unwrap_or(false);
         let mut text = String::new();
         for &child in &node.children {
             if let NodeData::Text(s) = &doc.get(child).data {
@@ -2864,12 +2878,16 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
             }
         }
         if !text.trim().is_empty() {
-            out.push(text);
+            if is_module {
+                module_scripts.push(text);
+            } else {
+                scripts.push(text);
+            }
         }
         return;
     }
     for &child in &node.children {
-        collect_inline_scripts(doc, child, out);
+        collect_inline_scripts(doc, child, scripts, module_scripts);
     }
 }
 
@@ -2936,17 +2954,18 @@ fn run_scripts_with_dom(
     deterministic: bool,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
-    collect_inline_scripts(&doc, doc.root(), &mut scripts);
+    let mut module_scripts: Vec<String> = Vec::new();
+    collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut module_scripts);
 
     let doc_arc = Arc::new(Mutex::new(doc));
 
-    if scripts.is_empty() {
+    if scripts.is_empty() && module_scripts.is_empty() {
         return (doc_arc, None, None);
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
         eprintln!(
-            "sandbox: заблокировано {} скрипт(ов) (sandbox=scripts)",
-            scripts.len()
+            "sandbox: заблокировано {} скрипт(ов) + {} модул(ей) (sandbox=scripts)",
+            scripts.len(), module_scripts.len()
         );
         return (doc_arc, None, None);
     }
@@ -2963,6 +2982,7 @@ fn run_scripts_with_dom(
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend) {
                     eprintln!("JS DOM init failed: {e}");
                 }
+                // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for src in &scripts {
                     match rt.eval(src) {
                         Ok(_) => {}
@@ -2973,6 +2993,19 @@ fn run_scripts_with_dom(
                             );
                         }
                         Err(e) => eprintln!("script error: {e}"),
+                    }
+                }
+                // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
+                for src in &module_scripts {
+                    match rt.eval_module(src) {
+                        Ok(()) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "module: engine=quickjs, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("module error: {e}"),
                     }
                 }
                 let nav_req = rt.take_navigate_request().map(|r| match r {
@@ -3027,7 +3060,8 @@ fn run_scripts(
     runtime: &dyn lumen_core::JsRuntime,
 ) -> usize {
     let mut scripts: Vec<String> = Vec::new();
-    collect_inline_scripts(doc, doc.root(), &mut scripts);
+    let mut _module_scripts: Vec<String> = Vec::new();
+    collect_inline_scripts(doc, doc.root(), &mut scripts, &mut _module_scripts);
     if scripts.is_empty() {
         return 0;
     }
@@ -9996,9 +10030,11 @@ mod tests {
             r#"<html><head></head><body><script>console.log(1);</script></body></html>"#,
         );
         let mut scripts = Vec::new();
-        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        let mut mods = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut mods);
         assert_eq!(scripts.len(), 1);
         assert!(scripts[0].contains("console.log"));
+        assert!(mods.is_empty());
     }
 
     #[test]
@@ -10007,8 +10043,10 @@ mod tests {
             r#"<html><head></head><body><script>   </script></body></html>"#,
         );
         let mut scripts = Vec::new();
-        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        let mut mods = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut mods);
         assert!(scripts.is_empty());
+        assert!(mods.is_empty());
     }
 
     #[test]
@@ -10017,8 +10055,27 @@ mod tests {
             r#"<html><body><script>a=1;</script><script>b=2;</script></body></html>"#,
         );
         let mut scripts = Vec::new();
-        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        let mut mods = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut mods);
         assert_eq!(scripts.len(), 2);
+        assert!(mods.is_empty());
+    }
+
+    #[test]
+    fn collect_inline_scripts_separates_modules() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body>
+              <script>var x = 1;</script>
+              <script type="module">export const y = 2;</script>
+            </body></html>"#,
+        );
+        let mut scripts = Vec::new();
+        let mut mods = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut mods);
+        assert_eq!(scripts.len(), 1, "classic script counted");
+        assert_eq!(mods.len(), 1, "module script counted");
+        assert!(scripts[0].contains("var x"));
+        assert!(mods[0].contains("export const y"));
     }
 
     #[test]
