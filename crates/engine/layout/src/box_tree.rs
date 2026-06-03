@@ -28,6 +28,7 @@ use crate::style::{
 };
 use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
                       build_counter_style_registry, format_counter_with_registry};
+use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
 use crate::TextMeasurer;
 
 /// HTML-имя элемента `<img>` для распознавания replaced-боксов в layout.
@@ -4596,6 +4597,12 @@ fn lay_out_grid(
 ) -> f32 {
     let em = s.font_size;
 
+    // CSS Grid L2 §9: If this grid was set up as a subgrid by its parent, read
+    // the inherited track contexts that the parent set in the thread-locals.
+    // We clear them immediately so our own children don't accidentally inherit them.
+    let inherited_cols: Option<SubgridContext> = SUBGRID_COL_CTX.with(|c| c.borrow_mut().take());
+    let inherited_rows: Option<SubgridContext> = SUBGRID_ROW_CTX.with(|c| c.borrow_mut().take());
+
     // Indices of actual items (non-Skip).
     let item_idxs: Vec<usize> = children
         .iter()
@@ -4608,12 +4615,23 @@ fn lay_out_grid(
         return 0.0;
     }
 
-    // Gap between tracks.
-    let col_gap = s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0);
-    let row_gap = s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0);
+    // Gap between tracks.  When the axis is subgridded we use the parent's gap
+    // (already baked into the offsets in SubgridContext); fall back to our own style.
+    let col_gap = inherited_cols.as_ref()
+        .map(|ctx| ctx.gap)
+        .unwrap_or_else(|| s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0));
+    let row_gap = inherited_rows.as_ref()
+        .map(|ctx| ctx.gap)
+        .unwrap_or_else(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0));
 
     // Determine explicit track counts.
-    let n_explicit_cols = s.grid_template_columns.len().max(1);
+    // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
+    // for placement purposes use the number of inherited tracks (or 1 for auto-placement).
+    let n_explicit_cols = if s.grid_template_columns.first() == Some(&GridTrackSize::Subgrid) {
+        inherited_cols.as_ref().map(|ctx| ctx.sizes.len()).unwrap_or(1).max(1)
+    } else {
+        s.grid_template_columns.len().max(1)
+    };
 
     // --- Step 1: Resolve placements for every item ---
     // placement: (col_start, col_end, row_start, row_end) all 1-based inclusive/exclusive.
@@ -4813,75 +4831,97 @@ fn lay_out_grid(
     let n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
 
     // --- Step 3: Compute column widths ---
-    // Compute fixed column widths.
-    let mut col_widths: Vec<f32> = (0..n_cols)
-        .map(|c| {
-            let ts = grid_track(c, &s.grid_template_columns, &s.grid_auto_columns);
-            match ts {
-                GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
-                GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
-                _ => 0.0, // fr / auto resolved later
-            }
-        })
-        .collect();
-
-    // Total gap between columns.
-    let total_col_gap = if n_cols > 1 { col_gap * (n_cols - 1) as f32 } else { 0.0 };
-    let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
-    let free_col = (content_width - fixed_col_total).max(0.0);
-
-    // Distribute fr among column tracks.
-    let total_fr: f32 = (0..n_cols)
-        .map(|c| grid_track(c, &s.grid_template_columns, &s.grid_auto_columns).fr().unwrap_or(0.0))
-        .sum();
-    let auto_col_count = (0..n_cols)
-        .filter(|&c| matches!(
-            grid_track(c, &s.grid_template_columns, &s.grid_auto_columns),
-            GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
-        ))
-        .count();
-
-    // For auto columns, divide remaining free space equally (after fr).
-    let fr_width = if total_fr > 0.0 { free_col / total_fr } else { 0.0 };
-    let auto_col_width = if auto_col_count > 0 && total_fr == 0.0 {
-        free_col / auto_col_count as f32
+    // If the column axis is subgridded, use the inherited track sizes directly;
+    // otherwise compute from the style as usual (CSS Grid L2 §9).
+    let (col_widths, col_offsets) = if let Some(ref ctx) = inherited_cols {
+        // Subgrid column axis: clip to n_cols (parent may span more tracks than
+        // the explicit template; auto-place inside those tracks).
+        let sizes: Vec<f32> = ctx.sizes.iter().take(n_cols as usize).cloned().collect();
+        let offsets: Vec<f32> = ctx.offsets.iter().take(n_cols as usize).cloned().collect();
+        (sizes, offsets)
     } else {
-        0.0
+        // Normal grid: compute column widths from the style.
+        let mut col_widths: Vec<f32> = (0..n_cols)
+            .map(|c| {
+                let ts = grid_track(c, &s.grid_template_columns, &s.grid_auto_columns);
+                match ts {
+                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
+                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                    // Subgrid sentinel without parent context — fall back to auto.
+                    GridTrackSize::Subgrid => 0.0,
+                    _ => 0.0, // fr / auto resolved later
+                }
+            })
+            .collect();
+
+        // Total gap between columns.
+        let total_col_gap = if n_cols > 1 { col_gap * (n_cols - 1) as f32 } else { 0.0 };
+        let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
+        let free_col = (content_width - fixed_col_total).max(0.0);
+
+        // Distribute fr among column tracks.
+        let total_fr: f32 = (0..n_cols)
+            .map(|c| grid_track(c, &s.grid_template_columns, &s.grid_auto_columns).fr().unwrap_or(0.0))
+            .sum();
+        let auto_col_count = (0..n_cols)
+            .filter(|&c| matches!(
+                grid_track(c, &s.grid_template_columns, &s.grid_auto_columns),
+                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
+            ))
+            .count();
+
+        // For auto columns, divide remaining free space equally (after fr).
+        let fr_width = if total_fr > 0.0 { free_col / total_fr } else { 0.0 };
+        let auto_col_width = if auto_col_count > 0 && total_fr == 0.0 {
+            free_col / auto_col_count as f32
+        } else {
+            0.0
+        };
+
+        for c in 0..n_cols {
+            match grid_track(c, &s.grid_template_columns, &s.grid_auto_columns) {
+                GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
+                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
+                    col_widths[c as usize] = auto_col_width;
+                }
+                _ => {}
+            }
+        }
+
+        // Column start offsets.
+        let mut col_offsets: Vec<f32> = Vec::with_capacity(n_cols as usize);
+        let mut x_off = 0.0_f32;
+        for c in 0..n_cols {
+            col_offsets.push(x_off);
+            x_off += col_widths[c as usize] + if c < n_cols - 1 { col_gap } else { 0.0 };
+        }
+
+        (col_widths, col_offsets)
     };
 
-    for c in 0..n_cols {
-        match grid_track(c, &s.grid_template_columns, &s.grid_auto_columns) {
-            GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
-            GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
-                col_widths[c as usize] = auto_col_width;
-            }
-            _ => {}
-        }
-    }
-
-    // Column start offsets.
-    let mut col_offsets: Vec<f32> = Vec::with_capacity(n_cols as usize);
-    let mut x_off = 0.0_f32;
-    for c in 0..n_cols {
-        col_offsets.push(x_off);
-        x_off += col_widths[c as usize] + if c < n_cols - 1 { col_gap } else { 0.0 };
-    }
-
     // --- Step 4: Layout items to measure row heights ---
-    // Explicit row heights.
-    let mut row_heights: Vec<f32> = (0..n_rows)
-        .map(|r| {
-            match grid_track(r, &s.grid_template_rows, &s.grid_auto_rows) {
-                GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
-                GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
-                _ => 0.0,
-            }
-        })
-        .collect();
+    // If the row axis is subgridded, use inherited sizes; otherwise compute from style.
+    let mut row_heights: Vec<f32> = if let Some(ref ctx) = inherited_rows {
+        ctx.sizes.iter().take(n_rows as usize).cloned().collect()
+    } else {
+        (0..n_rows)
+            .map(|r| {
+                match grid_track(r, &s.grid_template_rows, &s.grid_auto_rows) {
+                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
+                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                    GridTrackSize::Subgrid => 0.0,
+                    _ => 0.0,
+                }
+            })
+            .collect()
+    };
+
+    // Row offsets (computed from row_heights regardless of subgrid).
+    // For subgrid row axis the offsets are inherited below in final pass.
 
     // Layout each item in its cell to determine content height.
     for (k, &i) in item_idxs.iter().enumerate() {
-        let (cs, ce, rs, _re) = placements[k];
+        let (cs, ce, rs, re) = placements[k];
         if cs == 0 || rs == 0 {
             continue; // unplaced (should not happen after auto-placement)
         }
@@ -4890,13 +4930,46 @@ fn lay_out_grid(
         let cell_w: f32 = if c1 > c0 {
             col_widths[c0..c1].iter().sum::<f32>() + col_gap * (c1 - c0 - 1) as f32
         } else {
-            col_widths[c0]
+            col_widths.get(c0).copied().unwrap_or(0.0)
         };
-        // Layout at temporary position (y=0) to get intrinsic height.
-        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, None, measurer, viewport, pcb, hp);
+
+        // For subgrid children: set the thread-local context before laying out.
+        let child_col_subgrid = children[i].style.grid_template_columns.first()
+            == Some(&GridTrackSize::Subgrid);
+        let child_row_subgrid = children[i].style.grid_template_rows.first()
+            == Some(&GridTrackSize::Subgrid);
+
+        if child_col_subgrid || child_row_subgrid {
+            // Build subgrid context slices from our resolved track sizes.
+            let child_col_ctx = if child_col_subgrid && c1 > c0 {
+                Some(SubgridContext::from_parent_tracks(&col_widths[c0..c1], col_gap))
+            } else {
+                None
+            };
+            let child_row_ctx = if child_row_subgrid {
+                // Row heights not fully determined yet; pass current estimates.
+                let r0 = (rs - 1).min(n_rows - 1) as usize;
+                let re_eff = re.max(rs + 1);
+                let r1 = (re_eff - 1).min(n_rows) as usize;
+                if r1 > r0 {
+                    Some(SubgridContext::from_parent_tracks(&row_heights[r0..r1], row_gap))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let _guard = SubgridContextGuard::set(child_col_ctx, child_row_ctx);
+            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp);
+        } else {
+            // Layout at temporary position (y=0) to get intrinsic height.
+            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp);
+        }
+
         // Update auto row heights.
         let r0 = (rs - 1) as usize;
         if r0 < row_heights.len()
+            && inherited_rows.is_none()
             && matches!(
                 grid_track(r0 as u32, &s.grid_template_rows, &s.grid_auto_rows),
                 GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
@@ -4909,31 +4982,41 @@ fn lay_out_grid(
         }
     }
 
-    // Resolve fr row heights.
-    let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
-    let fixed_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
-    // If container has explicit height, distribute fr rows from it.
-    let container_h = s.height.as_ref().and_then(|h| h.resolve(em, Some(content_width), viewport));
-    let free_row = container_h.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
-    let total_row_fr: f32 = (0..n_rows)
-        .map(|r| grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr().unwrap_or(0.0))
-        .sum();
-    if total_row_fr > 0.0 && free_row > 0.0 {
-        let fr_h = free_row / total_row_fr;
-        for r in 0..n_rows {
-            if let Some(f) = grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr() {
-                row_heights[r as usize] = (f * fr_h).max(row_heights[r as usize]);
+    // Resolve fr row heights (skip when row axis is subgridded — sizes are fixed).
+    if inherited_rows.is_none() {
+        let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
+        let fixed_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
+        // If container has explicit height, distribute fr rows from it.
+        let container_h = s.height.as_ref().and_then(|h| h.resolve(em, Some(content_width), viewport));
+        let free_row = container_h.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
+        let total_row_fr: f32 = (0..n_rows)
+            .map(|r| grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr().unwrap_or(0.0))
+            .sum();
+        if total_row_fr > 0.0 && free_row > 0.0 {
+            let fr_h = free_row / total_row_fr;
+            for r in 0..n_rows {
+                if let Some(f) = grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr() {
+                    row_heights[r as usize] = (f * fr_h).max(row_heights[r as usize]);
+                }
             }
         }
     }
 
-    // Row top offsets.
-    let mut row_offsets: Vec<f32> = Vec::with_capacity(n_rows as usize);
-    let mut y_off = 0.0_f32;
-    for r in 0..n_rows {
-        row_offsets.push(y_off);
-        y_off += row_heights[r as usize] + if r < n_rows - 1 { row_gap } else { 0.0 };
-    }
+    // Row top offsets: if row axis is subgridded, use inherited offsets; else compute.
+    let (row_offsets, y_off) = if let Some(ref ctx) = inherited_rows {
+        let offsets: Vec<f32> = ctx.offsets.iter().take(n_rows as usize).cloned().collect();
+        let total = ctx.total_size();
+        (offsets, total)
+    } else {
+        let mut row_offsets: Vec<f32> = Vec::with_capacity(n_rows as usize);
+        let mut y_off = 0.0_f32;
+        for r in 0..n_rows {
+            row_offsets.push(y_off);
+            y_off += row_heights[r as usize] + if r < n_rows - 1 { row_gap } else { 0.0 };
+        }
+        (row_offsets, y_off)
+    };
+    let mut y_off = y_off;
 
     // --- Step 5: Final positioning pass ---
     for (k, &i) in item_idxs.iter().enumerate() {
@@ -4962,8 +5045,27 @@ fn lay_out_grid(
             row_heights[r0]
         };
 
-        // Re-layout with final cell width.
-        lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp);
+        // Re-layout with final cell width. For subgrid children, restore the context.
+        let child_col_subgrid = children[i].style.grid_template_columns.first()
+            == Some(&GridTrackSize::Subgrid);
+        let child_row_subgrid = children[i].style.grid_template_rows.first()
+            == Some(&GridTrackSize::Subgrid);
+        if child_col_subgrid || child_row_subgrid {
+            let final_col_ctx = if child_col_subgrid && c1 > c0 {
+                Some(SubgridContext::from_parent_tracks(&col_widths[c0..c1], col_gap))
+            } else {
+                None
+            };
+            let final_row_ctx = if child_row_subgrid && r1 > r0 {
+                Some(SubgridContext::from_parent_tracks(&row_heights[r0..r1], row_gap))
+            } else {
+                None
+            };
+            let _guard = SubgridContextGuard::set(final_col_ctx, final_row_ctx);
+            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp);
+        } else {
+            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp);
+        }
 
         let item = &mut children[i];
         let is = &item.style;
