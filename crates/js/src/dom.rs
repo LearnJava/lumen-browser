@@ -6055,10 +6055,12 @@ function _lumen_deliver_media_changes(w, h, dark, reducedMotion) {
 // ── postMessage (HTML LS §7.7.4) ─────────────────────────────────────────────
 var _message_listeners = [];
 
-// ── Window load / DOMContentLoaded / visibilitychange listener arrays ─────────
+// ── Window load / DOMContentLoaded / visibilitychange / error listener arrays ──
 var _load_listeners = [];
 var _domcontentloaded_win_listeners = [];
 var _visibilitychange_listeners = [];
+var _error_listeners = [];
+var _other_win_listeners = {};
 
 var window = {
     history: history,
@@ -6145,6 +6147,11 @@ var window = {
             }
         } else if (type === 'visibilitychange') {
             _visibilitychange_listeners.push(fn);
+        } else if (type === 'error') {
+            _error_listeners.push(fn);
+        } else {
+            if (!_other_win_listeners[type]) _other_win_listeners[type] = [];
+            _other_win_listeners[type].push(fn);
         }
     },
     removeEventListener: function(type, fn) {
@@ -6156,19 +6163,32 @@ var window = {
         else if (type === 'load') arr = _load_listeners;
         else if (type === 'DOMContentLoaded') arr = _domcontentloaded_win_listeners;
         else if (type === 'visibilitychange') arr = _visibilitychange_listeners;
-        else return;
+        else if (type === 'error') arr = _error_listeners;
+        else arr = _other_win_listeners[type];
+        if (!arr) return;
         var idx = arr.indexOf(fn);
         if (idx >= 0) arr.splice(idx, 1);
     },
     dispatchEvent: function(evt) {
         if (!evt || !evt.type) return true;
+        var arr;
         if (evt.type === 'load') {
-            var arr = _load_listeners.slice();
+            arr = _load_listeners.slice();
             for (var i = 0; i < arr.length; i++) {
                 try { arr[i].call(window, evt); } catch(e) {}
             }
             if (typeof window.onload === 'function') {
                 try { window.onload.call(window, evt); } catch(e) {}
+            }
+        } else if (evt.type === 'error') {
+            arr = _error_listeners.slice();
+            for (var i = 0; i < arr.length; i++) { try { arr[i].call(window, evt); } catch(e) {} }
+            if (typeof window.onerror === 'function') { try { window.onerror.call(window, evt); } catch(e) {} }
+        } else {
+            arr = _other_win_listeners[evt.type];
+            if (arr) {
+                arr = arr.slice();
+                for (var i = 0; i < arr.length; i++) { try { arr[i].call(window, evt); } catch(e) {} }
             }
         }
         return !evt.defaultPrevented;
@@ -8749,6 +8769,251 @@ function _wa_get_animations_for(target) {
 function _wa_doc_get_animations() {
     return _wa_animations.filter(function(a) { return a._state !== 'idle'; });
 }
+
+// ── Web Locks API (W3C Web Locks API §5) ──────────────────────────────────────
+// navigator.locks.request(name[, options], callback) → Promise
+// navigator.locks.query() → Promise<{held, pending}>
+//
+// Single-context implementation: locks are scoped to one JS context (page).
+// Cross-context coordination (cross-tab mutex) is Phase 3 / multi-process.
+//
+// Lock modes:
+//   'exclusive' (default): one holder max; blocked by any existing lock.
+//   'shared': concurrent readers allowed; blocked only by exclusive holders.
+//
+// Options (all optional):
+//   mode       'exclusive' | 'shared'  (default 'exclusive')
+//   signal     AbortSignal             (cancel queued request on abort)
+//   ifAvailable boolean                (callback(null) if not immediately free)
+//   steal      boolean                 (evict current holders; grant immediately)
+(function() {
+  var _locks = {};  // name → { excl, shared, queue[] }
+
+  function _st(name) {
+    if (!_locks[name]) _locks[name] = { excl: 0, shared: 0, queue: [] };
+    return _locks[name];
+  }
+
+  function _canAcq(st, mode) {
+    return mode === 'exclusive' ? st.excl === 0 && st.shared === 0 : st.excl === 0;
+  }
+
+  function _acq(st, mode) {
+    if (mode === 'exclusive') st.excl++; else st.shared++;
+  }
+
+  function _rel(st, mode) {
+    if (mode === 'exclusive') { if (st.excl   > 0) st.excl--;   }
+    else                      { if (st.shared > 0) st.shared--; }
+    _drain(st);
+  }
+
+  function _drain(st) {
+    var i = 0;
+    while (i < st.queue.length) {
+      var req = st.queue[i];
+      if (!_canAcq(st, req.mode)) break;
+      _acq(st, req.mode);
+      st.queue.splice(i, 1);
+      req.grant();
+      if (req.mode === 'exclusive') break; // exclusive acquired — stop draining
+      // shared acquired — continue to try more queued shared requests
+    }
+  }
+
+  function _run(cb, lock, resolve, reject, st, mode) {
+    var res;
+    try { res = cb(lock); } catch (e) { _rel(st, mode); reject(e); return; }
+    Promise.resolve(res).then(
+      function(v) { _rel(st, mode); resolve(v); },
+      function(e) { _rel(st, mode); reject(e); }
+    );
+  }
+
+  function Lock(name, mode) {
+    Object.defineProperty(this, 'name', { value: name, enumerable: true });
+    Object.defineProperty(this, 'mode', { value: mode, enumerable: true });
+  }
+
+  function LockManager() {}
+
+  LockManager.prototype.request = function(name, a, b) {
+    var opts = {}, cb;
+    if (typeof a === 'function') { cb = a; }
+    else { opts = a && typeof a === 'object' ? a : {}; cb = b; }
+
+    if (typeof cb !== 'function')
+      return Promise.reject(new TypeError('LockManager.request: callback required'));
+    if (name == null)
+      return Promise.reject(new TypeError('LockManager.request: name required'));
+
+    name = String(name);
+    var mode = opts.mode != null ? String(opts.mode) : 'exclusive';
+    if (mode !== 'exclusive' && mode !== 'shared')
+      return Promise.reject(
+        new TypeError('LockManager.request: mode must be exclusive or shared'));
+
+    var sig    = opts.signal     || null;
+    var ifAvl  = !!opts.ifAvailable;
+    var steal  = !!opts.steal;
+    var st     = _st(name);
+
+    if (steal) {
+      // Evict all current holders and remove exclusive pending requests.
+      st.excl = 0; st.shared = 0;
+      for (var qi = st.queue.length - 1; qi >= 0; qi--) {
+        if (st.queue[qi].mode === 'exclusive') {
+          st.queue[qi].abort(new DOMException('Lock stolen', 'AbortError'));
+          st.queue.splice(qi, 1);
+        }
+      }
+    }
+
+    return new Promise(function(resolve, reject) {
+      if (sig && sig.aborted) {
+        reject(sig.reason instanceof Error ? sig.reason
+          : new DOMException('The operation was aborted.', 'AbortError'));
+        return;
+      }
+      if (_canAcq(st, mode)) {
+        _acq(st, mode);
+        _run(cb, new Lock(name, mode), resolve, reject, st, mode);
+        return;
+      }
+      if (ifAvl) {
+        var r2;
+        try { r2 = cb(null); } catch (e2) { reject(e2); return; }
+        Promise.resolve(r2).then(resolve, reject);
+        return;
+      }
+      // Queue the request.
+      var granted = false, abortH = null;
+      function onGrant() {
+        if (granted) return; granted = true;
+        if (sig && abortH) sig.removeEventListener('abort', abortH);
+        _run(cb, new Lock(name, mode), resolve, reject, st, mode);
+      }
+      function onAbort() {
+        if (granted) return;
+        for (var j = 0; j < st.queue.length; j++) {
+          if (st.queue[j].grant === onGrant) { st.queue.splice(j, 1); break; }
+        }
+        var reason = (sig && sig.reason instanceof Error)
+          ? sig.reason : new DOMException('The operation was aborted.', 'AbortError');
+        reject(reason);
+      }
+      if (sig) { abortH = onAbort; sig.addEventListener('abort', abortH); }
+      st.queue.push({ mode: mode, grant: onGrant, abort: onAbort });
+    });
+  };
+
+  LockManager.prototype.query = function() {
+    var held = [], pending = [];
+    for (var n in _locks) {
+      var s = _locks[n];
+      for (var i = 0; i < s.excl;   i++) held.push({ name: n, mode: 'exclusive', clientId: '' });
+      for (var j = 0; j < s.shared; j++) held.push({ name: n, mode: 'shared',    clientId: '' });
+      for (var k = 0; k < s.queue.length; k++)
+        pending.push({ name: n, mode: s.queue[k].mode, clientId: '' });
+    }
+    return Promise.resolve({ held: held, pending: pending });
+  };
+
+  var _lockMgr = new LockManager();
+  Object.defineProperty(navigator, 'locks', {
+    value: _lockMgr, configurable: true, writable: false, enumerable: true,
+  });
+  window.LockManager = LockManager;
+  window.Lock = Lock;
+})();
+
+// ── Screen Wake Lock API (W3C Screen Wake Lock §6.5) ──────────────────────────
+// navigator.wakeLock.request('screen') → Promise<WakeLockSentinel>
+// Phase 1 stub: always resolves (no OS integration yet; release is a no-op).
+(function() {
+  function WakeLockSentinel(type) {
+    Object.defineProperty(this, 'type', { value: type, enumerable: true });
+    this.released  = false;
+    this._listeners = [];
+  }
+  WakeLockSentinel.prototype.release = function() {
+    if (this.released) return Promise.resolve();
+    this.released = true;
+    var ev = { type: 'release', target: this };
+    if (typeof this._onrelease === 'function') try { this._onrelease(ev); } catch(e) {}
+    for (var i = 0; i < this._listeners.length; i++) try { this._listeners[i](ev); } catch(e) {}
+    return Promise.resolve();
+  };
+  Object.defineProperty(WakeLockSentinel.prototype, 'onrelease', {
+    get: function() { return this._onrelease || null; },
+    set: function(fn) { this._onrelease = typeof fn === 'function' ? fn : null; },
+    configurable: true,
+  });
+  WakeLockSentinel.prototype.addEventListener = function(t, fn) {
+    if (t === 'release' && typeof fn === 'function') this._listeners.push(fn);
+  };
+  WakeLockSentinel.prototype.removeEventListener = function(t, fn) {
+    var i = this._listeners.indexOf(fn); if (i >= 0) this._listeners.splice(i, 1);
+  };
+
+  navigator.wakeLock = {
+    request: function(type) {
+      if (type !== 'screen')
+        return Promise.reject(
+          new DOMException('Unsupported wake lock type: ' + String(type), 'NotSupportedError'));
+      return Promise.resolve(new WakeLockSentinel(String(type)));
+    },
+  };
+  window.WakeLockSentinel = WakeLockSentinel;
+})();
+
+// ── Network Information API (W3C Network Information §7) ──────────────────────
+// navigator.connection — effective type, downlink, rtt, saveData.
+// Phase 1 stub: reports '4g'/10 Mbps/100 ms (reasonable desktop default).
+(function() {
+  function NetworkInformation() {
+    this.effectiveType = '4g';
+    this.downlink      = 10;
+    this.rtt           = 100;
+    this.saveData      = false;
+    this.type          = 'wifi';
+    this._onchange     = null;
+  }
+  Object.defineProperty(NetworkInformation.prototype, 'onchange', {
+    get: function() { return this._onchange; },
+    set: function(fn) { this._onchange = typeof fn === 'function' ? fn : null; },
+    configurable: true,
+  });
+  NetworkInformation.prototype.addEventListener    = function() {};
+  NetworkInformation.prototype.removeEventListener = function() {};
+
+  navigator.connection = new NetworkInformation();
+  window.NetworkInformation = NetworkInformation;
+})();
+
+// ── navigator.userActivation (HTML LS §6.4) ───────────────────────────────────
+// Single-user interactive desktop app: always reports the user has activated.
+Object.defineProperty(navigator, 'userActivation', {
+  value: Object.freeze({ isActive: true, hasBeenActive: true }),
+  configurable: true, writable: false, enumerable: true,
+});
+
+// ── Web Share API (W3C Web Share §4) ──────────────────────────────────────────
+// Phase 1 stub: always rejects (no OS share-sheet integration yet).
+navigator.share = function(_data) {
+  return Promise.reject(
+    new DOMException('navigator.share is not supported in Lumen Phase 1.', 'NotSupportedError'));
+};
+navigator.canShare = function() { return false; };
+
+// ── window.reportError() (HTML LS §8.1.3.6) ───────────────────────────────────
+// Fires an ErrorEvent on window for the given error (uncaught-error pipeline).
+function reportError(err) {
+  var msg = err instanceof Error ? err.message : String(err);
+  var ev = new ErrorEvent('error', { error: err, message: msg, bubbles: true, cancelable: true });
+  window.dispatchEvent(ev);
+}
+window.reportError = reportError;
 
 // ── DOM GC collect (idle shell tick) ─────────────────────────────────────────
 // Called by the shell's GcTick every 30 s with an array of node IDs that
@@ -16874,6 +17139,263 @@ mod tests {
             "'onfullscreenchange' in document && \
              'onfullscreenerror' in document"
         ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Web Locks API ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn navigator_locks_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof navigator.locks === 'object' && navigator.locks !== null").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lock_manager_is_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.LockManager === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn exclusive_lock_granted_immediately() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var got = false;
+            navigator.locks.request('r1', function(lock) {
+                got = lock !== null && lock.name === 'r1' && lock.mode === 'exclusive';
+            });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("got").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn shared_locks_can_be_concurrent() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var count = 0;
+            navigator.locks.request('sr', {mode:'shared'}, function() { count++; });
+            navigator.locks.request('sr', {mode:'shared'}, function() { count++; });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("count").unwrap(), lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn if_available_returns_null_when_locked() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var nullGot = false;
+            navigator.locks.request('la', function(lock) {
+                // hold lock during this promise
+                navigator.locks.request('la', {ifAvailable: true}, function(l2) {
+                    nullGot = l2 === null;
+                });
+            });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("nullGot").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lock_request_requires_callback() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var threw = false;
+            navigator.locks.request('t1').catch(function() { threw = true; });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("threw").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn invalid_mode_rejects() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var rejected = false;
+            navigator.locks.request('m1', {mode: 'invalid'}, function() {})
+              .catch(function() { rejected = true; });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("rejected").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn query_returns_held_and_pending() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var result = null;
+            navigator.locks.request('q1', function(lock) {
+                navigator.locks.query().then(function(s) { result = s; });
+            });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        let r = rt.eval(r#"
+            result !== null &&
+            typeof result.held === 'object' &&
+            typeof result.pending === 'object'
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn steal_option_grants_immediately() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var second = false;
+            navigator.locks.request('stl', function(lock) {
+                // Hold lock; second request steals it
+                return new Promise(function(res) {
+                    navigator.locks.request('stl', {steal: true}, function() {
+                        second = true;
+                    });
+                    res();
+                });
+            });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("second").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn aborted_signal_rejects_immediately() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var ctrl = new AbortController();
+            ctrl.abort();
+            var rejected = false;
+            navigator.locks.request('ab1', {signal: ctrl.signal}, function() {})
+              .catch(function() { rejected = true; });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("rejected").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lock_name_is_stringified() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var gotName = '';
+            navigator.locks.request(42, function(lock) { gotName = lock.name; });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(
+            rt.eval("gotName").unwrap(),
+            lumen_core::JsValue::String("42".into())
+        );
+    }
+
+    // ── Screen Wake Lock stub ────────────────────────────────────────────────────
+
+    #[test]
+    fn wake_lock_request_resolves() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var sentinel = null;
+            navigator.wakeLock.request('screen').then(function(s) { sentinel = s; });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        let r = rt.eval(
+            "sentinel !== null && sentinel.type === 'screen' && sentinel.released === false"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wake_lock_release_marks_released() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var released = false;
+            navigator.wakeLock.request('screen').then(function(s) {
+                s.release().then(function() { released = s.released; });
+            });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("released").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wake_lock_unsupported_type_rejects() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var rej = false;
+            navigator.wakeLock.request('cpu').catch(function() { rej = true; });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("rej").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Network Information stub ────────────────────────────────────────────────
+
+    #[test]
+    fn navigator_connection_effective_type() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "navigator.connection !== undefined && \
+             navigator.connection.effectiveType === '4g'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn navigator_connection_save_data_false() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("navigator.connection.saveData === false").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── navigator.userActivation ────────────────────────────────────────────────
+
+    #[test]
+    fn user_activation_has_been_active() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "navigator.userActivation.hasBeenActive === true && \
+             navigator.userActivation.isActive === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Web Share API stub ───────────────────────────────────────────────────────
+
+    #[test]
+    fn navigator_share_rejects() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var rej = false;
+            navigator.share({ title: 'test' }).catch(function() { rej = true; });
+        "#).unwrap();
+        rt.eval("_lumen_drain_microtasks()").unwrap();
+        assert_eq!(rt.eval("rej").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn navigator_can_share_false() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("navigator.canShare() === false").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── window.reportError() ────────────────────────────────────────────────────
+
+    #[test]
+    fn report_error_fires_error_event() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(r#"
+            var fired = false;
+            window.addEventListener('error', function() { fired = true; });
+            reportError(new Error('test'));
+            fired
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn report_error_is_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.reportError === 'function'").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
