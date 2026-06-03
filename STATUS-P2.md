@@ -6,8 +6,7 @@
 
 ## In progress
 
-View Transitions API (#40)  branch: p2-view-transitions
-Next step: install_view_transition_bindings in lumen-js + ViewTransitionState in shell/src/main.rs  crates/js/src/view_transitions.rs
+_(нет)_
 
 ---
 
@@ -22,12 +21,13 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | ~~37~~ | ~~Intersection Observer API~~ — **выполнено P3** (p3-observers-api) | — | — | — |
 | ~~38~~ | ~~Resize Observer API~~ — **выполнено P3** (p3-observers-api) | — | — | — |
 | ~~39~~ | ~~HTML Popover API~~ — **взято P1** (p1-popover-api, 2026-06-03) | — | — | — |
-| ~~40~~ | ~~View Transitions API~~ — **в работе P2** (p2-view-transitions, 2026-06-03) | — | — | — |
+| ~~40~~ | ~~View Transitions API~~ — **выполнено P2** (p2-view-transitions, 2026-06-03) | — | — | — |
 
 ---
 
 ## Recent merges
 
+- **p2-view-transitions** ✅ 2026-06-03 — View Transitions API (#40, CSS View Transitions L1). `view_transitions.rs` в lumen-js: `ViewTransitionEvent { Begin, End }`, `install_view_transition_bindings` регистрирует `_lumen_vt_begin`/`_lumen_vt_end` нативные функции + `VIEW_TRANSITION_SHIM` задаёт `document.startViewTransition(callback)`. Shell: `ViewTransitionState { old_dl, start_ms, duration_ms }`, `PersistentJs::take_view_transition_events()`; Begin → сохраняет `display_list` как snapshot; End → `relayout()` + старт 300 мс cross-fade; render step: `PushOpacity { alpha: 1-progress }` + `old_dl` + `PopOpacity` в `overlay_buf`. `ViewTransition { updateCallbackDone, ready, finished, skipTransition }`. 6 unit-тестов (install/is-function/callback-called/object-props/begin+end-events/no-callback). Graphic test 61 + run.py + COVERAGE.md + 1000000-final.html. lumen-js: 951 тест.
 - **p1-cq-units** ✅ 2026-06-03 — C10: `cq*` container query units (CSS Container Queries L1 §6.2, выполнено P1). `Length::Cqw/Cqh/Cqi/Cqb/Cqmin/Cqmax` варианты в `Length` enum. Парсинг в `compute_length_to_px` / `parse_length_unit`. Резолв через `CONTAINER_CQ` thread-local в `resolve()`. `set_cq_context` / `clear_cq_context` публичные функции. 4 unit-теста (parse/resolve/inline-size/calc). CSS-SPECS.md #25/#28 ⬜→✅.
 - **p4-mask-image + p2-mask-image-layer** ✅ 2026-06-03 — C11: `mask-image` CSS wiring (CSS Masking L1 §4, выполнено P4+P2). `ComputedStyle` получил `mask_image`/`mask_repeat`/`mask_size`. `apply_declaration` парсит все три свойства. `emit_push_mask` в `paint/src/display_list.rs` эмитит `PushMaskImage`/`PushMaskLinearGradient`/`PushMaskRadialGradient`/`PushMaskConicGradient` по типу маски. GPU composite pass (`p2-mask-image-layer`): `PushMaskLayer`/`PopMaskLayer` с `MaskMode::Alpha/Luminance`.
 - **p2-c9-marker-rendering** ✅ 2026-06-03 — C9: `::marker` рендеринг (CSS Lists L3 §2.1). Фикс корневой причины: `compute_pseudo_element_style` возвращал `None` при `matched.is_empty()`, подавляя `::marker` боксы у всех list-item без явного `li::marker { ... }` CSS-правила. Маркеры (disc/circle/square/decimal/roman/alpha) не создавались совсем, несмотря на наличие всего рендер-кода. Фикс: ранний `return None` заменён на `return Some(style)` для `pseudo == "marker"` — маркер наследует list-style-type/color/font из родителя и рендерится с дефолтным содержимым; `content: none` по-прежнему подавляет маркер. +2 теста box_tree (font-size override + наследование без CSS-правила); 2196 тестов lumen-layout (1 pre-existing BUG-055). Graphic test 32 расширён: секции `::marker { color }` и `::marker { content }`.
