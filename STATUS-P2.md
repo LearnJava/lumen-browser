@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-1: CSS Properties & Values API (Houdini)**  
-Branch: `p2-css-prop-values-api`  
-Next step: Parse `@property` at-rule in css-parser, wire to ComputedStyle fields
+_(нет)_
 
 ---
 
