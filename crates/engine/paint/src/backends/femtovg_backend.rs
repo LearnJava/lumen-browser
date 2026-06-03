@@ -397,9 +397,11 @@ impl FemtovgBackend {
     }
 
     /// Рисует залитый прямоугольник с разными радиусами углов.
+    /// Draw a rounded rectangle with per-corner elliptical radii.
     ///
-    /// femtovg поддерживает per-corner radius, но только круглые (не эллиптические).
-    /// Берём `max(rx, ry)` каждого угла — достаточно для большинства CSS.
+    /// When `rx == ry` for all corners the path is identical to the circular case.
+    /// For elliptical corners (rx ≠ ry) we use cubic Bézier approximation of a
+    /// quarter-ellipse with the Geng–Zwart kappa constant ≈ 0.5523.
     fn draw_fill_rounded_rect(
         &mut self,
         x: f32,
@@ -409,14 +411,63 @@ impl FemtovgBackend {
         radii: CornerRadii,
         color: Color,
     ) {
-        let tl = radii.tl.max(radii.tl_y);
-        let tr = radii.tr.max(radii.tr_y);
-        let br = radii.br.max(radii.br_y);
-        let bl = radii.bl.max(radii.bl_y);
+        // Kappa constant for cubic Bézier approximation of a quarter-circle/ellipse.
+        const K: f32 = 0.5523;
 
+        // Clamp radii so they don't exceed half the box dimensions (CSS Backgrounds §5.5).
+        let tl_x = radii.tl.min(w / 2.0).min(h / 2.0).max(0.0);
+        let tl_y = radii.tl_y.min(w / 2.0).min(h / 2.0).max(0.0);
+        let tr_x = radii.tr.min(w / 2.0).min(h / 2.0).max(0.0);
+        let tr_y = radii.tr_y.min(w / 2.0).min(h / 2.0).max(0.0);
+        let br_x = radii.br.min(w / 2.0).min(h / 2.0).max(0.0);
+        let br_y = radii.br_y.min(w / 2.0).min(h / 2.0).max(0.0);
+        let bl_x = radii.bl.min(w / 2.0).min(h / 2.0).max(0.0);
+        let bl_y = radii.bl_y.min(w / 2.0).min(h / 2.0).max(0.0);
+
+        // Fast path: all corners circular — delegate to femtovg built-in.
+        if (tl_x - tl_y).abs() < 0.5 && (tr_x - tr_y).abs() < 0.5
+            && (br_x - br_y).abs() < 0.5 && (bl_x - bl_y).abs() < 0.5
+        {
+            let mut path = femtovg::Path::new();
+            path.rounded_rect_varying(x, y, w, h, tl_x, tr_x, br_x, bl_x);
+            let paint = femtovg::Paint::color(lumen_to_fvg(color));
+            self.canvas.fill_path(&path, &paint);
+            return;
+        }
+
+        // Elliptical path: build manually with cubic Bézier corners.
         let mut path = femtovg::Path::new();
-        // Порядок: TL, TR, BR, BL — совпадает с CSS border-radius.
-        path.rounded_rect_varying(x, y, w, h, tl, tr, br, bl);
+        // Start at top-left corner's right end.
+        path.move_to(x + tl_x, y);
+        // Top edge → top-right corner.
+        path.line_to(x + w - tr_x, y);
+        path.bezier_to(
+            x + w - tr_x + K * tr_x, y,
+            x + w,                   y + tr_y - K * tr_y,
+            x + w,                   y + tr_y,
+        );
+        // Right edge → bottom-right corner.
+        path.line_to(x + w, y + h - br_y);
+        path.bezier_to(
+            x + w,                    y + h - br_y + K * br_y,
+            x + w - br_x + K * br_x, y + h,
+            x + w - br_x,             y + h,
+        );
+        // Bottom edge → bottom-left corner.
+        path.line_to(x + bl_x, y + h);
+        path.bezier_to(
+            x + bl_x - K * bl_x, y + h,
+            x,                   y + h - bl_y + K * bl_y,
+            x,                   y + h - bl_y,
+        );
+        // Left edge → top-left corner.
+        path.line_to(x, y + tl_y);
+        path.bezier_to(
+            x,             y + tl_y - K * tl_y,
+            x + tl_x - K * tl_x, y,
+            x + tl_x,     y,
+        );
+        path.close();
         let paint = femtovg::Paint::color(lumen_to_fvg(color));
         self.canvas.fill_path(&path, &paint);
     }
