@@ -6,9 +6,7 @@
 
 ## In progress
 
-**p1-subtle-crypto** — Web Crypto SubtleCrypto API (W3C WebCryptography API §14)
-branch: p1-subtle-crypto
-Next step: implement `_lumen_subtle_*` native bindings + JS shim in crates/js/src/dom.rs
+_(нет)_
 
 ---
 
@@ -19,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-subtle-crypto** ✅ 2026-06-03 — Web Crypto SubtleCrypto API (W3C WebCryptography API §14). Новый модуль `crates/js/src/subtle_crypto.rs`: per-thread `CryptoKeyStore` (thread_local HashMap<u32, CryptoKeyEntry>), реализация `generate_key`/`import_key`/`export_key`/`sign_data`/`verify_signature`/`aes_gcm_encrypt`/`aes_gcm_decrypt`. **Алгоритмы:** ECDSA P-256 (IEEE P1363 r||s подпись, SPKI/PKCS8/JWK форматы), HMAC-SHA256/384/512 (constant-time verify), AES-GCM 128/256 (AAD + auth tag 16 байт). **JS shim:** заменён минимальный `subtle { digest }` на полный SubtleCrypto с `CryptoKey` (opaque `__ckid`, type/algorithm/extractable/usages). **Бонус:** `URL.canParse()` + `URL.parse()` (URL LS §6.1); `AbortSignal.timeout(ms)` + `AbortSignal.any(signals)` (WHATWG Fetch §3.1). 15 Rust unit-тестов (subtle_crypto::tests) + 12 JS e2e (dom::tests). lumen-js: 1001 тест (было 976, +25). Clippy чист. Новые deps: `p256 v0.13` (Permanent, уже в lumen-network), `hmac v0.12` + `aes-gcm v0.10` (Provisional).
 
 - **p1-view-transitions** ✅ 2026-06-03 — CSS View Transitions API L1 (CSS VT §4). `document.startViewTransition(callback)` JS shim: вызывает `_lumen_vt_begin()` (snapshot текущего display list), запускает callback синхронно, вызывает `_lumen_vt_end()` (relayout + 300 ms cross-fade). Возвращает `ViewTransition { updateCallbackDone, ready, finished, skipTransition }` (Phase 0: pre-resolved Promises). Shell: `ViewTransitionState { old_dl, start_ms, duration_ms }` + field `Lumen.view_transition`; drain в `about_to_wait`; рендер: `PushOpacity(1-progress)/old_dl/PopOpacity` prepended к overlay_buf, `request_redraw()` до завершения 300 ms. Дополнительно исправлен pre-existing BUG: `font_registry` moved into `Arc` до использования `face_bytes_for_family` — переставлен `Arc::new` после measurer loop + заменены collapsible if на let-chain (clippy). lumen-js: 976 тестов (+7 unit, было 969). CSS-SPECS.md CSS VT L1 → 🟡. Clippy чист. Без новых зависимостей.
 
