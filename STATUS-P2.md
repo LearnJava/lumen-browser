@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**A-2: CSS Custom Highlight API**  branch: `p2-css-custom-highlight`
+Next step: `lumen-js::highlight_api.rs:1` — реализовать JS биндинги для `CSS.highlights`, `HighlightRegistry`, `Highlight` класс, `::highlight()` псевдо-элемент парсинг в `lumen-css-parser`
 
 ---
 
