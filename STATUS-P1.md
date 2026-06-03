@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-3: WebUSB API stub**  
-Branch: `p1-webusb-api-stub`  
-Next step: Create `crates/js/src/webusb.rs`, implement `navigator.usb.requestDevice({filters})` stub that returns reject, `USBDevice` class with open/close/selectConfiguration/claimInterface/transferIn/Out/controlTransferIn/Out methods, `USBConnectionEvent`. Add unit tests. Export to window.
+_(нет)_
 
 ---
 
@@ -16,6 +14,7 @@ Next step: Create `crates/js/src/webusb.rs`, implement `navigator.usb.requestDev
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-3: WebUSB API stub | Phase 0 JS-шим: navigator.usb.requestDevice({filters}) → reject, navigator.usb.getDevices() → Promise<[]>, USBDevice (vendorId/productId/productName/manufacturerName/serialNumber, open/close/selectConfiguration/claimInterface/releaseInterface/transferIn/Out/controlTransferIn/Out/clearHalt/reset → reject), USBConnectionEvent, USBManager extends EventTarget, USBConfiguration/Interface/AlternateInterface/Endpoint, USBTransferInResult/OutResult. 8 unit-тестов. lumen-js: 1109 тестов. |
 | 2026-06-04 | A-2: WebHID API stub | Phase 0 JS-шим: navigator.hid.requestDevice({filters}) → reject, navigator.hid.getDevices() → Promise<[]>, HIDDevice (vendorId/productId/productName/collections/opened, open/close/sendReport/receiveFeatureReport → reject), HIDConnectionEvent, HIDManager extends EventTarget, HIDCollectionInfo, HIDReportItem. 7 unit-тестов. lumen-js: 1101 тестов. |
 | 2026-06-04 | A-1: WebTransport API stub | Phase 0 JS-шим: WebTransport(url), datagrams.readable/writable, createBidirectionalStream/createUnidirectionalStream, все операции reject. WebTransportError класс. 1 unit-тест. lumen-js: 1094 тестов. |
 
