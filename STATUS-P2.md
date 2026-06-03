@@ -6,8 +6,7 @@
 
 ## In progress
 
-**RB-1**: `RenderBackend` trait + `RenderError` в `paint::backend`  branch: `p2-render-backend-trait`
-Next step: коммит готов, clippy чист, тесты выполняются — затем merge.
+_(нет)_
 
 ---
 
@@ -45,6 +44,8 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 ---
 
 ## Recent merges
+
+- **p2-render-backend-trait** ✅ 2026-06-03 — RB-1: `RenderBackend` trait + `RenderError` в `paint::backend` (ADR-010). `backend.rs`: `RenderError` enum (SurfaceLost/DeviceLost/ShaderError/Other) + impl Display + std::error::Error. `RenderBackend` trait: render/resize/set_scale_factor/register_image/clear_images/set_font_provider + default screenshot_rgba() → None. `lib.rs`: pub mod backend + pub use. 9 unit-тестов: Display форматирование, Clone/PartialEq, object-safety (NullBackend как Box<dyn RenderBackend>), register_image, screenshot_rgba. 538 тестов lumen-paint. Clippy чист.
 
 - **p2-mouse-pointer-events** ✅ 2026-06-03 — Mouse Events + W3C Pointer Events Level 2 (UI Events §17 + Pointer Events L2 §10). Shell теперь диспатчит полный набор событий: `mousedown`/`mouseup` при нажатии/отпускании левой кнопки мыши на DOM-элементе; `mouseover`/`mouseout` при смене hover (bubbles); `mouseenter`/`mouseleave` нон-бабблинг; `pointermove` рядом с `mousemove` (fires first per spec); `pointerdown`/`pointerup`/`pointerover`/`pointerout`/`pointerenter`/`pointerleave` — зеркалируют mouse-события с `PointerEvent` (pointerId=1, pointerType='mouse', isPrimary=true). JS: `_lumen_dispatch_pointer_event` в `dom.rs` создаёт `PointerEvent`; non-bubbling types имеют `bubbles:false` per spec. Shell: helper-методы `js_mouse_event`/`js_pointer_event`/`mod_flags` (`#[cfg(quickjs)]`); `CursorLeft` диспатчит leave-события перед очисткой `hovered_nid`. 5 новых unit-тестов (dom::tests). lumen-js: 1093 тестов (+5). Clippy чист.
 
