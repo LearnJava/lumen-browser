@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Mouse & Pointer Events shell integration  branch: p2-mouse-pointer-events
+Next step: Add _lumen_dispatch_pointer_event in dom.rs, then wire mousedown/mouseup/mouseover/mouseout/mouseenter/mouseleave + pointer events in main.rs
 
 ---
 

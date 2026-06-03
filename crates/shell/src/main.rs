@@ -4850,9 +4850,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .map(|r| r.node)
                     };
                     if new_hovered != self.hovered_nid {
+                        #[cfg(feature = "quickjs")]
+                        let old_nid = self.hovered_nid;
                         self.hovered_nid = new_hovered;
                         self.relayout();
                         self.request_redraw();
+                        // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
+                        #[cfg(feature = "quickjs")]
+                        {
+                            // Leave events on the element losing hover.
+                            if let Some(old) = old_nid {
+                                let nid = old.index() as u32;
+                                self.js_pointer_event(nid, "pointerout",   x_css, y_css, 0, 0);
+                                self.js_mouse_event(nid,   "mouseout",     x_css, y_css, 0, 0);
+                                self.js_pointer_event(nid, "pointerleave", x_css, y_css, 0, 0);
+                                self.js_mouse_event(nid,   "mouseleave",   x_css, y_css, 0, 0);
+                            }
+                            // Enter events on the element gaining hover.
+                            if let Some(nw) = new_hovered {
+                                let nid = nw.index() as u32;
+                                self.js_pointer_event(nid, "pointerover",  x_css, y_css, 0, 0);
+                                self.js_mouse_event(nid,   "mouseover",    x_css, y_css, 0, 0);
+                                self.js_pointer_event(nid, "pointerenter", x_css, y_css, 0, 0);
+                                self.js_mouse_event(nid,   "mouseenter",   x_css, y_css, 0, 0);
+                            }
+                        }
                     }
                 }
             }
@@ -4860,6 +4882,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 self.cursor_position = None;
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
+                    // Dispatch leave events before clearing hovered state.
+                    #[cfg(feature = "quickjs")]
+                    if let Some(old) = self.hovered_nid {
+                        let nid = old.index() as u32;
+                        self.js_pointer_event(nid, "pointerout",   0.0, 0.0, 0, 0);
+                        self.js_mouse_event(nid,   "mouseout",     0.0, 0.0, 0, 0);
+                        self.js_pointer_event(nid, "pointerleave", 0.0, 0.0, 0, 0);
+                        self.js_mouse_event(nid,   "mouseleave",   0.0, 0.0, 0, 0);
+                    }
                     self.hovered_nid = None;
                     self.relayout();
                     self.request_redraw();
@@ -4912,6 +4943,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+                    // Fire mousedown + pointerdown on the hovered DOM element.
+                    // Per W3C UI Events §17.6 + Pointer Events L2 §10 — fires before
+                    // any default action (click). Only when cursor is over page content.
+                    #[cfg(feature = "quickjs")]
+                    if let Some(hov) = self.hovered_nid {
+                        let nid = hov.index() as u32;
+                        self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
+                        self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
+                    }
 
                     // Command palette (task #23): modal — captures every click.
                     // A click on a row activates it; a click on the scrim closes.
@@ -5446,6 +5486,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.active_nid = None;
                         self.relayout();
                         self.request_redraw();
+                    }
+                    // Fire mouseup + pointerup on the hovered DOM element.
+                    // Per W3C UI Events §17.6 + Pointer Events L2 §10.
+                    #[cfg(feature = "quickjs")]
+                    if let (Some(hov), Some(pos)) = (self.hovered_nid, self.cursor_position) {
+                        let dpr = self.renderer.as_ref()
+                            .map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
+                        let xu = (pos.x as f32) / dpr;
+                        let yu = (pos.y as f32) / dpr;
+                        let nid = hov.index() as u32;
+                        self.js_pointer_event(nid, "pointerup", xu, yu, 0, 0);
+                        self.js_mouse_event(nid, "mouseup", xu, yu, 0, 0);
                     }
                     // Bookmark drag-and-drop: if a bookmark drag is in progress,
                     // resolve the drop target. Dropping on a folder re-files the
@@ -6263,12 +6315,61 @@ impl Lumen {
         self.input_tx.clone()
     }
 
+    /// Return the current keyboard modifier flags as a bitmask.
+    ///
+    /// Bit layout: bit0=ctrl, bit1=shift, bit2=alt, bit3=meta (super).
+    #[cfg(feature = "quickjs")]
+    fn mod_flags(&self) -> u8 {
+        (self.modifiers.control_key() as u8)
+            | ((self.modifiers.shift_key()  as u8) << 1)
+            | ((self.modifiers.alt_key()    as u8) << 2)
+            | ((self.modifiers.super_key()  as u8) << 3)
+    }
+
+    /// Dispatch a `MouseEvent` of the given `event_type` to DOM node `nid`.
+    ///
+    /// `button` = which button (0=left, 1=middle, 2=right).
+    /// `buttons` = bitmask of currently-held buttons.
+    /// Coordinates are CSS viewport pixels.
+    #[cfg(feature = "quickjs")]
+    fn js_mouse_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
+        if let Some(ctx) = &self.js_ctx {
+            let script = format!(
+                "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {})",
+                nid, event_type,
+                x_css as i32, y_css as i32,
+                button, buttons,
+                self.mod_flags(),
+            );
+            ctx.eval_js(&script);
+        }
+    }
+
+    /// Dispatch a `PointerEvent` of the given `event_type` to DOM node `nid`.
+    ///
+    /// Always uses pointerId=1, pointerType='mouse', isPrimary=true (mouse input).
+    /// Non-bubbling types (`pointerenter`/`pointerleave`) have `bubbles:false` per spec.
+    #[cfg(feature = "quickjs")]
+    fn js_pointer_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
+        if let Some(ctx) = &self.js_ctx {
+            let script = format!(
+                "_lumen_dispatch_pointer_event({}, '{}', {}, {}, {}, {}, {})",
+                nid, event_type,
+                x_css as i32, y_css as i32,
+                button, buttons,
+                self.mod_flags(),
+            );
+            ctx.eval_js(&script);
+        }
+    }
+
     /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.
     ///
     /// Hit-tests the position (accounting for current scroll offset) and fires
     /// `_lumen_dispatch_mouse_event` with event type `"mousemove"`.  Used by
     /// [`input::humanlike::HumanLikeSender`] to trace Bézier-curve paths before
     /// a click.  No-op when there is no JS context or no element at the position.
+    /// Also fires the matching W3C `pointermove` event per Pointer Events L2 §10.
     fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
         let panel_x_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
@@ -6283,20 +6384,11 @@ impl Lumen {
             hit_test(Point::new(page_x, page_y), lb)
         });
         #[cfg(feature = "quickjs")]
-        if let (Some(result), Some(ctx)) = (hit.as_ref(), self.js_ctx.as_ref()) {
-            let mod_flags: u8 =
-                (self.modifiers.control_key() as u8)
-                | ((self.modifiers.shift_key()  as u8) << 1)
-                | ((self.modifiers.alt_key()    as u8) << 2)
-                | ((self.modifiers.super_key()  as u8) << 3);
-            let script = format!(
-                "_lumen_dispatch_mouse_event({}, 'mousemove', {}, {}, 0, 0, {})",
-                result.node.index(),
-                x_css as i32,
-                y_css as i32,
-                mod_flags,
-            );
-            ctx.eval_js(&script);
+        if let Some(result) = hit.as_ref() {
+            let nid = result.node.index() as u32;
+            // Pointer Events L2 §10.5 — pointermove fires before mousemove.
+            self.js_pointer_event(nid, "pointermove", x_css, y_css, 0, 0);
+            self.js_mouse_event(nid, "mousemove", x_css, y_css, 0, 0);
         }
         #[cfg(not(feature = "quickjs"))]
         let _ = hit;
