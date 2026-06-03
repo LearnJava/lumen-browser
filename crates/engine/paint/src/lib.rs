@@ -4,13 +4,11 @@
 //! - [`display_list`] чистая логика: обход дерева layout, генерация
 //!   независимых от backend команд.
 //! - [`backend`] стабильный трейт [`RenderBackend`] — контракт всех GPU-бэкендов.
-//! - [`renderer`] текущий wgpu-бэкенд (exception #2 из §5 плана).
-//!
-//! Экспортирует [`FontMeasurer`] — реализацию [`lumen_layout::TextMeasurer`]
-//! на основе TTF-данных; используется в shell для line wrapping при layout.
+//! - [`renderer`] wgpu-бэкенд; доступен только с feature `backend-wgpu` (ADR-010).
 
 pub mod atlas;
 pub mod backend;
+#[cfg(feature = "backend-wgpu")]
 pub mod backends;
 pub mod backdrop_cache;
 pub mod glsl;
@@ -20,6 +18,7 @@ pub mod fallback;
 pub mod fingerprint;
 pub mod hit_test;
 pub mod layer_cache;
+#[cfg(feature = "backend-wgpu")]
 pub mod renderer;
 pub mod scroll_snap;
 pub mod svg_path;
@@ -31,6 +30,7 @@ pub mod cpu_raster;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use backend::{RenderBackend, RenderError};
+#[cfg(feature = "backend-wgpu")]
 pub use backends::WgpuBackend;
 pub use backdrop_cache::BackdropCache;
 pub use fallback::CURATED_FALLBACK_FAMILIES;
@@ -48,6 +48,7 @@ pub use display_list::{
 pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
+#[cfg(feature = "backend-wgpu")]
 pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};
 pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
 pub use webgl::SoftwareWebGl;

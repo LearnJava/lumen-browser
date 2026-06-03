@@ -24,11 +24,13 @@ pub struct GpuFingerprint {
 }
 
 impl GpuFingerprint {
-    /// Create normalized GPU fingerprint from adapter info.
+    /// Create normalized GPU fingerprint from wgpu adapter info.
     ///
     /// Always returns ("WebKit", "Generic GPU") regardless of actual
     /// adapter. The actual adapter info is discarded to prevent
     /// WebGL fingerprinting attacks (ADR-007).
+    /// Only available with `backend-wgpu` feature.
+    #[cfg(feature = "backend-wgpu")]
     pub fn from_adapter_info(_adapter_info: &wgpu::AdapterInfo) -> Self {
         GpuFingerprint {
             vendor: NORMALIZED_VENDOR.to_string(),
