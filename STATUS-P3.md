@@ -6,8 +6,7 @@
 
 ## In progress
 
-BUG-057: wgpu Vulkan crash on Windows  branch: p3-bug057-wgpu-dx12
-Next step: fix Instance backend selection in renderer.rs:1578, then merge
+_(нет)_
 
 ## Next
 
@@ -61,6 +60,7 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 ## Recent fixes
 
+- **BUG-057 wgpu Vulkan crash** (2026-06-03) — `Renderer::new_async` и `new_headless_async` теперь используют `wgpu::Backends::DX12` по умолчанию на Windows вместо Vulkan (через `InstanceDescriptor + with_env()`). Vulkan-бэкенд вызывал двойную панику при первом рендере страницы: сначала validation error «Encoder is invalid», затем при раскрутке стека Surface drop расил на ещё живом SurfaceTexture. `WGPU_BACKEND` env-var позволяет переопределить. Влито `p3-bug057-wgpu-dx12`.
 - **8A.6 doc-sync** (2026-05-31) — обновлены `lumen-plan.md` (8A.6 🟡→✅, 8A 🟡→✅, cpu_raster 33→57 страниц), `CLAUDE.md` (раздел «Planned migration» заменён на «8A.6 COMPLETE», убрана многостраничная история), `subsystems/driver.md` (57 страниц, invariants). Влито `p3-8a6-doc-sync`.
 - **8A.6(б-20) расширение PAGES snapshot_cpu 56 → 57** (2026-05-31) — `PAGES` (`crates/driver/tests/snapshot_cpu.rs`) расширен с 56 до 57 страниц: добавлена `54-svg-path-stroke` (SVG `<path>` со stroke-only и fill+stroke — stroke-тесселятор `tessellate_stroke` эмитит треугольники как `DrawSvgPath`, cpu_raster поддерживал с б-4, новый примитив не нужен; 22 КБ — 4 ряда: open stroked/closed stroked/fill+stroke/varying-width). 56 прежних эталонов перегенерировались байт-в-байт идентично → детерминизм. clippy чист (driver `--all-targets --features cpu-render`), `snapshot_cpu` 57-страничный 1/1. **Все graphic_tests/*.html теперь покрыты snapshot_cpu.** Влито `p3-8a6-more-pages-b20`.
 - **8A.6(б-19) расширение PAGES snapshot_cpu 54 → 56** (2026-05-31) — `PAGES` (`crates/driver/tests/snapshot_cpu.rs`) расширен с 54 до 56 страниц: добавлены `24-vertical-align` (vertical-align top/middle/bottom/baseline — цветные inline-боксы при разных baseline offset, только FillRect+DrawText, 26 КБ), `53-background-origin` (background-origin border-box/padding-box/content-box — `DrawBackgroundImage` явный no-op в cpu_raster.rs (зеркалит GPU-skip незарегистрированных URL), box geometry (FillRect+DrawBorder+DrawText) захватывает layout-структуру, 98 КБ). clippy чист (paint+driver `--features cpu-render`), paint 465/465, `snapshot_cpu` 56-страничный 1/1. Влито `p3-8a6-more-pages-b19`.
