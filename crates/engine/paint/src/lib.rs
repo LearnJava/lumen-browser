@@ -1,14 +1,16 @@
 //! Paint-слой: layout tree → display list → пиксели.
 //!
-//! Две стадии:
+//! Три слоя:
 //! - [`display_list`] чистая логика: обход дерева layout, генерация
 //!   независимых от backend команд.
-//! - [`renderer`] рисует через wgpu (exception #2 из §5 плана).
+//! - [`backend`] стабильный трейт [`RenderBackend`] — контракт всех GPU-бэкендов.
+//! - [`renderer`] текущий wgpu-бэкенд (exception #2 из §5 плана).
 //!
 //! Экспортирует [`FontMeasurer`] — реализацию [`lumen_layout::TextMeasurer`]
 //! на основе TTF-данных; используется в shell для line wrapping при layout.
 
 pub mod atlas;
+pub mod backend;
 pub mod backdrop_cache;
 pub mod glsl;
 pub mod compositor;
@@ -27,6 +29,7 @@ pub mod webgl;
 pub mod cpu_raster;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
+pub use backend::{RenderBackend, RenderError};
 pub use backdrop_cache::BackdropCache;
 pub use fallback::CURATED_FALLBACK_FAMILIES;
 pub use compositor::{
