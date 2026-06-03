@@ -6,8 +6,7 @@
 
 ## In progress
 
-RB-3: Feature-флаги в `lumen-paint/Cargo.toml`  branch: p2-rb3-feature-flags
-Next step: wgpu/winit → optional, gate backends/renderer/texture_pool/fingerprint  `crates/engine/paint/Cargo.toml:1`
+_(нет)_
 
 ---
 
@@ -33,7 +32,7 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 |---|--------|----------|--------|---------|
 | ~~RB-1~~ | ~~`RenderBackend` trait + `RenderError` в `paint::backend`~~ — **выполнено** (p2-render-backend-trait) | — | — | — |
 | ~~RB-2~~ | ~~`WgpuBackend` — обёртка над текущим `Renderer`~~ — **выполнено** (p2-wgpu-backend, 2026-06-03) | — | — | — |
-| RB-3 | Feature-флаги в `lumen-paint/Cargo.toml` | `lumen-paint` | S | ADR-010 |
+| ~~RB-3~~ | ~~Feature-флаги в `lumen-paint/Cargo.toml`~~ — **выполнено** (p2-rb3-feature-flags, 2026-06-03) | — | — | — |
 | RB-4 | Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var | `lumen-paint`, `lumen-shell` | M | ADR-010 |
 | RB-5 | `FemtovgBackend` скелет + базовые команды (FillRect/FillRoundedRect/DrawText/DrawBorder/PushClipRect) | `lumen-paint` | M | ADR-010 |
 | RB-6 | `FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов) | `lumen-paint` | L | ADR-010 |
@@ -45,6 +44,8 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 ---
 
 ## Recent merges
+
+- **p2-rb3-feature-flags** ✅ 2026-06-03 — RB-3: feature-флаги в `lumen-paint/Cargo.toml` (ADR-010). `wgpu` и `winit` стали `optional = true`. Новые фичи: `backend-wgpu` (default, Phase 1, гейтирует `dep:wgpu + dep:winit`), `backend-femtovg` (Phase 2 stub), `backend-vello` (Phase 3 stub), `backend-cpu`, `compare`. Сохранена совместимость `cpu-render` для `lumen-driver`. Гейтированы: `pub mod renderer`, `pub mod backends`, `pub use backends::WgpuBackend`, `pub use renderer::*` в `lib.rs`; `PooledTexture` в `texture_pool.rs`; `from_adapter_info` в `fingerprint.rs`. wgpu-free код (display_list, atlas, compositor и др.) без изменений. 544 тестов lumen-paint. Clippy чист.
 
 - **p2-wgpu-backend** ✅ 2026-06-03 — RB-2: `WgpuBackend` в `paint::backends::wgpu_backend` (ADR-010). Тонкая обёртка над `Renderer`, реализующая `RenderBackend`. `backends/mod.rs` + `backends/wgpu_backend.rs`. Трансляция ошибок: `wgpu::SurfaceError` → `RenderError` (Lost/Outdated/Timeout → SurfaceLost; OutOfMemory → DeviceLost; Other → Other); `ImageRegisterError` → `String`. `new(window, font_bytes)` оконный + `new_headless(font_bytes, w, h)` headless-режим. `renderer()/renderer_mut()` — доступ к Renderer для операций вне трейта. `screenshot_rgba()` → None для windowed. `lib.rs`: `pub mod backends` + `pub use backends::WgpuBackend`. 7 unit-тестов (все 5 вариантов SurfaceError + Send bound). 544 тестов lumen-paint (было 538, +7 новых минус некоторые уже учтённые). Clippy чист.
 
