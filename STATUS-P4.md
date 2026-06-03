@@ -182,6 +182,23 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
   4. In the animation scheduler (`AnimationScheduler` / shell tick loop): resolve `animation_timeline` to a progress fraction using `resolve_scroll_progress` / `resolve_view_progress`, then drive `CompositorAnimFrame` progress from it instead of wall-clock time.
 - **Entry points:** `lumen-layout/src/scroll_timeline.rs` (all public API), `lumen-layout/src/style.rs` (ComputedStyle), `lumen-layout/src/animation.rs` (AnimationScheduler).
 
+### CSS Anchor Positioning L1 — `anchor-name` / `position-anchor` / `inset-area` / `anchor()` (P1 feature p1-anchor-positioning, 2026-06-03)
+- **Status:** Algorithm ready. `lumen_layout::collect_anchors(root) -> AnchorRegistry` (two-phase collect), `register_anchor(registry, name, node, rect)`, `resolve_anchor_function(registry, name, side, is_horizontal) -> Option<f32>`, `resolve_inset_area(registry, name, row, col, containing_rect) -> Option<AnchoredPosition>` in `lumen-layout/src/anchor.rs`. Types: `AnchorSide` (Top/Right/Bottom/Left/Center/Start/End/Percentage), `InsetAreaKeyword` (Start/Center/End/SpanStart/SpanEnd/SpanAll/SelfStart/SelfEnd/None), `AnchoredPosition { top, left, width, height }`, `AnchorEntry { node, rect }`, `AnchorRegistry { entries: HashMap<String, AnchorEntry> }`. 21 unit tests.
+- **P4 task** (CSS Anchor Positioning L1 — <https://drafts.csswg.org/css-anchor-position-1/>):
+  1. **`anchor-name`** (§2): Add `anchor_name: Option<String>` to `ComputedStyle`. Parse `anchor-name: --foo` in `apply_declaration()` (stores the raw custom-ident string). **Not inherited.** Wire in `collect_anchors_rec()` in `anchor.rs` — replace the current stub body with:
+     ```rust
+     if let Some(name) = &lb.style.anchor_name {
+         register_anchor(registry, name.clone(), lb.node, lb.rect);
+     }
+     ```
+     Then call `collect_anchors(root)` after layout in `box_tree.rs` before the positioned-layout pass (or as a separate post-pass). Store the result in a `&AnchorRegistry` passed down to `lay_out_absolute()`.
+  2. **`position-anchor`** (§3): Add `position_anchor: Option<String>` to `ComputedStyle`. Parse `position-anchor: --foo` in `apply_declaration()`. **Not inherited.** Used in `lay_out_absolute()` to look up the default anchor.
+  3. **`anchor()` function in inset values** (§3.1): When evaluating `top`/`right`/`bottom`/`left` for an absolutely-positioned element, if the value is an `anchor()` function token (detect `starts_with("anchor(")`), parse the anchor-element name + side, and call `resolve_anchor_function(registry, name, side, is_horizontal)` to get the px value. Substitute `auto` if `None`.
+  4. **`inset-area`** (§5): Add `inset_area_row: InsetAreaKeyword` + `inset_area_col: InsetAreaKeyword` to `ComputedStyle` (both default `None`). Parse `inset-area: center span-all` etc. in `apply_declaration()`. In `lay_out_absolute()`, if both fields are not `None`, call `resolve_inset_area(registry, position_anchor_name, row, col, cb_rect) -> Option<AnchoredPosition>` and apply the returned `top`/`left`/`width`/`height` before the usual inset resolution.
+  5. **`position-area`** is an alias for `inset-area` per the spec — parse identically.
+- **Entry points:** `lumen-layout/src/anchor.rs` (all algorithm API), `lumen-layout/src/box_tree.rs` `lay_out_absolute()` (wire collect + resolve calls, marked `// CSS: anchor-name, position-anchor, inset-area, anchor()`).
+- **CSS comment location:** `anchor.rs:collect_anchors_rec` body + `box_tree.rs` `lay_out_absolute()` (P4 adds `// CSS:` comment).
+
 ### CSS Motion Path L1 — `offset-path` / `offset-distance` / `offset-rotate` (P1 feature p1-motion-path, 2026-06-02)
 - **Status:** Algorithm ready. `lumen_layout::resolve_motion_transform(path_str, offset_distance_px, rotate) -> Option<MotionTransform>` in `lumen-layout/src/motion_path.rs`. Parses `path("M…")` SVG path strings (all commands M/L/H/V/C/S/Q/T/A/Z, relative and absolute). Returns `MotionTransform { translate_x, translate_y, rotation_deg }`. `OffsetRotate::Auto` tracks tangent, `Reverse` = tangent+180°, `AutoAngle` = tangent+extra, `Angle(deg)` = fixed. Arc commands approximated as cubic Bézier via W3C endpoint→center parameterisation. 15 unit tests.
 - **P4 task** (CSS Motion Path L1):
