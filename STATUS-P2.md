@@ -6,8 +6,7 @@
 
 ## In progress
 
-A-3: CSS Typed OM (partial)  branch: `p2-css-typed-om`
-Next step: `crates/js/src/lib.rs` install bindings + create typed_om_api.rs module
+_(нет)_
 
 ---
 
@@ -90,6 +89,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-css-typed-om** ✅ 2026-06-04 — A-3: CSS Typed OM Phase 0 (CSS Typed Object Model L1). `crates/js/src/typed_om_api.rs`: `CSSStyleValue` base class, `CSSKeywordValue` для ключевых слов, `CSSUnitValue` для числовых значений с единицами (px/em/%), `CSSNumericValue.to(unit)` конверсия единиц (same unit only). `install_typed_om_api(ctx)` шим регистрирует классы в глобальной области видимости. `Element.prototype.attributeStyleMap` с get/set/has/delete/entries/keys/values методами; `Element.prototype.computedStyleMap()` возвращает read-only map. Phase 0: JS shim only, значения работают через строки стилей. Phase 1 (future P4): Direct layout/computed property wiring для performance. 11 новых unit-тестов (CSSUnitValue/CSSKeywordValue creation, value accessors, unit conversion, inheritance chain, parsing разных юнитов и отрицательных чисел). lumen-js: 1150 ✅ (+11). Clippy чист в typed_om_api.rs.
 
 - **p2-css-properties-values-api** ✅ 2026-06-04 — A-1: CSS Properties & Values API (Houdini) Phase 0–1. `crates/js/src/css_properties_values_api.rs`: `RegisteredPropertiesMap` registry + `RegisteredProperty` struct (name/syntax/inherits/initial_value). `install_css_properties_values_api(ctx)` IIFE-шим регистрирует `CSS.registerProperty()` и пишет в `global._lumen_registered_properties` Map. `@property at-rule` парсинг в `lumen-css-parser/src/parser.rs`: `PropertyRule` struct с дескрипторами name/syntax/inherits/initial-value; `parse_property_rule()` парсит тело @property; `StyleSheet.property_rules: Vec<PropertyRule>`. `lumen-layout/src/style.rs`: `apply_property_initial_values()` применяет `initial-value` как fallback для custom свойств без декларации/наследования; `validate_against_syntax()` синтаксис-валидация против descriptor («*», «<color>», «<length>», «<percentage>», «<integer>», «<number>», «<angle>», «<time>», «<resolution>», «<custom-ident>»); `get_registered_properties()` экспортирован из lumen-js для доступа из layout. 6 новых unit-тестов (lumen-js) + 4 (lumen-layout syntax validation). lumen-js: 1139 ✅ (+31 с highlight_api merge), lumen-css-parser: 266 ✅ (+1), lumen-layout: 2277 ✅. Clippy чист.
 
