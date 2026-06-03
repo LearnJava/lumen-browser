@@ -409,6 +409,7 @@ fn run_window_mode(
         current_history_state_json: String::from("null"),
         fullscreen_nid: None,
         view_transition: None,
+        archive: tabs::archive::TabArchive::new(),
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -3540,6 +3541,13 @@ struct Lumen {
     /// The `old_dl` snapshot fades out over the new display list for `duration_ms`.
     /// `None` when no transition is active.
     view_transition: Option<ViewTransitionState>,
+    /// Tab auto-archive state (7A.5).
+    ///
+    /// Background tabs idle for more than `ARCHIVE_AFTER_MS` are moved here from
+    /// the visible tab strip.  Only a title + URL string is retained; restoring
+    /// opens a fresh navigation to that URL.  The archive button (rightmost 36 px
+    /// of the tab bar) shows a count badge and toggles the archive panel.
+    archive: tabs::archive::TabArchive,
 }
 
 /// State for an in-progress CSS View Transition cross-fade (CSS View Transitions L1).
@@ -4857,7 +4865,56 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Tab bar occupies y = 0..TAB_BAR_HEIGHT — dispatch first.
                     if y_css < tabs::strip::TAB_BAR_HEIGHT {
                         let win_w = self.viewport_width_css();
-                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, win_w) {
+                        // Archive panel: close on click-outside before checking button.
+                        if self.archive.visible {
+                            match tabs::archive::hit_test_panel(
+                                &self.archive,
+                                x_css,
+                                y_css,
+                                win_w,
+                                tabs::strip::TAB_BAR_HEIGHT,
+                            ) {
+                                Some(tabs::archive::ArchiveHit::Restore(id)) => {
+                                    if let Some(entry) = self.archive.take(id)
+                                        && !entry.url.is_empty()
+                                    {
+                                        self.navigate_to(PageSource::Url(entry.url));
+                                    }
+                                    self.archive.close();
+                                    self.request_redraw();
+                                    return;
+                                }
+                                Some(tabs::archive::ArchiveHit::Dismiss(id)) => {
+                                    self.archive.take(id);
+                                    self.request_redraw();
+                                    return;
+                                }
+                                Some(tabs::archive::ArchiveHit::Inside) => {
+                                    self.request_redraw();
+                                    return;
+                                }
+                                Some(tabs::archive::ArchiveHit::Outside) => {
+                                    self.archive.close();
+                                    self.request_redraw();
+                                }
+                                None => {}
+                            }
+                        }
+                        // Archive toolbar button (rightmost 36 px of the tab bar).
+                        if tabs::archive::hit_test_button(
+                            x_css,
+                            y_css,
+                            win_w,
+                            tabs::strip::TAB_BAR_HEIGHT,
+                        ) {
+                            self.archive.toggle();
+                            self.request_redraw();
+                            return;
+                        }
+                        // Tab area: pass effective width (excluding archive button).
+                        let tab_area_w =
+                            win_w - tabs::archive::ARCHIVE_BTN_W;
+                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
                             tabs::strip::TabHit::Tab(idx) => self.switch_tab(idx),
                             tabs::strip::TabHit::Close(idx) => {
                                 self.close_tab(idx, event_loop);
@@ -4865,6 +4922,41 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             tabs::strip::TabHit::Empty => {}
                         }
                         return;
+                    }
+                    // Archive panel: close on click below tab bar when open.
+                    if self.archive.visible {
+                        let win_w = self.viewport_width_css();
+                        match tabs::archive::hit_test_panel(
+                            &self.archive,
+                            x_css,
+                            y_css,
+                            win_w,
+                            tabs::strip::TAB_BAR_HEIGHT,
+                        ) {
+                            Some(tabs::archive::ArchiveHit::Restore(id)) => {
+                                if let Some(entry) = self.archive.take(id)
+                                    && !entry.url.is_empty()
+                                {
+                                    self.navigate_to(PageSource::Url(entry.url));
+                                }
+                                self.archive.close();
+                                self.request_redraw();
+                                return;
+                            }
+                            Some(tabs::archive::ArchiveHit::Dismiss(id)) => {
+                                self.archive.take(id);
+                                self.request_redraw();
+                                return;
+                            }
+                            Some(tabs::archive::ArchiveHit::Inside) => {
+                                self.request_redraw();
+                                return;
+                            }
+                            Some(tabs::archive::ArchiveHit::Outside) | None => {
+                                self.archive.close();
+                                self.request_redraw();
+                            }
+                        }
                     }
 
                     // Vertical tab panel: intercept clicks in x < PANEL_WIDTH area.
@@ -5820,9 +5912,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // mode never reflows content (the strip shows page background).
                 if !self.focus.active {
                     let win_w = self.viewport_width_css();
+                    // Tab strip uses the area to the left of the archive button.
+                    let tab_area_w = win_w - tabs::archive::ARCHIVE_BTN_W;
                     let mut tab_cmds =
-                        tabs::strip::build_tab_bar(&self.tab_strip, win_w);
+                        tabs::strip::build_tab_bar(&self.tab_strip, tab_area_w);
                     overlay_buf.append(&mut tab_cmds);
+                    // Archive toolbar button (rightmost 36 px of tab bar).
+                    let mut arch_btn = tabs::archive::build_button(
+                        &self.archive,
+                        win_w,
+                        tabs::strip::TAB_BAR_HEIGHT,
+                    );
+                    overlay_buf.append(&mut arch_btn);
+                    // Archive panel: floating drop-down anchored below the button.
+                    let mut arch_panel = tabs::archive::build_panel(
+                        &self.archive,
+                        win_w,
+                        tabs::strip::TAB_BAR_HEIGHT,
+                    );
+                    overlay_buf.append(&mut arch_panel);
                 }
 
                 // Command palette (task #23): modal — drawn above everything,
@@ -8061,6 +8169,7 @@ impl Lumen {
                 tab_state: TabState::Active,
                 opener_id: None,
                 container: tabs::containers::ContainerKind::None,
+                last_activated_ms: 0.0,
             });
             self.lifecycle_mgr.open_tab(id as u64);
 
@@ -8297,6 +8406,54 @@ impl Lumen {
                 self.tab_strip.set_tab_state(idx, tr.to);
             }
         }
+
+        // Auto-archive (7A.5): move background tabs idle for > 12 h out of the
+        // strip.  Only runs when there are ≥ 2 tabs (the active tab is never
+        // archived) and the tab is not already hibernated (RAM already saved).
+        if self.tab_strip.len() >= 2 {
+            let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+            let threshold = tabs::archive::ARCHIVE_AFTER_MS;
+            // Collect IDs to archive (avoiding borrow conflict on tab_strip).
+            let to_archive: Vec<usize> = self
+                .tab_strip
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(i, t)| {
+                    *i != self.tab_strip.active
+                        && t.tab_state != tab_lifecycle::TabState::Hibernated
+                        && (now_ms - t.last_activated_ms) > threshold
+                })
+                .map(|(_, t)| t.id)
+                .collect();
+
+            for tab_id in to_archive {
+                // Guard: never archive down to 0 tabs.
+                if self.tab_strip.len() <= 1 {
+                    break;
+                }
+                let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == tab_id) else {
+                    continue;
+                };
+                let title = self.tab_strip.tabs[idx].title.clone();
+                let container = self.tab_strip.tabs[idx].container;
+                let url = self
+                    .bg_tabs
+                    .get(&tab_id)
+                    .and_then(|s| s.source.url_str().map(|u| u.to_owned()))
+                    .unwrap_or_default();
+                self.archive.push(tabs::archive::ArchivedTab {
+                    id: tab_id,
+                    title,
+                    url,
+                    container,
+                });
+                // Evict in-memory snapshot and remove from strip + lifecycle.
+                self.bg_tabs.remove(&tab_id);
+                self.lifecycle_mgr.close_tab(tab_id as u64);
+                self.tab_strip.remove(idx);
+            }
+        }
     }
 
     // ── Tab management ────────────────────────────────────────────────────────
@@ -8483,11 +8640,12 @@ impl Lumen {
     fn open_new_tab(&mut self) {
         // In tree-style tab mode, new tabs become children of the active tab,
         // building the parent-child tree automatically.
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         let new_idx = if self.tree_tabs.visible {
             let opener_id = self.tab_strip.tabs[self.tab_strip.active].id;
-            self.tab_strip.push_with_opener(opener_id)
+            self.tab_strip.push_with_opener(opener_id, now_ms)
         } else {
-            self.tab_strip.push_blank()
+            self.tab_strip.push_blank(now_ms)
         };
         let new_id = self.tab_strip.tabs[new_idx].id;
         // Save current page into bg_tabs under the old active tab's id.
@@ -8624,8 +8782,10 @@ impl Lumen {
         self.lifecycle_mgr.activate_tab(new_id as u64);
 
         // Restore new active tab, marking it Active so any badge clears.
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         self.tab_strip.active = idx;
         self.tab_strip.set_tab_state(idx, TabState::Active);
+        self.tab_strip.update_last_activated(idx, now_ms);
 
         self.reset_to_blank_tab();
 

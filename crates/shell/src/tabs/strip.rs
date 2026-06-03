@@ -79,6 +79,13 @@ pub struct TabEntry {
     /// tabs inherit `None`; the user changes containers via the shell's
     /// `set_tab_container` API.
     pub container: ContainerKind,
+    /// Session-elapsed milliseconds when this tab was last made active.
+    ///
+    /// Set to `now_ms` on tab creation and on every activation via
+    /// `update_last_activated`. The auto-archive tick (7A.5) compares this
+    /// against `ARCHIVE_AFTER_MS` to decide whether a background tab should
+    /// be moved to [`crate::tabs::archive::TabArchive`].
+    pub last_activated_ms: f64,
 }
 
 /// State of the tab strip (tab list + active index).
@@ -101,6 +108,7 @@ impl TabStrip {
                 tab_state: TabState::Active,
                 opener_id: None,
                 container: ContainerKind::None,
+                last_activated_ms: 0.0,
             }],
             active: 0,
             next_id: 1,
@@ -113,7 +121,10 @@ impl TabStrip {
     }
 
     /// Append a new blank tab and return its index.
-    pub fn push_blank(&mut self) -> usize {
+    ///
+    /// `now_ms` — current session-elapsed milliseconds, stored as
+    /// `last_activated_ms` so the auto-archive timer starts from creation time.
+    pub fn push_blank(&mut self, now_ms: f64) -> usize {
         let id = self.next_id;
         self.next_id += 1;
         self.tabs.push(TabEntry {
@@ -122,6 +133,7 @@ impl TabStrip {
             tab_state: TabState::Active,
             opener_id: None,
             container: ContainerKind::None,
+            last_activated_ms: now_ms,
         });
         self.tabs.len() - 1
     }
@@ -130,7 +142,10 @@ impl TabStrip {
     ///
     /// Sets `TabEntry::opener_id` so tree-style tab rendering can indent and
     /// group this tab under its parent. Returns the new tab's strip index.
-    pub fn push_with_opener(&mut self, opener_id: usize) -> usize {
+    ///
+    /// `now_ms` — current session-elapsed milliseconds (same semantics as
+    /// [`push_blank`]).
+    pub fn push_with_opener(&mut self, opener_id: usize, now_ms: f64) -> usize {
         let id = self.next_id;
         self.next_id += 1;
         self.tabs.push(TabEntry {
@@ -139,8 +154,19 @@ impl TabStrip {
             tab_state: TabState::Active,
             opener_id: Some(opener_id),
             container: ContainerKind::None,
+            last_activated_ms: now_ms,
         });
         self.tabs.len() - 1
+    }
+
+    /// Record `now_ms` as the activation timestamp for the tab at `idx`.
+    ///
+    /// Call on every tab switch so the auto-archive timer resets for the
+    /// newly-active tab and advances for all background tabs.
+    pub fn update_last_activated(&mut self, idx: usize, now_ms: f64) {
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.last_activated_ms = now_ms;
+        }
     }
 
     /// Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op.
@@ -365,7 +391,7 @@ mod tests {
     #[test]
     fn push_blank_increments_len() {
         let mut s = TabStrip::new();
-        let idx = s.push_blank();
+        let idx = s.push_blank(0.0);
         assert_eq!(idx, 1);
         assert_eq!(s.len(), 2);
     }
@@ -373,15 +399,15 @@ mod tests {
     #[test]
     fn push_blank_starts_active_state() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         assert_eq!(s.tabs[1].tab_state, TabState::Active);
     }
 
     #[test]
     fn remove_tab_clamps_active() {
         let mut s = TabStrip::new();
-        s.push_blank();
-        s.push_blank();
+        s.push_blank(0.0);
+        s.push_blank(0.0);
         s.active = 2;
         let new_active = s.remove(2);
         assert_eq!(s.len(), 2);
@@ -398,7 +424,7 @@ mod tests {
     #[test]
     fn set_tab_state_updates_entry() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
         assert_eq!(s.tabs[0].tab_state, TabState::BackgroundOld);
         assert_eq!(s.tabs[1].tab_state, TabState::Active);
@@ -413,7 +439,7 @@ mod tests {
     #[test]
     fn hit_test_tab_body() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         // Two tabs, each 512px wide in a 1024px window.
         // Click in the middle of the first tab, away from close button.
         let hit = hit_test(&s, 100.0, 18.0, 1024.0);
@@ -460,7 +486,7 @@ mod tests {
     #[test]
     fn build_tab_bar_badge_for_background_old() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
         let dl = build_tab_bar(&s, 1024.0);
         // Amber badge: r=255, g=168
@@ -476,7 +502,7 @@ mod tests {
     #[test]
     fn build_tab_bar_badge_for_hibernated() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
         let dl = build_tab_bar(&s, 1024.0);
         // Grey badge: r=110, g=110
@@ -500,7 +526,7 @@ mod tests {
     #[test]
     fn push_blank_starts_without_container() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         assert_eq!(s.tabs[1].container, ContainerKind::None);
     }
 
@@ -508,7 +534,7 @@ mod tests {
     fn push_with_opener_starts_without_container() {
         let mut s = TabStrip::new();
         let opener_id = s.tabs[0].id;
-        s.push_with_opener(opener_id);
+        s.push_with_opener(opener_id, 0.0);
         assert_eq!(s.tabs[1].container, ContainerKind::None);
     }
 
@@ -609,8 +635,8 @@ mod tests {
     #[test]
     fn build_tab_bar_strip_only_for_tabs_with_container() {
         let mut s = TabStrip::new();
-        s.push_blank();
-        s.push_blank();
+        s.push_blank(0.0);
+        s.push_blank(0.0);
         s.set_tab_container(1, ContainerKind::Work);
         let dl = build_tab_bar(&s, 1024.0);
         let work_color = ContainerKind::Work.border_color().expect("Work has colour");
