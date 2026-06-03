@@ -3805,6 +3805,19 @@ var document = {
     },
     onfullscreenchange: null,
     onfullscreenerror:  null,
+    // Storage Access API (W3C Storage Access API §5) — Phase 0: always granted
+    requestStorageAccess: function() {
+        return Promise.resolve();
+    },
+    hasStorageAccess: function() {
+        return Promise.resolve(true);
+    },
+    requestStorageAccessFor: function(origin) {
+        return Promise.resolve();
+    },
+    hasUnpartitionedCookieAccess: function() {
+        return Promise.resolve(true);
+    },
 };
 
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
@@ -18267,6 +18280,42 @@ mod tests {
                  const tsu = p.createScriptURL('https://example.com/s.js'); \
                  trustedTypes.isScriptURL(tsu)",
             )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn storage_access_request_storage_access_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof document.requestStorageAccess === 'function'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn storage_access_has_storage_access_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof document.hasStorageAccess === 'function'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn storage_access_request_storage_access_for_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof document.requestStorageAccessFor === 'function'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn storage_access_has_unpartitioned_cookie_access_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof document.hasUnpartitionedCookieAccess === 'function'")
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

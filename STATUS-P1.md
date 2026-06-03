@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty — A-10 завершена)
+A-11: Storage Access API  branch: p1-storage-access-api
+Next step: завершение и merge в main
 
 ---
 
