@@ -27,6 +27,7 @@ pub mod temporal_api;
 pub mod webgl_bindings;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
+pub mod webhid;
 pub mod webtransport;
 pub mod worker;
 
@@ -394,6 +395,13 @@ impl QuickJsRuntime {
             // requests reject with NotAllowedError; enumerateDevices returns [].
             if let Err(e) = media_devices::install_media_devices_bindings(&ctx) {
                 eprintln!("MediaDevices bindings init failed: {}", e);
+            }
+
+            // Install WebHID API (W3C WebHID §3–5) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: all device
+            // operations reject with NotSupportedError (no USB/HID support).
+            if let Err(e) = webhid::install_webhid_bindings(&ctx) {
+                eprintln!("WebHID bindings init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
