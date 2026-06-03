@@ -16,6 +16,7 @@ pub mod notifications_bindings;
 pub mod shared_worker;
 pub mod surface_api;
 pub mod video_bindings;
+pub mod view_transitions;
 pub mod webgl_bindings;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
@@ -33,6 +34,7 @@ use std::sync::{
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest};
+pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
 pub use lumen_core::WebStorage;
 
@@ -151,6 +153,11 @@ pub struct QuickJsRuntime {
     /// Each `Enter` causes the shell to call `window.set_fullscreen(Borderless)`;
     /// each `Exit` calls `window.set_fullscreen(None)`.
     fullscreen_requests: Arc<Mutex<Vec<dom::FullscreenRequest>>>,
+    /// View Transition events from `document.startViewTransition`.
+    ///
+    /// `Begin` is pushed before the callback runs; `End` after.
+    /// Drained by the shell in `about_to_wait` to drive snapshot + cross-fade.
+    view_transition_events: Arc<Mutex<Vec<view_transitions::ViewTransitionEvent>>>,
 }
 
 struct Inner {
@@ -193,6 +200,7 @@ impl QuickJsRuntime {
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
+            view_transition_events: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -306,6 +314,14 @@ impl QuickJsRuntime {
                 Arc::clone(&self.fullscreen_requests),
             )
             .map_err(|e| rq_err(&ctx, e))?;
+
+            // Install View Transitions API (CSS View Transitions L1) — after DOM.
+            if let Err(e) = view_transitions::install_view_transition_bindings(
+                &ctx,
+                Arc::clone(&self.view_transition_events),
+            ) {
+                eprintln!("View Transitions bindings init failed: {}", e);
+            }
 
             // Install Battery Status API disable (ADR-007 Layer 4, 9D.4) — after DOM.
             if let Err(e) = battery_bindings::install_battery_bindings(&ctx) {
@@ -546,6 +562,14 @@ impl QuickJsRuntime {
     /// Returns an empty vec when no fullscreen state changes occurred since the last drain.
     pub fn take_fullscreen_requests(&self) -> Vec<dom::FullscreenRequest> {
         std::mem::take(&mut *self.fullscreen_requests.lock().unwrap())
+    }
+
+    /// Drain all View Transition events queued by `document.startViewTransition`.
+    ///
+    /// Called by the shell in `about_to_wait`. `Begin` triggers a display-list
+    /// snapshot; `End` triggers relayout + 300 ms cross-fade animation.
+    pub fn take_view_transition_events(&self) -> Vec<view_transitions::ViewTransitionEvent> {
+        std::mem::take(&mut *self.view_transition_events.lock().unwrap())
     }
 
     /// Returns `true` if JS mutated the DOM since the last call, clearing the flag.

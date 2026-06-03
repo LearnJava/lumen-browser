@@ -102,6 +102,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('58', '58-first-letter-line.html', 2.0, 'CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter drop-cap (large yellow, float:left) + ::first-line green bold first line'),
     ('59', '59-image-set-cross-fade.html', 2.0, 'CSS Images L4 §5/§4 — image-set() DPR selection + cross-fade() two-image blend; -webkit- vendor prefix variants'),
     ('60', '60-svg-stroke-advanced.html', 1.0, 'SVG stroke advanced: stroke-linecap (butt/round/square), stroke-linejoin (miter/bevel/round), stroke-miterlimit, stroke-dasharray, stroke-dashoffset, fill-rule (nonzero/evenodd)'),
+    ('61', '61-view-transitions.html',   1.0, 'View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade'),
 ]
 
 # --- PNG reader (stdlib only) ---
