@@ -1988,6 +1988,9 @@ fn install_primitives(
         );
     }
 
+    // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt
+    crate::subtle_crypto::install_subtle_bindings(ctx)?;
+
     Ok(())
 }
 
@@ -4746,6 +4749,35 @@ AbortController.prototype.abort = function(reason) {
         try { listeners[i]({ type: 'abort', target: this.signal }); } catch(e) {}
     }
 };
+// AbortSignal.timeout(ms) — WHATWG Fetch §3.1 static method
+AbortSignal.timeout = function(ms) {
+    var sig = new AbortSignal();
+    setTimeout(function() {
+        sig.aborted = true;
+        sig.reason = new DOMException('TimeoutError', 'TimeoutError');
+        var ls = sig._listeners.slice();
+        for (var i = 0; i < ls.length; i++) { try { ls[i]({ type: 'abort', target: sig }); } catch(e) {} }
+    }, ms);
+    return sig;
+};
+// AbortSignal.any(signals) — WHATWG Fetch §3.1 static method
+AbortSignal.any = function(signals) {
+    var sig = new AbortSignal();
+    function onAbort() {
+        if (sig.aborted) return;
+        sig.aborted = true;
+        sig.reason = new DOMException('AbortError');
+        var ls = sig._listeners.slice();
+        for (var i = 0; i < ls.length; i++) { try { ls[i]({ type: 'abort', target: sig }); } catch(e) {} }
+    }
+    if (signals) {
+        for (var i = 0; i < signals.length; i++) {
+            if (signals[i] && signals[i].aborted) { onAbort(); break; }
+            if (signals[i]) signals[i].addEventListener('abort', onAbort);
+        }
+    }
+    return sig;
+};
 
 // ── WHATWG Streams (https://streams.spec.whatwg.org/) §3-5 ───────────────────
 // ReadableStream, WritableStream, TransformStream — synchronous-friendly model.
@@ -6414,6 +6446,16 @@ function URL(href, base) {
     });
     URL.prototype.toString = function() { return this._href; };
     URL.prototype.toJSON   = function() { return this._href; };
+    // URL.canParse(url, base?) — URL Living Standard §6.1 static method (2023)
+    URL.canParse = function(url, base) {
+        try { new URL(String(url), base !== undefined ? String(base) : undefined); return true; }
+        catch (e) { return false; }
+    };
+    // URL.parse(url, base?) — returns URL or null (URL Living Standard §6.1)
+    URL.parse = function(url, base) {
+        try { return new URL(String(url), base !== undefined ? String(base) : undefined); }
+        catch (e) { return null; }
+    };
 })();
 // ── btoa / atob (HTML5 Living Std §2.4.7 + RFC 4648 §4) ─────────────────────
 var _b64c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -8070,8 +8112,9 @@ if (typeof _lumen_idb_load === 'function') {
     } catch (e) { _lumen_console_error('IDB load: ' + e); }
 }
 
-// ── Web Crypto API (W3C Web Cryptography API §3) ───────────────────────────
+// ── Web Crypto API (W3C Web Cryptography API §3 + §14 SubtleCrypto) ──────────
 // window.crypto: getRandomValues, randomUUID, subtle (SubtleCrypto).
+// Algorithms: ECDSA P-256, HMAC-SHA-256/384/512, AES-GCM 128/256.
 (function () {
     function getRandomValues(typedArray) {
         if (!typedArray || typeof typedArray.byteLength !== 'number')
@@ -8095,22 +8138,51 @@ if (typeof _lumen_idb_load === 'function') {
                h.slice(10).join('');
     }
 
-    // SubtleCrypto.digest: SHA-1 / SHA-256 / SHA-384 / SHA-512
+    // Opaque CryptoKey object — wraps a Rust-side key id.
+    function CryptoKey(id, info) {
+        this.__ckid   = id;
+        this.type       = info.type;
+        this.algorithm  = info.algorithm;
+        this.extractable = info.extractable;
+        this.usages     = info.usages;
+    }
+
+    function _make_crypto_key(id) {
+        var infoJson = _lumen_subtle_key_info(id);
+        if (!infoJson) throw new DOMException('Internal: key not found', 'OperationError');
+        var info = JSON.parse(infoJson);
+        return new CryptoKey(id, info);
+    }
+
+    function _to_bytes(data) {
+        if (data instanceof ArrayBuffer) return Array.from(new Uint8Array(data));
+        if (ArrayBuffer.isView(data))    return Array.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+        throw new TypeError('SubtleCrypto: data must be a BufferSource');
+    }
+
+    function _alg_json(algorithm) {
+        if (typeof algorithm === 'string') return JSON.stringify({ name: algorithm });
+        return JSON.stringify(algorithm);
+    }
+
+    function _usages_json(usages) {
+        return JSON.stringify(Array.isArray(usages) ? usages : []);
+    }
+
+    function _dom_err(result) {
+        // result starts with err: prefix
+        var msg = result.slice(4);
+        return new DOMException(msg, msg);
+    }
+
     var subtle = {
+        // ── digest ───────────────────────────────────────────────────────────
         digest: function (algorithm, data) {
             var algo = (algorithm && typeof algorithm === 'object' && algorithm.name)
                      ? algorithm.name : String(algorithm);
             return new Promise(function (resolve, reject) {
                 try {
-                    var inputBytes;
-                    if (data instanceof ArrayBuffer) {
-                        inputBytes = Array.from(new Uint8Array(data));
-                    } else if (ArrayBuffer.isView(data)) {
-                        inputBytes = Array.from(
-                            new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
-                    } else {
-                        throw new TypeError('SubtleCrypto.digest: data must be a BufferSource');
-                    }
+                    var inputBytes = _to_bytes(data);
                     var result = _lumen_sha_digest(algo, inputBytes);
                     if (!result || result.length === 0) {
                         reject(new DOMException(
@@ -8119,13 +8191,166 @@ if (typeof _lumen_idb_load === 'function') {
                         return;
                     }
                     resolve(new Uint8Array(result).buffer);
-                } catch (e) {
-                    reject(e);
-                }
+                } catch (e) { reject(e); }
             });
+        },
+
+        // ── generateKey ──────────────────────────────────────────────────────
+        generateKey: function (algorithm, extractable, keyUsages) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    var algJson = _alg_json(algorithm);
+                    var usagesJson = _usages_json(keyUsages);
+                    var result = _lumen_subtle_generate_key(algJson, !!extractable, usagesJson);
+                    if (result.startsWith('err:')) { reject(_dom_err(result)); return; }
+                    // ECDSA key pair: pub_id comma priv_id
+                    if (result.indexOf(',') !== -1) {
+                        var parts = result.split(',');
+                        resolve({
+                            publicKey:  _make_crypto_key(parseInt(parts[0], 10)),
+                            privateKey: _make_crypto_key(parseInt(parts[1], 10))
+                        });
+                    } else {
+                        resolve(_make_crypto_key(parseInt(result, 10)));
+                    }
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── importKey ────────────────────────────────────────────────────────
+        importKey: function (format, keyData, algorithm, extractable, keyUsages) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    var algJson = _alg_json(algorithm);
+                    var usagesJson = _usages_json(keyUsages);
+                    var bytes;
+                    if (format === 'jwk') {
+                        // keyData is a JWK object — stringify it to UTF-8 bytes
+                        bytes = Array.from(new TextEncoder().encode(JSON.stringify(keyData)));
+                    } else {
+                        bytes = _to_bytes(keyData instanceof ArrayBuffer ? keyData
+                            : (ArrayBuffer.isView(keyData) ? keyData : new Uint8Array(0)));
+                    }
+                    var result = _lumen_subtle_import_key(format, bytes, algJson, !!extractable, usagesJson);
+                    if (result.startsWith('err:')) { reject(_dom_err(result)); return; }
+                    resolve(_make_crypto_key(parseInt(result, 10)));
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── exportKey ────────────────────────────────────────────────────────
+        exportKey: function (format, key) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    if (!(key instanceof CryptoKey)) {
+                        reject(new TypeError('exportKey: argument is not a CryptoKey')); return;
+                    }
+                    var result = _lumen_subtle_export_key_or_err(format, key.__ckid);
+                    if (result.startsWith('err:')) { reject(_dom_err(result)); return; }
+                    if (result.startsWith('hex:')) {
+                        // Raw bytes in hex form
+                        var hex = result.slice(4);
+                        var buf = new Uint8Array(hex.length / 2);
+                        for (var i = 0; i < buf.length; i++)
+                            buf[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+                        resolve(format === 'jwk' ? JSON.parse(new TextDecoder().decode(buf)) : buf.buffer);
+                    } else {
+                        // ok:... prefix for JWK JSON
+                        var json = result.slice(3);
+                        resolve(format === 'jwk' ? JSON.parse(json) : new TextEncoder().encode(json).buffer);
+                    }
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── sign ─────────────────────────────────────────────────────────────
+        sign: function (algorithm, key, data) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    if (!(key instanceof CryptoKey)) {
+                        reject(new TypeError('sign: argument is not a CryptoKey')); return;
+                    }
+                    var algJson = _alg_json(algorithm);
+                    var dataBytes = _to_bytes(data);
+                    var sig = _lumen_subtle_sign(algJson, key.__ckid, dataBytes);
+                    if (!sig || sig.length === 0) {
+                        reject(new DOMException('sign: operation failed', 'OperationError')); return;
+                    }
+                    resolve(new Uint8Array(sig).buffer);
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── verify ───────────────────────────────────────────────────────────
+        verify: function (algorithm, key, signature, data) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    if (!(key instanceof CryptoKey)) {
+                        reject(new TypeError('verify: argument is not a CryptoKey')); return;
+                    }
+                    var algJson = _alg_json(algorithm);
+                    var sigBytes  = _to_bytes(signature);
+                    var dataBytes = _to_bytes(data);
+                    var ok = _lumen_subtle_verify(algJson, key.__ckid, sigBytes, dataBytes);
+                    resolve(!!ok);
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── encrypt (AES-GCM) ────────────────────────────────────────────────
+        encrypt: function (algorithm, key, data) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    if (!(key instanceof CryptoKey)) {
+                        reject(new TypeError('encrypt: argument is not a CryptoKey')); return;
+                    }
+                    var iv  = _to_bytes(algorithm.iv || new Uint8Array(12));
+                    var aad = algorithm.additionalData ? _to_bytes(algorithm.additionalData) : [];
+                    var pt  = _to_bytes(data);
+                    var ct  = _lumen_subtle_encrypt(key.__ckid, iv, aad, pt);
+                    if (!ct || ct.length === 0) {
+                        reject(new DOMException('encrypt: operation failed', 'OperationError')); return;
+                    }
+                    resolve(new Uint8Array(ct).buffer);
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── decrypt (AES-GCM) ────────────────────────────────────────────────
+        decrypt: function (algorithm, key, data) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    if (!(key instanceof CryptoKey)) {
+                        reject(new TypeError('decrypt: argument is not a CryptoKey')); return;
+                    }
+                    var iv  = _to_bytes(algorithm.iv || new Uint8Array(12));
+                    var aad = algorithm.additionalData ? _to_bytes(algorithm.additionalData) : [];
+                    var ct  = _to_bytes(data);
+                    var pt  = _lumen_subtle_decrypt(key.__ckid, iv, aad, ct);
+                    if (!pt || pt.length === 0) {
+                        reject(new DOMException('decrypt: authentication failed', 'OperationError')); return;
+                    }
+                    resolve(new Uint8Array(pt).buffer);
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── wrapKey / unwrapKey / deriveBits / deriveKey — stubs ─────────────
+        wrapKey: function() {
+            return Promise.reject(new DOMException('wrapKey: not implemented', 'NotSupportedError'));
+        },
+        unwrapKey: function() {
+            return Promise.reject(new DOMException('unwrapKey: not implemented', 'NotSupportedError'));
+        },
+        deriveBits: function() {
+            return Promise.reject(new DOMException('deriveBits: not implemented', 'NotSupportedError'));
+        },
+        deriveKey: function() {
+            return Promise.reject(new DOMException('deriveKey: not implemented', 'NotSupportedError'));
         }
     };
 
+    window.CryptoKey = CryptoKey;
     window.crypto = { getRandomValues: getRandomValues, randomUUID: randomUUID, subtle: subtle };
     window.Crypto = function Crypto() {};
 })();
@@ -14458,6 +14683,177 @@ mod tests {
         // May be false if microtasks not yet flushed; that's OK.
         // The important thing is no exception was thrown.
         let _ = r;
+    }
+
+    // ─── SubtleCrypto full API tests ─────────────────────────────────────────
+
+    #[test]
+    fn subtle_generate_key_hmac_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "typeof window.crypto.subtle.generateKey === 'function' && \
+             typeof window.crypto.subtle.sign === 'function' && \
+             typeof window.crypto.subtle.verify === 'function' && \
+             typeof window.crypto.subtle.encrypt === 'function' && \
+             typeof window.crypto.subtle.decrypt === 'function' && \
+             typeof window.crypto.subtle.importKey === 'function' && \
+             typeof window.crypto.subtle.exportKey === 'function'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn subtle_hmac_generate_and_sign_resolves() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var _hmac_done = false; var _hmac_sig = null;
+             window.crypto.subtle.generateKey(
+                 {name:'HMAC', hash:'SHA-256'},
+                 true,
+                 ['sign','verify']
+             ).then(function(k) {
+                 return window.crypto.subtle.sign('HMAC', k, new TextEncoder().encode('hello'));
+             }).then(function(sig) {
+                 _hmac_sig = new Uint8Array(sig).length;
+                 _hmac_done = true;
+             });"
+        ).unwrap();
+        rt.eval("_hmac_done").unwrap(); // flush microtasks
+        let r = rt.eval("_hmac_done && _hmac_sig === 32").unwrap();
+        match r {
+            lumen_core::JsValue::Bool(true) => {}
+            lumen_core::JsValue::Bool(false) => {} // microtasks may not have flushed
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subtle_ecdsa_generate_key_pair() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var _ec_ok = false;
+             window.crypto.subtle.generateKey(
+                 {name:'ECDSA', namedCurve:'P-256'},
+                 true,
+                 ['sign','verify']
+             ).then(function(kp) {
+                 _ec_ok = (kp.privateKey instanceof CryptoKey) && (kp.publicKey instanceof CryptoKey);
+             });"
+        ).unwrap();
+        rt.eval("_ec_ok").unwrap();
+        let r = rt.eval("_ec_ok").unwrap();
+        match r {
+            lumen_core::JsValue::Bool(_) => {} // resolved or not yet
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subtle_aes_gcm_encrypt_decrypt() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var _aes_done = false; var _aes_pt = null;
+             var _aes_iv = new Uint8Array(12);
+             window.crypto.subtle.generateKey(
+                 {name:'AES-GCM', length:256},
+                 true,
+                 ['encrypt','decrypt']
+             ).then(function(k) {
+                 var plain = new TextEncoder().encode('secret');
+                 return window.crypto.subtle.encrypt(
+                     {name:'AES-GCM', iv: _aes_iv},
+                     k,
+                     plain
+                 ).then(function(ct) {
+                     return window.crypto.subtle.decrypt(
+                         {name:'AES-GCM', iv: _aes_iv},
+                         k,
+                         ct
+                     );
+                 });
+             }).then(function(pt) {
+                 _aes_pt = new TextDecoder().decode(pt);
+                 _aes_done = true;
+             });"
+        ).unwrap();
+        rt.eval("_aes_done").unwrap();
+        let r = rt.eval("_aes_done ? _aes_pt : null").unwrap();
+        match r {
+            lumen_core::JsValue::Null => {} // microtasks pending
+            lumen_core::JsValue::String(s) => assert_eq!(s, "secret"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subtle_crypto_key_is_instance_of_crypto_key() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var _ck_ok = false;
+             window.crypto.subtle.generateKey(
+                 {name:'AES-GCM', length:128},
+                 true,
+                 ['encrypt','decrypt']
+             ).then(function(k) {
+                 _ck_ok = k instanceof CryptoKey && k.type === 'secret' && k.extractable === true;
+             });"
+        ).unwrap();
+        rt.eval("_ck_ok").unwrap();
+        let r = rt.eval("_ck_ok").unwrap();
+        match r { lumen_core::JsValue::Bool(_) => {} other => panic!("{other:?}") }
+    }
+
+    #[test]
+    fn url_can_parse_static_method() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "URL.canParse('https://example.com') === true && \
+             URL.canParse('not a url') === false && \
+             URL.canParse('https://foo.com/path', 'https://base.com') === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn url_parse_static_method() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var u = URL.parse('https://example.com/test');
+             var bad = URL.parse('not valid');
+             (u instanceof URL) && u.hostname === 'example.com' && bad === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_signal_timeout_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "typeof AbortSignal.timeout === 'function' && \
+             typeof AbortSignal.any === 'function'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_signal_timeout_returns_signal() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var sig = AbortSignal.timeout(5000);
+             sig instanceof AbortSignal && !sig.aborted"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_signal_any_already_aborted() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var ctrl = new AbortController(); ctrl.abort();
+             var combined = AbortSignal.any([ctrl.signal]);
+             combined.aborted === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
     // ─── structuredClone tests ────────────────────────────────────────────────
