@@ -2721,6 +2721,18 @@ fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
 
 // ─── CSS 2.1 §9.5 — Float context ────────────────────────────────────────────
 
+/// CSS Shapes L1 §5.1 — parse `circle(<length-px>)` from a raw shape string.
+/// Returns the radius in px. Only handles `circle(Npx)` without `at` clause.
+/// Returns `None` for any unrecognised syntax (fallback to rectangular float).
+pub(crate) fn parse_circle_px(s: &str) -> Option<f32> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("circle(")?.strip_suffix(')')?;
+    let token = inner.split_whitespace().next()?;
+    // Accept "50px" or bare "50" (assume px).
+    let digits = token.strip_suffix("px").unwrap_or(token);
+    digits.parse::<f32>().ok().filter(|&r| r > 0.0)
+}
+
 /// CSS 2.1 §9.5 — tracks float placements within a single block formatting
 /// context.  Simplified Phase-0 implementation: only axis-aligned rectangles,
 /// no shape-outside wrapping.  All coordinates are in the same space as the
@@ -2732,31 +2744,55 @@ struct FloatContext {
     /// Right floats: `(bottom_y, left_edge)` — left edge of the float margin
     /// box.  Active while `bottom_y > query_y`.
     right: Vec<(f32, f32)>,
+    /// CSS Shapes L1 — `shape-outside: circle(r)` overrides.
+    /// `(top_y, bottom_y, is_left, center_x, center_y, radius)`.
+    /// `is_left=true` → left float, `false` → right float.
+    shape_circles: Vec<(f32, f32, bool, f32, f32, f32)>,
 }
 
 impl FloatContext {
     fn new() -> Self {
-        Self { left: Vec::new(), right: Vec::new() }
+        Self { left: Vec::new(), right: Vec::new(), shape_circles: Vec::new() }
     }
 
     /// Left boundary of available inline space at `y` (= rightmost right-edge
     /// of all left floats whose `bottom_y > y`).  Falls back to `default_x`.
     fn left_edge_at(&self, y: f32, default_x: f32) -> f32 {
-        self.left
+        let rect_edge = self.left
             .iter()
             .filter(|(bot, _)| *bot > y)
             .map(|(_, r)| *r)
-            .fold(default_x, f32::max)
+            .fold(default_x, f32::max);
+        // CSS Shapes L1: override rectangular edge with circle boundary.
+        self.shape_circles
+            .iter()
+            .filter(|(top, bot, is_left, ..)| *is_left && *top <= y && *bot > y)
+            .map(|(_, _, _, cx, cy, r)| {
+                let dy = y - cy;
+                let hw = (r * r - dy * dy).max(0.0_f32).sqrt();
+                cx + hw
+            })
+            .fold(rect_edge, f32::max)
     }
 
     /// Right boundary of available inline space at `y` (= leftmost left-edge
     /// of all right floats whose `bottom_y > y`).  Falls back to `default_x`.
     fn right_edge_at(&self, y: f32, default_x: f32) -> f32 {
-        self.right
+        let rect_edge = self.right
             .iter()
             .filter(|(bot, _)| *bot > y)
             .map(|(_, l)| *l)
-            .fold(default_x, f32::min)
+            .fold(default_x, f32::min);
+        // CSS Shapes L1: override rectangular edge with circle boundary.
+        self.shape_circles
+            .iter()
+            .filter(|(top, bot, is_left, ..)| !is_left && *top <= y && *bot > y)
+            .map(|(_, _, _, cx, cy, r)| {
+                let dy = y - cy;
+                let hw = (r * r - dy * dy).max(0.0_f32).sqrt();
+                cx - hw
+            })
+            .fold(rect_edge, f32::min)
     }
 
     /// Record a left float occupying `[y_top, bottom_y)` with right margin
@@ -3255,13 +3291,37 @@ fn lay_out(
                                 let lx = fc.left_edge_at(child_y, content_x);
                                 child.rect.x = lx + fml;
                                 child.rect.y = child_y + fmt;
-                                fc.add_left(child_y + fmt + fh + fmb, lx + fml + fw + fmr);
+                                let top_y  = child_y + fmt;
+                                let bot_y  = top_y + fh + fmb;
+                                let right_edge = lx + fml + fw + fmr;
+                                fc.add_left(bot_y, right_edge);
+                                // CSS Shapes L1 — wire circle(r) shape-outside.
+                                #[allow(clippy::collapsible_if)]
+                                if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
+                                    if let Some(r) = parse_circle_px(sv) {
+                                        let cx = child.rect.x + fw / 2.0;
+                                        let cy = top_y + fh / 2.0;
+                                        fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
+                                    }
+                                }
                             }
                             FloatSide::Right => {
                                 let rx = fc.right_edge_at(child_y, container_right);
                                 child.rect.x = rx - fmr - fw;
                                 child.rect.y = child_y + fmt;
-                                fc.add_right(child_y + fmt + fh + fmb, rx - fmr - fw - fml);
+                                let top_y  = child_y + fmt;
+                                let bot_y  = top_y + fh + fmb;
+                                let left_edge = rx - fmr - fw - fml;
+                                fc.add_right(bot_y, left_edge);
+                                // CSS Shapes L1 — wire circle(r) shape-outside.
+                                #[allow(clippy::collapsible_if)]
+                                if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
+                                    if let Some(r) = parse_circle_px(sv) {
+                                        let cx = child.rect.x + fw / 2.0;
+                                        let cy = top_y + fh / 2.0;
+                                        fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
+                                    }
+                                }
                             }
                             FloatSide::None => unreachable!(),
                         }
@@ -7520,6 +7580,34 @@ mod tests {
             (markers[0].style.font_size - 20.0).abs() < 0.5,
             "marker should inherit 20px font-size from li, got {}", markers[0].style.font_size,
         );
+    }
+
+    // ── CSS Shapes L1 — shape-outside circle() ────────────────────────────────
+
+    #[test]
+    fn parse_circle_px_valid() {
+        assert_eq!(super::parse_circle_px("circle(50px)"), Some(50.0));
+        assert_eq!(super::parse_circle_px("circle(0px)"), None);
+        assert_eq!(super::parse_circle_px("circle(10)"), Some(10.0));
+        assert_eq!(super::parse_circle_px("CIRCLE(30PX)"), Some(30.0)); // case-insensitive
+    }
+
+    #[test]
+    fn parse_circle_px_invalid() {
+        assert_eq!(super::parse_circle_px("none"), None);
+        assert_eq!(super::parse_circle_px("ellipse(30px 20px)"), None);
+        assert_eq!(super::parse_circle_px("polygon(0 0, 10 0, 10 10)"), None);
+    }
+
+    #[test]
+    fn shape_outside_circle_computation() {
+        // Circle with radius 50px centered at (100, 50): at y=50 (center),
+        // horizontal extent = center_x + radius = 100 + 50 = 150.
+        // At y=0 (50px above center): hw = sqrt(50^2 - 50^2) = 0, extent = 100.
+        let mut fc = super::FloatContext::new();
+        fc.shape_circles.push((0.0, 100.0, true, 100.0, 50.0, 50.0));
+        assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
+        assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
     }
 
 }
