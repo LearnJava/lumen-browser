@@ -2017,21 +2017,38 @@ fn marker_text(lst: ListStyleType, ordinal: u32) -> String {
 }
 
 /// CSS Lists L3 §2.1 — creates `BoxKind::Marker` and prepends to children.
-/// Does nothing when `list-style-type: none` or `list-style-image` is set (P4).
-fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &ComputedStyle, ordinal: u32) {
+/// Calls `compute_pseudo_element_style("marker")` so CSS `::marker` rules (color,
+/// font, content) override the defaults. `content: none` on `::marker` suppresses
+/// the marker entirely; `content: <string>` / `counter()` replaces the default text.
+#[allow(clippy::too_many_arguments)]
+fn inject_marker(
+    parent_id: NodeId,
+    children: &mut Vec<LayoutBox>,
+    style: &ComputedStyle,
+    ordinal: u32,
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+) {
     if matches!(style.list_style_type, ListStyleType::None) {
         return;
     }
+    // CSS Pseudo-elements L4 §14.2 — compute ::marker style.
+    // Returns None only when `content: none` is set, which suppresses the marker.
+    let Some(mut ms) = compute_pseudo_element_style(
+        doc, parent_id, "marker", sheet, style, viewport, dark_mode,
+    ) else {
+        return;
+    };
     // CSS: list-style-image — P4 wires image markers.
-    let text = marker_text(style.list_style_type, ordinal);
-    let mut ms = ComputedStyle::root();
-    ms.font_size    = style.font_size;
-    ms.font_weight  = style.font_weight;
-    ms.font_style   = style.font_style;
-    ms.font_family  = style.font_family.clone();
-    ms.line_height  = style.line_height;
-    ms.color        = style.color;
-    ms.display      = Display::Inline;
+    let text = match &ms.content {
+        Content::Items(items) => marker_content_text(items, doc, parent_id, counters, registry),
+        _ => marker_text(style.list_style_type, ordinal),
+    };
+    ms.display = Display::Inline;
     children.insert(0, LayoutBox {
         node:     parent_id,
         rect:     Rect::ZERO,
@@ -2045,6 +2062,45 @@ fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &Compu
         col_span: 1,
         row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
     });
+}
+
+/// Extracts a plain-text string from `::marker { content: <items> }`.
+/// Supports String literals, `attr()`, `counter()`, `counters()`.
+fn marker_content_text(
+    items: &[ContentItem],
+    doc: &Document,
+    owner_id: NodeId,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+) -> String {
+    let snap = counters.get(&owner_id);
+    items.iter().filter_map(|item| match item {
+        ContentItem::String(s) => Some(s.clone()),
+        ContentItem::Counter { name, style: list_style } => {
+            let val = snap
+                .and_then(|s| s.get(name))
+                .and_then(|v| v.last())
+                .copied()
+                .unwrap_or(0);
+            let sname = list_style.as_deref().unwrap_or("decimal");
+            Some(format_counter_with_registry(val, sname, registry))
+        }
+        ContentItem::Counters { name, separator, style: list_style } => {
+            let vals = snap
+                .and_then(|s| s.get(name))
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let sname = list_style.as_deref().unwrap_or("decimal");
+            let parts: Vec<String> = vals.iter()
+                .map(|&v| format_counter_with_registry(v, sname, registry))
+                .collect();
+            Some(parts.join(separator.as_str()))
+        }
+        ContentItem::Attr(attr) => {
+            doc.get(owner_id).get_attr(attr).map(str::to_string)
+        }
+        _ => None,
+    }).collect()
 }
 
 /// CSS Display L3 §7.2 — replaces each `BoxKind::Contents` child with its own
@@ -2403,7 +2459,8 @@ fn build_box(
             // ::marker comes before ::before in document order.
             if style.display == Display::ListItem {
                 let ordinal = li_ordinal(doc, id);
-                inject_marker(id, &mut children, &style, ordinal);
+                inject_marker(id, &mut children, &style, ordinal,
+                              doc, sheet, viewport, dark_mode, counters, registry);
             }
         }
         // CSS Display L3 §7.2 — flatten display:contents boxes into this context.
@@ -7238,4 +7295,130 @@ mod tests {
         }
     }
 
+    // ── CSS Pseudo-elements L4 §14.2 — ::marker tests ────────────────────────
+
+    fn find_markers(b: &super::LayoutBox, out: &mut Vec<super::LayoutBox>) {
+        if matches!(b.kind, super::BoxKind::Marker { .. }) { out.push(b.clone()); }
+        for c in &b.children { find_markers(c, out); }
+    }
+
+    #[test]
+    fn marker_default_inherits_parent_color() {
+        // No ::marker rule → marker inherits color from li parent.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("ul { color: #ff0000; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected at least one marker");
+        // Marker should have inherited red color from parent ul.
+        assert!(
+            markers[0].style.color.r > 200,
+            "marker should inherit red color from ul, got r={}", markers[0].style.color.r,
+        );
+    }
+
+    #[test]
+    fn marker_css_rule_overrides_color() {
+        // ::marker { color: #0000ff } → marker gets blue, not parent color.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("ul { color: #ff0000; } li::marker { color: #0000ff; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected at least one marker");
+        // Marker must use blue (::marker rule) not parent red.
+        assert!(
+            markers[0].style.color.b > 200,
+            "marker should be blue from ::marker rule, got b={}", markers[0].style.color.b,
+        );
+        assert!(
+            markers[0].style.color.r < 50,
+            "marker should NOT be red (parent color), got r={}", markers[0].style.color.r,
+        );
+    }
+
+    #[test]
+    fn marker_content_none_suppresses_marker() {
+        // li::marker { content: none } → no BoxKind::Marker in tree.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("li::marker { content: none; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(markers.is_empty(), "content:none should suppress marker box, found {} markers", markers.len());
+    }
+
+    #[test]
+    fn marker_content_string_overrides_text() {
+        // li::marker { content: "★ " } → marker text becomes "★ " not "• ".
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse(r#"li::marker { content: "★ "; }"#),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected marker with custom content");
+        if let super::BoxKind::Marker { ref text, .. } = markers[0].kind {
+            assert_eq!(text, "★ ", "custom content string should override default marker text");
+        } else {
+            panic!("expected BoxKind::Marker");
+        }
+    }
+
+    #[test]
+    fn marker_default_without_css_rule_still_renders() {
+        // No ::marker CSS rule at all → marker renders with default disc bullet.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "default disc list item must produce a marker box");
+    }
+
+    #[test]
+    fn marker_font_size_css_rule_applied() {
+        // li::marker { font-size: 24px } → marker uses 24px, not the inherited 16px.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("li { font-size: 16px; } li::marker { font-size: 24px; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected marker");
+        assert!(
+            (markers[0].style.font_size - 24.0).abs() < 0.5,
+            "marker should have font-size 24px from CSS rule, got {}", markers[0].style.font_size,
+        );
+    }
+
+    #[test]
+    fn marker_inherits_font_size_from_parent_without_rule() {
+        // No ::marker rule → marker inherits font-size from li parent.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("li { font-size: 20px; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected marker");
+        assert!(
+            (markers[0].style.font_size - 20.0).abs() < 0.5,
+            "marker should inherit 20px font-size from li, got {}", markers[0].style.font_size,
+        );
+    }
+
 }
+

@@ -5059,6 +5059,11 @@ pub fn compute_pseudo_element_style(
     }
 
     if matched.is_empty() {
+        // CSS Lists L3 §2.1: ::marker always generates a marker box from list-style-type
+        // without any explicit CSS rule. Other pseudo-elements require a matching declaration.
+        if pseudo.eq_ignore_ascii_case("marker") {
+            return Some(style);
+        }
         return None;
     }
 
@@ -5076,8 +5081,14 @@ pub fn compute_pseudo_element_style(
     }
 
     // ::before/::after require content: to render; ::first-letter/::first-line do not.
+    // ::marker renders by default (content comes from list-style-type); content:none suppresses it.
     if pseudo.eq_ignore_ascii_case("first-letter") || pseudo.eq_ignore_ascii_case("first-line") {
         Some(style)
+    } else if pseudo.eq_ignore_ascii_case("marker") {
+        match &style.content {
+            Content::None => None,
+            _ => Some(style),
+        }
     } else {
         match &style.content {
             Content::Items(_) => Some(style),

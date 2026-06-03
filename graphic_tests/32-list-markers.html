@@ -45,6 +45,10 @@
     padding-left: 0;
   }
   ul.inside li { background: #0f3460; }
+  /* ::marker CSS override — color + content */
+  ul.custom-marker::marker,
+  ul.custom-marker li::marker { color: #fc8181; }
+  ul.content-marker li::marker { content: "→ "; color: #68d391; }
 </style>
 </head>
 <body>
@@ -114,6 +118,20 @@
       <ul style="list-style-type: none; padding-left: 0;">
         <li>No bullet A</li>
         <li>No bullet B</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="label">::marker { color: red }</div>
+      <ul class="custom-marker">
+        <li>Red marker</li>
+        <li>Red marker</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="label">::marker { content: "→ " }</div>
+      <ul class="content-marker" style="list-style-type: disc;">
+        <li>Arrow A</li>
+        <li>Arrow B</li>
       </ul>
     </div>
   </div>
