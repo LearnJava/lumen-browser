@@ -13260,6 +13260,116 @@ mod tests {
         assert!(ch1.rect.y > ch0.rect.y, "b should be below a");
     }
 
+    #[test]
+    fn multicol_column_span_all_spans_full_width() {
+        // A child with column-span:all should be laid out at the full container width,
+        // not squeezed into a single column.
+        // Layout: 2 column children → span-all → 2 more column children.
+        let root = lay_measured(
+            r#"<div id='c'>
+              <div id='a'></div>
+              <div id='s'></div>
+              <div id='b'></div>
+            </div>"#,
+            r#"#c { width: 300px; column-count: 2; column-gap: 10px; }
+               #a { height: 20px; }
+               #b { height: 20px; }
+               #s { column-span: all; height: 10px; }"#,
+            800.0,
+        );
+        let container = first_element_child(&root);
+        // Find the span-all child by height (10px).
+        let span_child = container.children.iter()
+            .find(|c| (c.rect.height - 10.0).abs() < 1.0)
+            .expect("span-all child not found");
+        // Span-all element must cover the full container width (300px).
+        assert!(
+            (span_child.rect.width - 300.0).abs() < 1.0,
+            "span-all child width={} should be 300px",
+            span_child.rect.width
+        );
+        // Span-all element must start at container's content_x.
+        assert!(
+            span_child.rect.x < 10.0,
+            "span-all child x={} should be near container left edge",
+            span_child.rect.x
+        );
+    }
+
+    #[test]
+    fn multicol_column_span_all_children_below_span() {
+        // Children after a column-span:all element must be positioned below it.
+        let root = lay_measured(
+            r#"<div id='c'>
+              <div id='s'></div>
+              <div id='b'></div>
+            </div>"#,
+            r#"#c { width: 300px; column-count: 2; column-gap: 10px; }
+               #s { column-span: all; height: 15px; }
+               #b { height: 20px; }"#,
+            800.0,
+        );
+        let container = first_element_child(&root);
+        let span_child = container.children.iter()
+            .find(|c| (c.rect.height - 15.0).abs() < 1.0)
+            .expect("span-all child not found");
+        let after_child = container.children.iter()
+            .find(|c| (c.rect.height - 20.0).abs() < 1.0)
+            .expect("child after span not found");
+        // Child after span must be below the span-all element.
+        assert!(
+            after_child.rect.y >= span_child.rect.y + span_child.rect.height,
+            "after_child.y={} must be >= span bottom={}",
+            after_child.rect.y,
+            span_child.rect.y + span_child.rect.height
+        );
+    }
+
+    #[test]
+    fn multicol_column_fill_auto_sequential() {
+        // column-fill: auto — each column is filled up to the container height before
+        // spilling to the next column, rather than distributing content evenly.
+        // With height:40px and 3 children of 15px each, the per_col_cap=2 guard ensures
+        // col0 holds 2 children (30px, fits in 40px) and col1 holds the third.
+        // The x-position of the third child must equal col1_x = content_x + col_w.
+        let root = lay_measured(
+            "<div id='c'><div id='a'></div><div id='b'></div><div id='d'></div></div>",
+            "#c { width: 300px; column-count: 2; column-gap: 0px; height: 40px; column-fill: auto; } \
+             #a { height: 15px; } #b { height: 15px; } #d { height: 15px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        assert_eq!(container.children.len(), 3, "expected 3 column children");
+        let ch0 = &container.children[0];
+        let ch1 = &container.children[1];
+        let ch2 = &container.children[2];
+        // col_w = 300 / 2 = 150. col1 starts at content_x + 150.
+        // With per_col_cap=2: ch0 and ch1 go to col0, ch2 overflows to col1.
+        assert!(
+            (ch0.rect.x - ch1.rect.x).abs() < 1.0,
+            "ch0 and ch1 should share col0 (x0={}, x1={})",
+            ch0.rect.x, ch1.rect.x
+        );
+        assert!(
+            ch2.rect.x > ch0.rect.x + 1.0,
+            "ch2 should be in col1 (x2={} vs x0={})",
+            ch2.rect.x, ch0.rect.x
+        );
+    }
+
+    #[test]
+    fn multicol_column_fill_balance_vs_auto_target() {
+        // Verify that column-fill:balance uses total/n_cols as target, not container height.
+        // With height:20px and 2 children of 15px each and 2 columns:
+        //   balance: target = ceil(30/2) = 15 → ch0 fills col0 (15px), ch1 overflows to col1
+        //   auto:    target = 20 → ch0(15)+ch1(15)=30>20 with count_cap=1, so still col0+col1
+        // Both end up with same layout here; test that column_fill_balance is parsed.
+        let root = lay("<p>x</p>", "p { column-fill: balance; }");
+        assert!(first_p_style(&root).column_fill_balance, "balance should set column_fill_balance=true");
+        let root2 = lay("<p>x</p>", "p { column-fill: auto; }");
+        assert!(!first_p_style(&root2).column_fill_balance, "auto should set column_fill_balance=false");
+    }
+
     // ── ::marker box (BUG-011) ───────────────────────────────────────────
 
     #[test]

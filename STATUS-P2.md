@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+C8: `column-rule` / `column-span` / `column-fill` wiring  branch: p2-c8-column-extras
+Next step: wire column_span_all + column_fill_balance in lay_out_multicol_children  box_tree.rs:3990
 
 ---
 
