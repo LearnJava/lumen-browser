@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**A-4: WebBluetooth API stub** — branch: `p1-webbluetooth-api`
+Next step: добавить JS-шим в `crates/js/src/bluetooth.rs`
 
 ---
 
