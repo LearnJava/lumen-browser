@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Scroll Snap shell integration  branch: p2-scroll-snap
+Next step: add snap_containers field to Lumen + wire collect_snap_containers/find_snap_target into scroll handler  crates/shell/src/main.rs:3120
 
 ---
 
