@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+RB-6: `FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов)  branch: p2-rb6-femtovg-full
+Next step: реализовать render_command для всех no-op команд  femtovg_backend.rs
 
 ---
 
