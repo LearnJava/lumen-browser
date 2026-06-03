@@ -10,6 +10,14 @@ _(нет)_
 
 ---
 
+## Recent merges
+
+| Дата | Задача | Описание |
+|------|--------|---------|
+| 2026-06-04 | A-1: WebTransport API stub | Phase 0 JS-шим: WebTransport(url), datagrams.readable/writable, createBidirectionalStream/createUnidirectionalStream, все операции reject. WebTransportError класс. 1 unit-тест. lumen-js: 1094 тестов. |
+
+---
+
 ## Next
 
 Ordered by priority. Сгруппированы по домену.
@@ -18,7 +26,7 @@ Ordered by priority. Сгруппированы по домену.
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| A-1 | **WebTransport API stub** — `new WebTransport(url)`, `datagrams.readable/writable`, `createBidirectionalStream()`, фазы connecting/connected/closed, всё reject (нет QUIC). `WebTransportError`. | S | `lumen-js` |
+| ~~A-1~~ | ~~**WebTransport API stub**~~ — **выполнено** | S | `lumen-js` |
 | A-2 | **WebHID API stub** — `navigator.hid.requestDevice({filters})` → reject NotSupportedError (Phase 0), `HIDDevice` (open/close/sendReport/receiveFeatureReport/oninputreport), `HIDConnectionEvent`. | S | `lumen-js` |
 | A-3 | **WebUSB API stub** — `navigator.usb.requestDevice({filters})` → reject, `USBDevice` (open/close/selectConfiguration/claimInterface/transferIn/Out/controlTransferIn/Out), `USBConnectionEvent`. | S | `lumen-js` |
 | A-4 | **WebBluetooth API stub** — `navigator.bluetooth.requestDevice({filters})` → reject NotSupportedError, `BluetoothRemoteGATTServer.connect()` → reject, `BluetoothDevice.gatt`, `getAvailability()` → false. | S | `lumen-js` |
