@@ -42,7 +42,7 @@ use std::sync::{
 
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
-pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap};
+pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest};
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};

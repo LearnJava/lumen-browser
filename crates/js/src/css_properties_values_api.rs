@@ -3,6 +3,11 @@
 
 use rquickjs::Ctx;
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
+/// Global registry of custom property definitions (keyed by property name).
+/// This is shared across all stylesheets and reachable via CSS.registerProperty().
+static REGISTERED_PROPERTIES: OnceLock<Mutex<RegisteredPropertiesMap>> = OnceLock::new();
 
 /// Maps property name (e.g. "--my-color") to its definition.
 #[derive(Clone, Debug, Default)]
@@ -34,6 +39,11 @@ impl RegisteredPropertiesMap {
     pub fn clear(&mut self) {
         self.properties.clear();
     }
+}
+
+/// Get the global registered properties registry, initializing it if necessary.
+pub fn get_registered_properties() -> &'static Mutex<RegisteredPropertiesMap> {
+    REGISTERED_PROPERTIES.get_or_init(|| Mutex::new(RegisteredPropertiesMap::new()))
 }
 
 /// Definition of a custom CSS property.
