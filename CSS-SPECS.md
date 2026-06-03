@@ -253,9 +253,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `A B`, `A > B`, `A + B`, `A ~ B` | ✅ | all combinators |
 | `:root`, `:first/last-child`, `:nth-*`, `:only-*`, `:empty` | ✅ | |
 | `:not(S)` | ✅ | L3 simple; L4 any selector |
-| `:hover`, `:active` | 🟡 | parsed; shell wiring partial |
-| `:focus`, `:focus-within` | 🟡 | parsed; focus tracking ⬜ |
-| `:focus-visible` | ⬜ | Selectors L4 |
+| `:hover`, `:active` | ✅ | shell hit-test wiring 2026-06-03; ancestor propagation per spec |
+| `:focus`, `:focus-within` | ✅ | shell click-focus wiring 2026-06-03 |
+| `:focus-visible` | ✅ | Phase 0: synonym for `:focus` 2026-06-03 |
 | `:link`, `:visited` | 🟡 | parsed; navigation state ⬜ |
 | `:target` | ⬜ | fragment navigation |
 | `:enabled`, `:disabled`, `:checked` | 🟡 | parsed; form state ⬜ |
