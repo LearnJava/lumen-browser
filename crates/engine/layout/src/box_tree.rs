@@ -2290,6 +2290,24 @@ fn build_box(
         }
     };
 
+    // CSS Containment L3 §4 — content-visibility: hidden suppresses the subtree.
+    // Phase 1: element keeps its own box but contributes 0×0 (no contain-intrinsic-size yet).
+    // content-visibility: auto (off-viewport skip) is deferred to Phase 2.
+    if style.content_visibility == crate::style::ContentVisibility::Hidden {
+        return LayoutBox {
+            node: id,
+            rect: Rect::ZERO,
+            style,
+            kind,
+            children: Vec::new(),
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+    }
+
     let mut children = Vec::new();
     if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::SvgRoot { .. }) {
         // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
@@ -7608,6 +7626,33 @@ mod tests {
         fc.shape_circles.push((0.0, 100.0, true, 100.0, 50.0, 50.0));
         assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
         assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn content_visibility_hidden_produces_empty_children() {
+        let html = r#"<div class="hidden"><span>should be skipped</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(".hidden { content-visibility: hidden; }");
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        fn find_hidden(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if b.style.content_visibility == crate::style::ContentVisibility::Hidden {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_hidden)
+        }
+        if let Some(hidden_box) = find_hidden(&root) {
+            assert!(hidden_box.children.is_empty(), "content-visibility:hidden should have no children");
+        }
+    }
+
+    #[test]
+    fn content_visibility_visible_children_present() {
+        let html = r#"<div><span>hello</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let has_children = root.children.iter().any(|c| !c.children.is_empty());
+        assert!(has_children, "visible elements should have children");
     }
 
 }
