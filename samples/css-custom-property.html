@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    @property --my-color {
+      syntax: "<color>";
+      inherits: true;
+      initial-value: blue;
+    }
+
+    @property --my-size {
+      syntax: "<length>";
+      inherits: false;
+      initial-value: 10px;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: white;
+    }
+
+    .test {
+      color: var(--my-color, red);
+      width: var(--my-size, 20px);
+      height: 100px;
+      border: 2px solid black;
+    }
+
+    .override {
+      --my-color: green;
+      --my-size: 50px;
+    }
+  </style>
+</head>
+<body>
+  <div class="test">Should be blue text on default size</div>
+  <div class="test override">Should be green text with 50px size</div>
+</body>
+</html>
