@@ -6,7 +6,10 @@
 
 ## In progress
 
-_(нет)_
+**p2-tab-auto-archive** — Tab auto-archive (7A.5): auto-hide inactive tabs from strip after 12 h  
+branch: p2-tab-auto-archive  
+Next step: add `last_activated_ms` to `TabEntry`, create `archive.rs`, wire in `main.rs`  
+`crates/shell/src/tabs/strip.rs:56`, `crates/shell/src/tabs/archive.rs` (new)
 
 ---
 
@@ -22,6 +25,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | ~~38~~ | ~~Resize Observer API~~ — **выполнено P3** (p3-observers-api) | — | — | — |
 | ~~39~~ | ~~HTML Popover API~~ — **взято P1** (p1-popover-api, 2026-06-03) | — | — | — |
 | ~~40~~ | ~~View Transitions API~~ — **выполнено P2** (p2-view-transitions, 2026-06-03) | — | — | — |
+| 41 | Tab auto-archive (7A.5) — **взято P2** (p2-tab-auto-archive) | `shell` | M | 7A.5 |
 
 ---
 
