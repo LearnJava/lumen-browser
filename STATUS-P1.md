@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**A-2: WebHID API stub**  
+Branch: `p1-webhid-api-stub`  
+Next step: Create `crates/js/src/webhid.rs`, implement `navigator.hid.requestDevice()` stub that returns reject, `HIDDevice` class with methods (open/close/sendReport/receiveFeatureReport), `HIDConnectionEvent`. Add unit tests. Export to window.
 
 ---
 
