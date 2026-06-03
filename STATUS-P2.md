@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p2-temporal-api** branch: `p2-temporal-api`
+Next step: implement `temporal_api.rs` in `crates/js/src/temporal_api.rs`
 
 ---
 

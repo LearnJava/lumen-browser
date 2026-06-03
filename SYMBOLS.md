@@ -895,7 +895,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-js  (91 symbols)
+## lumen-js  (92 symbols)
 
 `crates/js/src/audio_bindings.rs:25` **fn** `new_session_seed` — Generate a unique per-session noise seed
 `crates/js/src/audio_bindings.rs:37` **fn** `install_audio_bindings` — Install AudioContext stub with fingerprint noise into the JS context
@@ -927,35 +927,35 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/heap_snapshot.rs:97` **fn** `decompress_heap` — Inverse of [`compress_heap`]: strip the [`HEAP_MAGIC`] prefix and inflate
 `crates/js/src/iframe_element.rs:30` **fn** `install_iframe_element_bindings` — Install HTMLIFrameElement stubs into the JS context
 `crates/js/src/intl_bindings.rs:42` **fn** `install_intl_bindings` — Install the `Intl` shim into the JS context
-`crates/js/src/lib.rs:48` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:62` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:179` **fn** `new`
-`crates/js/src/lib.rs:246` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:449` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:458` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:470` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:495` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
-`crates/js/src/lib.rs:509` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:534` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:553` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:563` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:574` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
-`crates/js/src/lib.rs:582` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
-`crates/js/src/lib.rs:590` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:599` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:608` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:617` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:625` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:634` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:646` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:655` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:664` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:675` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:684` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:693` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:703` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:721` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:733` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:49` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:63` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:180` **fn** `new`
+`crates/js/src/lib.rs:247` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:456` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:465` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:477` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:502` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
+`crates/js/src/lib.rs:516` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:541` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:560` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:570` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:581` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
+`crates/js/src/lib.rs:589` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
+`crates/js/src/lib.rs:597` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:606` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:615` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:624` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:632` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:641` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:653` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:662` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:671` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:682` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:691` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:700` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:710` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:728` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:740` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
 `crates/js/src/media_devices.rs:26` **fn** `install_media_devices_bindings` — Install MediaDevices API shim into the JS context
 `crates/js/src/navigator_bindings.rs:36` **struct** `NavigatorProfile` — High-entropy `navigator` / `screen` / timezone values exposed to JavaScript
 `crates/js/src/navigator_bindings.rs:86` **fn** `set_navigator_profile` — Install a process-wide navigator profile (9F.1). Subsequent calls to the
@@ -973,6 +973,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/shared_worker.rs:137` **fn** `drain_messages` — Drain all messages a runtime's shared-worker ports have received
 `crates/js/src/shared_worker.rs:147` **fn** `install_shared_worker_bindings` — Install the `_lumen_sw_connect` / `_lumen_sw_post` / `_lumen_sw_close` native
 `crates/js/src/surface_api.rs:29` **fn** `install_surface_api_protection` — Install Layer 1 surface API protection into the JS context
+`crates/js/src/temporal_api.rs:36` **fn** `install_temporal_api` — Install the Temporal API shim into the given QuickJS context
 `crates/js/src/video_bindings.rs:27` **fn** `install_video_bindings` — Install HTMLVideoElement stubs into the JS context
 `crates/js/src/view_transitions.rs:17` **enum** `ViewTransitionEvent` — Events emitted by `document.startViewTransition` and drained by the shell
 `crates/js/src/view_transitions.rs:68` **fn** `install_view_transition_bindings` — Register `_lumen_vt_begin` / `_lumen_vt_end` native functions and install
@@ -1949,7 +1950,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (555 symbols)
+## lumen-shell  (572 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2475,6 +2476,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle/state.rs:136` **fn** `advance_tier` — Advance to the next tier. Returns `true` if a transition occurred
 `crates/shell/src/tab_lifecycle/state.rs:150` **fn** `should_transition_on_idle` — Returns `true` if the idle timeout for the current tier has elapsed
 `crates/shell/src/tab_lifecycle/state.rs:167` **fn** `suggested_pressure_state` — If memory pressure justifies an earlier-than-scheduled tier advance, returns
+`crates/shell/src/tabs/archive.rs:58` **struct** `ArchivedTab` — A tab that was auto-archived and removed from the visible tab strip
+`crates/shell/src/tabs/archive.rs:74` **enum** `ArchiveHit` — Hit result from the archive button or panel
+`crates/shell/src/tabs/archive.rs:86` **struct** `TabArchive` — State of the tab archive system
+`crates/shell/src/tabs/archive.rs:103` **fn** `new` — Create an empty archive with the panel closed
+`crates/shell/src/tabs/archive.rs:108` **fn** `push` — Push a newly-archived tab (prepend — newest entry shown first)
+`crates/shell/src/tabs/archive.rs:113` **fn** `take` — Remove and return the archived entry with the given original tab `id`
+`crates/shell/src/tabs/archive.rs:119` **fn** `count` — Number of archived entries
+`crates/shell/src/tabs/archive.rs:124` **fn** `toggle` — Toggle panel open/closed; resets scroll on open
+`crates/shell/src/tabs/archive.rs:132` **fn** `close` — Close panel without clearing entries
+`crates/shell/src/tabs/archive.rs:138` **fn** `scroll_up` — Scroll up by one row (clamped at zero)
+`crates/shell/src/tabs/archive.rs:144` **fn** `scroll_down` — Scroll down by one row (clamped at last page)
+`crates/shell/src/tabs/archive.rs:157` **fn** `archive_btn_x` — Pixel x-coordinate where the archive button begins (right of all tabs)
+`crates/shell/src/tabs/archive.rs:177` **fn** `hit_test_button` — Hit-test the archive toolbar button area
+`crates/shell/src/tabs/archive.rs:185` **fn** `hit_test_panel` — Hit-test the archive panel when it is open
+`crates/shell/src/tabs/archive.rs:238` **fn** `build_button` — Build the archive toolbar button appended to the right of the tab bar
+`crates/shell/src/tabs/archive.rs:309` **fn** `build_panel` — Build the drop-down archive panel anchored below the archive button
 `crates/shell/src/tabs/containers.rs:44` **enum** `ContainerKind` — Kind of tab container. Drives the border-top colour in the tab strip
 `crates/shell/src/tabs/containers.rs:65` **fn** `border_color` — Border-top strip colour, or `None` for [`ContainerKind::None`]
 `crates/shell/src/tabs/containers.rs:82` **fn** `name` — Human-readable container name for UI labels
@@ -2485,18 +2502,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/containers.rs:150` **fn** `len` — Number of `(origin, container)` mappings tracked
 `crates/shell/src/tabs/containers.rs:156` **fn** `is_empty` — `true` if no mapping has been allocated yet
 `crates/shell/src/tabs/strip.rs:56` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:85` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:96` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:111` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:116` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:133` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:152` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:160` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:172` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:182` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:193` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:213` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:244` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:92` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:103` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:119` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:127` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:148` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:166` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:178` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:186` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:198` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:208` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:219` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:239` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:270` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -2913,4 +2931,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2848 symbols in 20 crates*
+*Total: 2866 symbols in 20 crates*
