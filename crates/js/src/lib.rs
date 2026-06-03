@@ -27,6 +27,7 @@ pub mod temporal_api;
 pub mod webgl_bindings;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
+pub mod webtransport;
 pub mod worker;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
