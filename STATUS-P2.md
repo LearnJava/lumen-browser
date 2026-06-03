@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+C9: `::marker` рендеринг  branch: p2-c9-marker-rendering
+Next step: compute_pseudo_element_style("marker") + inject_marker refactor  box_tree.rs:2021
 
 ---
 
