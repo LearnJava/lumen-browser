@@ -6,8 +6,7 @@
 
 ## In progress
 
-RB-7: `VelloBackend` заглушка  branch: p2-rb7-vello-stub
-Next step: коммит + merge в main
+_(нет)_
 
 ---
 
@@ -37,7 +36,7 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 | ~~RB-4~~ | ~~Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var~~ — **выполнено** (p2-rb4-backend-factory, 2026-06-03) | — | — | — |
 | ~~RB-5~~ | ~~`FemtovgBackend` скелет + базовые команды~~ — **выполнено** (p2-rb5-femtovg-backend, 2026-06-03) | — | — | — |
 | ~~RB-6~~ | ~~`FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов)~~ — **выполнено** (p2-rb6-femtovg-full, 2026-06-03) | — | — | — |
-| RB-7 | `VelloBackend` заглушка (компилируется, логирует, ничего не рисует) | `lumen-paint` | S | ADR-010 |
+| ~~RB-7~~ | ~~`VelloBackend` заглушка (компилируется, логирует, ничего не рисует)~~ — **выполнено** (p2-rb7-vello-stub, 2026-06-03) | — | — | — |
 | RB-8 | `CompareBackend` + тест-раннер в `lumen-driver` (pixel diff двух бэкендов) — совместно с P3 | `lumen-paint`, `lumen-driver` | M | ADR-010 |
 | RB-9 | `FemtovgBackend` → default; `WgpuBackend` → fallback | `lumen-paint`, `lumen-shell` | S | ADR-010 |
 | RB-10 | `VelloBackend` полный (когда vello API стабилизируется) | `lumen-paint` | L | ADR-010 (Phase 3+) |
@@ -45,6 +44,8 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 ---
 
 ## Recent merges
+
+- **p2-rb7-vello-stub** ✅ 2026-06-03 — RB-7: `VelloBackend` заглушка (ADR-010 Phase 3). Новый модуль `paint::backends::vello_backend`: `VelloBackend` реализует `RenderBackend` — компилируется, логирует через `eprintln!`, ничего не рисует. `render()` → Ok(()); `screenshot_rgba()` → `Some(прозрачный буфер размера width×height×4)` для совместимости с будущим `CompareBackend` (RB-8). `viewport_size()` и `scale_factor()` делегируют к хранимым полям. Без новых зависимостей (feature `backend-vello = []`). `backends/mod.rs`: `pub mod vello_backend` + re-export `VelloBackend`. `lib.rs`: `backends` компилируется при любом из трёх backend-* фичей. `backend_factory.rs`: `LUMEN_BACKEND=vello` создаёт `VelloBackend` через `create_vello(window)`. 13 новых unit-тестов; lumen-paint: 561 тест. Clippy чист.
 
 - **p2-rb6-femtovg-full** ✅ 2026-06-03 — RB-6: `FemtovgBackend` полный — все ~30 `DisplayCommand` вариантов (ADR-010 Phase 2). `DrawImage`/`DrawBackgroundImage` → `Paint::image()` + серый placeholder. `DrawLinearGradient` → `linear_gradient_stops()` с CSS-angle → (start,end) математикой (аналог WgpuBackend). `DrawRadialGradient` → `radial_gradient_stops()`, farthest-corner радиус. `DrawConicGradient` → triangle fan (≥36 сегментов) с `interp_conic_color` (нет нативной поддержки в OpenGL ES 2.0). `DrawOutline` → 4 fill_rect снаружи box. `DrawScrollbar` → track fill + thumb `rounded_rect`. `DrawSvgPath` → chunks(3) → femtovg Path triangle fan. `DrawCrossFade` → два `Paint::image` с complementary alpha. `DrawLayerSnapshot` → `snapshots: HashMap<u64, ImageId>`. `BoxModelOverlay` → 4 полупрозрачных FillRect (Chrome DevTools палитра). `PushOpacity` → `set_global_alpha`. `PushBlendMode` → `global_composite_operation` (Normal/PlusLighter; прочие CSS blend modes → SourceOver, ограничение GL ES). `PushTransform` → `set_transform(Transform2D)` из Mat4 2D-аффинной части. `PushFilter` → global_alpha для Opacity; blur/color-matrix — save/restore (нет GPU colour-matrix в femtovg). `PushBackdropFilter` → save/restore (нет backdrop в GL ES). `PushMask*` / `PushMaskLayer` → scissor по rect (аппроксимация). `BeginStickyLayer` → `sticky_offset_dy/dx` + translate; стек `sticky_stack`. `PageBreak` → no-op. 19 новых unit-тестов; 567 OK с backend-femtovg. Clippy чист.
 
