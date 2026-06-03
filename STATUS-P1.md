@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-2: WebHID API stub**  
-Branch: `p1-webhid-api-stub`  
-Next step: Create `crates/js/src/webhid.rs`, implement `navigator.hid.requestDevice()` stub that returns reject, `HIDDevice` class with methods (open/close/sendReport/receiveFeatureReport), `HIDConnectionEvent`. Add unit tests. Export to window.
+_(нет)_
 
 ---
 
@@ -16,6 +14,7 @@ Next step: Create `crates/js/src/webhid.rs`, implement `navigator.hid.requestDev
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-2: WebHID API stub | Phase 0 JS-шим: navigator.hid.requestDevice({filters}) → reject, navigator.hid.getDevices() → Promise<[]>, HIDDevice (vendorId/productId/productName/collections/opened, open/close/sendReport/receiveFeatureReport → reject), HIDConnectionEvent, HIDManager extends EventTarget, HIDCollectionInfo, HIDReportItem. 7 unit-тестов. lumen-js: 1101 тестов. |
 | 2026-06-04 | A-1: WebTransport API stub | Phase 0 JS-шим: WebTransport(url), datagrams.readable/writable, createBidirectionalStream/createUnidirectionalStream, все операции reject. WebTransportError класс. 1 unit-тест. lumen-js: 1094 тестов. |
 
 ---
