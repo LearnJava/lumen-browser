@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**RB-1**: `RenderBackend` trait + `RenderError` в `paint::backend`  branch: `p2-render-backend-trait`
+Next step: коммит готов, clippy чист, тесты выполняются — затем merge.
 
 ---
 
