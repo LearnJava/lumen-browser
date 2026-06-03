@@ -28,6 +28,7 @@ pub mod scroll_timeline;
 pub mod snapshot;
 pub mod stacking;
 pub mod style;
+pub mod subgrid;
 pub mod text_iter;
 pub(crate) mod vertical;
 
@@ -75,6 +76,7 @@ pub use scroll_timeline::{
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };
 pub use snapshot::serialize_layout_tree;
+pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};
 pub use stacking::{
     box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,
     StackingContext, StackingContextId, StackingTree,
@@ -12602,6 +12604,119 @@ mod tests {
         // Dense: C fills col 1 row 3 → x=0, y=100
         assert!((c.rect.x - 0.0).abs() < 1.0,   "c.x={}: dense col must back-fill col1 row3", c.rect.x);
         assert!((c.rect.y - 100.0).abs() < 1.0, "c.y={}: dense col must back-fill col1 row3", c.rect.y);
+    }
+
+    // ── CSS Grid L2 Subgrid ───────────────────────────────────────────────────
+
+    /// `grid-template-columns: subgrid` parses to the sentinel `[Subgrid]`.
+    #[test]
+    fn grid_subgrid_parse_columns() {
+        let root = lay(
+            "<body><div id='g'><div id='sg'></div></div></body>",
+            "#g { display: grid; grid-template-columns: 100px 200px; } \
+             #sg { grid-template-columns: subgrid; }",
+        );
+        let grid = first_element_child(&root);
+        let subgrid = first_element_child(grid);
+        assert_eq!(subgrid.style.grid_template_columns.len(), 1);
+        assert_eq!(subgrid.style.grid_template_columns[0], GridTrackSize::Subgrid);
+    }
+
+    /// `grid-template-rows: subgrid` parses to the sentinel `[Subgrid]`.
+    #[test]
+    fn grid_subgrid_parse_rows() {
+        let root = lay(
+            "<body><div id='g'><div id='sg'></div></div></body>",
+            "#g { display: grid; grid-template-rows: 50px 100px; } \
+             #sg { grid-template-rows: subgrid; }",
+        );
+        let grid = first_element_child(&root);
+        let subgrid = first_element_child(grid);
+        assert_eq!(subgrid.style.grid_template_rows.len(), 1);
+        assert_eq!(subgrid.style.grid_template_rows[0], GridTrackSize::Subgrid);
+    }
+
+    /// A subgrid item spanning 2 columns inherits those column widths from the parent.
+    /// Two items inside the subgrid are placed in the inherited columns (100px + 200px).
+    #[test]
+    fn grid_subgrid_column_layout() {
+        let root = lay(
+            "<body>\
+               <div id='g'>\
+                 <div id='sg'>\
+                   <span id='a'></span>\
+                   <span id='b'></span>\
+                 </div>\
+               </div>\
+             </body>",
+            r#"
+            body { width: 400px; }
+            #g {
+                display: grid;
+                grid-template-columns: 100px 200px;
+                grid-template-rows: 50px;
+                width: 300px;
+            }
+            #sg {
+                display: grid;
+                grid-template-columns: subgrid;
+                grid-column: 1 / 3;
+            }
+            #a { height: 30px; }
+            #b { height: 30px; }
+            "#,
+        );
+        let grid = first_element_child(&root);
+        // The subgrid item spans both columns → width = 300px.
+        let sg = first_element_child(grid);
+        assert!(
+            (sg.rect.width - 300.0).abs() < 2.0,
+            "subgrid width should be ~300, got {}",
+            sg.rect.width
+        );
+        // Items inside subgrid are placed in the inherited 100px and 200px columns.
+        let items: Vec<_> = sg.children.iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert_eq!(items.len(), 2, "expected 2 items in subgrid");
+        let a = &items[0];
+        let b = &items[1];
+        // a in col 1 (x=0, w=100), b in col 2 (x=100, w=200).
+        assert!((a.rect.x - sg.rect.x).abs() < 2.0, "a.x rel={}", a.rect.x - sg.rect.x);
+        assert!((a.rect.width - 100.0).abs() < 2.0, "a.w={}", a.rect.width);
+        assert!((b.rect.x - sg.rect.x - 100.0).abs() < 2.0, "b.x rel={}", b.rect.x - sg.rect.x);
+        assert!((b.rect.width - 200.0).abs() < 2.0, "b.w={}", b.rect.width);
+    }
+
+    /// `collect_subgrid_items` finds both column-subgrid and row-subgrid containers.
+    #[test]
+    fn grid_collect_subgrid_items() {
+        use crate::subgrid::collect_subgrid_items;
+        let root = lay(
+            "<body>\
+               <div id='g'>\
+                 <div id='col_sg'></div>\
+                 <div id='row_sg'></div>\
+                 <div id='both_sg'></div>\
+                 <div id='normal'></div>\
+               </div>\
+             </body>",
+            r#"
+            #g { display: grid; grid-template-columns: 100px 200px; grid-template-rows: 50px 50px; }
+            #col_sg { grid-template-columns: subgrid; grid-column: 1 / 3; }
+            #row_sg { grid-template-rows: subgrid; grid-row: 1 / 3; }
+            #both_sg { grid-template-columns: subgrid; grid-template-rows: subgrid; }
+            "#,
+        );
+        let items = collect_subgrid_items(&root);
+        // col_sg, row_sg, both_sg should appear; normal should not.
+        assert_eq!(items.len(), 3, "expected 3 subgrid items, got {:?}", items.len());
+        let col_sg = items.iter().find(|it| it.subgrid_columns && !it.subgrid_rows);
+        assert!(col_sg.is_some(), "missing col-subgrid item");
+        let row_sg = items.iter().find(|it| it.subgrid_rows && !it.subgrid_columns);
+        assert!(row_sg.is_some(), "missing row-subgrid item");
+        let both_sg = items.iter().find(|it| it.subgrid_columns && it.subgrid_rows);
+        assert!(both_sg.is_some(), "missing both-subgrid item");
     }
 
     // ── collect_image_requests ────────────────────────────────────────────────

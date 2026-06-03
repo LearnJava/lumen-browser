@@ -3501,15 +3501,21 @@ pub enum GridTrackSize {
     MaxContent,
     /// `minmax(min, max)` — track between min and max sizing functions.
     Minmax(Box<GridTrackSize>, Box<GridTrackSize>),
+    /// `subgrid` — inherit track sizes from the spanning tracks of the parent grid
+    /// (CSS Grid Layout L2 §9). The grid item must itself be a grid container;
+    /// its column/row tracks are replaced by the parent's resolved track sizes
+    /// for the cells it spans. Stored as a sentinel `vec![GridTrackSize::Subgrid]`
+    /// in `grid_template_columns` or `grid_template_rows`.
+    Subgrid,
 }
 
 impl GridTrackSize {
     /// Resolve to a concrete pixel size given container width, em, viewport.
-    /// For `fr` and `auto` returns `None` — caller handles those specially.
+    /// For `fr`, `auto`, and `subgrid` returns `None` — caller handles those specially.
     pub fn resolve_fixed(&self, em: f32, cb: f32, viewport: Size) -> Option<f32> {
         match self {
             Self::Length(l) => l.resolve(em, Some(cb), viewport),
-            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent => None,
+            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent | Self::Subgrid => None,
             Self::Minmax(min, _max) => min.resolve_fixed(em, cb, viewport),
         }
     }
@@ -3524,6 +3530,11 @@ impl GridTrackSize {
         if let Self::Fr(v) = self { Some(*v) } else { None }
     }
 
+    /// True when this track inherits its size from the parent grid (subgrid axis).
+    pub fn is_subgrid(&self) -> bool {
+        matches!(self, Self::Subgrid)
+    }
+
     /// Parse a single track sizing keyword / value (no `repeat()`).
     fn parse_single(s: &str, is_quirks: bool) -> Option<Self> {
         let lc = s.trim().to_ascii_lowercase();
@@ -3531,6 +3542,9 @@ impl GridTrackSize {
             "auto" => return Some(Self::Auto),
             "min-content" => return Some(Self::MinContent),
             "max-content" => return Some(Self::MaxContent),
+            // `subgrid` as a single token is handled in parse_track_list; reaching
+            // here means it appeared inside a repeat() context — treat as auto.
+            "subgrid" => return Some(Self::Auto),
             _ => {}
         }
         // `<number>fr`
@@ -3558,9 +3572,15 @@ impl GridTrackSize {
 
     /// Parse a track-list value string into a Vec of GridTrackSize.
     /// Handles `repeat(N, <track-list>)` by expanding.
+    /// `subgrid` as the entire value returns `vec![Subgrid]` (sentinel for the whole axis).
     pub fn parse_track_list(s: &str, is_quirks: bool) -> Vec<Self> {
+        let trimmed = s.trim();
+        // CSS Grid L2 §9: `subgrid` replaces the entire track list for that axis.
+        if trimmed.eq_ignore_ascii_case("subgrid") {
+            return vec![Self::Subgrid];
+        }
         let mut result = Vec::new();
-        for token in split_track_list_tokens(s) {
+        for token in split_track_list_tokens(trimmed) {
             let t = token.trim();
             let lc = t.to_ascii_lowercase();
             if lc.starts_with("repeat(") && lc.ends_with(')') {

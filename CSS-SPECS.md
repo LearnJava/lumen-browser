@@ -102,17 +102,17 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
 | CSS Writing Modes L4 | [css-writing-modes-4](https://www.w3.org/TR/css-writing-modes-4/) | 🟡 | vertical-rl/lr layout axis swap | **#41** |
-| CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | ⬜ | subgrid; masonry | **#42** |
+| CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry ⬜ | **#42** |
 | CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | shape-outside float wrapping | **#43** |
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | offset-path motion layout algorithm stub ready (P1); CSS wiring pending (P4) | **#44** |
-| CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ⬜ | break-before/after/inside | **#45** |
+| CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | 🟡 | color-mix() algorithm stub (P1 2026-06-03, `color_mix.rs`); CSS wiring pending (P4); relative color syntax ⬜ | **#46** |
 | CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | ⬜ | font-palette; @font-palette-values | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
 | CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ⬜ | decorative lines in gaps | **#50** |
-| CSS Env Variables L1 | [css-env-1](https://www.w3.org/TR/css-env-1/) | ⬜ | env() safe-area-inset-* | **#51** |
-| CSS Selectors L5 | [selectors-5](https://www.w3.org/TR/selectors-5/) | ⬜ | :nth-child(An+B of S) | **#52** |
+| CSS Env Variables L1 | [css-env-1](https://www.w3.org/TR/css-env-1/) | ✅ | `env()` + fallback + nested `calc(env(...)+...)` implemented in `style.rs:8798` (`expand_env_vars`); `safe-area-inset-*` returns fallback when not set | **#51** |
+| CSS Selectors L5 | [selectors-5](https://www.w3.org/TR/selectors-5/) | ✅ | `:nth-child(An+B of S)` selector filter implemented in `style.rs:6464` + `css-parser` parser; 4 layout tests | **#52** |
 | CSS Nesting (scope) | [css-scoping-1](https://www.w3.org/TR/css-scoping-1/) | ⬜ | @scope rule | **#53** |
 | CSS Functions & Mixins | [css-mixins-1](https://www.w3.org/TR/css-mixins-1/) | ⬜ | @function rule | **#54** |
 | Scroll-driven Animations | [scroll-animations-1](https://www.w3.org/TR/scroll-animations-1/) | 🟡 | scroll-timeline; animation-timeline | **#55** |

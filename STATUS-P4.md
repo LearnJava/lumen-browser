@@ -44,13 +44,24 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 | 11 | `attr()` with type (CSS Values L4) | M | none |
 | 12 | `mask-image` CSS wiring | L | P2 GPU compositing pass |
 | 13 | `writing-mode: vertical-*` axis swap | L | ~~layout engine~~ **stub ready** (P1 2026-05-31, `vertical.rs`) |
-| 14 | `subgrid` track inheritance | XL | grid engine |
+| ~~14~~ | ~~`subgrid` track inheritance~~ — **алгоритм готов** (P1 2026-06-03, `subgrid.rs`) | — | — |
 
 ---
 
 ## Needs wiring (algorithm ready, CSS not connected)
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
+
+### `grid-template-columns/rows: subgrid` (P1 feature p1-css-subgrid, 2026-06-03)
+- **Status:** Full layout algorithm ready in `lumen-layout/src/subgrid.rs` + `box_tree.rs`.
+  - `GridTrackSize::Subgrid` variant added to the enum (`style.rs:3490`).
+  - `parse_track_list("subgrid", ...)` returns `vec![GridTrackSize::Subgrid]` sentinel.
+  - `lay_out_grid` in `box_tree.rs:4586` reads thread-local `SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX` and uses inherited track sizes when available.
+  - Parent grid automatically sets thread-locals for subgrid children before `lay_out` call (RAII `SubgridContextGuard`).
+  - `collect_subgrid_items(root) -> Vec<SubgridItem>` — iterates layout tree and returns all subgrid containers.
+  - 9 unit tests pass: parse (2), layout (1), collect_subgrid_items (1), SubgridContext API (5).
+- **P4 task:** CSS parsing already wired — `apply_declaration` for `grid-template-columns`/`grid-template-rows` calls `parse_track_list` which handles `subgrid`. No new ComputedStyle fields needed. The layout engine now reads `GridTrackSize::Subgrid` sentinel and applies inherited tracks. **No further P4 work required for Phase 1** — the algorithm is end-to-end. To add CSS Grid L2 `<line-name-list>` after `subgrid` keyword (optional), extend `parse_track_list` to collect named lines when `subgrid <ident>+` is detected.
+- **Entry points:** `lumen-layout/src/subgrid.rs` — `SubgridContext`, `collect_subgrid_items`; `lumen-layout/src/box_tree.rs:4586` — `lay_out_grid` subgrid entry.
 
 ### `:fullscreen` CSS pseudo-class (P1 feature p1-fullscreen-api)
 - **Status:** JS Fullscreen API implemented. `element.requestFullscreen()` sets `data-lumen-fullscreen` sentinel attribute on the element; `document.exitFullscreen()` / `_lumen_notify_fullscreen_exit()` removes it. `document.fullscreenElement` tracks the active nid. Shell wired to winit `set_fullscreen(Borderless)` / `set_fullscreen(None)`. CSS parser already has `PseudoClass::Fullscreen` (always `false` for now — see `style.rs:5477`).
