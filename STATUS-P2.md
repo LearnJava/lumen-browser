@@ -6,8 +6,7 @@
 
 ## In progress
 
-**p2-interactive-pseudo-classes** — `:hover`/`:focus`/`:active`/`:focus-within`/`:focus-visible` интерактивные псевдо-классы  branch: p2-interactive-pseudo-classes
-Next step: добавить варианты в `PseudoClass` enum + парсинг, затем thread-locals + матчер, затем shell wiring  `crates/engine/css-parser/src/parser.rs:316`
+_(нет)_
 
 ---
 
@@ -28,6 +27,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p2-interactive-pseudo-classes** ✅ 2026-06-03 — CSS `:hover`/`:focus`/`:active`/`:focus-within`/`:focus-visible` (CSS Selectors L4 §4.3-4.5). `PseudoClass` enum расширен 5 вариантами; парсинг в `css-parser`; thread-locals `HOVER_NID/FOCUS_NID/ACTIVE_NID` в `layout/src/style.rs`; `set_interactive_state(hover, focus, active)` + `clear_interactive_state()` экспортированы; `is_self_or_ancestor` — `:hover`/`:active`/`:focus-within` матчат предков per spec. Shell: `hovered_nid` обновляется в `CursorMoved` (hit-test + relayout при смене), `active_nid` — в `MouseInput Pressed/Released`, `focused_node` — в `handle_click_at` (relayout при смене). `relayout()` передаёт состояния в `set_interactive_state` до layout, очищает после. 5 новых unit-тестов (hover/ancestor-hover/no-match/focus/active+ancestor). CSS-SPECS.md: `:hover`/`:active`/`:focus`/`:focus-within`/`:focus-visible` 🟡⬜→✅. lumen-layout: 2257 тестов (+ BUG-055 pre-existing).
 
 - **p2-esm-module-scripts** ✅ 2026-06-03 — Фикс падающего теста в `lumen-js::esm`. `esm::tests::page_url_can_be_updated_via_shared_handle` ожидал `"a.js"` при пустом `page_url`, но `resolve_relative("", "./a.js")` корректно возвращает `"./a.js"` (нет схемы для обрезки → leading `./` сохраняется в `normalize_path`). Изменено ожидание теста + добавлены комментарии. lumen-js: 1046 тестов.
 
