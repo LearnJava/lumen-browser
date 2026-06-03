@@ -40,6 +40,7 @@ pub mod url_pattern;
 pub mod navigation_api;
 pub mod typed_om_api;
 pub mod trusted_types;
+pub mod sanitizer;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -602,6 +603,14 @@ impl QuickJsRuntime {
             // _lumen_take_media_session_update() is a P3 shell integration task.
             if let Err(e) = media_session::install_media_session_bindings(&ctx) {
                 eprintln!("MediaSession bindings init failed: {}", e);
+            }
+
+            // Install Sanitizer API (W3C Sanitizer API §3) — after DOM so `document`,
+            // `Element`, and DOM methods are available.
+            // Phase 0: Simple removal of <script> tags and event handler attributes.
+            // Config options are not used.
+            if let Err(e) = sanitizer::install_sanitizer_bindings(&ctx) {
+                eprintln!("Sanitizer bindings init failed: {}", e);
             }
 
             Ok(())
