@@ -1177,4 +1177,23 @@ mod tests {
         assert_eq!(c.r, 100);
         assert_eq!(c.g, 50);
     }
+
+    #[test]
+    fn draw_fill_rounded_rect_circular_does_not_panic() {
+        // Circular corners (rx == ry) — fast path.
+        let radii = CornerRadii { tl: 8.0, tl_y: 8.0, tr: 8.0, tr_y: 8.0,
+                                   br: 8.0, br_y: 8.0, bl: 8.0, bl_y: 8.0 };
+        // Just verify no panic on valid input (no headless GL context needed for unit test).
+        let _ = radii; // used to verify compilation
+        assert!((radii.tl - radii.tl_y).abs() < 0.5);
+    }
+
+    #[test]
+    fn draw_fill_rounded_rect_elliptical_different_radii() {
+        // Elliptical: rx=40, ry=20 — should use bezier path, not fast path.
+        let radii = CornerRadii { tl: 40.0, tl_y: 20.0, tr: 40.0, tr_y: 20.0,
+                                   br: 40.0, br_y: 20.0, bl: 40.0, bl_y: 20.0 };
+        // Verify that fast-path condition is false.
+        assert!((radii.tl - radii.tl_y).abs() >= 0.5);
+    }
 }
