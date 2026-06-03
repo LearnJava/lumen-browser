@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(нет)_
+**p2-esm-module-scripts** — фикс падающего теста `page_url_can_be_updated_via_shared_handle` в `esm.rs`  branch: p2-esm-module-scripts
 
 ---
 

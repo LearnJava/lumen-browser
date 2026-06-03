@@ -262,7 +262,11 @@ mod tests {
     #[test]
     fn page_url_can_be_updated_via_shared_handle() {
         let (r, handle) = LumenResolver::new("");
-        assert_eq!(r.resolve_specifier("", "./a.js"), "a.js");
+        // With an empty page_url and empty base, the relative path cannot be resolved to a
+        // real origin; resolve_relative returns the path normalised but still relative.
+        assert_eq!(r.resolve_specifier("", "./a.js"), "./a.js");
+        // After updating the shared handle, relative imports from inline module scripts
+        // (which have a virtual lumen:// base) resolve correctly against the page origin.
         *handle.lock().unwrap() = "https://example.com/page.html".to_owned();
         assert_eq!(r.resolve_specifier("lumen://inline-0", "./a.js"), "https://example.com/a.js");
     }
