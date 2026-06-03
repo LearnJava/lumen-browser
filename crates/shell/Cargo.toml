@@ -16,6 +16,11 @@ path = "src/main.rs"
 # falls back to NullJsRuntime which silently ignores all inline scripts.
 quickjs = ["dep:lumen-js"]
 
+# femtovg rendering backend (Phase 2, ADR-010). Activates lumen-paint/backend-femtovg.
+# Use: cargo run -p lumen-shell --features backend-femtovg
+# Or:  LUMEN_BACKEND=femtovg cargo run -p lumen-shell --features backend-femtovg
+backend-femtovg = ["lumen-paint/backend-femtovg"]
+
 [dependencies]
 lumen-core.workspace = true
 lumen-devtools.workspace = true

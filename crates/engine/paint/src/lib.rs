@@ -8,7 +8,7 @@
 
 pub mod atlas;
 pub mod backend;
-#[cfg(feature = "backend-wgpu")]
+#[cfg(any(feature = "backend-wgpu", feature = "backend-femtovg"))]
 pub mod backends;
 pub mod backdrop_cache;
 pub mod glsl;
@@ -32,6 +32,8 @@ pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use backend::{RenderBackend, RenderError};
 #[cfg(feature = "backend-wgpu")]
 pub use backends::WgpuBackend;
+#[cfg(feature = "backend-femtovg")]
+pub use backends::FemtovgBackend;
 pub use backdrop_cache::BackdropCache;
 pub use fallback::CURATED_FALLBACK_FAMILIES;
 pub use compositor::{
