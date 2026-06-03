@@ -6,13 +6,8 @@
 
 ## In progress
 
-_(нет)_
-
----
-
-## Next
-
-_(нет — все задачи выполнены)_
+**p1-anchor-positioning** — CSS Anchor Positioning L1 algorithm stub  branch: p1-anchor-positioning
+Next step: write anchor.rs, update lib.rs, STATUS-P4.md, subsystems/lumen-layout.md  anchor.rs:1
 
 ---
 

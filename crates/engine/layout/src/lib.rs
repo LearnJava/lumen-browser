@@ -12,6 +12,7 @@
 //! Не поддерживается (Phase 2+): flex, grid, float, absolute positioning,
 //! font-weight/style на уровне inline.
 
+pub mod anchor;
 pub mod animation;
 pub mod box_tree;
 pub mod counters;
@@ -59,6 +60,10 @@ pub use selection::{caret_at_point, selection_rects};
 pub use selector_query::{
     computed_style_by_selector, computed_style_to_map, find_all_by_selector,
     find_box_by_selector, query_all, ComputedStyleSnapshot,
+};
+pub use anchor::{
+    collect_anchors, register_anchor, resolve_anchor_function, resolve_inset_area,
+    AnchorEntry, AnchorRegistry, AnchorSide, AnchoredPosition, InsetAreaKeyword,
 };
 pub use motion_path::{resolve_motion_transform, MotionTransform};
 pub use text_iter::{collect_visible_text, TextFragment};
