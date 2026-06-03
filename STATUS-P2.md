@@ -6,8 +6,7 @@
 
 ## In progress
 
-**C7: `@counter-style` custom counters** — branch: p2-c7-counter-style
-Next step: реализовать `CounterStyleRegistry` + threading в `build_box`/`content_to_inline_segments` — `layout/src/counters.rs`
+_(нет)_
 
 ---
 
@@ -19,7 +18,6 @@ Next step: реализовать `CounterStyleRegistry` + threading в `build_b
 
 | # | Task | Crate(s) | Effort |
 |---|------|----------|--------|
-| C7 | **`@counter-style` кастомные счётчики.** Parse at-rule `@counter-style`; дескрипторы `system`/`symbols`/`prefix`/`suffix`/`range`/`pad`/`negative`; resolve в `counter()`/`counters()` значениях. | `lumen-layout` | M |
 | C8 | **`column-rule` / `column-span` / `column-fill`.** Поля `column_rule_*` + `column_span: ColumnSpan` + `column_fill: ColumnFill`; parse; wire в multi-column layout engine. | `lumen-layout` | S |
 | C9 | **`::marker` рендеринг.** `compute_pseudo_element_style("::marker")`; `content`/color/font поддержка; emit перед list-item боксом в display list. | `lumen-layout`, `lumen-paint` | S |
 | C10 | **`cq*` container query units** (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`). Resolve против ближайшего `container` предка в `compute_length_to_px`. | `lumen-layout` | M |
@@ -40,6 +38,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-c7-counter-style** ✅ 2026-06-03 — C7: `@counter-style` custom counters end-to-end (CSS Counter Styles L3). `CounterStyleDef` struct с дескрипторами `system`/`symbols`/`additive-symbols`/`prefix`/`suffix`/`range`/`pad`/`negative`/`fallback`. `CounterStyleRegistry = HashMap<String, CounterStyleDef>`. `build_counter_style_registry(sheet)` строит реестр из `sheet.counter_styles`. Алгоритмы: `cyclic` (rem_euclid), `numeric` (positional base-N), `alphabetic` (bijective base-N, как spreadsheet-колонки), `symbolic` (повтор символа), `additive` (weighted sum, как Roman numerals), `fixed` (конечный range), `extends` (делегирует). Парсинг CSS-строк с Unicode-escape `\XXXXXX`. Реестр строится внутри `layout`/`layout_measured`/`layout_measured_hyp` и пробрасывается через `build_box`→`collect_inline_segments`→`inject_pseudo`→`content_to_inline_segments`. `format_counter_with_registry` заменяет `format_counter` — custom стили первичны, встроенные — fallback. Публичный API `layout_measured/layout_measured_hyp` не изменён. 34 новых unit-теста; итого lumen-layout: 2186 (1 pre-existing BUG-055).
 - **p2-svg-stroke-advanced** ✅ 2026-06-03 — C6: SVG stroke advanced properties end-to-end (SVG §11.3/11.4). Новые enums `FillRule { NonZero, EvenOdd }`, `StrokeLinecap { Butt, Round, Square }`, `StrokeLinejoin { Miter, Round, Bevel }` в `layout/src/style.rs`. `ComputedStyle` получил 6 новых полей: `svg_fill_rule`, `svg_stroke_linecap`, `svg_stroke_linejoin`, `svg_stroke_miterlimit` (default 4.0), `svg_stroke_dasharray: Vec<f32>`, `svg_stroke_dashoffset`. `apply_declaration` парсит все 6 свойств; наследование в `compute_style` + `apply_css_wide_keyword`. Алгоритмы в `paint/src/svg_path.rs`: `StrokeParams` struct, `apply_dash_pattern()` (разбивка пути на дашированные сегменты, корректный dashoffset), `tessellate_stroke_ex()` (full linecap round/square + linejoin bevel/round + configurable miterlimit). `emit_svg_shape` в `display_list.rs` wires все поля через `StrokeParams`. Graphic test 60-svg-stroke-advanced.html. 12 новых unit-тестов (svg_path). Итого lumen-paint: 529 тестов.
 - **p2-scrollbar-width-color** ✅ 2026-06-03 — C5: `scrollbar-width` / `scrollbar-color` CSS wiring. `DrawScrollbar` расширен полями `thumb_color: [f32;4]`, `track_color: [f32;4]`. `ScrollbarInput` получил `gutter_px`. Emit-блок читает `b.style.scrollbar_width` (auto=12px, thin=6px, none→команда не эмитируется) и `b.style.scrollbar_color` (Some→custom colors, None→defaults). Renderer использует per-command цвета вместо hardcoded констант. 4 новых теста; 518 passed (lumen-paint).
 - **p2-overflow-scroll-wiring** ✅ 2026-06-03 — C4: CSS unit-тесты для `overflow: scroll/auto` wiring. Подтверждено: `parse_overflow_kw` + display list emitter корректно обрабатывают `Scroll|Auto`. 5 тестов в `lumen-layout/style.rs` (одно/двухзначный shorthand, отдельные оси `overflow-x/y`) + 1 тест в `lumen-paint/display_list.rs` (`overflow:auto` → `PushScrollLayer`).
