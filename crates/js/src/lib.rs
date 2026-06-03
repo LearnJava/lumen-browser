@@ -33,6 +33,7 @@ pub mod webhid;
 pub mod webusb;
 pub mod webtransport;
 pub mod worker;
+pub mod url_pattern;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -518,6 +519,12 @@ impl QuickJsRuntime {
             // timezone helpers can leverage Date internals. Pure JS, no native bindings.
             if let Err(e) = temporal_api::install_temporal_api(&ctx) {
                 eprintln!("Temporal API init failed: {}", e);
+            }
+
+            // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
+            // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
+            if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {
+                eprintln!("URL Pattern API init failed: {}", e);
             }
 
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
