@@ -21,7 +21,7 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - DOM read: `getElementById`, `querySelector`, `querySelectorAll`, `getAttribute`, `tagName`, `textContent`, `parentElement`, `children`.
   - DOM write: `setAttribute`, `removeAttribute`, `textContent =`, `innerHTML =`, `createElement`, `createTextNode`, `appendChild`, `removeChild`.
   - `document.title` get/set.
-  - Phase 0 querySelector: supports `#id`, `.class`, `tagname`, `*` (no compound selectors).
+  - querySelector uses full CSS3 selector engine (lumen_layout::query_all): compound selectors, combinators ( > + ~), pseudo-classes, attribute selectors. element.matches() and element.closest() use per-node matches_selector. (P2 2026-06-03)
   - 19 DOM tests + 16 runtime tests = 35 total. All pass.
   - Shell integration: `run_scripts_with_dom` wraps `Document` in `Arc<Mutex<>>`, calls `install_dom`, drops runtime to release Arc clones, recovers `Document`.
 - **Fetch API JS shim** (`install_dom_api`, `crates/js/src/dom.rs`). 2026-05-22.
@@ -185,7 +185,6 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- querySelector compound selectors (e.g. `div.class`, `#id > p`).
 - `rusty_v8` backend (v1.0+).
 
 ## Invariants
