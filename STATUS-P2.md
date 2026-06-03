@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-1: CSS Properties & Values API (Houdini)**  
-Branch: `p2-css-properties-values-api`  
-Next step: Create `crates/js/src/css_properties_values_api.rs`, implement `CSS.registerProperty` stub, `@property` at-rule parsing in css-parser, `StyleSheet.registered_properties`, wiring in `compute_style`. Add 8 unit tests.
+_(нет)_
 
 ---
 
@@ -91,6 +89,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-css-properties-values-api** ✅ 2026-06-04 — A-1: CSS Properties & Values API (Houdini) Phase 0–1. `crates/js/src/css_properties_values_api.rs`: `RegisteredPropertiesMap` registry + `RegisteredProperty` struct (name/syntax/inherits/initial_value). `install_css_properties_values_api(ctx)` IIFE-шим регистрирует `CSS.registerProperty()` и пишет в `global._lumen_registered_properties` Map. `@property at-rule` парсинг в `lumen-css-parser/src/parser.rs`: `PropertyRule` struct с дескрипторами name/syntax/inherits/initial-value; `parse_property_rule()` парсит тело @property; `StyleSheet.property_rules: Vec<PropertyRule>`. `lumen-layout/src/style.rs`: `apply_property_initial_values()` применяет `initial-value` как fallback для custom свойств без декларации/наследования; `validate_against_syntax()` синтаксис-валидация против descriptor («*», «<color>», «<length>», «<percentage>», «<integer>», «<number>», «<angle>», «<time>», «<resolution>», «<custom-ident>»); `get_registered_properties()` экспортирован из lumen-js для доступа из layout. 6 новых unit-тестов (lumen-js) + 4 (lumen-layout syntax validation). lumen-js: 1139 ✅ (+31 с highlight_api merge), lumen-css-parser: 266 ✅ (+1), lumen-layout: 2277 ✅. Clippy чист.
 
 - **p2-css-custom-highlight** ✅ 2026-06-04 — A-2: CSS Custom Highlight API (CSS Highlight API L1) Phase 0. `lumen-js/src/highlight_api.rs`: `CSS.highlights` HighlightRegistry + `Highlight` class (extends Set) с `priority` полем. IIFE-шим регистрирует оба объекта в `install_highlight_api_bindings(&ctx)`. `lumen-css-parser`: `PseudoElementKind::Highlight(name)` вариант, `parse_functional_pseudo_element` парсит `::highlight(name)` и извлекает идентификатор. `layout/style.rs`: pattern match для Highlight в `pseudo_element_name_matches`. Phase 0: реестр + парсинг полный; Phase 1 (visual rendering) = `emit_text_with_highlights()` в `paint/display_list.rs` (pending). 12 новых unit-тестов (9 lumen-js highlight_api, 3 lumen-css-parser highlight_pseudo). lumen-js: 1149 ✅, lumen-css-parser: 264 ✅. Clippy чист.
 
