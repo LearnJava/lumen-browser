@@ -16,6 +16,7 @@ pub mod media_devices;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod shared_worker;
+pub mod speech;
 pub mod surface_api;
 pub mod video_bindings;
 pub mod view_transitions;
@@ -498,6 +499,14 @@ impl QuickJsRuntime {
                 Arc::clone(&self.view_transition_events),
             ) {
                 eprintln!("View Transitions bindings init failed: {}", e);
+            }
+
+            // Install Web Speech API (W3C Web Speech §3–4) — after DOM so `window`,
+            // `Promise`, `setTimeout`, and `Event` are available.
+            // Phase 0: SpeechSynthesis dispatches to OS TTS (SAPI/espeak/say);
+            // SpeechRecognition always rejects with service-not-allowed.
+            if let Err(e) = speech::install_speech_bindings(&ctx) {
+                eprintln!("Speech bindings init failed: {}", e);
             }
 
             Ok(())
