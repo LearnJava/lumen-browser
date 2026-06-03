@@ -6,7 +6,7 @@
 
 ## In progress
 
-**p2-esm-module-scripts** — фикс падающего теста `page_url_can_be_updated_via_shared_handle` в `esm.rs`  branch: p2-esm-module-scripts
+_(нет)_
 
 ---
 
@@ -27,6 +27,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p2-esm-module-scripts** ✅ 2026-06-03 — Фикс падающего теста в `lumen-js::esm`. `esm::tests::page_url_can_be_updated_via_shared_handle` ожидал `"a.js"` при пустом `page_url`, но `resolve_relative("", "./a.js")` корректно возвращает `"./a.js"` (нет схемы для обрезки → leading `./` сохраняется в `normalize_path`). Изменено ожидание теста + добавлены комментарии. lumen-js: 1046 тестов.
 
 - **p2-temporal-api** ✅ 2026-06-03 — TC39 Temporal API шим (Stage 4, ES2025) в `lumen-js`. `crates/js/src/temporal_api.rs`: чистый JS-шим без нативных биндингов, аналогично Intl-шиму. Полный набор классов: `Temporal.Now` (instant/plainDateISO/plainDateTimeISO/zonedDateTimeISO/timeZoneId), `Temporal.Instant` (epochNs как Number, from/fromEpochMs/add/subtract/since/toString/toZonedDateTimeISO), `Temporal.PlainDate` (from/compare/add/subtract/since/until/with/equals/toString, геттеры dayOfWeek/dayOfYear/weekOfYear/daysInMonth/daysInYear/inLeapYear), `Temporal.PlainTime`, `Temporal.PlainDateTime` (add/subtract/since/until/withPlainDate/withPlainTime), `Temporal.PlainYearMonth`, `Temporal.PlainMonthDay`, `Temporal.Duration` (ISO 8601 "P1Y2M3DT4H5M6.789S" парсинг+форматирование, arithmetic/negated/abs), `Temporal.ZonedDateTime` (UTC + fixed-offset "+HH:MM"; named TZ через Date.getTimezoneOffset), `Temporal.Calendar` (iso8601), `Temporal.TimeZone`. Идемпотентен (пропускает при наличии нативного Temporal). 30 unit-тестов, lumen-js: 1031 тест (было 1001, +30).
 
