@@ -14,13 +14,13 @@ _(нет)_
 
 Ordered by priority. Каждая задача имеет подробный файл с точным кодом для Haiku.
 
-| # | Задача | Размер | Файл |
-|---|--------|--------|------|
-| 1 | BiDi `script.evaluate` / `callFunction` / `addPreloadScript` (8H.3) | S | → [`docs/tasks/p1-bidi-script-evaluate.md`](docs/tasks/p1-bidi-script-evaluate.md) |
+_(нет)_
 
 ---
 
 ## Recent merges
+
+- **p1-bidi-script-evaluate** ✅ 2026-06-03 — BiDi `script.evaluate` / `script.callFunction` / `script.addPreloadScript` / `script.removePreloadScript` (8H.3 subset). Phase 1 stub: context-валидация + детерминированный ответ `{type:"undefined"}`. `script.addPreloadScript` возвращает script-id через `state.next_id()`. 4 unit-теста (unknown context, no context, add/remove preload). Реальное выполнение JS требует 8A.7 (shell-as-driver-client, P3). lumen-shell: 953 тестов (было 951 + 2 новых script).
 
 - **p1-browsersession-set-clock** ✅ 2026-06-03 — BrowserSession `set_clock()` / `set_rng_seed()` trait methods (8F.1 + 8F.2). `ClockMode { Frozen(u64), Real }` enum in `lumen-core::ext`. InProcessSession delegates to SessionContext. SessionContext::set_rng_seed now accepts `Option<u64>` for clearing. Default no-op implementations for NullBrowserSession. 3 unit tests. lumen-core / lumen-driver: clippy clean.
 
