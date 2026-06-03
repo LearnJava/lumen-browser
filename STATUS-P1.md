@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p1-css-subgrid** — CSS Grid L2 §9 Subgrid algorithm stub  branch: p1-css-subgrid  
+Next step: Add `GridTrackSize::Subgrid` + parse `subgrid` keyword (`style.rs:3490`), then thread-local track inheritance in `lay_out_grid` (`box_tree.rs:4586`)
 
 ---
 
