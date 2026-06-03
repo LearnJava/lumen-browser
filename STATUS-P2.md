@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+A-1 CSS Properties & Values API (Houdini)  branch: p2-css-prop-values-api
+Phase 0: RegisterProperty JS API + @property at-rule parsing + initial-value fallback wiring
 
 ---
 
@@ -89,6 +90,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-webgl2-context** ✅ 2026-06-04 — A-5: WebGL2 context Phase 0. VAO API (createVertexArray/bindVertexArray/deleteVertexArray), instanced draws (drawArraysInstanced/drawElementsInstanced), integer uniforms (uniform1ui/2ui/3ui/4ui), texImage3D stub. `lumen-paint/src/webgl.rs`: `SoftwareWebGl` extended with VAO registry and methods; new `Val` enum variants for unsigned integers (UInt, UVec2, UVec3, UVec4). `lumen-js/src/webgl_canvas.rs`: all WebGL2 native functions registered; JS shim extended with VAO methods + instanced draw methods + integer uniform methods + 3D texture method + WebGL2 constants. All 23 JS WebGL tests pass. Phase 0: functional stubs; Phase 1 (future): full GPU wiring for VAOs + instancing + integer compute shaders.
 
 - **p2-offscreen-canvas** ✅ 2026-06-04 — A-4: OffscreenCanvas API Phase 0. `crates/js/src/offscreen_canvas.rs`: `OffscreenCanvas` struct с thread-local registry для off-DOM canvas-ов с уникальными ID. Native bindings для всех Context2D методов (fillRect, clearRect, strokeRect, arc, fill, stroke, property setters). `install_offscreen_canvas_bindings` регистрирует `_lumen_offscreen_canvas_*` функции + JS shim, определяющий класс OffscreenCanvas: `new OffscreenCanvas(w, h)`, `getContext('2d')` → Context2D прокси, `transferToImageBitmap()` → {width, height, data}, `convertToBlob()` стаб. Phase 0: чистый JS-шим. Phase 1 (future): createImageBitmap() из Canvas/ImageData/Blob. 13 новых unit-тестов (6 Rust + 7 JS интеграционных: constructor clamping/uniqueness, getContext caching, invalid types, fillRect, transferToImageBitmap). lumen-js: 1150 ✅ (+13).
 
