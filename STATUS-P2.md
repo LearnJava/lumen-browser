@@ -6,8 +6,7 @@
 
 ## In progress
 
-RB-9: `FemtovgBackend` → default; `WgpuBackend` → fallback  branch: p2-rb9-femtovg-default
-Next step: cargo check + clippy + tests  crates/shell/src/backend_factory.rs + crates/engine/paint/Cargo.toml
+_(нет)_
 
 ---
 
@@ -39,12 +38,14 @@ GPU-слой — домен P2 (владение крейтом `lumen-paint` + 
 | ~~RB-6~~ | ~~`FemtovgBackend` полный (все ~30 `DisplayCommand` вариантов)~~ — **выполнено** (p2-rb6-femtovg-full, 2026-06-03) | — | — | — |
 | ~~RB-7~~ | ~~`VelloBackend` заглушка (компилируется, логирует, ничего не рисует)~~ — **выполнено** (p2-rb7-vello-stub, 2026-06-03) | — | — | — |
 | ~~RB-8~~ | ~~`CompareBackend` + тест-раннер в `lumen-driver` (pixel diff двух бэкендов)~~ — **выполнено** (p2-rb8-compare-backend, 2026-06-03) | — | — | — |
-| RB-9 | `FemtovgBackend` → default; `WgpuBackend` → fallback | `lumen-paint`, `lumen-shell` | S | ADR-010 |
+| ~~RB-9~~ | ~~`FemtovgBackend` → default; `WgpuBackend` → fallback~~ — **выполнено** (p2-rb9-femtovg-default, 2026-06-03) | — | — | — |
 | RB-10 | `VelloBackend` полный (когда vello API стабилизируется) | `lumen-paint` | L | ADR-010 (Phase 3+) |
 
 ---
 
 ## Recent merges
+
+- **p2-rb9-femtovg-default** ✅ 2026-06-03 — RB-9: `FemtovgBackend` → Phase 2 default; `WgpuBackend` → fallback (ADR-010 RB-9). `lumen-paint/Cargo.toml`: `default = ["backend-femtovg"]`. workspace `Cargo.toml`: `lumen-paint = { default-features = false }` — каждый крейт явно указывает нужные фичи. `lumen-shell/Cargo.toml`: явно `features = ["backend-femtovg", "backend-wgpu"]`; новая feature `backend-wgpu` для opt-in wgpu из shell. `lumen-driver/Cargo.toml`: явно `features = ["backend-wgpu"]` (использует Renderer напрямую). `backend_factory.rs`: `""` и `"femtovg"` → `create_femtovg_or_wgpu()` (femtovg первым, fallback wgpu при ошибке OpenGL context); `"wgpu"` → прямой wgpu; +2 unit-теста. `lumen-paint/src/lib.rs`: `texture_pool` гейтирован `backend-wgpu`. `fingerprint.rs`: константы гейтированы `any(backend-wgpu, test)`. `headless_tests.rs`, `texture_pool_integration.rs`: `#![cfg(feature = "backend-wgpu")]`. Тесты: lumen-paint 504 ✅, lumen-shell 920 ✅, lumen-driver 75 ✅. Clippy чист.
 
 - **p2-rb8-compare-backend** ✅ 2026-06-03 — RB-8: `CompareBackend` + `CpuBackend` + тест-раннер в `lumen-driver` (ADR-010 RB-8). `CpuBackend` (`backends/cpu_backend.rs`, feature `backend-cpu = ["cpu-render"]`): реализует `RenderBackend` через `rasterize_cpu` (tiny-skia); `screenshot_rgba()` возвращает RGBA8-пиксели; 9 unit-тестов. `CompareBackend` (`backends/compare_backend.rs`, feature `compare = ["backend-cpu"]`): держит `primary + secondary Box<dyn RenderBackend>`; `render()` вызывает оба и вычисляет `DiffResult` (diff_pixels / total_pixels / diff_percent / format); `resize()` сбрасывает diff; 11 unit-тестов. `lumen-driver`: feature `compare-backends = ["lumen-paint/compare"]`; `InProcessSession::display_list_for_compare()`; `tests/compare_backends.rs` (6 тестов: cpu vs cpu = 0% diff на 9 страницах). Итого 26 новых тестов. lumen-paint с feature compare: 604 тестов. Clippy чист.
 
