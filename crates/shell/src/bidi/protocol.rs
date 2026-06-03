@@ -73,7 +73,7 @@ impl BidiState {
     /// Формат совпадает с UUID v4 по длине полей, но детерминирован —
     /// клиенты BiDi трактуют context/session/navigation id как непрозрачные
     /// строки, а детерминизм нужен для unit-тестов.
-    fn next_id(&mut self, tag: u16) -> String {
+    pub(super) fn next_id(&mut self, tag: u16) -> String {
         self.counter += 1;
         let n = self.counter;
         format!("{:08x}-{tag:04x}-4000-8000-{n:012x}", n as u32)
@@ -157,6 +157,10 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "browsingContext.getTree" => {
             DispatchResult::single(make_success(id, browsing_context_tree(state)))
         }
+        "script.evaluate" => script_evaluate(id, &params, state),
+        "script.callFunction" => script_call_function(id, &params, state),
+        "script.addPreloadScript" => script_add_preload(id, &params, state),
+        "script.removePreloadScript" => script_remove_preload(id, &params, state),
         other => DispatchResult::single(make_error(
             Some(id),
             "unknown command",
@@ -475,6 +479,66 @@ fn make_error(id: Option<i64>, code: &str, message: &str) -> String {
     obj.insert("message".into(), JsonValue::String(message.into()));
     obj.insert("stacktrace".into(), JsonValue::String(String::new()));
     JsonValue::Object(obj).to_string()
+}
+
+// ──────────────────────────────────────────
+// script.* handlers (BiDi §10)
+// ──────────────────────────────────────────
+
+/// `script.evaluate` — выполнить JS expression в browsing context (BiDi §10.2.4).
+///
+/// Phase 1 stub: проверяет что context существует, возвращает `{type:"undefined"}`.
+/// Реальное выполнение требует 8A.7 (shell-as-driver-client).
+fn script_evaluate(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+    let ctx_id = params
+        .get("target")
+        .and_then(|t| t.get("context"))
+        .and_then(|v| v.as_str());
+
+    if let Some(ctx_id) = ctx_id {
+        if state.find(ctx_id).is_none() {
+            return DispatchResult::single(make_error(
+                Some(id),
+                "no such frame",
+                &format!("unknown browsing context: {ctx_id}"),
+            ));
+        }
+    }
+
+    // Phase 1: return undefined stub.
+    let mut result = BTreeMap::new();
+    result.insert("type".into(), JsonValue::String("undefined".into()));
+
+    let mut outer = BTreeMap::new();
+    outer.insert("result".into(), JsonValue::Object(result));
+    outer.insert("realm".into(), JsonValue::String("stub-realm".into()));
+
+    DispatchResult::single(make_success(id, JsonValue::Object(outer)))
+}
+
+/// `script.callFunction` — вызвать функцию в browsing context (BiDi §10.2.5).
+///
+/// Phase 1 stub: те же проверки что script.evaluate, возвращает `{type:"undefined"}`.
+fn script_call_function(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+    // Same validation + stub response as evaluate.
+    script_evaluate(id, params, state)
+}
+
+/// `script.addPreloadScript` — зарегистрировать preload script (BiDi §10.2.1).
+///
+/// Phase 1 stub: возвращает детерминированный script-id без реального хранения.
+fn script_add_preload(id: i64, _params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let script_id = state.next_id(0xaaaa);
+    let mut result = BTreeMap::new();
+    result.insert("script".into(), JsonValue::String(script_id));
+    DispatchResult::single(make_success(id, JsonValue::Object(result)))
+}
+
+/// `script.removePreloadScript` — удалить preload script (BiDi §10.2.2).
+///
+/// Phase 1 stub: ACK без реального удаления.
+fn script_remove_preload(id: i64, _params: &JsonValue, _state: &mut BidiState) -> DispatchResult {
+    DispatchResult::single(make_success(id, empty_obj()))
 }
 
 #[cfg(test)]
@@ -870,5 +934,47 @@ mod tests {
 
         let bad = dispatch(r#"{"id":11,"method":"browsingContext.activate","params":{"context":"nope"}}"#, &mut state);
         assert_eq!(parse(&bad.frames[0]).get("error").and_then(|x| x.as_str()), Some("no such frame"));
+    }
+
+    #[test]
+    fn script_evaluate_unknown_context_returns_error() {
+        let mut state = BidiState::new();
+        let result = dispatch(
+            r#"{"id":1,"method":"script.evaluate","params":{"expression":"1+1","target":{"context":"bad-ctx"},"awaitPromise":false}}"#,
+            &mut state,
+        );
+        assert!(!result.close);
+        assert!(result.frames[0].contains("no such frame"), "got: {}", result.frames[0]);
+    }
+
+    #[test]
+    fn script_evaluate_no_context_returns_stub() {
+        let mut state = BidiState::new();
+        // No context given — should return stub without error.
+        let result = dispatch(
+            r#"{"id":2,"method":"script.evaluate","params":{"expression":"1+1","awaitPromise":false}}"#,
+            &mut state,
+        );
+        assert!(result.frames[0].contains("undefined"), "got: {}", result.frames[0]);
+    }
+
+    #[test]
+    fn script_add_preload_returns_script_id() {
+        let mut state = BidiState::new();
+        let result = dispatch(
+            r#"{"id":3,"method":"script.addPreloadScript","params":{"functionDeclaration":"()=>{}"}}"#,
+            &mut state,
+        );
+        assert!(result.frames[0].contains("script"), "got: {}", result.frames[0]);
+    }
+
+    #[test]
+    fn script_remove_preload_acks() {
+        let mut state = BidiState::new();
+        let result = dispatch(
+            r#"{"id":4,"method":"script.removePreloadScript","params":{"script":"stub-id"}}"#,
+            &mut state,
+        );
+        assert!(result.frames[0].contains("success"), "got: {}", result.frames[0]);
     }
 }
