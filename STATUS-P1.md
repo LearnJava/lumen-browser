@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty — A-8 завершена)
+A-9: Trusted Types API stub  branch: p1-a9-trusted-types
+Next step: Реализовать W3C TT §3 — `trustedTypes.createPolicy()`, `TrustedHTML/Script/ScriptURL`, `defaultPolicy`, Phase 0 без enforcement  crates/js/src/trusted_types.rs
 
 ---
 
@@ -39,7 +40,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-5~~ | ~~**File System Access API**~~ — **выполнено** | M | `lumen-js`, `lumen-shell` |
 | ~~A-6~~ | ~~**URL Pattern API**~~ — **выполнено** | S | `lumen-js` |
 | ~~A-7~~ | ~~**Navigation API**~~ — **выполнено** | M | `lumen-js`, `lumen-shell` |
-| A-8 | **Import Maps** (HTML LS §8.1.6.2) — парсинг `<script type="importmap">` в html-parser, `ImportMap {imports, scopes}`, интеграция в `LumenResolver` для ESM: ключ `"react"` → `"/vendor/react.js"`. | S | `lumen-html-parser`, `lumen-js` |
+| ~~A-8~~ | ~~**Import Maps**~~ — **выполнено** | S | `lumen-html-parser`, `lumen-js` |
 | A-9 | **Trusted Types API stub** (W3C TT §3) — `trustedTypes.createPolicy(name, rules)`, `TrustedHTML/Script/ScriptURL` wrappers, `trustedTypes.defaultPolicy`, Phase 0: без enforcement (политика проверяется, не блокирует). | S | `lumen-js` |
 | A-10 | **Sanitizer API stub** (W3C Sanitizer API §3) — `new Sanitizer(config)`, `sanitizer.sanitizeFor(element, string)` удаляет `<script>` + event handlers, `element.setHTML(html, {sanitizer})`. | S | `lumen-js` |
 | A-11 | **Storage Access API** — `document.requestStorageAccess()` → granted Promise (Phase 0: всегда yes), `document.hasStorageAccess()` → true, `document.requestStorageAccessFor(origin)`, `hasUnpartitionedCookieAccess()`. | XS | `lumen-js` |
