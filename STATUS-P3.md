@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(никто ничего не зарезервировал)_
+BUG-057: wgpu Vulkan crash on Windows  branch: p3-bug057-wgpu-dx12
+Next step: fix Instance backend selection in renderer.rs:1578, then merge
 
 ## Next
 
