@@ -6,8 +6,7 @@
 
 ## In progress
 
-**A-2: CSS Custom Highlight API**  branch: `p2-css-custom-highlight`
-Next step: `lumen-js::highlight_api.rs:1` — реализовать JS биндинги для `CSS.highlights`, `HighlightRegistry`, `Highlight` класс, `::highlight()` псевдо-элемент парсинг в `lumen-css-parser`
+_(нет)_
 
 ---
 
@@ -90,6 +89,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-css-custom-highlight** ✅ 2026-06-04 — A-2: CSS Custom Highlight API (CSS Highlight API L1) Phase 0. `lumen-js/src/highlight_api.rs`: `CSS.highlights` HighlightRegistry + `Highlight` class (extends Set) с `priority` полем. IIFE-шим регистрирует оба объекта в `install_highlight_api_bindings(&ctx)`. `lumen-css-parser`: `PseudoElementKind::Highlight(name)` вариант, `parse_functional_pseudo_element` парсит `::highlight(name)` и извлекает идентификатор. `layout/style.rs`: pattern match для Highlight в `pseudo_element_name_matches`. Phase 0: реестр + парсинг полный; Phase 1 (visual rendering) = `emit_text_with_highlights()` в `paint/display_list.rs` (pending). 12 новых unit-тестов (9 lumen-js highlight_api, 3 lumen-css-parser highlight_pseudo). lumen-js: 1149 ✅, lumen-css-parser: 264 ✅. Clippy чист.
 
 - **p2-tab-restore-spinner** ✅ 2026-06-03 — Loading spinner при restore гибернированной вкладки >200ms (10K.3). `restore_spinner_start_ms: Option<f64>` в Lumen отслеживает время начала восстановления. `build_spinner(elapsed_ms, win_w, win_h)` возвращает `None` до 200ms, затем — чёрный полупрозрачный фон + 8 вращающихся точек, каждая точка цвет #66b2ff. Spinner скрывается при завершении restore или ошибке. `request_redraw()` продолжает анимацию пока активен. 3 unit-теста (none_before_threshold, some_after_threshold, some_at_exact_threshold). lumen-shell: 926 тестов ✅ (+3). Clippy чист.
 
