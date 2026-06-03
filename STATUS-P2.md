@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**A-4: OffscreenCanvas** — `new OffscreenCanvas(w, h)`, `getContext('2d')` → Context2D, `transferToImageBitmap()` → ImageBitmap, `createImageBitmap()` из Blob/ImageData. 8 тестов. branch: `p2-offscreen-canvas`
+
+Next step: реализовать OffscreenCanvas bindings в `crates/js/src/offscreen_canvas.rs`
 
 ---
 
