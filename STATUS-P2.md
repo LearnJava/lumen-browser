@@ -6,8 +6,8 @@
 
 ## In progress
 
-A-2 CSS Custom Highlight API  branch: p2-css-custom-highlight
-Phase 0: `CSS.highlights` registry + `Highlight` class + `::highlight(name)` pseudo-element parsing
+A-6 CSS Paint Worklet API stub (Houdini)  branch: p2-paint-worklet-api
+Phase 0: `CSS.paintWorklet.addModule(url)` + worker registration + `paint()` invocation stubs
 
 ---
 
