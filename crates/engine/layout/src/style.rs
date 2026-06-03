@@ -5625,6 +5625,34 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         PseudoClass::Invalid => form_validity(doc, node) == Some(false),
         // Phase 0: без интерактивного состояния пользователя — всегда false.
         PseudoClass::UserValid | PseudoClass::UserInvalid => false,
+        // ── Interactive pseudo-classes ────────────────────────────────────────────
+        // State is set thread-locally by `set_interactive_state` before layout.
+        // `:hover` — element under pointer, or its ancestors (CSS Selectors L4 §4.3).
+        PseudoClass::Hover => {
+            let hid = HOVER_NID.with(Cell::get);
+            if hid == u32::MAX { return false; }
+            is_self_or_ancestor(doc, node, NodeId::from_index(hid as usize))
+        }
+        // `:focus` — exact keyboard-focused element (no ancestor propagation).
+        PseudoClass::Focus => {
+            FOCUS_NID.with(Cell::get) == node.index() as u32
+        }
+        // `:active` — mouse-pressed element and its ancestors (CSS Selectors L4 §4.5).
+        PseudoClass::Active => {
+            let aid = ACTIVE_NID.with(Cell::get);
+            if aid == u32::MAX { return false; }
+            is_self_or_ancestor(doc, node, NodeId::from_index(aid as usize))
+        }
+        // `:focus-within` — element or any descendant has focus (CSS Selectors L4 §4.4.2).
+        PseudoClass::FocusWithin => {
+            let fid = FOCUS_NID.with(Cell::get);
+            if fid == u32::MAX { return false; }
+            is_self_or_ancestor(doc, node, NodeId::from_index(fid as usize))
+        }
+        // `:focus-visible` — Phase 0: identical to `:focus` (no keyboard-vs-mouse distinction yet).
+        PseudoClass::FocusVisible => {
+            FOCUS_NID.with(Cell::get) == node.index() as u32
+        }
         PseudoClass::Unsupported(_) => false,
         PseudoClass::Host(_) => false,
     }
@@ -7638,6 +7666,53 @@ pub fn set_cq_context(width: f32, height: Option<f32>) {
 /// Clears the `cq*` context after the container re-layout pass completes.
 pub fn clear_cq_context() {
     CONTAINER_CQ.with(|c| c.set(None));
+}
+
+thread_local! {
+    /// Raw NodeId.0 of the currently-hovered element, or `u32::MAX` if none.
+    /// Set by `set_interactive_state` before layout; cleared with `clear_interactive_state`.
+    /// `:hover` matches the hovered element and all its ancestors (CSS Selectors L4 §4.3).
+    static HOVER_NID:  Cell<u32> = const { Cell::new(u32::MAX) };
+    /// Raw NodeId.0 of the keyboard-focused element, or `u32::MAX` if none.
+    /// `:focus` matches exactly; `:focus-within` matches the element and its ancestors.
+    static FOCUS_NID:  Cell<u32> = const { Cell::new(u32::MAX) };
+    /// Raw NodeId.0 of the mouse-pressed element, or `u32::MAX` if none.
+    /// `:active` matches the active element and all its ancestors (CSS Selectors L4 §4.5).
+    static ACTIVE_NID: Cell<u32> = const { Cell::new(u32::MAX) };
+}
+
+/// Sets the interactive hover/focus/active state for the next layout pass.
+///
+/// Call this before `layout_measured` / `layout_measured_hyp` on the layout thread.
+/// The thread-locals are read by `matches_pseudo_class` for `:hover`, `:focus`,
+/// `:active`, `:focus-within`, and `:focus-visible`.
+///
+/// Call `clear_interactive_state()` after layout to reset the thread-locals.
+pub fn set_interactive_state(
+    hover: Option<NodeId>,
+    focus: Option<NodeId>,
+    active: Option<NodeId>,
+) {
+    HOVER_NID .with(|h| h.set(hover .map(|n| n.index() as u32).unwrap_or(u32::MAX)));
+    FOCUS_NID .with(|f| f.set(focus .map(|n| n.index() as u32).unwrap_or(u32::MAX)));
+    ACTIVE_NID.with(|a| a.set(active.map(|n| n.index() as u32).unwrap_or(u32::MAX)));
+}
+
+/// Clears hover/focus/active state after layout.
+pub fn clear_interactive_state() {
+    set_interactive_state(None, None, None);
+}
+
+/// Returns `true` if `ancestor` is `node` itself, or a proper ancestor of `node` in the tree.
+fn is_self_or_ancestor(doc: &Document, ancestor: NodeId, node: NodeId) -> bool {
+    if ancestor == node { return true; }
+    let mut cur = doc.get(node).parent;
+    while let Some(parent_id) = cur {
+        if parent_id == ancestor { return true; }
+        if parent_id == doc.root() { break; }
+        cur = doc.get(parent_id).parent;
+    }
+    false
 }
 
 /// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет

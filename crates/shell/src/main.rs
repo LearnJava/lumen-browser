@@ -319,6 +319,8 @@ fn run_window_mode(
         content_width: 0.0,
         dark_mode: false,
         cursor_position: None,
+        hovered_nid: None,
+        active_nid: None,
         scroll_drag: None,
         scroll_anim: None,
         momentum_anim: None,
@@ -3652,7 +3654,11 @@ impl Lumen {
         let (css_w, css_h) =
             zoom::effective_viewport(vp_size.width as f32, vp_size.height as f32, meta_scale, self.zoom_factor);
         let viewport = Size::new(css_w, css_h);
+        // Set interactive hover/focus/active state for this layout pass so that
+        // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
+        lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
         let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider, self.dark_mode);
+        lumen_layout::clear_interactive_state();
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.display_list = new_dl;
@@ -4824,9 +4830,40 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     );
                     self.request_redraw();
                 }
+                // CSS :hover tracking — find the element under the cursor and
+                // trigger relayout when it changes so :hover rules re-evaluate.
+                {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let new_hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                        None
+                    } else {
+                        let (page_x, page_y) = self.page_point(x_css, y_css);
+                        self.layout_box
+                            .as_ref()
+                            .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
+                            .map(|r| r.node)
+                    };
+                    if new_hovered != self.hovered_nid {
+                        self.hovered_nid = new_hovered;
+                        self.relayout();
+                        self.request_redraw();
+                    }
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
+                // Clear hover state when cursor leaves the window.
+                if self.hovered_nid.is_some() {
+                    self.hovered_nid = None;
+                    self.relayout();
+                    self.request_redraw();
+                }
                 self.gesture.cancel();
                 // Драг продолжается даже когда курсор вышел из окна — winit
                 // продолжит слать CursorMoved-события за пределами client area,
@@ -4856,6 +4893,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 } else if button != MouseButton::Left {
                     // Middle / back / forward — ignore.
                 } else if state == ElementState::Pressed {
+                    // CSS :active — set immediately on press so :active rules apply.
+                    if self.active_nid != self.hovered_nid {
+                        self.active_nid = self.hovered_nid;
+                        self.relayout();
+                        self.request_redraw();
+                    }
                     let Some(cursor) = self.cursor_position else {
                         // Без CursorMoved-snapshot-а до Press — не знаем где
                         // клик; bail out. Реалистично — Press всегда приходит
@@ -5398,6 +5441,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 } else {
                     // Released — завершаем drag (если он был).
+                    // CSS :active — clear on release.
+                    if self.active_nid.is_some() {
+                        self.active_nid = None;
+                        self.relayout();
+                        self.request_redraw();
+                    }
                     // Bookmark drag-and-drop: if a bookmark drag is in progress,
                     // resolve the drop target. Dropping on a folder re-files the
                     // bookmark; dropping anywhere else opens it (a plain click).
@@ -6352,8 +6401,14 @@ impl Lumen {
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
-        // Track focused node for TypeText injection.
-        self.focused_node = hit_result.as_ref().map(|r| r.node);
+        // Track focused node for TypeText injection and CSS :focus matching.
+        let new_focused = hit_result.as_ref().map(|r| r.node);
+        let focus_changed = new_focused != self.focused_node;
+        self.focused_node = new_focused;
+        // Trigger relayout if :focus state changed so :focus / :focus-within rules update.
+        if focus_changed {
+            self.relayout();
+        }
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so
         // handlers can read event.clientX/clientY/ctrlKey/etc.

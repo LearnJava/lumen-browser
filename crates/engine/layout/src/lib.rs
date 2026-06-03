@@ -81,6 +81,7 @@ pub use stacking::{
 };
 pub use style::{
     apply_container_rules, evaluate_container_condition,
+    set_interactive_state, clear_interactive_state,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     AlignValue, AnimationDirection, ContainerContext,
@@ -1551,8 +1552,112 @@ mod tests {
     fn pseudo_hover_never_matches() {
         let root = lay("<p>x</p>", "p:hover { color: red; }");
         let p = first_element_child(&root);
-        // :hover в Phase 0 никогда не матчит.
+        // :hover без set_interactive_state не матчит.
         assert_eq!(p.style.color.r, 0);
+    }
+
+    // ── Interactive pseudo-classes: :hover / :focus / :active ────────────────
+
+    fn node_named(lb: &LayoutBox, doc: &lumen_dom::Document, local: &str) -> Option<lumen_dom::NodeId> {
+        if let lumen_dom::NodeData::Element { name, .. } = &doc.get(lb.node).data
+            && name.local == local { return Some(lb.node); }
+        for c in &lb.children { if let Some(n) = node_named(c, doc, local) { return Some(n); } }
+        None
+    }
+
+    fn lb_named<'a>(lb: &'a LayoutBox, doc: &lumen_dom::Document, local: &str) -> Option<&'a LayoutBox> {
+        if let lumen_dom::NodeData::Element { name, .. } = &doc.get(lb.node).data
+            && name.local == local { return Some(lb); }
+        for c in &lb.children { if let Some(f) = lb_named(c, doc, local) { return Some(f); } }
+        None
+    }
+
+    #[test]
+    fn hover_matches_when_node_is_hovered() {
+        let html = "<p>x</p>";
+        let css = "p:hover { color: red; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let p_nid = first_element_child(&root_lb).node;
+        set_interactive_state(Some(p_nid), None, None);
+        let root_hover = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let p_hover = first_element_child(&root_hover);
+        assert_eq!(p_hover.style.color.r, 255, ":hover should apply (color red)");
+        assert_eq!(p_hover.style.color.g, 0);
+    }
+
+    #[test]
+    fn hover_matches_ancestor_of_hovered_node() {
+        // :hover applies to all ancestors of the hovered node (CSS Selectors L4 §4.3).
+        // Use block-level <p> child so it gets its own LayoutBox (inline elements don't).
+        let html = "<div><p>x</p></div>";
+        let css = "div:hover { background-color: blue; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let p_nid = node_named(&root_lb, &doc, "p").expect("<p> not found");
+        set_interactive_state(Some(p_nid), None, None);
+        let root_hover = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let div_bg = lb_named(&root_hover, &doc, "div").expect("<div> not found").style.background_color;
+        assert!(
+            matches!(div_bg, Some(CssColor::Rgba(Color { b: 255, .. }))),
+            "parent :hover should match when child is hovered"
+        );
+    }
+
+    #[test]
+    fn hover_does_not_match_non_hovered_node() {
+        // Use block-level <div> as the non-hovered element to get a LayoutBox.
+        let html = "<p>x</p><div>y</div>";
+        let css = "p:hover { color: red; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let div_nid = node_named(&root_lb, &doc, "div").expect("<div> not found");
+        set_interactive_state(Some(div_nid), None, None);
+        let root_hover = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let p = first_element_child(&root_hover);
+        assert_eq!(p.style.color.r, 0, "non-hovered <p> should not match :hover");
+    }
+
+    #[test]
+    fn focus_matches_exact_node() {
+        let html = "<input type='text' />";
+        let css = "input:focus { border-color: blue; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let input_nid = first_element_child(&root_lb).node;
+        set_interactive_state(None, Some(input_nid), None);
+        let root_focus = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let input = first_element_child(&root_focus);
+        assert!(
+            matches!(input.style.border_top_color, CssColor::Rgba(Color { b: 255, .. })),
+            ":focus border-color blue"
+        );
+    }
+
+    #[test]
+    fn active_matches_element_and_ancestor() {
+        let html = "<div><button>click</button></div>";
+        let css = "div:active { background-color: red; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let btn_nid = node_named(&root_lb, &doc, "button").expect("<button> not found");
+        set_interactive_state(None, None, Some(btn_nid));
+        let root_active = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let div_bg = lb_named(&root_active, &doc, "div").expect("<div> not found").style.background_color;
+        assert!(
+            matches!(div_bg, Some(CssColor::Rgba(Color { r: 255, .. }))),
+            "parent :active should match when child is active"
+        );
     }
 
     // ── :placeholder-shown (CSS Selectors L4 §15.1) ──

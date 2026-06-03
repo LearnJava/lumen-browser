@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p2-interactive-pseudo-classes** — `:hover`/`:focus`/`:active`/`:focus-within`/`:focus-visible` интерактивные псевдо-классы  branch: p2-interactive-pseudo-classes
+Next step: добавить варианты в `PseudoClass` enum + парсинг, затем thread-locals + матчер, затем shell wiring  `crates/engine/css-parser/src/parser.rs:316`
 
 ---
 
