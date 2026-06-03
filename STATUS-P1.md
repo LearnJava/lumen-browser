@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**A-7: Navigation API**  
+Branch: `p1-navigation-api`  
+Next step: Implement Navigator singleton + NavigationHistoryEntry + navigation API JS shim in `crates/js/src/navigation_api.rs`
 
 ---
 
