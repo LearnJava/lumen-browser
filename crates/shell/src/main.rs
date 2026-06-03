@@ -406,6 +406,7 @@ fn run_window_mode(
         display_url: None,
         current_history_state_json: String::from("null"),
         fullscreen_nid: None,
+        view_transition: None,
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -1126,6 +1127,22 @@ pub(crate) trait PersistentJs {
     /// `window.set_fullscreen(None)` accordingly.
     #[allow(dead_code)]
     fn take_fullscreen_requests(&self) -> Vec<(bool, u32)>;
+    /// Drain CSS View Transition events from `document.startViewTransition`.
+    ///
+    /// Shell drains these in `about_to_wait`: `Begin` captures old display list,
+    /// `End` triggers relayout and starts 300 ms cross-fade.
+    #[allow(dead_code)]
+    fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent>;
+}
+
+/// CSS View Transitions L1 — event kind emitted by `document.startViewTransition`.
+#[derive(Debug)]
+#[allow(dead_code)]
+enum ViewTransitionEvent {
+    /// Callback is about to run — shell should snapshot the current frame.
+    Begin,
+    /// Callback finished — shell should relayout and start the cross-fade animation.
+    End,
 }
 
 #[cfg(feature = "quickjs")]
@@ -1294,6 +1311,16 @@ impl PersistentJs for QuickPersistentJs {
             .map(|r| match r {
                 lumen_js::FullscreenRequest::Enter { nid } => (true, nid),
                 lumen_js::FullscreenRequest::Exit => (false, 0),
+            })
+            .collect()
+    }
+    fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent> {
+        self.rt
+            .take_view_transition_events()
+            .into_iter()
+            .map(|ev| match ev {
+                lumen_js::ViewTransitionEvent::Begin => ViewTransitionEvent::Begin,
+                lumen_js::ViewTransitionEvent::End   => ViewTransitionEvent::End,
             })
             .collect()
     }
@@ -2333,7 +2360,6 @@ fn parse_and_layout(
     // @font-face: загружаем url()-источники до layout.
     // CSS: @font-face multi-font TextMeasurer — P1 нужно поддержать font-family в layout
     let font_registry = load_font_faces(&sheet.font_faces, base, sink);
-    let font_provider: Arc<dyn lumen_core::FontProvider> = Arc::new(font_registry);
 
     // Populate document.fonts with FontFace objects from @font-face rules.
     // Phase 1: store FontFace metadata; status marked as Loaded after successful load.
@@ -2355,12 +2381,13 @@ fn parse_and_layout(
     let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
     for rule in &sheet.font_faces {
-        if !rule.family.is_empty() {
-            if let Some(bytes) = font_registry.face_bytes_for_family(&rule.family) {
-                measurer.register_family(&rule.family, bytes);
-            }
+        if !rule.family.is_empty()
+            && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
+        {
+            measurer.register_family(&rule.family, bytes);
         }
     }
+    let font_provider: Arc<dyn lumen_core::FontProvider> = Arc::new(font_registry);
 
     let layout = {
         let d = doc_arc.lock().unwrap();
@@ -3508,6 +3535,24 @@ struct Lumen {
     /// `document.exitFullscreen()` or `Escape` exits fullscreen.  Used to deliver
     /// `_lumen_notify_fullscreen_exit()` when the OS exits fullscreen externally.
     fullscreen_nid: Option<u32>,
+    /// Active CSS View Transition (CSS View Transitions L1 §4).
+    ///
+    /// Set when `document.startViewTransition(callback)` fires `_lumen_vt_end`.
+    /// The `old_dl` snapshot fades out over the new display list for `duration_ms`.
+    /// `None` when no transition is active.
+    view_transition: Option<ViewTransitionState>,
+}
+
+/// State for an in-progress CSS View Transition cross-fade (CSS View Transitions L1).
+///
+/// Holds the captured old display list and timing parameters.
+struct ViewTransitionState {
+    /// Display list captured before the JS callback mutated the DOM.
+    old_dl: lumen_paint::DisplayList,
+    /// Wall-clock epoch offset (ms) when the animation started.
+    start_ms: f64,
+    /// Total cross-fade duration in milliseconds.
+    duration_ms: f64,
 }
 
 impl Lumen {
@@ -4413,6 +4458,36 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.fullscreen_nid = None;
                     if let Some(w) = self.window.as_ref() {
                         w.set_fullscreen(None);
+                    }
+                }
+            }
+        }
+
+        // CSS View Transitions API: drain snapshot/animation events from JS.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            for event in js.take_view_transition_events() {
+                match event {
+                    ViewTransitionEvent::Begin => {
+                        // Capture current display list as the "before" snapshot.
+                        self.view_transition = Some(ViewTransitionState {
+                            old_dl: self.display_list.clone(),
+                            start_ms: 0.0,
+                            duration_ms: 300.0,
+                        });
+                    }
+                    ViewTransitionEvent::End => {
+                        // Callback finished — relayout picks up DOM mutations,
+                        // then the render step blends old_dl (fading out) over
+                        // the new display list.
+                        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                        if let Some(vt) = &mut self.view_transition {
+                            vt.start_ms = now_ms;
+                        }
+                        self.relayout();
+                        if let Some(w) = self.window.as_ref() {
+                            w.request_redraw();
+                        }
                     }
                 }
             }
@@ -5518,6 +5593,38 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 let scroll_y = self.scroll_y;
                 let scroll_x = self.scroll_x;
+
+                // CSS View Transitions: fade old display list over new content.
+                // The old_dl is wrapped in PushOpacity(1-progress)/PopOpacity so it
+                // fades out while the new display list (rendered underneath) fades in.
+                // Runs at most 300 ms; after that, view_transition is cleared.
+                let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                if let Some(ref vt) = self.view_transition {
+                    let elapsed = now_ms - vt.start_ms;
+                    let progress = (elapsed / vt.duration_ms).clamp(0.0, 1.0) as f32;
+                    let alpha = 1.0 - progress;
+                    if alpha > 0.0 {
+                        let mut vt_cmds = Vec::with_capacity(vt.old_dl.len() + 2);
+                        vt_cmds.push(lumen_paint::DisplayCommand::PushOpacity { alpha });
+                        vt_cmds.extend_from_slice(&vt.old_dl);
+                        vt_cmds.push(lumen_paint::DisplayCommand::PopOpacity);
+                        // Prepend so old content renders before (under) UI panels.
+                        vt_cmds.append(&mut overlay_buf);
+                        overlay_buf = vt_cmds;
+                        // Keep animating until transition completes.
+                        if let Some(w) = self.window.as_ref() {
+                            w.request_redraw();
+                        }
+                    }
+                }
+                // Clear completed transition.
+                let transition_done = self
+                    .view_transition
+                    .as_ref()
+                    .is_some_and(|vt| now_ms - vt.start_ms >= vt.duration_ms);
+                if transition_done {
+                    self.view_transition = None;
+                }
 
                 // Hint overlay: viewport-locked бейджи kbd-навигации.
                 // Добавляются последними → рисуются поверх scrollbar/tooltip.

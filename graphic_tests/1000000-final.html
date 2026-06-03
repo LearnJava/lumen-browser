@@ -675,6 +675,43 @@
   <div class="fline-mini">The first line is green and bold via ::first-line style override.</div>
 </div>
 
+<!-- View Transitions API demo -->
+<style>
+  .vt-row { margin-top: 10px; display: flex; gap: 12px; align-items: center; }
+  .vt-btn {
+    background: #4a5568; border: 1px solid #718096; border-radius: 4px;
+    color: #e2e8f0; padding: 6px 14px; font-size: 12px; cursor: pointer;
+  }
+  .vt-status { font: 11px/1.4 monospace; color: #a0aec0; flex: 1; }
+  .vt-target {
+    width: 120px; height: 40px; border-radius: 4px;
+    background: #2d3748; border: 1px solid #4a5568;
+    display: flex; align-items: center; justify-content: center;
+    color: #68d391; font-size: 12px; font-weight: bold;
+    transition: background 0.3s;
+  }
+  .vt-target.activated { background: #2c7a4e; border-color: #48bb78; }
+</style>
+<div class="vt-row">
+  <div class="vt-target" id="vtBox">Before</div>
+  <span class="vt-status" id="vtStatus">startViewTransition() not yet called</span>
+</div>
+<script>
+(function() {
+  var box = document.getElementById('vtBox');
+  var status = document.getElementById('vtStatus');
+  if (typeof document.startViewTransition === 'function') {
+    document.startViewTransition(function() {
+      box.classList.add('activated');
+      box.textContent = 'After';
+    });
+    status.textContent = 'startViewTransition() called: ViewTransition API active (300ms cross-fade)';
+  } else {
+    status.textContent = 'document.startViewTransition: not available';
+  }
+})();
+</script>
+
 </div><!-- /card -->
 </body>
 </html>
