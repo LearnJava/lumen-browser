@@ -12788,19 +12788,19 @@ mod tests {
         assert_eq!(reqs[0].url, "hd.webp");
     }
 
-    /// `<picture><source type="image/avif" srcset="hero.avif"><img src="hero.jpg"></picture>` →
-    /// avif нет в `supported_mime_types()` → picker пропускает source → fallback на `<img src>`.
+    /// `<picture><source type="image/heic" srcset="hero.heic"><img src="hero.jpg"></picture>` →
+    /// heic нет в `supported_mime_types()` → picker пропускает source → fallback на `<img src>`.
     #[test]
     fn collect_picture_unsupported_type_falls_back() {
         let doc = lumen_html_parser::parse(concat!(
             r#"<body><picture>"#,
-            r#"<source type="image/avif" srcset="hero.avif">"#,
+            r#"<source type="image/heic" srcset="hero.heic">"#,
             r#"<img src="hero.jpg">"#,
             r#"</picture></body>"#,
         ));
         let reqs = collect_image_requests(&doc, vp());
         assert_eq!(reqs.len(), 1, "должен быть один запрос — fallback PNG/JPEG");
-        assert_eq!(reqs[0].url, "hero.jpg", "avif source скипается, выбирается img src");
+        assert_eq!(reqs[0].url, "hero.jpg", "heic source скипается, выбирается img src");
     }
 
     /// `<picture>` с первым поддерживаемым `<source type="image/webp">` →
