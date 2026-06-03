@@ -61,11 +61,22 @@ pub trait RenderBackend: Send {
     fn register_image(&mut self, src: String, image: &Image) -> Result<(), String>;
     fn clear_images(&mut self);
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>);
+    // Extended API (RB-4, Phase 1):
+    fn viewport_size(&self) -> Size { Size { width: 1024.0, height: 720.0 } }
+    fn scale_factor(&self) -> f64 { 1.0 }
+    fn preload_curated_fallbacks(&mut self) {}
+    fn on_layer_memory_pressure(&mut self, _level: MemoryPressureLevel) {}
     fn screenshot_rgba(&mut self) -> Option<Vec<u8>> { None }  // headless only
 }
 ```
 
 `DisplayCommand` does not change. Layout and shell code never sees GPU-API types.
+
+**RB-4 (2026-06-03) — Shell wired to `Box<dyn RenderBackend>`:**
+- `Lumen.renderer: Option<Renderer>` → `Option<Box<dyn RenderBackend>>`
+- `backend_factory::create_backend(window, font_bytes)` reads `LUMEN_BACKEND` env var and creates the right backend (Phase 1: wgpu only; femtovg/vello log a warning and fallback to wgpu)
+- `WgpuBackend` implements the 4 new trait methods by delegating to inner `Renderer`
+- Shell no longer imports `Renderer` directly (except in `do_print_to_pdf` local scope for `render_print_pages`)
 
 ### Backends
 
@@ -120,11 +131,23 @@ Shell reads `LUMEN_BACKEND` env var to override at runtime.
 ### Backend selection at runtime (shell)
 
 ```
-LUMEN_BACKEND=wgpu    cargo run -p lumen-shell
-LUMEN_BACKEND=femtovg cargo run -p lumen-shell
-LUMEN_BACKEND=vello   cargo run -p lumen-shell
-LUMEN_BACKEND=cpu     cargo run -p lumen-shell
+LUMEN_BACKEND=wgpu    cargo run -p lumen-shell   # Phase 1: wgpu (default)
+LUMEN_BACKEND=femtovg cargo run -p lumen-shell   # Phase 2: not yet implemented (RB-5)
+LUMEN_BACKEND=vello   cargo run -p lumen-shell   # Phase 3: not yet implemented (RB-10)
+LUMEN_BACKEND=cpu     cargo run -p lumen-shell   # headless only — use lumen-driver
 ```
+
+**Completed RB tasks:**
+- ✅ RB-1: `RenderBackend` trait + `RenderError` in `paint::backend`
+- ✅ RB-2: `WgpuBackend` wrapper over `Renderer`
+- ✅ RB-3: feature flags in `lumen-paint/Cargo.toml`
+- ✅ RB-4: Shell uses `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var + `backend_factory`
+- ⬜ RB-5: `FemtovgBackend` skeleton
+- ⬜ RB-6: `FemtovgBackend` full
+- ⬜ RB-7: `VelloBackend` stub
+- ⬜ RB-8: `CompareBackend`
+- ⬜ RB-9: FemtovgBackend → default
+- ⬜ RB-10: `VelloBackend` full
 
 ## Gotchas
 

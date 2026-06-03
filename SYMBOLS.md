@@ -1781,13 +1781,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backdrop_cache.rs:184` **fn** `is_empty` — Whether the cache holds no entries
 `crates/engine/paint/src/backdrop_cache.rs:190` **fn** `used_bytes` — Total GPU memory tracked by live entries, in bytes
 `crates/engine/paint/src/backdrop_cache.rs:196` **fn** `budget_bytes` — Configured eviction budget, in bytes
-`crates/engine/paint/src/backend.rs:37` **enum** `RenderError` — Ошибка рендера — возвращается из [`RenderBackend::render`]
-`crates/engine/paint/src/backend.rs:77` **trait** `RenderBackend` — Стабильный интерфейс GPU-рендера для Lumen
-`crates/engine/paint/src/backends/wgpu_backend.rs:50` **struct** `WgpuBackend` — wgpu-бэкенд: тонкая обёртка над [`Renderer`], реализующая [`RenderBackend`]
-`crates/engine/paint/src/backends/wgpu_backend.rs:61` **fn** `new` — Создаёт оконный бэкенд из winit-окна
-`crates/engine/paint/src/backends/wgpu_backend.rs:72` **fn** `new_headless` — Создаёт headless-бэкенд для тестов и `--print-to-pdf`
-`crates/engine/paint/src/backends/wgpu_backend.rs:84` **fn** `renderer` — Неизменяемый доступ к внутреннему [`Renderer`]
-`crates/engine/paint/src/backends/wgpu_backend.rs:89` **fn** `renderer_mut` — Изменяемый доступ к внутреннему [`Renderer`]
+`crates/engine/paint/src/backend.rs:38` **enum** `RenderError` — Ошибка рендера — возвращается из [`RenderBackend::render`]
+`crates/engine/paint/src/backend.rs:78` **trait** `RenderBackend` — Стабильный интерфейс GPU-рендера для Lumen
+`crates/engine/paint/src/backends/wgpu_backend.rs:51` **struct** `WgpuBackend` — wgpu-бэкенд: тонкая обёртка над [`Renderer`], реализующая [`RenderBackend`]
+`crates/engine/paint/src/backends/wgpu_backend.rs:62` **fn** `new` — Создаёт оконный бэкенд из winit-окна
+`crates/engine/paint/src/backends/wgpu_backend.rs:73` **fn** `new_headless` — Создаёт headless-бэкенд для тестов и `--print-to-pdf`
+`crates/engine/paint/src/backends/wgpu_backend.rs:85` **fn** `renderer` — Неизменяемый доступ к внутреннему [`Renderer`]
+`crates/engine/paint/src/backends/wgpu_backend.rs:90` **fn** `renderer_mut` — Изменяемый доступ к внутреннему [`Renderer`]
 `crates/engine/paint/src/compositor.rs:63` **trait** `Layer` — Один layer: bbox + связь со stacking context-ом + локальный display list
 `crates/engine/paint/src/compositor.rs:71` **trait** `LayerTree` — Коллекция layer-ов. Trait-обстракция, чтобы compositor мог принимать
 `crates/engine/paint/src/compositor.rs:79` **struct** `BasicLayer` — Sprint 0 / Phase 0 concrete impl. Owned struct без интерлевания —
@@ -1834,9 +1834,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:2166` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
 `crates/engine/paint/src/display_list.rs:2295` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
 `crates/engine/paint/src/fingerprint.rs:19` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
-`crates/engine/paint/src/fingerprint.rs:32` **fn** `from_adapter_info` — Create normalized GPU fingerprint from adapter info
-`crates/engine/paint/src/fingerprint.rs:40` **fn** `vendor` — Vendor string: always "WebKit"
-`crates/engine/paint/src/fingerprint.rs:45` **fn** `renderer` — Renderer string: always "Generic GPU"
+`crates/engine/paint/src/fingerprint.rs:34` **fn** `from_adapter_info` — Create normalized GPU fingerprint from wgpu adapter info
+`crates/engine/paint/src/fingerprint.rs:42` **fn** `vendor` — Vendor string: always "WebKit"
+`crates/engine/paint/src/fingerprint.rs:47` **fn** `renderer` — Renderer string: always "Generic GPU"
 `crates/engine/paint/src/glsl.rs:32` **enum** `Val` — Runtime value inside the GLSL interpreter
 `crates/engine/paint/src/glsl.rs:49` **fn** `to_float` — Convert any numeric-ish value to a scalar f32
 `crates/engine/paint/src/glsl.rs:63` **fn** `to_vec4` — Convert any value to vec4 (broadcasting rules)
@@ -1869,12 +1869,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:175` **fn** `is_empty` — Check if cache is empty
 `crates/engine/paint/src/layer_cache.rs:180` **fn** `contains` — Check if a specific layer is in cache
 `crates/engine/paint/src/layer_cache.rs:189` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:68` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:78` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/lib.rs:161` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:170` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:182` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family`
-`crates/engine/paint/src/lib.rs:189` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:69` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:79` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/lib.rs:162` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:171` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:183` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family`
+`crates/engine/paint/src/lib.rs:190` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1331` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
@@ -1931,17 +1931,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/svg_path.rs:943` **fn** `tessellate_stroke_ex` — Tessellate strokes with full linecap / linejoin / miterlimit / dasharray support
 `crates/engine/paint/src/texture_pool.rs:15` **struct** `TextureKey` — Key for a pool entry: texture dimensions
 `crates/engine/paint/src/texture_pool.rs:24` **fn** `new` — Create a new texture pool key
-`crates/engine/paint/src/texture_pool.rs:32` **struct** `PooledTexture` — A pooled GPU texture resource
-`crates/engine/paint/src/texture_pool.rs:51` **struct** `TexturePool` — Texture pool managing free textures for recycling
-`crates/engine/paint/src/texture_pool.rs:61` **fn** `new` — Create a new empty texture pool
-`crates/engine/paint/src/texture_pool.rs:71` **fn** `acquire` — Try to allocate a texture of the given size from the pool
-`crates/engine/paint/src/texture_pool.rs:80` **fn** `release` — Return a texture to the pool for reuse
-`crates/engine/paint/src/texture_pool.rs:86` **fn** `clear` — Clear all pooled textures, freeing GPU memory
-`crates/engine/paint/src/texture_pool.rs:92` **fn** `len` — Get the number of free textures in the pool (across all sizes)
-`crates/engine/paint/src/texture_pool.rs:97` **fn** `is_empty` — Check if the pool is empty
-`crates/engine/paint/src/texture_pool.rs:102` **fn** `len_for_size` — Get the number of free textures of a specific size
-`crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
-`crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
+`crates/engine/paint/src/texture_pool.rs:34` **struct** `PooledTexture` — A pooled GPU texture resource
+`crates/engine/paint/src/texture_pool.rs:53` **struct** `TexturePool` — Texture pool managing free textures for recycling
+`crates/engine/paint/src/texture_pool.rs:63` **fn** `new` — Create a new empty texture pool
+`crates/engine/paint/src/texture_pool.rs:73` **fn** `acquire` — Try to allocate a texture of the given size from the pool
+`crates/engine/paint/src/texture_pool.rs:82` **fn** `release` — Return a texture to the pool for reuse
+`crates/engine/paint/src/texture_pool.rs:88` **fn** `clear` — Clear all pooled textures, freeing GPU memory
+`crates/engine/paint/src/texture_pool.rs:94` **fn** `len` — Get the number of free textures in the pool (across all sizes)
+`crates/engine/paint/src/texture_pool.rs:99` **fn** `is_empty` — Check if the pool is empty
+`crates/engine/paint/src/texture_pool.rs:104` **fn** `len_for_size` — Get the number of free textures of a specific size
+`crates/engine/paint/src/texture_pool.rs:110` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
+`crates/engine/paint/src/texture_pool.rs:115` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 `crates/engine/paint/src/webgl.rs:114` **struct** `SoftwareWebGl` — Pure-Rust software WebGL 1.0 context
 `crates/engine/paint/src/webgl.rs:170` **fn** `new` — Create a context with a `width × height` drawing buffer
 `crates/engine/paint/src/webgl.rs:197` **fn** `width` — Drawing-buffer width in pixels
@@ -1979,7 +1979,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (583 symbols)
+## lumen-shell  (584 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2007,6 +2007,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/animation_scheduler.rs:54` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
 `crates/shell/src/animation_scheduler.rs:75` **fn** `clear` — Удалить все записи для элементов, которых больше нет в дереве
+`crates/shell/src/backend_factory.rs:28` **fn** `create_backend` — Создаёт windowed рендер-бэкенд для окна `window`
 `crates/shell/src/bidi/protocol.rs:54` **struct** `BidiState` — Состояние одного BiDi-соединения
 `crates/shell/src/bidi/protocol.rs:67` **fn** `new` — Новое пустое состояние соединения
 `crates/shell/src/bidi/protocol.rs:103` **struct** `DispatchResult` — Результат обработки одной команды
@@ -2971,4 +2972,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2906 symbols in 20 crates*
+*Total: 2907 symbols in 20 crates*

@@ -22,6 +22,7 @@
 
 mod address_bar;
 mod animation_scheduler;
+mod backend_factory;
 mod bidi;
 mod config;
 mod deterministic;
@@ -76,7 +77,7 @@ use lumen_layout::{collect_snap_containers, find_snap_target};
 #[cfg(feature = "quickjs")]
 use lumen_layout::{collect_computed_styles, collect_scroll_containers, set_scroll_position};
 use lumen_layout::style::ComputedStyle;
-use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, Renderer};
+use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
 use lumen_layout::Cursor as CssCursor;
 use winit::application::ApplicationHandler;
 
@@ -3145,7 +3146,7 @@ struct Lumen {
     event_sink: Arc<dyn EventSink>,
     modifiers: ModifiersState,
     window: Option<Arc<Window>>,
-    renderer: Option<Renderer>,
+    renderer: Option<Box<dyn RenderBackend>>,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -4280,7 +4281,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         };
 
-        let mut renderer = match Renderer::new(window.clone(), INTER_FONT.to_vec()) {
+        let mut renderer = match backend_factory::create_backend(window.clone(), INTER_FONT.to_vec()) {
             Ok(r) => r,
             Err(err) => {
                 eprintln!("Не удалось инициализировать рендер: {err}");
@@ -4672,7 +4673,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(level) = self.memory_poll.tick(&mut self.cache_registry) {
             self.image_cache.on_memory_pressure(level);
             if let Some(renderer) = &mut self.renderer {
-                renderer.layer_cache_mut().on_memory_pressure(level);
+                renderer.on_layer_memory_pressure(level);
             }
         }
 

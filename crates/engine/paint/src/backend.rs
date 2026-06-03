@@ -22,7 +22,8 @@
 use std::fmt;
 use std::sync::Arc;
 
-use lumen_core::ext::FontProvider;
+use lumen_core::ext::{FontProvider, MemoryPressureLevel};
+use lumen_core::geom::Size;
 use lumen_image::Image;
 
 use crate::DisplayCommand;
@@ -119,6 +120,37 @@ pub trait RenderBackend: Send {
     /// `None` означает возврат к bundled Inter fallback.
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>);
 
+    /// Возвращает текущий размер viewport в **logical** (CSS) пикселях.
+    ///
+    /// Дефолт — 1024×720: hardcoded fallback до создания реального окна.
+    /// Переопределяется в windowed-бэкендах; headless-бэкенды могут вернуть
+    /// точный размер рендер-поверхности.
+    fn viewport_size(&self) -> Size {
+        Size { width: 1024.0, height: 720.0 }
+    }
+
+    /// Возвращает текущий device-pixel-ratio (HiDPI scale factor).
+    ///
+    /// Дефолт — 1.0. Windowed-бэкенды переопределяют через [`set_scale_factor`].
+    ///
+    /// [`set_scale_factor`]: RenderBackend::set_scale_factor
+    fn scale_factor(&self) -> f64 {
+        1.0
+    }
+
+    /// Предзагружает системные шрифты-fallback для Unicode-покрытия.
+    ///
+    /// Вызывается shell-ом один раз после создания бэкенда. Дефолт — no-op;
+    /// wgpu-бэкенд переопределяет через [`Renderer::preload_curated_fallbacks`].
+    ///
+    /// [`Renderer::preload_curated_fallbacks`]: crate::renderer::Renderer::preload_curated_fallbacks
+    fn preload_curated_fallbacks(&mut self) {}
+
+    /// Реагирует на события memory-pressure — вытесняет layer-cache.
+    ///
+    /// Вызывается из poll-loop shell-а. Дефолт — no-op.
+    fn on_layer_memory_pressure(&mut self, _level: MemoryPressureLevel) {}
+
     /// Возвращает сырые RGBA-пиксели после последнего [`render`][RenderBackend::render].
     ///
     /// Только headless-бэкенды реализуют это; windowed-бэкенды возвращают `None`.
@@ -214,5 +246,35 @@ mod tests {
         let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![255; 4], icc_profile: None };
         let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
         assert!(b.register_image("test".into(), &img).is_ok());
+    }
+
+    #[test]
+    fn null_backend_viewport_size_default() {
+        let b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        let sz = b.viewport_size();
+        assert_eq!(sz.width, 1024.0, "default viewport width должен быть 1024");
+        assert_eq!(sz.height, 720.0, "default viewport height должен быть 720");
+    }
+
+    #[test]
+    fn null_backend_scale_factor_default() {
+        let b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        assert_eq!(b.scale_factor(), 1.0, "default scale factor должен быть 1.0");
+    }
+
+    #[test]
+    fn null_backend_preload_curated_fallbacks_noop() {
+        let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        // Должен завершиться без паники
+        b.preload_curated_fallbacks();
+    }
+
+    #[test]
+    fn null_backend_on_layer_memory_pressure_noop() {
+        let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        // Должен завершиться без паники для всех уровней
+        b.on_layer_memory_pressure(MemoryPressureLevel::Low);
+        b.on_layer_memory_pressure(MemoryPressureLevel::Medium);
+        b.on_layer_memory_pressure(MemoryPressureLevel::High);
     }
 }

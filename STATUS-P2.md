@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+RB-4: Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var  branch: p2-rb4-backend-factory
+Next step: extend RenderBackend trait + create backend_factory  crates/engine/paint/src/backend.rs
 
 ---
 
