@@ -193,7 +193,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `border-*-width` | ✅ | f32 px |
 | `border-*-style` | ✅ | solid/dashed/dotted/double |
 | `border-*-color` | ✅ | CssColor; currentColor |
-| `border-radius` / `border-*-*-radius` | ✅ | circular SDF rendering ✅; elliptical (rx≠ry syntax `10px / 20px`) ⬜ |
+| `border-radius` / `border-*-*-radius` | ✅ | circular SDF rendering ✅; elliptical (rx≠ry syntax `10px / 20px`) ✅ FemtovgBackend |
 | `box-shadow` | ✅ | offset/blur/spread/color/inset; multiple |
 | `outline` / `outline-*` | ✅ | width/style/color/offset |
 
