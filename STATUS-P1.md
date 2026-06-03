@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty — A-11 завершена)
+A-12: Shape Detection API stub  branch: p1-shape-detection-api
+Next step: реализовать FaceDetector/BarcodeDetector/TextDetector stubs  crates/js/src/shape_detection.rs
 
 ---
 
