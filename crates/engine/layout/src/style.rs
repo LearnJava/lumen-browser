@@ -21,7 +21,7 @@ use lumen_core::geom::Size;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
     Declaration, DirArg, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, SimpleSelector, Specificity,
-    Stylesheet,
+    Stylesheet, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
 
@@ -4790,6 +4790,34 @@ pub fn compute_style(
             next_rule_idx += 1;
         }
     }
+    // CSS Conditional Rules L3 §2 — `@supports`: evaluate condition against
+    // Lumen's supported-properties list; include contained rules only when
+    // condition is true (same ordering semantics as @media).
+    for supports in &sheet.supports_rules {
+        if !supports.condition.evaluate(SUPPORTED_PROPERTIES) {
+            next_rule_idx += supports.rules.len();
+            continue;
+        }
+        for rule in &supports.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
+        }
+    }
     // Inline-style declarations подключаются с `is_inline = true` и
     // synthetic specificity = default (Cascade L4 §6.4.3 — реальная
     // specificity inline-стиля игнорируется в сортировке: за порядок
@@ -5040,6 +5068,30 @@ pub fn compute_pseudo_element_style(
             continue;
         }
         for rule in &media.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    matched.push((decl.important, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
+        }
+    }
+    // CSS Conditional Rules L3 §2 — @supports in pseudo-element context.
+    for supports in &sheet.supports_rules {
+        if !supports.condition.evaluate(SUPPORTED_PROPERTIES) {
+            next_rule_idx += supports.rules.len();
+            continue;
+        }
+        for rule in &supports.rules {
             let mut best: Option<Specificity> = None;
             for complex in &rule.selectors {
                 if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
@@ -22842,5 +22894,30 @@ mod tests {
         let s = ts_prop("perspective-origin", "25% 75%");
         assert_eq!(s.perspective_origin.0, PositionComponent::Percent(0.25));
         assert_eq!(s.perspective_origin.1, PositionComponent::Percent(0.75));
+    }
+
+    // ── @supports cascade wiring ──────────────────────────────────────────────
+
+    #[test]
+    fn at_supports_known_property_applies_rules() {
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let sheet = lumen_css_parser::parse("@supports (color: red) { div { color: blue; } }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn at_supports_unknown_property_skips_rules() {
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let sheet = lumen_css_parser::parse(
+            "@supports (unknown-xyz-prop: 1) { div { color: blue; } }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Color stays default (black) because rule was filtered out.
+        assert_eq!(s.color, Color::BLACK);
     }
 }

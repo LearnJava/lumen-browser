@@ -1423,6 +1423,27 @@ fn install_primitives(
         }
     );
 
+    // ── CSS.supports() backing (CSS Conditional Rules L3 §6) ──────────────────
+    // Two-argument form: CSS.supports(property, value) → check property name.
+    // Intentionally ignores value in Phase 0 (property-name check is sufficient
+    // for the feature-detection patterns real sites use).
+    reg!(
+        "_lumen_css_supports_prop",
+        |prop: String, _value: String| -> bool {
+            lumen_css_parser::SUPPORTED_PROPERTIES
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(&prop))
+        }
+    );
+    // One-argument form: CSS.supports(conditionText) → parse + evaluate.
+    reg!(
+        "_lumen_css_supports_cond",
+        |condition: String| -> bool {
+            lumen_css_parser::parse_supports_condition(&condition)
+                .evaluate(lumen_css_parser::SUPPORTED_PROPERTIES)
+        }
+    );
+
     // Queues a lazy image load request.  Called by `_lumen_deliver_lazy_images()` in JS
     // when an image registered via `_lumen_init_lazy_images` enters the lazy-load margin.
     // Shell drains via `QuickJsRuntime::take_lazy_image_requests` after each layout.
@@ -6916,6 +6937,54 @@ var matchMedia = function(media) {
     return mql;
 };
 window.matchMedia            = matchMedia;
+
+// ── window.CSS (CSS Object Model L1 §5 + CSS Conditional Rules L3 §6) ────────
+// CSS.supports(property, value) — two-argument form.
+// CSS.supports(conditionText) — one-argument form.
+// CSS.escape(ident) — CSS.escape() L1 §4.2 (WhatWG CSS OM).
+var CSS = {
+    supports: function(prop, value) {
+        if (arguments.length < 2) {
+            // One-argument form: CSS.supports(conditionText)
+            // Strip outermost parens if present (common usage pattern).
+            var cond = String(prop);
+            return !!_lumen_css_supports_cond(cond);
+        }
+        // Two-argument form: CSS.supports(property, value)
+        return !!_lumen_css_supports_prop(String(prop), String(value));
+    },
+    escape: function(ident) {
+        // CSS.escape() — WhatWG CSS OM §4.2.
+        // Escapes all chars that are not safe in CSS identifiers.
+        ident = String(ident);
+        var result = '';
+        for (var i = 0; i < ident.length; i++) {
+            var code = ident.charCodeAt(i);
+            var ch = ident[i];
+            if (i === 0 && code >= 0x30 && code <= 0x39) {
+                // Leading digit (escape as hex) — escape as hex.
+                result += '\\\\' + code.toString(16) + ' ';
+                continue;
+            }
+            // Safe: [a-zA-Z0-9_-] and non-ASCII.
+            if ((code >= 0x61 && code <= 0x7a) ||
+                (code >= 0x41 && code <= 0x5a) ||
+                (code >= 0x30 && code <= 0x39) ||
+                code === 0x5f || code === 0x2d || code >= 0x80) {
+                result += ch;
+            } else if (code === 0x00) {
+                result += '�';
+            } else if (code <= 0x1f || code === 0x7f) {
+                result += '\\\\' + code.toString(16) + ' ';
+            } else {
+                result += '\\\\' + ch;
+            }
+        }
+        return result;
+    },
+};
+window.CSS = CSS;
+
 window.Blob                  = Blob;
 window.File                  = File;
 window.FileReader            = FileReader;
@@ -17396,6 +17465,94 @@ mod tests {
     fn report_error_is_on_window() {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("typeof window.reportError === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── CSS.supports() / CSS.escape() ─────────────────────────────────────────
+
+    #[test]
+    fn css_object_exists_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.CSS === 'object'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_supports_two_arg_known_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("CSS.supports('display', 'grid')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_supports_two_arg_unknown_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("CSS.supports('--custom-var', '1')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn css_supports_one_arg_known_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("CSS.supports('(color: red)')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_supports_one_arg_unknown_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("CSS.supports('(unknown-prop: x)')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn css_supports_one_arg_and_condition() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("CSS.supports('(display: grid) and (color: red)')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_supports_one_arg_or_with_unknown() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("CSS.supports('(unknown: x) or (color: red)')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_supports_case_insensitive() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("CSS.supports('Display', 'block')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_escape_plain_word() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("CSS.escape('hello')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("hello".into()));
+    }
+
+    #[test]
+    fn css_escape_leading_digit() {
+        let rt = runtime_with_dom(make_doc());
+        // Leading digit '1' must be hex-escaped.
+        let r = rt.eval("CSS.escape('1abc')").unwrap();
+        let s = match r { lumen_core::JsValue::String(s) => s, _ => panic!("expected string") };
+        assert!(s.starts_with('\\'), "leading digit should be escaped, got: {s}");
+    }
+
+    #[test]
+    fn css_supports_is_function() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof CSS.supports === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_escape_is_function() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof CSS.escape === 'function'").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
