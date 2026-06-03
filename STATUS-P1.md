@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-esmodule-support** — `<script type=module>` ES Module support  
+branch: `p1-esmodule-support`  
+Next step: Implement `LumenLoader/LumenResolver` in `crates/js/src/esm.rs`, wire into `QuickJsRuntime::new()`
 
 ---
 
