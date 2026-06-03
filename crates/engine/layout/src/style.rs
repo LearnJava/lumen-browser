@@ -15028,6 +15028,9 @@ fn parse_hex_color(s: &str) -> Option<Color> {
 ///   - hsl: hue в градусах (число или `<n>deg`), saturation и lightness в %;
 ///   - alpha (4-й компонент): float 0..1 или процент 0–100%. По умолчанию 1.
 fn parse_function_color(s: &str) -> Option<Color> {
+    // CSS: color-mix() — P4 task: detect "color-mix(in <space>, ...)" here,
+    // call `lumen_layout::color_mix::mix_colors(space, c1, w1, c2, w2)`, return Color.
+    // Algorithm stub: crates/engine/layout/src/color_mix.rs.
     let lower = s.to_ascii_lowercase();
     let (kind, body) = if let Some(b) = lower.strip_prefix("rgba(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Rgb, b)

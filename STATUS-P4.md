@@ -173,6 +173,24 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
   4. In `renderer.rs` `DrawScrollbar` handler: read the per-command color fields instead of `TRACK_COLOR`/`THUMB_COLOR` constants.
 - **Entry points:** `paint/src/display_list.rs` — `scrollbar_rects()` helper + `walk()` emit block after `PopScrollLayer`. `paint/src/renderer.rs` — `DrawScrollbar` match arm. `SCROLLBAR_WIDTH: f32 = 12.0` const controls default gutter width.
 
+### CSS `color-mix()` function (P1 feature p1-color-mix, 2026-06-03)
+- **Status:** Algorithm ready. `lumen_layout::mix_colors(space, c1, w1, c2, w2) -> [f32; 4]` in `crates/engine/layout/src/color_mix.rs`. Converts both input sRGB colors to the interpolation space, lerps (polar spaces use shortest-arc hue), converts result back to sRGB. Input/output: `[r, g, b, a]` each in `[0.0, 1.0]`. Supported spaces: `MixColorSpace::Srgb | SrgbLinear | Hsl | Hwb | Lab | Lch | Oklab | Oklch | XyzD65 | XyzD50`. `MixColorSpace::from_css(s)` parses the CSS identifier. 25 unit tests.
+- **P4 task** (CSS Color L5 §10.2 `color-mix()`):
+  1. In `parse_function_color()` (`style.rs:15030`), detect `"color-mix("` prefix before the existing `rgba(` chain (marked with `// CSS: color-mix()` comment).
+  2. Parse the `color-mix(in <space>, <color1> [<pct>]?, <color2> [<pct>]?)` syntax:
+     - Strip `color-mix(` prefix + `)` suffix.
+     - Split by `,` to get: `in <space>`, `<color1> [<pct>]?`, `<color2> [<pct>]?`.
+     - Call `MixColorSpace::from_css(space_token)` → `MixColorSpace`.
+     - Parse `<color1>` via `parse_color()`, extract optional `<pct>` (percentage or fraction; default: 50%).
+     - Parse `<color2>` similarly.
+     - Normalize: if one percentage is given, the other = 100% - pct1. If neither given, both = 50%. Convert to fractions `w1, w2 ∈ [0, 1]`.
+     - Call `mix_colors(space, c1.to_f32(), w1, c2.to_f32(), w2)` (use `Color::to_f32()` helper or inline `[r/255.0, g/255.0, b/255.0, a/255.0]`).
+     - Convert result `[f32; 4]` back to `Color` via `[(r*255.0) as u8, ...]`.
+  3. To support `color-mix()` in `CssColor` context (for `color: color-mix(...)`), extend `parse_css_color_legacy()` similarly.
+  4. Add 3-4 CSS tests: `color-mix(in srgb, red, blue)` → `(128, 0, 128)`, `color-mix(in oklch, red 40%, blue)` → some saturated color, `color-mix(in hsl, red 100%, blue 0%)` → red.
+- **Entry points:** `lumen-layout/src/style.rs:15030` — `parse_function_color` + `parse_css_color_legacy`; `lumen-layout/src/color_mix.rs` — `mix_colors` + `MixColorSpace`.
+- **CSS comment location:** `style.rs:15030` `// CSS: color-mix()` comment.
+
 ### CSS Scroll-Driven Animations L1 — `ScrollTimeline` / `ViewTimeline` (P1 feature p1-scroll-driven-animations)
 - **Status:** Algorithm ready. `ScrollTimeline`, `ViewTimeline`, `NamedScrollTimeline`, `NamedViewTimeline`, `ScrollAxis`, `Viewport` in `lumen-layout/src/scroll_timeline.rs`. Progress resolvers: `resolve_scroll_progress()` + `resolve_view_progress()`. Collection stubs: `collect_named_scroll_timelines()` + `collect_named_view_timelines()`. All exported from `lumen-layout`. 15 unit tests.
 - **P4 task** (CSS Scroll-Driven Animations L1):
