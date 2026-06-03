@@ -11,6 +11,7 @@ pub mod dom;
 pub mod geolocation;
 pub mod heap_snapshot;
 pub mod intl_bindings;
+pub mod media_devices;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod shared_worker;
@@ -315,6 +316,13 @@ impl QuickJsRuntime {
             // Install navigator/screen/timezone normalization (ADR-007 Layer 4, 9D.6) — after DOM.
             if let Err(e) = navigator_bindings::install_navigator_bindings(&ctx) {
                 eprintln!("Navigator bindings init failed: {}", e);
+            }
+
+            // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: all capture
+            // requests reject with NotAllowedError; enumerateDevices returns [].
+            if let Err(e) = media_devices::install_media_devices_bindings(&ctx) {
+                eprintln!("MediaDevices bindings init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
