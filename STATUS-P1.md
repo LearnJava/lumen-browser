@@ -6,9 +6,7 @@
 
 ## In progress
 
-**p1-iframe-placeholder** — HTML `<iframe>` placeholder layout + JS stubs (HTML spec §4.8.5).
-branch: `p1-iframe-placeholder`
-Next step: clippy + full test suite + graphic test + SYMBOLS.md + commit
+_(нет)_
 
 ---
 
@@ -19,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-iframe-placeholder** ✅ 2026-06-03 — HTML `<iframe>` placeholder layout + JS stubs (HTML spec §4.8.5). `BoxKind::Iframe { src }` — новый replaced element в layout: UA default 300×150 px, `width`/`height` HTML-атрибуты как presentational hints (расширен `apply_image_presentational_hints`), `is_replaced=true` (не растягивается на ширину контейнера). Paint: grey `DrawImage` placeholder (незарегистрированный src → серый, паттерн как у `<video>`). JS: `crates/js/src/iframe_element.rs` — `HTMLIFrameElement` стабы: `src`/`name`/`srcdoc`/`width`/`height`/`sandbox`/`allow`/`referrerPolicy`/`loading` отражают HTML атрибуты; `contentDocument`/`contentWindow` → `null` (Phase 0 — нет sub-document navigation); `getSVGDocument()` → `null`. 6 layout-тестов + 10 JS-тестов. lumen-js: 922 lib. Clippy чист. Без новых зависимостей.
 
 - **p1-fullscreen-api** ✅ 2026-06-03 — Fullscreen API (WHATWG Fullscreen Standard §4). `element.requestFullscreen()` → Promise: устанавливает `data-lumen-fullscreen` sentinel-атрибут + очередь `FullscreenRequest::Enter` в Rust-очередь; `document.exitFullscreen()` → Promise: убирает атрибут + очередь Exit. `document.fullscreenElement` (getter из `_fs_nid`), `document.fullscreenEnabled=true`, `onfullscreenchange`/`onfullscreenerror` на element и document. `fullscreenchange` event пробрасывается bubbles:true на element → document. Shell wiring: `PersistentJs::take_fullscreen_requests() -> Vec<(bool, u32)>` — дренируется в `about_to_wait`, вызывает `window.set_fullscreen(Borderless(None))` / `set_fullscreen(None)`. Escape-key handler: при `fullscreen_nid.is_some()` выходит из fullscreen и вызывает `_lumen_notify_fullscreen_exit()` в JS. `_lumen_notify_fullscreen_exit()` — синхронный хелпер для shell-вызова при внешнем выходе. Поле `fullscreen_nid: Option<u32>` в `Lumen`. **P4 handoff:** `PseudoClass::Fullscreen` в `style.rs:5477` — wire к `data-lumen-fullscreen` (инструкция добавлена в STATUS-P4.md). lumen-js: 902 тестов (+11). Clippy чист. Без новых зависимостей.
 
