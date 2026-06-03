@@ -189,6 +189,11 @@ pub struct QuickJsRuntime {
     /// same `Arc<Mutex<String>>` and reads it at resolution time, so relative imports from
     /// inline module scripts resolve correctly against the page origin.
     module_page_url: esm::SharedPageUrl,
+    /// Import map for module specifier resolution (HTML LS §8.1.6.2).
+    ///
+    /// Shared with the `LumenResolver`'s import_map field. Set via `set_import_map()`
+    /// before evaluating modules. Maps bare specifiers like "react" to URLs like "/vendor/react.js".
+    module_import_map: Arc<Mutex<esm::ImportMap>>,
 }
 
 struct Inner {
@@ -207,6 +212,8 @@ impl QuickJsRuntime {
     pub fn new() -> Result<Self, JsError> {
         let module_registry = esm::new_registry();
         let (resolver, module_page_url) = esm::LumenResolver::new("");
+        // Capture the import_map reference from the resolver before it's moved into QuickJS.
+        let module_import_map = Arc::clone(&resolver.import_map);
         let loader = esm::LumenLoader::new(Arc::clone(&module_registry));
         let rt = Runtime::new().map_err(|e| JsError::Runtime(e.to_string()))?;
         rt.set_loader(resolver, loader);
@@ -238,6 +245,7 @@ impl QuickJsRuntime {
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             module_registry,
             module_page_url,
+            module_import_map,
         })
     }
 

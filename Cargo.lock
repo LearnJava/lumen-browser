@@ -1852,6 +1852,7 @@ dependencies = [
  "lumen-paint",
  "p256",
  "rquickjs",
+ "serde_json",
  "sha1",
  "sha2",
 ]
