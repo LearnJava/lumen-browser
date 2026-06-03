@@ -2489,6 +2489,26 @@ function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, 
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// Called from shell for pointer events (W3C Pointer Events Level 2).
+// Mirrors _lumen_dispatch_mouse_event but creates a PointerEvent (extends MouseEvent).
+// Non-bubbling types (pointerenter / pointerleave) set bubbles:false per spec.
+// mod: bit-mask — bit0=ctrl, bit1=shift, bit2=alt, bit3=meta
+function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button, buttons, mod) {
+    var bubbles = (type !== 'pointerenter' && type !== 'pointerleave');
+    var ev = new PointerEvent(type, {
+        bubbles: bubbles, cancelable: bubbles, isTrusted: true,
+        clientX: clientX, clientY: clientY,
+        screenX: clientX, screenY: clientY,
+        pageX:   clientX, pageY:   clientY,
+        button: button, buttons: buttons,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+        pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        pressure: buttons ? 0.5 : 0.0
+    });
+    return _lumen_dispatch_rich(start_nid, ev);
+}
+
 // Called from shell for keydown / keyup / keypress events.
 // mod: same bit-mask as _lumen_dispatch_mouse_event
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
@@ -6135,9 +6155,10 @@ var window = {
     localStorage: localStorage,
     sessionStorage: sessionStorage,
     _lumen_dispatch_composition: _lumen_dispatch_composition,
-    _lumen_dispatch_mouse_event: _lumen_dispatch_mouse_event,
-    _lumen_dispatch_key_event:   _lumen_dispatch_key_event,
-    _lumen_dispatch_rich:        _lumen_dispatch_rich,
+    _lumen_dispatch_mouse_event:   _lumen_dispatch_mouse_event,
+    _lumen_dispatch_pointer_event: _lumen_dispatch_pointer_event,
+    _lumen_dispatch_key_event:     _lumen_dispatch_key_event,
+    _lumen_dispatch_rich:          _lumen_dispatch_rich,
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
     addEventListener: function(type, fn) {
@@ -15450,6 +15471,92 @@ mod tests {
              (e instanceof PointerEvent) && (e instanceof MouseEvent) && \
              e.pointerId === 1 && e.pointerType === 'mouse' && e.isPrimary === true && \
              Array.isArray(e.getCoalescedEvents()) && Array.isArray(e.getPredictedEvents())"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_pointer_event_delivers_to_element() {
+        // _lumen_dispatch_pointer_event must fire a PointerEvent on the target node
+        // with pointerId=1, pointerType='mouse', isPrimary=true per Pointer Events L2.
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc);
+        let r = rt.eval(
+            "var div = document.createElement('div'); document.body.appendChild(div); \
+             var got = null; \
+             div.addEventListener('pointerdown', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_event(div.__nid__, 'pointerdown', 10, 20, 0, 1, 0); \
+             got !== null && got instanceof PointerEvent && \
+             got.type === 'pointerdown' && \
+             got.clientX === 10 && got.clientY === 20 && \
+             got.pointerId === 1 && got.pointerType === 'mouse' && got.isPrimary === true && \
+             got.pressure === 0.5"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_pointer_event_bubbles_for_bubbling_types() {
+        // pointerdown / pointermove / pointerup must bubble through ancestor chain.
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc);
+        let r = rt.eval(
+            "var parent = document.createElement('div'); document.body.appendChild(parent); \
+             var child = document.createElement('span'); parent.appendChild(child); \
+             var bubbled = false; \
+             parent.addEventListener('pointerdown', function(e) { bubbled = e.bubbles; }); \
+             _lumen_dispatch_pointer_event(child.__nid__, 'pointerdown', 0, 0, 0, 1, 0); \
+             bubbled"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_pointer_event_no_bubble_for_enter_leave() {
+        // pointerenter / pointerleave must NOT bubble (bubbles:false per spec).
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc);
+        let r = rt.eval(
+            "var parent = document.createElement('div'); document.body.appendChild(parent); \
+             var child = document.createElement('span'); parent.appendChild(child); \
+             var bubbled_to_parent = false; \
+             parent.addEventListener('pointerenter', function(e) { bubbled_to_parent = true; }); \
+             _lumen_dispatch_pointer_event(child.__nid__, 'pointerenter', 0, 0, 0, 0, 0); \
+             !bubbled_to_parent"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_pointer_event_mouseover_and_mouseenter_both_exist() {
+        // Both mouseover (bubbles) and mouseenter (no bubble) should be dispatchable.
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc);
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var over = false; var enter = false; \
+             el.addEventListener('mouseover',  function() { over = true; }); \
+             el.addEventListener('mouseenter', function() { enter = true; }); \
+             _lumen_dispatch_mouse_event(el.__nid__, 'mouseover',  5, 5, 0, 0, 0); \
+             _lumen_dispatch_mouse_event(el.__nid__, 'mouseenter', 5, 5, 0, 0, 0); \
+             over && enter"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_pointer_event_mousedown_mouseup_sequence() {
+        // mousedown and mouseup must deliver with correct button/buttons values.
+        let doc = make_doc();
+        let rt = runtime_with_dom(doc);
+        let r = rt.eval(
+            "var el = document.createElement('button'); document.body.appendChild(el); \
+             var downBtns = -1; var upBtns = -1; \
+             el.addEventListener('mousedown', function(e) { downBtns = e.buttons; }); \
+             el.addEventListener('mouseup',   function(e) { upBtns   = e.buttons; }); \
+             _lumen_dispatch_mouse_event(el.__nid__, 'mousedown', 0, 0, 0, 1, 0); \
+             _lumen_dispatch_mouse_event(el.__nid__, 'mouseup',   0, 0, 0, 0, 0); \
+             downBtns === 1 && upBtns === 0"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
