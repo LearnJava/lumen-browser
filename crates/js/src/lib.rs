@@ -1,6 +1,7 @@
 pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
+pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
 pub mod clipboard;
@@ -324,6 +325,12 @@ impl QuickJsRuntime {
             // Install HTMLAudioElement stubs (HTML spec §4.8.10) — after DOM/video.
             if let Err(e) = audio_element::install_audio_element_bindings(&ctx) {
                 eprintln!("Audio element bindings init failed: {}", e);
+            }
+
+            // Install HTMLIFrameElement stubs (HTML spec §4.8.5) — after DOM.
+            // Phase 0: contentDocument/contentWindow return null (no sub-document navigation).
+            if let Err(e) = iframe_element::install_iframe_element_bindings(&ctx) {
+                eprintln!("IFrame element bindings init failed: {}", e);
             }
 
             // Install Geolocation API stub (W3C Geolocation L2, §7.7) — after DOM/navigator.

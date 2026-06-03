@@ -6817,8 +6817,8 @@ fn ua_vertical_align(doc: &Document, node: NodeId) -> Option<VerticalAlign> {
     }
 }
 
-/// Применяет HTML presentational hints для `<img>` и `<video>`: `width`/`height`,
-/// `hspace`/`vspace` (→ margin), `border` (→ border-width + style=solid) для `<img>`.
+/// Применяет HTML presentational hints для `<img>`, `<video>`, `<iframe>`:
+/// `width`/`height`, `hspace`/`vspace` (→ margin), `border` для `<img>`.
 /// HTML5 §15.3.9. Author CSS поверх — выигрывает.
 fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
@@ -6826,7 +6826,8 @@ fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut Co
     };
     let is_img = name.local == "img";
     let is_video = name.local == "video";
-    if !is_img && !is_video {
+    let is_iframe = name.local == "iframe";
+    if !is_img && !is_video && !is_iframe {
         return;
     }
     let node_ref = doc.get(node);

@@ -3321,6 +3321,55 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             out.push(DisplayCommand::FillRect { rect: b.rect, color: grey });
             emit_outline(b, out);
         }
+        BoxKind::Iframe { src } => {
+            if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
+                return;
+            }
+            emit_box_shadows(b, out);
+            // Phase 0: grey placeholder — no sub-document navigation.
+            // Using DrawImage with src as key: unregistered key → grey placeholder
+            // (same pattern as Video). The src string identifies this iframe to
+            // the shell for potential future navigation.
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: src.clone(),
+                alt: String::new(),
+                object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
         // SVG elements: second-pass self-paint not needed (handled in walk).
         BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => {}
     }
@@ -3884,6 +3933,57 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // Phase 0: grey bar for audio controls UI.
             let grey = Color { r: 200, g: 200, b: 200, a: 255 };
             out.push(DisplayCommand::FillRect { rect: b.rect, color: grey });
+            emit_outline(b, out);
+        }
+        BoxKind::Iframe { src } => {
+            if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
+                return;
+            }
+            // Phase 0: grey placeholder — no sub-document navigation.
+            // DrawImage with src as key: unregistered key → grey placeholder (same as Video).
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b, dpr);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: src.clone(),
+                alt: String::new(),
+                object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
             emit_outline(b, out);
         }
         BoxKind::SvgRoot { .. } => {

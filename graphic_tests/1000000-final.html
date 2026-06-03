@@ -622,6 +622,13 @@
   <video src="nonexistent.mp4" style="width:80px;height:45px;border-radius:6px;"></video>
 </div>
 
+<!-- iframe placeholder — HTML spec §4.8.5: 300×150 UA default, grey DrawImage -->
+<div style="margin-top:12px;display:flex;gap:12px;align-items:flex-end;">
+  <iframe src="https://example.com" style="width:240px;height:135px;border:1px solid #718096;"></iframe>
+  <iframe src="https://lumen-browser.example" width="160" height="90"></iframe>
+  <iframe style="width:80px;height:45px;border:2px solid #e53e3e;"></iframe>
+</div>
+
 <!-- background-origin -->
 <div style="margin-top:12px;display:flex;gap:12px;align-items:flex-end;">
   <div style="width:80px;height:60px;border:10px solid #e53e3e;padding:10px;background-color:#2d3748;background-image:url(../samples/images/perceptron.png);background-size:30px 24px;background-repeat:no-repeat;background-position:0% 0%;background-origin:border-box;"></div>
