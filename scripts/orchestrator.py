@@ -14,9 +14,18 @@
     python scripts/orchestrator.py P1 --model haiku                     # сразу на Haiku (alias)
     python scripts/orchestrator.py P1 --fallback-model haiku            # резерв при лимите
     python scripts/orchestrator.py P1 --model sonnet --fallback-model haiku   # стартуем на Sonnet, резерв Haiku
+    python scripts/orchestrator.py P5 --max-tasks 1                     # P5: один прогон ревизии
     python scripts/orchestrator.py --stop P1                            # мягкая остановка
     python scripts/orchestrator.py --stop-all                           # остановить всех
     python scripts/orchestrator.py --status                             # статус всех
+
+P5 (роль здоровья кода) — особый случай
+---------------------------------------
+Задачи P5 рекуррентные: health-свип не уходит из секции «Next» STATUS-P5.md,
+поэтому `has_tasks("P5")` всегда возвращает True. Запуск без лимита
+(`orchestrator.py P5`) будет гонять ревизию по кругу бесконечно. Всегда
+ограничивай: `--max-tasks 1` (один прогон) или останавливай `--stop P5`.
+У фич-сессий P1–P4 «Next» со временем пустеет — там лимит не обязателен.
 
 Восстановление после краша
 ---------------------------
