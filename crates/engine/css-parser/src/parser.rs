@@ -313,8 +313,30 @@ pub enum PseudoClass {
     /// Specificity вычисляется как для `:is` — максимум по списку.
     /// None = простой `:host`; Some(list) = `:host(selector-list)`.
     Host(Option<Vec<ComplexSelector>>),
-    /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
-    /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
+    /// `:hover` (CSS Selectors L4 §4.3) — элемент под указателем или с потомком
+    /// под указателем. Состояние хранится thread-locally в `lumen-layout`
+    /// через `set_interactive_state`; matcher проверяет, является ли тестируемый
+    /// элемент предком или самим hovered-узлом (CSS Selectors L4 §4.3 «or one
+    /// of its descendants»).
+    Hover,
+    /// `:focus` (CSS Selectors L4 §4.4) — элемент, у которого есть keyboard
+    /// focus. Хранится thread-locally; matcher — точное совпадение с focus-узлом
+    /// (в отличие от `:hover`, фокус не «наследуется» предками — для этого есть
+    /// `:focus-within`).
+    Focus,
+    /// `:active` (CSS Selectors L4 §4.5) — элемент, активированный пользователем
+    /// (кнопка мыши нажата и не отпущена). По спеке матчит элемент И его предков.
+    Active,
+    /// `:focus-within` (CSS Selectors L4 §4.4.2) — элемент или его потомок имеет
+    /// keyboard focus. Matcher проверяет, является ли тестируемый элемент
+    /// предком-или-собой focus-узла.
+    FocusWithin,
+    /// `:focus-visible` (CSS Selectors L4 §4.4.3) — как `:focus`, но только
+    /// если индикатор фокуса должен быть виден по эвристике UA (обычно
+    /// при навигации клавиатурой, не мышью). В Phase 0 синоним `:focus`.
+    FocusVisible,
+    /// Неизвестные или ещё-не-реализованные псевдо-классы. Всегда `false`.
+    /// Хранится имя для отладки и корректного подсчёта specificity (0-1-0).
     Unsupported(String),
 }
 
@@ -3117,6 +3139,11 @@ impl<'a> Parser<'a> {
             "checked" => PseudoClass::Checked,
             "indeterminate" => PseudoClass::Indeterminate,
             "default" => PseudoClass::Default,
+            "hover" => PseudoClass::Hover,
+            "focus" => PseudoClass::Focus,
+            "active" => PseudoClass::Active,
+            "focus-within" => PseudoClass::FocusWithin,
+            "focus-visible" => PseudoClass::FocusVisible,
             "link" => PseudoClass::Link,
             "visited" => PseudoClass::Visited,
             "any-link" => PseudoClass::AnyLink,
