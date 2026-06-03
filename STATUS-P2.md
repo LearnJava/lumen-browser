@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+A-3: CSS Typed OM (partial)  branch: `p2-css-typed-om`
+Next step: `crates/js/src/lib.rs` install bindings + create typed_om_api.rs module
 
 ---
 
