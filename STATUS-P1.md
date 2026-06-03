@@ -6,9 +6,7 @@
 
 ## In progress
 
-**p1-web-locks** — Web Locks API + compat stubs (Web Share, Wake Lock, Network Information, userActivation, reportError)
-branch: p1-web-locks
-Next step: Web Locks pure-JS impl в dom.rs:8753, тесты в dom.rs:17124+  crates/js/src/dom.rs
+_(нет)_
 
 ---
 
@@ -19,6 +17,8 @@ _(нет — все задачи выполнены)_
 ---
 
 ## Recent merges
+
+- **p1-web-locks** ✅ 2026-06-03 — Web Locks API (W3C §5) + compat stubs: `navigator.locks.request(name[,opts],cb)` / `query()` — чистый JS-шим, per-context, без новых зависимостей; exclusive/shared режимы, FIFO-очередь с корректным drain (exclusive блокирует всё, shared пропускает параллельных читателей), опции mode/signal/ifAvailable/steal. `window.LockManager`, `window.Lock` экспортированы. **Screen Wake Lock** (W3C §6.5): `navigator.wakeLock.request('screen')` → `WakeLockSentinel{type, released, release()}` с onrelease + addEventListener. **Network Information API**: `navigator.connection {effectiveType:'4g', downlink:10, rtt:100, saveData:false, type:'wifi'}`. **navigator.userActivation**: `{isActive:true, hasBeenActive:true}`. **Web Share API stub**: `navigator.share()`/`canShare()` → всегда reject/false. **window.reportError(err)**: fires `ErrorEvent` на window. **Бонус:** `window.addEventListener` расширен — `'error'` + generic `_other_win_listeners{}` (fallback для любых типов); `window.dispatchEvent` теперь доставляет любой тип событий. 21 новый тест, lumen-js: 933 lib. Clippy чист. Без новых зависимостей.
 
 - **p1-iframe-placeholder** ✅ 2026-06-03 — HTML `<iframe>` placeholder layout + JS stubs (HTML spec §4.8.5). `BoxKind::Iframe { src }` — новый replaced element в layout: UA default 300×150 px, `width`/`height` HTML-атрибуты как presentational hints (расширен `apply_image_presentational_hints`), `is_replaced=true` (не растягивается на ширину контейнера). Paint: grey `DrawImage` placeholder (незарегистрированный src → серый, паттерн как у `<video>`). JS: `crates/js/src/iframe_element.rs` — `HTMLIFrameElement` стабы: `src`/`name`/`srcdoc`/`width`/`height`/`sandbox`/`allow`/`referrerPolicy`/`loading` отражают HTML атрибуты; `contentDocument`/`contentWindow` → `null` (Phase 0 — нет sub-document navigation); `getSVGDocument()` → `null`. 6 layout-тестов + 10 JS-тестов. lumen-js: 922 lib. Clippy чист. Без новых зависимостей.
 
