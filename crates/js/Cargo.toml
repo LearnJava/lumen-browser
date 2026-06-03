@@ -20,6 +20,11 @@ lumen-canvas = { workspace = true }
 # lumen-css-parser: needed for window.matchMedia() — parses media queries and
 # evaluates them against the current MediaContext (viewport size + user prefs).
 lumen-css-parser = { workspace = true }
+# lumen-layout: needed for querySelector compound selector matching.
+# Provides query_all(doc, sel) which uses the full CSS3 selector engine from style.rs
+# (compound selectors, combinators, pseudo-classes). No circular dep: layout does not
+# depend on lumen-js. Workspace-internal, no new external dependency.
+lumen-layout = { workspace = true }
 # Permanent #5 (§5): JS engine. QuickJS for Phase 0–1; rusty_v8 planned for v1.0+.
 # Rationale: writing a JS engine from scratch is not in scope for Lumen.
 # `loader` feature: enables ES6 module resolver/loader API (Resolver + Loader traits +

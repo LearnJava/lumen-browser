@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**querySelector compound selectors**  branch: p2-querySelector-compound
+Next step: add lumen-layout dep to lumen-js/Cargo.toml; replace selector_matches in dom.rs with query_all from lumen-layout::selector_query  crates/js/src/dom.rs:423
 
 ---
 
