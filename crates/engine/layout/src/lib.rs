@@ -15,6 +15,7 @@
 pub mod anchor;
 pub mod animation;
 pub mod box_tree;
+pub mod color_mix;
 pub mod counters;
 pub mod image_gating;
 pub mod motion_path;
@@ -36,6 +37,7 @@ pub use counters::{
     CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
     CounterSystem, CounterRange, RangeBound,
 };
+pub use color_mix::{MixColorSpace, mix_colors};
 pub use image_gating::gate_image_requests;
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,

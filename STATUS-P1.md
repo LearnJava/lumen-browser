@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**p1-color-mix** branch: `p1-color-mix`
+Next step: implement `color_mix.rs` in `crates/engine/layout/src/color_mix.rs`
 
 ---
 
