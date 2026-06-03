@@ -4975,6 +4975,7 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
         PseudoElementKind::Slotted(_) => name.eq_ignore_ascii_case("slotted"),
         PseudoElementKind::Marker => name.eq_ignore_ascii_case("marker"),
         PseudoElementKind::Selection => name.eq_ignore_ascii_case("selection"),
+        PseudoElementKind::Highlight(_) => name.eq_ignore_ascii_case("highlight"),
         PseudoElementKind::Unknown(s) => s.eq_ignore_ascii_case(name),
     }
 }

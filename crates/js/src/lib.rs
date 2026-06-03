@@ -3,6 +3,7 @@ pub mod audio_element;
 pub mod battery_bindings;
 pub mod esm;
 pub mod gamepad;
+pub mod highlight_api;
 pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
@@ -33,6 +34,7 @@ pub mod webhid;
 pub mod webusb;
 pub mod webtransport;
 pub mod worker;
+pub mod url_pattern;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -382,6 +384,12 @@ impl QuickJsRuntime {
                 Arc::clone(&self.fullscreen_requests),
             )
             .map_err(|e| rq_err(&ctx, e))?;
+
+            // Install CSS Custom Highlight API (CSS Highlight API L1) — after DOM.
+            // Phase 0: CSS.highlights registry + Highlight class; visual rendering in Phase 1.
+            if let Err(e) = highlight_api::install_highlight_api_bindings(&ctx) {
+                eprintln!("Highlight API bindings init failed: {}", e);
+            }
 
             // Install Battery Status API disable (ADR-007 Layer 4, 9D.4) — after DOM.
             if let Err(e) = battery_bindings::install_battery_bindings(&ctx) {

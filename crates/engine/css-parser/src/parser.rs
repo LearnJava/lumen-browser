@@ -365,6 +365,10 @@ pub enum PseudoElementKind {
     /// `::selection` (CSS Pseudo-Elements L4 §5.6) — selected text.
     /// В Phase 0 парсится как имя; P3 интеграция с DOM selection для highlight.
     Selection,
+    /// `::highlight(name)` (CSS Highlight API L1 §3) — custom text highlight.
+    /// Аргумент `name` — ключ в `CSS.highlights` реестре. Phase 0: парсирует имя,
+    /// Phase 1: вызывает `emit_text_with_highlights()` для рендеринга.
+    Highlight(String),
     /// Неизвестный pseudo-element (например, `::custom-pseudo` или typo).
     /// Хранится имя для диагностики.
     Unknown(String),
@@ -3338,7 +3342,7 @@ impl<'a> Parser<'a> {
         out
     }
 
-    /// Парсит тело функционального pseudo-element (например `::slotted(...)`).
+    /// Парсит тело функционального pseudo-element (например `::slotted(...)` или `::highlight(...)`).
     /// Возвращает `None` для неизвестных или невалидных тел — caller обернёт
     /// в `Unknown(name)` и проглотит остаток до `)`.
     fn parse_functional_pseudo_element(&mut self, name_lower: &str) -> Option<PseudoElementKind> {
@@ -3353,6 +3357,17 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoElementKind::Slotted(Some(list)))
+            }
+            "highlight" => {
+                // CSS Highlight API L1 §3: `::highlight(name)` матчит элемент,
+                // который стилизуется через highlight с заданным именем.
+                self.skip_ws_and_comments();
+                let name = self.parse_ident().unwrap_or_default();
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') || name.is_empty() {
+                    return None;
+                }
+                Some(PseudoElementKind::Highlight(name))
             }
             _ => None,
         }
@@ -6632,6 +6647,53 @@ mod tests {
                 assert!(list[0].head.parts.iter().any(|p| matches!(p, SimpleSelector::Attribute(_))));
             }
             _ => panic!("Expected Slotted(Some(...)), got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    // ────────────────── ::highlight pseudo-element (CSS Highlight API L1 §3) ──
+
+    #[test]
+    fn highlight_pseudo_element_simple() {
+        // `::highlight(search) { color: red; background: yellow; }` — simple name
+        let s = parse("::highlight(search) { color: red; background: yellow; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        assert_eq!(sel.head.parts.len(), 1);
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Highlight(name)) => {
+                assert_eq!(name, "search");
+            }
+            _ => panic!("Expected Highlight(\"search\"), got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    #[test]
+    fn highlight_pseudo_element_custom_name() {
+        // `::highlight(custom-highlight-name) { ... }` — hyphenated name
+        let s = parse("::highlight(custom-highlight-name) { color: blue; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Highlight(name)) => {
+                assert_eq!(name, "custom-highlight-name");
+            }
+            _ => panic!("Expected Highlight with name, got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    #[test]
+    fn highlight_pseudo_element_with_combinator() {
+        // `span::highlight(spelling) { color: red; }` — type selector + highlight
+        let s = parse("span::highlight(spelling) { color: red; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        assert_eq!(sel.head.parts.len(), 2);
+        assert_eq!(sel.head.parts[0], SimpleSelector::Type("span".into()));
+        match &sel.head.parts[1] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Highlight(name)) => {
+                assert_eq!(name, "spelling");
+            }
+            _ => panic!("Expected Highlight pseudo-element, got {:?}", sel.head.parts[1]),
         }
     }
 }
