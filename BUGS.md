@@ -620,3 +620,4 @@ CSS-фильтры `grayscale`, `sepia`, `brightness`, `invert`, `contrast`, `sa
 | `direction: rtl` alignment | Phase 1 | TEST-27: 9.76% |
 BUG-055 | OPEN | layout | collect_picture_unsupported_type_falls_back: <picture> type-attribute fallback выбирает avif источник вместо img src — picture/source с неподдерживаемым type не скипается | crates/engine/layout/src/lib.rs:12366
 BUG-056 | OPEN | shell | font_registry used after move in parse_and_layout: clippy E0382 на main — font_registry перемещён в Arc::new() но используется снова в for-loop ниже | crates/shell/src/main.rs:2316
+BUG-057 | FIXED 2026-06-03 | paint | wgpu Vulkan crash on first render after page load: «Encoder is invalid» validation error → double panic при drop SurfaceAcquireSemaphores; воспроизводится на Windows Vulkan backend; fix: DX12 backend по умолчанию на Windows в Renderer::new_async + new_headless_async | crates/engine/paint/src/renderer.rs:1578

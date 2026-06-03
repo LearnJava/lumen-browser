@@ -1575,7 +1575,19 @@ impl Renderer {
         // ScaleFactorChanged-event-е через `set_scale_factor`.
         let scale_factor = window.scale_factor();
 
-        let instance = wgpu::Instance::default();
+        // BUG-057: on Windows the Vulkan backend causes a double-panic on the first
+        // rendered frame (encoder invalidated, then Surface drop races SurfaceTexture).
+        // DX12 does not exhibit this issue. Default to DX12 on Windows; allow the
+        // WGPU_BACKEND env-var to override for debugging / fallback.
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: if cfg!(target_os = "windows") {
+                wgpu::Backends::DX12
+            } else {
+                wgpu::Backends::PRIMARY
+            },
+            ..Default::default()
+        }
+        .with_env());
         let surface = instance.create_surface(window)?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -1646,7 +1658,16 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let instance = wgpu::Instance::default();
+        // Mirror the windowed-mode backend choice (BUG-057).
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: if cfg!(target_os = "windows") {
+                wgpu::Backends::DX12
+            } else {
+                wgpu::Backends::PRIMARY
+            },
+            ..Default::default()
+        }
+        .with_env());
         // No surface needed — request adapter without compatible_surface constraint.
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
