@@ -6,8 +6,7 @@
 
 ## In progress
 
-**p2-temporal-api** branch: `p2-temporal-api`
-Next step: implement `temporal_api.rs` in `crates/js/src/temporal_api.rs`
+_(нет)_
 
 ---
 
@@ -28,6 +27,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p2-temporal-api** ✅ 2026-06-03 — TC39 Temporal API шим (Stage 4, ES2025) в `lumen-js`. `crates/js/src/temporal_api.rs`: чистый JS-шим без нативных биндингов, аналогично Intl-шиму. Полный набор классов: `Temporal.Now` (instant/plainDateISO/plainDateTimeISO/zonedDateTimeISO/timeZoneId), `Temporal.Instant` (epochNs как Number, from/fromEpochMs/add/subtract/since/toString/toZonedDateTimeISO), `Temporal.PlainDate` (from/compare/add/subtract/since/until/with/equals/toString, геттеры dayOfWeek/dayOfYear/weekOfYear/daysInMonth/daysInYear/inLeapYear), `Temporal.PlainTime`, `Temporal.PlainDateTime` (add/subtract/since/until/withPlainDate/withPlainTime), `Temporal.PlainYearMonth`, `Temporal.PlainMonthDay`, `Temporal.Duration` (ISO 8601 "P1Y2M3DT4H5M6.789S" парсинг+форматирование, arithmetic/negated/abs), `Temporal.ZonedDateTime` (UTC + fixed-offset "+HH:MM"; named TZ через Date.getTimezoneOffset), `Temporal.Calendar` (iso8601), `Temporal.TimeZone`. Идемпотентен (пропускает при наличии нативного Temporal). 30 unit-тестов, lumen-js: 1031 тест (было 1001, +30).
 
 - **p2-tab-auto-archive** ✅ 2026-06-03 — Tab auto-archive (7A.5, §12.13). `tabs/archive.rs`: `ArchivedTab { id, title, url, container }`, `TabArchive { entries, visible, scroll_row }`, `ArchiveHit { Restore(id), Dismiss(id), Inside, Outside }`. `ARCHIVE_AFTER_MS = 12 h`. Archive toolbar button (36 px, rightmost of tab bar): archive clock glyph + count badge. Drop-down panel (320 px right-anchored, ≤8 rows + scroll): container color strip + title + URL + restore ↺ / dismiss × per row. `strip.rs`: `TabEntry.last_activated_ms: f64` + `update_last_activated(idx, now_ms)` + `push_blank/push_with_opener` accept `now_ms`. `main.rs`: `Lumen.archive: TabArchive`; `tick_lifecycle` auto-archives background tabs idle > 12 h (evicts `bg_tabs` + removes from strip + lifecycle); click routing: archive button → toggle panel, Restore → `navigate_to(PageSource::Url(url))`, Dismiss → `take(id)`, Outside → close; rendering: tab bar uses `win_w - ARCHIVE_BTN_W` for tab area + archive button + archive panel appended to overlay. `switch_tab` calls `update_last_activated`. 33 новых тестов (16 archive unit + 17 strip/tree/vertical_tabs updates); итого lumen-shell: **899 тестов**. lumen-plan.md 7A ✅, 7A.5 ✅.
 
