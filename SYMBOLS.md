@@ -1748,7 +1748,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (221 symbols)
+## lumen-paint  (223 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -1781,6 +1781,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backdrop_cache.rs:184` **fn** `is_empty` — Whether the cache holds no entries
 `crates/engine/paint/src/backdrop_cache.rs:190` **fn** `used_bytes` — Total GPU memory tracked by live entries, in bytes
 `crates/engine/paint/src/backdrop_cache.rs:196` **fn** `budget_bytes` — Configured eviction budget, in bytes
+`crates/engine/paint/src/backend.rs:37` **enum** `RenderError` — Ошибка рендера — возвращается из [`RenderBackend::render`]
+`crates/engine/paint/src/backend.rs:77` **trait** `RenderBackend` — Стабильный интерфейс GPU-рендера для Lumen
 `crates/engine/paint/src/compositor.rs:63` **trait** `Layer` — Один layer: bbox + связь со stacking context-ом + локальный display list
 `crates/engine/paint/src/compositor.rs:71` **trait** `LayerTree` — Коллекция layer-ов. Trait-обстракция, чтобы compositor мог принимать
 `crates/engine/paint/src/compositor.rs:79` **struct** `BasicLayer` — Sprint 0 / Phase 0 concrete impl. Owned struct без интерлевания —
@@ -1862,12 +1864,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:175` **fn** `is_empty` — Check if cache is empty
 `crates/engine/paint/src/layer_cache.rs:180` **fn** `contains` — Check if a specific layer is in cache
 `crates/engine/paint/src/layer_cache.rs:189` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:63` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:73` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/lib.rs:156` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:165` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:177` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family`
-`crates/engine/paint/src/lib.rs:184` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:66` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:76` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/lib.rs:159` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:168` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:180` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family`
+`crates/engine/paint/src/lib.rs:187` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1331` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
@@ -2964,4 +2966,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2899 symbols in 20 crates*
+*Total: 2901 symbols in 20 crates*
