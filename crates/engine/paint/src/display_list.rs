@@ -2424,6 +2424,20 @@ fn emit_background_layer(
                 }
             }
         }
+        BackgroundImage::Paint(name) => {
+            // CSS Paint API (Houdini) — paint(name) generates dynamic image via registered worklet.
+            // Phase 0: render as grey placeholder `DrawImage`; Phase 1: invoke worklet paint() callback.
+            // `// CSS: background: paint(name)`
+            out.push(DisplayCommand::DrawBackgroundImage {
+                rect: clip,
+                origin_rect: origin,
+                src: format!("paint:{}", name),  // Prefixed to distinguish from URL images.
+                size: layer.size,
+                position: layer.position,
+                repeat: layer.repeat,
+                image_rendering: b.style.image_rendering,
+            });
+        }
         _ => {}
     }
     if use_blend {
