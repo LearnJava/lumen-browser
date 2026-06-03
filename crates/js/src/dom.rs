@@ -2001,6 +2001,9 @@ fn install_primitives(
     // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt
     crate::subtle_crypto::install_subtle_bindings(ctx)?;
 
+    // File System Access API: showOpenFilePicker/showSaveFilePicker/showDirectoryPicker
+    crate::filesystem_access::install_filesystem_access(ctx)?;
+
     Ok(())
 }
 
