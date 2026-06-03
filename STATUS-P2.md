@@ -14,15 +14,20 @@ _(нет)_
 
 ### Roadmap (фичи)
 
-Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
+Ordered by impact. Каждая задача имеет подробный файл с точным кодом для Haiku.
 
-| # | Task | Crate(s) | Effort | Roadmap |
-|---|------|----------|--------|---------|
-| ~~37~~ | ~~Intersection Observer API~~ — **выполнено P3** (p3-observers-api) | — | — | — |
-| ~~38~~ | ~~Resize Observer API~~ — **выполнено P3** (p3-observers-api) | — | — | — |
-| ~~39~~ | ~~HTML Popover API~~ — **взято P1** (p1-popover-api, 2026-06-03) | — | — | — |
-| ~~40~~ | ~~View Transitions API~~ — **выполнено P2** (p2-view-transitions, 2026-06-03) | — | — | — |
-| ~~41~~ | ~~Tab auto-archive (7A.5)~~ — **выполнено P2** (p2-tab-auto-archive, 2026-06-03) | — | — | — |
+| # | Задача | Размер | Файл |
+|---|--------|--------|------|
+| 1 | FemtovgBackend эллиптические border-radius (rx≠ry) | S | → [`docs/tasks/p2-femtovg-elliptical-radius.md`](docs/tasks/p2-femtovg-elliptical-radius.md) |
+| 2 | FemtovgBackend PushFilter blur (box blur + sigma stack) | M | → [`docs/tasks/p2-femtovg-filter-blur.md`](docs/tasks/p2-femtovg-filter-blur.md) |
+| ~~RB-10~~ | ~~VelloBackend полный~~ — **заблокирован** (vello API нестабилен, Phase 3+) | — | — |
+
+**Завершённые roadmap-фичи (37–41):**
+| ~~37~~ | ~~Intersection Observer API~~ — **выполнено P3** | | |
+| ~~38~~ | ~~Resize Observer API~~ — **выполнено P3** | | |
+| ~~39~~ | ~~HTML Popover API~~ — **выполнено P1** | | |
+| ~~40~~ | ~~View Transitions API~~ — **выполнено P2** | | |
+| ~~41~~ | ~~Tab auto-archive (7A.5)~~ — **выполнено P2** | | |
 
 ### GPU / RenderBackend (ADR-010, Phase 2–3)
 

@@ -27,24 +27,27 @@ _(none)_
 
 ## Next
 
-Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-05-29 state.
+Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подробный пошаговый файл для Haiku.
 
-| # | Property / Feature | Effort | Blocker |
-|---|-------------------|--------|---------|
-| 1 | `overflow: scroll` scrollable containers | L | shell scroll event |
-| 2 | `text-align-last` | S | none |
-| 3 | `perspective()` + `transform-style: preserve-3d` (3D Transforms L2) | L | none (P2 matrix primitive ready — see "Needs wiring") |
-| 4 | `@counter-style` custom counter definitions | M | none |
-| 5 | `justify-items` / `justify-self` for grid (Box Alignment L3) | S | none |
-| 6 | `column-rule` rendering + `column-span` + `column-fill` | S | none |
-| ~~7~~ | ~~Scroll snap shell integration~~ — **выполнено P2** (p2-scroll-snap, 2026-06-03) | — | — |
-| 8 | `::selection` pseudo-element | S | none |
-| 9 | `::marker` rendering | S | none |
-| 10 | `cq*` container query units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`) | M | none |
-| 11 | `attr()` with type (CSS Values L4) | M | none |
-| 12 | `mask-image` CSS wiring | L | P2 GPU compositing pass |
-| 13 | `writing-mode: vertical-*` axis swap | L | ~~layout engine~~ **stub ready** (P1 2026-05-31, `vertical.rs`) |
-| ~~14~~ | ~~`subgrid` track inheritance~~ — **алгоритм готов** (P1 2026-06-03, `subgrid.rs`) | — | — |
+| # | Property / Feature | Effort | Blocker | Task file |
+|---|-------------------|--------|---------|-----------|
+| 1 | `:fullscreen` + `:popover-open` sentinel pseudo-classes | XS | none | → [`docs/tasks/p4-sentinel-pseudo-classes.md`](docs/tasks/p4-sentinel-pseudo-classes.md) |
+| 2 | `color-mix()` CSS parsing | S | none | → [`docs/tasks/p4-color-mix-parsing.md`](docs/tasks/p4-color-mix-parsing.md) |
+| 3 | `text-align-last` wiring в align_lines | S | none | → [`docs/tasks/p4-text-align-last.md`](docs/tasks/p4-text-align-last.md) |
+| 4 | `::selection` pseudo-element | S | none | — |
+| 5 | `attr()` with type (CSS Values L4) | M | none | — |
+| 6 | `font-variation-settings` TextMeasurer wiring | M | none (P1 face.rs stub готов) | — |
+| 7 | `overflow: scroll` scrollable containers | L | P3 shell scroll event | — |
+| 8 | `:host` / `::slotted` (Shadow DOM) | M | none | — |
+| ~~3~~  | ~~`perspective()` + `transform-style: preserve-3d`~~ — **выполнено P2** (p2-css-3d-wiring, 2026-06-03) | — | — | — |
+| ~~4~~  | ~~`@counter-style`~~ — **выполнено P2** (p2-c7-counter-style, 2026-06-03) | — | — | — |
+| ~~5~~  | ~~`justify-items`/`justify-self`~~ — **выполнено** (parsing+wiring, 2026-06-03) | — | — | — |
+| ~~6~~  | ~~`column-span`/`column-fill`~~ — **выполнено P2** (p2-c8-column-extras, 2026-06-03) | — | — | — |
+| ~~9~~  | ~~`::marker` rendering~~ — **выполнено P2** (p2-c9-marker-rendering, 2026-06-03) | — | — | — |
+| ~~10~~ | ~~`cq*` container query units~~ — **выполнено P1** (p1-cq-units, 2026-06-03) | — | — | — |
+| ~~12~~ | ~~`mask-image`~~ — **выполнено P4+P2** (p4-mask-image, 2026-06-03) | — | — | — |
+| ~~13~~ | ~~`writing-mode: vertical-*`~~ — **уже проброшено** (wiring в box_tree.rs готово) | — | — | — |
+| ~~14~~ | ~~`subgrid`~~ — **алгоритм готов, P4 работа не нужна** (p1-css-subgrid, 2026-06-03) | — | — | — |
 
 ---
 
@@ -63,13 +66,9 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 - **P4 task:** CSS parsing already wired — `apply_declaration` for `grid-template-columns`/`grid-template-rows` calls `parse_track_list` which handles `subgrid`. No new ComputedStyle fields needed. The layout engine now reads `GridTrackSize::Subgrid` sentinel and applies inherited tracks. **No further P4 work required for Phase 1** — the algorithm is end-to-end. To add CSS Grid L2 `<line-name-list>` after `subgrid` keyword (optional), extend `parse_track_list` to collect named lines when `subgrid <ident>+` is detected.
 - **Entry points:** `lumen-layout/src/subgrid.rs` — `SubgridContext`, `collect_subgrid_items`; `lumen-layout/src/box_tree.rs:4586` — `lay_out_grid` subgrid entry.
 
-### `:fullscreen` CSS pseudo-class (P1 feature p1-fullscreen-api)
-- **Status:** JS Fullscreen API implemented. `element.requestFullscreen()` sets `data-lumen-fullscreen` sentinel attribute on the element; `document.exitFullscreen()` / `_lumen_notify_fullscreen_exit()` removes it. `document.fullscreenElement` tracks the active nid. Shell wired to winit `set_fullscreen(Borderless)` / `set_fullscreen(None)`. CSS parser already has `PseudoClass::Fullscreen` (always `false` for now — see `style.rs:5477`).
-- **P4 task:**
-  1. In `style.rs` `matches_pseudo_class` at `PseudoClass::Fullscreen => false` (line ~5477): replace `false` with a check for the `data-lumen-fullscreen` attribute on the element, similar to how `:popover-open` is done for popovers. Pattern: `doc.get_attr(node.id, "data-lumen-fullscreen").is_some()`.
-  2. Similarly wire `PseudoClass::PopoverOpen` (line ~5488) to check `data-lumen-popover-open` sentinel (separate task, same pattern).
-- **Entry points:** `lumen-layout/src/style.rs` at `PseudoClass::Fullscreen => false` (search `// CSS: :fullscreen` comment).
-- **CSS comment location:** `style.rs` at the `PseudoClass::Fullscreen => false` line.
+### `:fullscreen` + `:popover-open` CSS pseudo-classes → [`docs/tasks/p4-sentinel-pseudo-classes.md`](docs/tasks/p4-sentinel-pseudo-classes.md)
+- **Status:** JS APIs ready; CSS returns `false`. XS task — 2 one-line changes.
+- **Entry points:** `lumen-layout/src/style.rs:5621` (`PseudoClass::Fullscreen => false`) and `:5632` (`PseudoClass::PopoverOpen => false`).
 
 ### CSS `image-set()` background image (P2 feature p2-css-image-set)
 - **Status:** Paint-side resolution ready. `lumen-paint::select_image_set_url(value, dpr) -> &str` (`display_list.rs`) parses `image-set( <url-or-string> [<resolution>]# )` (units `x`/`dppx`/`dpi`/`dpcm`, default `1x`) and returns the URL closest to `dpr` (tie → higher resolution). `is_image_set(value)` detects the function (incl. `-webkit-image-set(`). `emit_background_layer` already calls them for `BackgroundImage::Url` values — if the stored string is an `image-set(…)` expression it resolves to a single URL before emitting `DrawBackgroundImage` (marked `// CSS: image-set`). DPR is threaded purely (no globals): `build_display_list_ordered_dpr` / `build_display_list_ordered_with_anim_dpr` take a `dpr` arg; the non-`_dpr` builders default to `1.0`.
@@ -79,25 +78,11 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 - **Entry points:** `lumen-layout/src/style.rs` `parse_single_bg_layer` (background-image token loop); paint resolution is already wired in `lumen-paint/src/display_list.rs` `emit_background_layer`.
 - **CSS comment location:** `display_list.rs` `emit_background_layer` `// CSS: image-set`.
 
-### `@media (prefers-color-scheme: dark)` visual restyle (P2 feature p2-dark-mode)
-- **Status:** Shell side done. The OS dark-mode preference is now detected (winit `Window::theme()` at window creation + `WindowEvent::ThemeChanged` refresh) and stored in `Lumen.dark_mode` (`shell/src/main.rs`). It is delivered to JS `matchMedia('(prefers-color-scheme: dark)')` via `deliver_media_query_changes(.., self.dark_mode)`. Helper: `shell/src/platform/dark_mode.rs::theme_prefers_dark(Option<Theme>) -> bool`. On theme change the shell calls `relayout()` + `request_redraw()`.
-- **Gap:** The **layout cascade still hardcodes `prefers_dark: false`** — `media_context_from_viewport(viewport)` in `lumen-layout/src/style.rs:13868` returns a `MediaContext` with `prefers_dark: false`, so CSS `@media (prefers-color-scheme: dark)` rules never match visually even when the OS is dark. JS matchMedia already reports dark correctly; only the visual cascade is inert.
-- **P4 task:**
-  1. Thread the shell's `dark_mode` boolean into `lumen_layout::layout_measured_hyp` (and `layout_measured`) so it reaches `compute_style` / `compute_pseudo_element_style` (the two `media_context_from_viewport(viewport)` call sites at `style.rs:4647` and `style.rs:4914`). Simplest: add a `prefers_dark: bool` field to a small `MediaContext`-like input threaded alongside `viewport`, or pass `prefers_dark` as a parameter through `build_box` / `lay_out` / `apply_container_styles`.
-  2. Update `media_context_from_viewport` to take `prefers_dark` instead of the hardcoded `false`.
-  3. Shell wiring: `parse_and_layout` / `relayout_page` (`shell/src/main.rs`) must forward `self.dark_mode` into the layout entry point. Both currently call `layout_measured_hyp(&d, &sheet, viewport, &measurer, hp)`.
-  4. **Keep the snapshot default `false`** — `lumen-driver` CPU snapshots and `--dump-*` headless modes must stay light to preserve cross-OS bit-identity (ADR-008). Only the interactive shell sets it from the OS.
-- **Entry points:** `lumen-layout/src/style.rs:13868` (`media_context_from_viewport`), `:4647` + `:4914` (call sites); `shell/src/main.rs` `parse_and_layout` / `relayout_page` (forward `dark_mode`).
+### ~~`@media (prefers-color-scheme: dark)` visual restyle~~ — **ВЫПОЛНЕНО** (p2-dark-mode-visual, 2026-06-03)
+`dark_mode` уже передаётся через весь каскад: `layout_measured_hyp(.., dark_mode)` → `compute_style` → `media_context_from_viewport(viewport, dark_mode)`. Shell форвардит `self.dark_mode`. Задача закрыта.
 
-### CSS 3D transforms — `perspective()` + 3D functions (P2 feature p2-css-3d-transforms)
-- **Status:** GPU/matrix primitive ready. `Mat4` has 3D constructors (`perspective(d)`, `rotate_x/rotate_y/rotate_z/rotate_3d`, `translate_3d`, `scale_3d`, `from_3d` for `matrix3d`, `project_point` for 4×4 + perspective divide, `is_2d_affine` fast-path flag) in `lumen-layout/src/property_trees.rs`. The renderer (`paint/src/renderer.rs`, `apply_affine_to_verts` / `apply_affine_to_rrect_verts`) now projects any **non-2D-affine** `PushTransform` matrix perspective-correctly (w-divide), so 3D matrices render as a flattened projection. Existing 2D output is bit-identical (fast path).
-- **P4 task:**
-  1. Add 3D variants to `TransformFn` (style.rs): `RotateX(f32)`, `RotateY(f32)`, `RotateZ(f32)`, `Rotate3d(f32,f32,f32,f32)`, `TranslateZ(f32)`, `Translate3d(f32,f32,f32)`, `ScaleZ(f32)`, `Scale3d(f32,f32,f32)`, `Perspective(f32)`, `Matrix3d([f32;16])`. Parse them in `apply_declaration()` for `transform`.
-  2. Map each new variant to its `Mat4` constructor in the `forward_box_transform` match (see `// CSS:` comment in `property_trees.rs`) **and** in `transform_fns_to_matrix` (animation path).
-  3. **Parent `perspective` property** (field `ComputedStyle.perspective` already parsed): a non-`None` perspective on an element applies `Mat4::perspective(d)` to the space its children are drawn in. Wire this in `display_list.rs` where child `PushTransform` matrices are composed — premultiply the parent perspective (offset by `perspective-origin`) into each child's matrix. Add `perspective_origin` field to ComputedStyle (default `50% 50%`).
-  4. **`transform-style`**: add `TransformStyle { Flat, Preserve3d }` field + `apply_declaration("transform-style")` (values `flat` / `preserve-3d`, default `flat`, **not** inherited). The **depth-sort primitive is ready** (P2 feature `p2-css-3d-depth-buffer`): `paint/src/display_list.rs` has `depth_sorted_child_order` (back-to-front painter's-algorithm sort of children by transformed z), gated behind `establishes_3d_rendering_context(b)`. To wire: change that helper's body from `false` to `b.style.transform_style == TransformStyle::Preserve3d` (single edit, marked with a `// CSS: transform-style` comment). The **GPU depth buffer is also ready** (`FillVertex.z` field populated by `apply_affine_to_verts` via `project_point_z` for 3D transforms; fill pipeline has `DepthStencilState` with `CompareFunction::LessEqual`; depth texture attached to frame render pass). Intersecting 3D planes will occlusion-test correctly once `preserve-3d` is wired.
-- **Entry points:** `lumen-layout/src/property_trees.rs` `forward_box_transform` (match arm `// CSS:` comment) + `transform_fns_to_matrix`; `Mat4` 3D constructors in the same file.
-- **CSS comment location:** `property_trees.rs` `forward_box_transform` transform-loop match.
+### ~~CSS 3D transforms — `perspective()` + 3D functions~~ — **ВЫПОЛНЕНО** (p2-css-3d-wiring, 2026-06-03)
+`TransformFn` расширен 3D-вариантами; `establish_3d_rendering_context` подключён к `transform_style`; GPU depth buffer готов. Задача закрыта.
 
 ### `position: sticky` scroll-driven offset (P1 feature p1-sticky-layout)
 - **Status:** `StickyBox`, `collect_sticky_boxes()`, `compute_sticky_offset()` implemented in `lumen-layout/src/lib.rs`. Layout treats sticky as normal flow; offset computed separately.
@@ -109,30 +94,15 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 - **Entry point:** `lumen-layout/src/lib.rs` — `collect_sticky_boxes()` + `compute_sticky_offset()`
 - **CSS comment location:** `box_tree.rs` after `Position::Relative` block (end of `lay_out_block`)
 
-### `writing-mode: vertical-rl / vertical-lr` axis swap (P1 feature p1-clickable-nodes, 2026-05-31)
-- **Status:** `lay_out_vertical_block()` in `lumen-layout/src/vertical.rs`. Dispatched from `lay_out()` in `box_tree.rs` when `style.writing_mode` is `VerticalRl` or `VerticalLr`. `WritingMode` enum + field `writing_mode` already exists in `ComputedStyle` (style.rs). CSS parsing already wired.
-- **P4 task:**
-  1. No new CSS parsing or `ComputedStyle` changes needed — `writing_mode` field and `apply_declaration("writing-mode")` are already in `style.rs`.
-  2. The dispatch already reads `b.style.writing_mode` (box_tree.rs `lay_out()`) — no wiring needed there either.
-  3. **Optional extension:** `sideways-rl` / `sideways-lr` variants in `WritingMode` enum — parse them in `apply_declaration` and handle in `lay_out_vertical_block` (currently falls through to `VerticalRl`).
-  4. Inline text flow inside vertical containers (character rotation, vertical text metrics) — deferred to a future P1 inline-vertical task.
-- **Entry points:** `crates/engine/layout/src/vertical.rs:1` — `lay_out_vertical_block`; `crates/engine/layout/src/box_tree.rs` — dispatch at `lay_out()` writing-mode check (search `// CSS: writing-mode`).
+### ~~`writing-mode: vertical-rl / vertical-lr`~~ — **ВЫПОЛНЕНО** (dispatch уже готов)
+`lay_out_vertical_block()` вызывается из `lay_out()` при `WritingMode::VerticalRl/Lr`. CSS-парсинг и dispatch готовы. Задача закрыта.
 - **CSS comment location:** `box_tree.rs` at the writing-mode dispatch block.
 
-### ::first-letter pseudo-element (P1 feature p1-css-first-line-letter)
-- **Status:** Structural markers ready in InlineRun
-- **P4 task:**
-  1. Look up `::first-letter` rule via `compute_pseudo_element_style()`
-  2. Override segment.style for first grapheme
-  3. Wire in `lay_out()` (box_tree.rs) after wrap_inline_run()
-  4. Split first grapheme if font-size changes at display-list time
+### ~~::first-letter pseudo-element~~ — **ВЫПОЛНЕНО**
+`apply_first_letter_pseudo()` реализована и вызывается из `lay_out()` (`box_tree.rs:2377, 2414`). Задача закрыта.
 
-### ::first-line pseudo-element (P1 feature p1-css-first-line-letter)
-- **Status:** Structural markers ready in InlineRun.lines[0]
-- **P4 task:**
-  1. Look up `::first-line` rule via `compute_pseudo_element_style()`
-  2. Override frag.style for first line (inheritable properties only)
-  3. Wire in `lay_out()` (box_tree.rs) after wrap_inline_run()
+### ~~::first-line pseudo-element~~ — **ВЫПОЛНЕНО**
+`apply_first_line_pseudo_styles()` реализована и вызывается. Задача закрыта.
 
 ### :host / ::slotted pseudo-classes (Shadow DOM)
 - **Status:** Selector matching needed in composed tree
@@ -175,16 +145,10 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 - **Entry points:** `lumen-layout/src/lib.rs` (collect / set API), `paint/src/display_list.rs:2736` (emitter), `paint/src/renderer.rs` (PushScrollLayer handler after PopTransform).
 - **CSS comment location:** `display_list.rs:2727` `// CSS: overflow — P4 wires:...` comment.
 
-### `scrollbar-width` / `scrollbar-color` (P2 feature p2-scrollbar-rendering)
-- **Status:** `DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical }` implemented. Renderer draws track + thumb as two semi-transparent fill quads. Default appearance: 12px gutter, track rgba(0,0,0,0.08), thumb rgba(0,0,0,0.38).
-- **P4 task:**
-  1. Add `scrollbar_width: ScrollbarWidth` to `ComputedStyle` (values: `auto | thin | none`, default `auto`). Parse in `apply_declaration("scrollbar-width")`.
-  2. Add `scrollbar_color: Option<(CssColor, CssColor)>` (thumb, track pair). Parse `scrollbar-color: <color> <color>` in `apply_declaration("scrollbar-color")`.
-  3. In `display_list.rs` `walk()`: when emitting `DrawScrollbar`, if `b.style.scrollbar_width == None` skip entirely (no scrollbar). Thread `scrollbar_color` through to `DrawScrollbar` fields so renderer can use it instead of hard-coded constants.
-  4. In `renderer.rs` `DrawScrollbar` handler: read the per-command color fields instead of `TRACK_COLOR`/`THUMB_COLOR` constants.
-- **Entry points:** `paint/src/display_list.rs` — `scrollbar_rects()` helper + `walk()` emit block after `PopScrollLayer`. `paint/src/renderer.rs` — `DrawScrollbar` match arm. `SCROLLBAR_WIDTH: f32 = 12.0` const controls default gutter width.
+### ~~`scrollbar-width` / `scrollbar-color`~~ — **ВЫПОЛНЕНО** (p2-scrollbar-width-color, 2026-06-03)
+`DrawScrollbar` расширен `thumb_color`/`track_color`; emit читает поля стиля. Задача закрыта.
 
-### CSS `color-mix()` function (P1 feature p1-color-mix, 2026-06-03)
+### CSS `color-mix()` function → [`docs/tasks/p4-color-mix-parsing.md`](docs/tasks/p4-color-mix-parsing.md) (P1 feature p1-color-mix, 2026-06-03)
 - **Status:** Algorithm ready. `lumen_layout::mix_colors(space, c1, w1, c2, w2) -> [f32; 4]` in `crates/engine/layout/src/color_mix.rs`. Converts both input sRGB colors to the interpolation space, lerps (polar spaces use shortest-arc hue), converts result back to sRGB. Input/output: `[r, g, b, a]` each in `[0.0, 1.0]`. Supported spaces: `MixColorSpace::Srgb | SrgbLinear | Hsl | Hwb | Lab | Lch | Oklab | Oklch | XyzD65 | XyzD50`. `MixColorSpace::from_css(s)` parses the CSS identifier. 25 unit tests.
 - **P4 task** (CSS Color L5 §10.2 `color-mix()`):
   1. In `parse_function_color()` (`style.rs:15030`), detect `"color-mix("` prefix before the existing `rgba(` chain (marked with `// CSS: color-mix()` comment).

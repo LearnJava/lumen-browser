@@ -12,17 +12,14 @@ _(нет)_
 
 ## Next
 
-- **ADR для crypto-зависимостей** (заведено P5, health-свип 2026-06-03). Коммит
-  `1bd82f0 p1-subtle-crypto` добавил `hmac v0.12` + `aes-gcm v0.10` (Provisional)
-  без строки «Why this dependency» в теле коммита и без критерия выпуска
-  (graduation criterion), как требует CLAUDE.md §«No new dep without justification».
-  Категории зафиксированы только в STATUS-P1.md «Recent» (стр. ~35), не формально.
-  Нужно: оформить ADR в `docs/decisions/` (категория Provisional, trait-anchor
-  `SubtleCrypto`, критерий graduation — когда hmac/aes-gcm станут permanent или
-  заменятся на собственную реализацию), обновить индекс `docs/decisions/README.md`.
-  `p256` — уже permanent (используется в lumen-network), отдельного ADR не требует.
+Ordered by priority. Каждая задача имеет подробный файл с точным кодом для Haiku.
 
-_(остальная P1 queue пуста — следующая задача определяется при старте новой сессии)_
+| # | Задача | Размер | Файл |
+|---|--------|--------|------|
+| 1 | ADR-011 для crypto deps (hmac + aes-gcm) | XS | → [`docs/tasks/p1-adr-crypto.md`](docs/tasks/p1-adr-crypto.md) |
+| 2 | `shape-outside: circle()` в FloatContext | M | → [`docs/tasks/p1-shape-outside-circle.md`](docs/tasks/p1-shape-outside-circle.md) |
+| 3 | `@scope` cascade wiring | S | → [`docs/tasks/p1-scope-cascade.md`](docs/tasks/p1-scope-cascade.md) |
+| 4 | `content-visibility: hidden` skip subtree | S | → [`docs/tasks/p1-content-visibility.md`](docs/tasks/p1-content-visibility.md) |
 
 ---
 
