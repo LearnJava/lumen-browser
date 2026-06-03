@@ -6,8 +6,7 @@
 
 ## In progress
 
-**querySelector compound selectors**  branch: p2-querySelector-compound
-Next step: add lumen-layout dep to lumen-js/Cargo.toml; replace selector_matches in dom.rs with query_all from lumen-layout::selector_query  crates/js/src/dom.rs:423
+_(нет)_
 
 ---
 
@@ -28,6 +27,8 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 ---
 
 ## Recent merges
+
+- **p2-querySelector-compound** ✅ 2026-06-03 — querySelector/querySelectorAll/matches/closest полный CSS-движок (CSS Selectors L3+L4). Заменяет Phase 0 заглушку (только #id/.class/tagname) на lumen_layout::query_all — поддерживает compound-селекторы (div.class, p#id), комбинаторы (> + ~), псевдо-классы (:first-child, :not, :nth-child и др.), атрибутные селекторы ([attr=val]). element.matches() и element.closest() используют новый _lumen_node_matches_selector (per-node проверка через matches_selector из selector_query.rs). lumen-layout: pub fn matches_selector добавлена. lumen-js: 1058 тестов (+12).
 
 - **p2-interactive-pseudo-classes** ✅ 2026-06-03 — CSS `:hover`/`:focus`/`:active`/`:focus-within`/`:focus-visible` (CSS Selectors L4 §4.3-4.5). `PseudoClass` enum расширен 5 вариантами; парсинг в `css-parser`; thread-locals `HOVER_NID/FOCUS_NID/ACTIVE_NID` в `layout/src/style.rs`; `set_interactive_state(hover, focus, active)` + `clear_interactive_state()` экспортированы; `is_self_or_ancestor` — `:hover`/`:active`/`:focus-within` матчат предков per spec. Shell: `hovered_nid` обновляется в `CursorMoved` (hit-test + relayout при смене), `active_nid` — в `MouseInput Pressed/Released`, `focused_node` — в `handle_click_at` (relayout при смене). `relayout()` передаёт состояния в `set_interactive_state` до layout, очищает после. 5 новых unit-тестов (hover/ancestor-hover/no-match/focus/active+ancestor). CSS-SPECS.md: `:hover`/`:active`/`:focus`/`:focus-within`/`:focus-visible` 🟡⬜→✅. lumen-layout: 2257 тестов (+ BUG-055 pre-existing).
 
