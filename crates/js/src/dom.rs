@@ -2004,6 +2004,9 @@ fn install_primitives(
     // File System Access API: showOpenFilePicker/showSaveFilePicker/showDirectoryPicker
     crate::filesystem_access::install_filesystem_access(ctx)?;
 
+    // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL
+    crate::trusted_types::install_trusted_types_bindings(ctx)?;
+
     Ok(())
 }
 
@@ -18127,6 +18130,144 @@ mod tests {
     fn css_escape_is_function() {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("typeof CSS.escape === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn trusted_types_is_defined() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof trustedTypes === 'object' && trustedTypes !== null")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn create_policy_returns_policy() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "const p = trustedTypes.createPolicy('test', {}); \
+                 typeof p === 'object' && p !== null && p.name === 'test'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn create_html_returns_trusted_html() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "const p = trustedTypes.createPolicy('test', {}); \
+                 const th = p.createHTML('<div>test</div>'); \
+                 th instanceof TrustedHTML && th.toString() === '<div>test</div>'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn create_script_returns_trusted_script() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "const p = trustedTypes.createPolicy('test', {}); \
+                 const ts = p.createScript('var x = 1'); \
+                 ts instanceof TrustedScript && ts.toString() === 'var x = 1'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn create_script_url_returns_trusted_script_url() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "const p = trustedTypes.createPolicy('test', {}); \
+                 const tsu = p.createScriptURL('https://example.com/script.js'); \
+                 tsu instanceof TrustedScriptURL && tsu.toString() === 'https://example.com/script.js'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn default_policy_create_html_works() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "const th = trustedTypes.defaultPolicy.createHTML('<p>test</p>'); \
+                 th instanceof TrustedHTML && th.toString() === '<p>test</p>'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn get_policy_returns_policy() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "trustedTypes.createPolicy('mypolicy', {}); \
+                 const p = trustedTypes.getPolicy('mypolicy'); \
+                 p !== null && p.name === 'mypolicy'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn get_policy_returns_null_for_unknown() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("trustedTypes.getPolicy('nonexistent') === null").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn is_html_true_for_trusted_html() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "const p = trustedTypes.createPolicy('test', {}); \
+                 const th = p.createHTML('<div></div>'); \
+                 trustedTypes.isHTML(th)",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn is_html_false_for_string() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("trustedTypes.isHTML('<div></div>')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn is_script_true_for_trusted_script() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "const p = trustedTypes.createPolicy('test', {}); \
+                 const ts = p.createScript('x=1'); \
+                 trustedTypes.isScript(ts)",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn is_script_url_true_for_trusted_script_url() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "const p = trustedTypes.createPolicy('test', {}); \
+                 const tsu = p.createScriptURL('https://example.com/s.js'); \
+                 trustedTypes.isScriptURL(tsu)",
+            )
+            .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
