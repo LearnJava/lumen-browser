@@ -250,7 +250,7 @@ mod tests {
 
     fn strip2() -> TabStrip {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         s
     }
 
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn build_panel_badge_for_background_old() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
         let dl = build_panel(&s, TAB_H, WIN_H);
         let has_amber = dl.iter().any(|c| match c {
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn build_panel_badge_for_hibernated() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
         let dl = build_panel(&s, TAB_H, WIN_H);
         let has_grey = dl.iter().any(|c| match c {
@@ -396,7 +396,7 @@ mod tests {
         let mut s = TabStrip::new();
         // Add many tabs so they would overflow.
         for _ in 0..30 {
-            s.push_blank();
+            s.push_blank(0.0);
         }
         // window_h only fits a few rows.
         let small_h = TAB_H + 3.0 * ROW_H;

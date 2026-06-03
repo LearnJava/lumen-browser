@@ -334,16 +334,16 @@ mod tests {
     fn strip_with_child() -> TabStrip {
         let mut s = TabStrip::new(); // tab id=0
         let root_id = s.tabs[0].id;
-        s.push_with_opener(root_id); // tab id=1, child of 0
+        s.push_with_opener(root_id, 0.0); // tab id=1, child of 0
         s
     }
 
     fn strip_with_grandchild() -> TabStrip {
         let mut s = TabStrip::new(); // id=0
         let root_id = s.tabs[0].id;
-        s.push_with_opener(root_id); // id=1
+        s.push_with_opener(root_id, 0.0); // id=1
         let child_id = s.tabs[1].id;
-        s.push_with_opener(child_id); // id=2
+        s.push_with_opener(child_id, 0.0); // id=2
         s
     }
 
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn build_panel_badge_for_background_old() {
         let mut s = TabStrip::new();
-        s.push_blank();
+        s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
         let p = TreeTabsPanel::new();
         let dl = build_panel(&s, &p, TAB_H, WIN_H);

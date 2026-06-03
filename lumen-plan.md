@@ -77,7 +77,7 @@
 - ⬜ Граф знаний (§12.9) — Phase 3+
 - ⬜ Кросс-устройственная синхронизация E2E (§12.11) — Phase 4+, требует mobile
 - 🟡 DevTools (инспектор / консоль / network) (§12.12) — инспектор (Ctrl+Shift+I), JS-консоль (F12), network panel (Ctrl+Shift+E) готовы; computed-styles panel (7E.2, P4) отложена
-- 🟡 Tab UX: вертикальные/tree-style вкладки, workspaces, split view, auto-archive (§12.13) — vertical/tree/workspaces/split view ✅; auto-archive (7A.5) ⬜
+- ✅ Tab UX: вертикальные/tree-style вкладки, workspaces, split view, auto-archive (§12.13) — vertical/tree/workspaces/split view ✅; auto-archive (7A.5) ✅ 2026-06-03
 - ✅ Power-user input: vim-keys, gestures, omnibox-алиасы, regex find, click-hint overlay (§12.14) — все 5 пунктов 7B.1–7B.5 ✅
 - ✅ Privacy UX: встроенный блокировщик, per-site контролы, cookie-banner dismiss (§12.15) — block list engine + permission panel + cookie-banner dismiss + shields widget (7C.1–7C.4) ✅
 - 🟡 Web platform baseline: Passkeys/WebAuthn, контейнеры, sidebar web panels (§12.16) — контейнеры (7D.2) + sidebar (7D.3) ✅; WebAuthn (7D.1) 🟡 (software authenticator готов, roaming CTAP2 — future)
@@ -270,12 +270,12 @@
 | 5B | ✅ **`[P3]` HTTP Range requests** | `<video>` seek | — |
 | 5C | ✅ **`[P3]` DevTools/CDP минимум** | Debug движка | `crates/devtools/` | WS сервер + Browser.getVersion + DOM.getDocument stub + --devtools-port |
 | 6+ | ⬜ **`[P3]` knowledge / Profiles / Focus / IME / WebSockets / SW / V8 / AI** (Phase 2-3) | — | — |
-| 7A | 🟡 **`[P3]` Tab UX** (§12.13, Phase 2) | Современная модель вкладок; 7A.1–7A.4 ✅, 7A.5 ⬜ | `shell/src/tabs/` + `shell/src/panels/` |
+| 7A | ✅ **`[P3]` Tab UX** (§12.13, Phase 2) | Современная модель вкладок; 7A.1–7A.5 ✅ | `shell/src/tabs/` + `shell/src/panels/` |
 | 7A.1 | ✅ Vertical tabs panel (toggle, drag-reorder, collapse) | `shell/src/panels/vertical_tabs.rs` | P2 done 2026-06-01 (p2-vertical-tabs): 200px left dock, Ctrl+B |
 | 7A.2 | ✅ Tree-style tabs (parent-child) | `shell/src/tabs/tree.rs`, `shell/src/panels/tree_tabs.rs` | — |
 | 7A.3 | ✅ Workspaces (изолированные группы) | `shell/src/panels/workspace_panel.rs` + `storage/src/workspaces.rs` | P2 done 2026-06-01 (p2-workspaces-ui): bottom switcher, Ctrl+Shift+W |
 | 7A.4 | ✅ **`[P3+P2]` Split view** (2-4 viewport на окно) | `shell/src/panels/split_view.rs` + `paint` multi-viewport | P2 done 2026-06-01 (p2-split-view): Ctrl+\ toggle, Ctrl+M focus |
-| 7A.5 | ⬜ Tab auto-archive (UX-фича: убрать вкладки старше 12 ч из tab strip в @archive) | `shell/src/tabs/archive.rs` | **семантика отделена от трека 10**: 7A.5 — UI-скрытие, **трек 10** — RAM-выгрузка по tier'ам |
+| 7A.5 | ✅ Tab auto-archive (UX-фича: убрать вкладки старше 12 ч из tab strip в @archive) | `shell/src/tabs/archive.rs` | P2 done 2026-06-03 (p2-tab-auto-archive): `TabArchive` + archive toolbar button (36 px) + drop-down panel + auto-archive in `tick_lifecycle`. |
 | 7B | ✅ **`[P3]` Power-user input** (§12.14, Phase 2-3) | Keyboard-first аудитория; 7B.1–7B.5 ✅ | `shell/src/input/` |
 | 7B.1 | ✅ Vim-style key bindings (modal) | `shell/src/input/vim.rs` | P1 done 2026-06-01 (p1-vim-keybindings): Normal/Insert, j/k/d/u/gg/G/yy/H/L, Ctrl+Alt+V |
 | 7B.2 | ✅ **`[P3+P1]` Click-hint overlay** | `shell/src/hints.rs` + `lumen-layout::collect_clickable_elements` | P1: iterator ✅ (p1-click-hint-overlay); P3: vimium-style F-overlay ✅ (p3-click-hint-overlay) |

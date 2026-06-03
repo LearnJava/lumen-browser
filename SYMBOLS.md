@@ -1046,19 +1046,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/read_later.rs:346` **fn** `delete`
 `crates/knowledge/src/read_later.rs:356` **fn** `count`
 
-## lumen-layout  (427 symbols)
+## lumen-layout  (416 symbols)
 
-`crates/engine/layout/src/anchor.rs:40` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
-`crates/engine/layout/src/anchor.rs:69` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
-`crates/engine/layout/src/anchor.rs:102` **struct** `AnchorRegistry` — Map from CSS `anchor-name` value (e.g. `"--foo"`) to the border-box [`Rect`]
-`crates/engine/layout/src/anchor.rs:109` **struct** `AnchorEntry` — One registered anchor element
-`crates/engine/layout/src/anchor.rs:123` **fn** `get` — Look up an anchor by CSS name (e.g. `"--tooltip-anchor"`)
-`crates/engine/layout/src/anchor.rs:128` **fn** `is_empty` — True when the registry has no anchors
-`crates/engine/layout/src/anchor.rs:154` **fn** `collect_anchors`
-`crates/engine/layout/src/anchor.rs:177` **fn** `register_anchor` — Register an element as a named anchor.  Called by P4's CSS wiring when it
-`crates/engine/layout/src/anchor.rs:204` **fn** `resolve_anchor_function`
-`crates/engine/layout/src/anchor.rs:256` **struct** `AnchoredPosition` — Resolved inset-area position for an anchored element
-`crates/engine/layout/src/anchor.rs:285` **fn** `resolve_inset_area`
 `crates/engine/layout/src/animation.rs:36` **struct** `AnimatedStyle` — Sparse animated values for one element — scheduler output per node per frame
 `crates/engine/layout/src/animation.rs:46` **struct** `AnimationFrame` — Output of `AnimationScheduler::tick` — per-node animated values for one frame
 `crates/engine/layout/src/animation.rs:58` **fn** `merge` — Merge `other` into `self`; `other` values take precedence per property
@@ -1121,21 +1110,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/counters.rs:299` **fn** `build_counter_style_registry` — Build a `CounterStyleRegistry` from all `@counter-style` rules in a stylesheet
 `crates/engine/layout/src/counters.rs:578` **fn** `format_counter_with_registry` — Format a counter value using the registry (custom `@counter-style`) first,
 `crates/engine/layout/src/image_gating.rs:42` **fn** `gate_image_requests` — Returns the set of [`NodeId`]s for `BoxKind::Image` boxes whose bounding
-`crates/engine/layout/src/lib.rs:113` **trait** `TextMeasurer`
-`crates/engine/layout/src/lib.rs:153` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:174` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:195` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:401` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
-`crates/engine/layout/src/lib.rs:429` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:488` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
-`crates/engine/layout/src/lib.rs:561` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
-`crates/engine/layout/src/lib.rs:579` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:604` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:736` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
-`crates/engine/layout/src/lib.rs:824` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
-`crates/engine/layout/src/lib.rs:849` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
-`crates/engine/layout/src/lib.rs:918` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
-`crates/engine/layout/src/lib.rs:944` **fn** `set_scroll_position` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/lib.rs:108` **trait** `TextMeasurer`
+`crates/engine/layout/src/lib.rs:148` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:169` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:190` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:396` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
+`crates/engine/layout/src/lib.rs:424` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:483` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
+`crates/engine/layout/src/lib.rs:556` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
+`crates/engine/layout/src/lib.rs:574` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:599` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:731` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
+`crates/engine/layout/src/lib.rs:819` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
+`crates/engine/layout/src/lib.rs:844` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
+`crates/engine/layout/src/lib.rs:913` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
+`crates/engine/layout/src/lib.rs:939` **fn** `set_scroll_position` — Update the scroll position of a node in the layout tree
 `crates/engine/layout/src/motion_path.rs:22` **struct** `MotionTransform` — Result of resolving a motion offset along an `offset-path`
 `crates/engine/layout/src/motion_path.rs:39` **fn** `resolve_motion_transform` — Resolve the motion transform for an element with `offset-path: path(...)`
 `crates/engine/layout/src/page.rs:22` **struct** `MarginBoxTextFragment` — Text fragment within a margin-box after layout
@@ -1945,7 +1934,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (555 symbols)
+## lumen-shell  (572 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2471,6 +2460,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle/state.rs:136` **fn** `advance_tier` — Advance to the next tier. Returns `true` if a transition occurred
 `crates/shell/src/tab_lifecycle/state.rs:150` **fn** `should_transition_on_idle` — Returns `true` if the idle timeout for the current tier has elapsed
 `crates/shell/src/tab_lifecycle/state.rs:167` **fn** `suggested_pressure_state` — If memory pressure justifies an earlier-than-scheduled tier advance, returns
+`crates/shell/src/tabs/archive.rs:58` **struct** `ArchivedTab` — A tab that was auto-archived and removed from the visible tab strip
+`crates/shell/src/tabs/archive.rs:74` **enum** `ArchiveHit` — Hit result from the archive button or panel
+`crates/shell/src/tabs/archive.rs:86` **struct** `TabArchive` — State of the tab archive system
+`crates/shell/src/tabs/archive.rs:103` **fn** `new` — Create an empty archive with the panel closed
+`crates/shell/src/tabs/archive.rs:108` **fn** `push` — Push a newly-archived tab (prepend — newest entry shown first)
+`crates/shell/src/tabs/archive.rs:113` **fn** `take` — Remove and return the archived entry with the given original tab `id`
+`crates/shell/src/tabs/archive.rs:119` **fn** `count` — Number of archived entries
+`crates/shell/src/tabs/archive.rs:124` **fn** `toggle` — Toggle panel open/closed; resets scroll on open
+`crates/shell/src/tabs/archive.rs:132` **fn** `close` — Close panel without clearing entries
+`crates/shell/src/tabs/archive.rs:138` **fn** `scroll_up` — Scroll up by one row (clamped at zero)
+`crates/shell/src/tabs/archive.rs:144` **fn** `scroll_down` — Scroll down by one row (clamped at last page)
+`crates/shell/src/tabs/archive.rs:157` **fn** `archive_btn_x` — Pixel x-coordinate where the archive button begins (right of all tabs)
+`crates/shell/src/tabs/archive.rs:177` **fn** `hit_test_button` — Hit-test the archive toolbar button area
+`crates/shell/src/tabs/archive.rs:185` **fn** `hit_test_panel` — Hit-test the archive panel when it is open
+`crates/shell/src/tabs/archive.rs:238` **fn** `build_button` — Build the archive toolbar button appended to the right of the tab bar
+`crates/shell/src/tabs/archive.rs:309` **fn** `build_panel` — Build the drop-down archive panel anchored below the archive button
 `crates/shell/src/tabs/containers.rs:44` **enum** `ContainerKind` — Kind of tab container. Drives the border-top colour in the tab strip
 `crates/shell/src/tabs/containers.rs:65` **fn** `border_color` — Border-top strip colour, or `None` for [`ContainerKind::None`]
 `crates/shell/src/tabs/containers.rs:82` **fn** `name` — Human-readable container name for UI labels
@@ -2481,18 +2486,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/containers.rs:150` **fn** `len` — Number of `(origin, container)` mappings tracked
 `crates/shell/src/tabs/containers.rs:156` **fn** `is_empty` — `true` if no mapping has been allocated yet
 `crates/shell/src/tabs/strip.rs:56` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:85` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:96` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:111` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:116` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:133` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:152` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:160` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:172` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:182` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:193` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:213` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:244` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:92` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:103` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:119` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:127` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:148` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:166` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:178` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:186` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:198` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:208` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:219` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:239` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:270` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -2909,4 +2915,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2844 symbols in 20 crates*
+*Total: 2850 symbols in 20 crates*
