@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+- **A-5: File System Access API** — branch: `p1-file-system-api`
+  - Next step: Implement JS shim in `crates/js/src/filesystem_access.rs`
 
 ---
 
