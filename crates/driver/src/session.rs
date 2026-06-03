@@ -644,6 +644,19 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
     fn eval(&mut self, script: &str) -> Result<String> {
         <Self as BrowserSession>::eval(self, script)
     }
+
+    fn set_clock(&mut self, mode: lumen_core::ClockMode) -> Result<()> {
+        match mode {
+            lumen_core::ClockMode::Frozen(ts) => self.context.set_frozen_clock(ts),
+            lumen_core::ClockMode::Real => self.context.clear_frozen_clock(),
+        }
+        Ok(())
+    }
+
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()> {
+        self.context.set_rng_seed(seed);
+        Ok(())
+    }
 }
 
 // ── Вспомогательные функции ─────────────────────────────────────────────────
@@ -1358,5 +1371,29 @@ mod tests {
             s.build_http_client().fingerprint_profile(),
             lumen_network::HttpProfile::Strict
         );
+    }
+
+    #[test]
+    fn set_clock_frozen_stores_timestamp() {
+        let mut sess = InProcessSession::new();
+        lumen_core::ext::BrowserSession::set_clock(&mut sess, lumen_core::ClockMode::Frozen(1_700_000_000_000)).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn set_clock_real_clears_timestamp() {
+        let mut sess = InProcessSession::new();
+        lumen_core::ext::BrowserSession::set_clock(&mut sess, lumen_core::ClockMode::Frozen(42)).unwrap();
+        lumen_core::ext::BrowserSession::set_clock(&mut sess, lumen_core::ClockMode::Real).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), None);
+    }
+
+    #[test]
+    fn set_rng_seed_stores_and_clears() {
+        let mut sess = InProcessSession::new();
+        lumen_core::ext::BrowserSession::set_rng_seed(&mut sess, Some(12345)).unwrap();
+        assert_eq!(sess.context.rng_seed(), Some(12345));
+        lumen_core::ext::BrowserSession::set_rng_seed(&mut sess, None).unwrap();
+        assert_eq!(sess.context.rng_seed(), None);
     }
 }

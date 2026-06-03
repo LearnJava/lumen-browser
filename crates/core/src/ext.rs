@@ -1786,6 +1786,15 @@ pub trait SwBackend: Send + Sync {
 // ADR-006: Automation API — first-class engine surface
 // ============================================================================
 
+/// Clock mode for deterministic testing (BrowserSession::set_clock, 8F.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockMode {
+    /// Freeze clock at this many milliseconds since Unix epoch.
+    Frozen(u64),
+    /// Use system real-time clock (default).
+    Real,
+}
+
 /// Browser automation session — unified interface for in-process tests, MCP agents,
 /// and BiDi servers. All automation consumers (tests, drivers, external clients)
 /// call the same trait. The trait surface is engine-native, not protocol-shaped.
@@ -1862,6 +1871,24 @@ pub trait BrowserSession: Send {
     /// Returns a JSON-compatible value (primitive / array / object).
     /// Scripts that throw return Err with the exception message.
     fn eval(&mut self, script: &str) -> Result<String>;
+
+    /// Freeze the session clock to a fixed timestamp for deterministic testing (8F.1).
+    ///
+    /// `ClockMode::Frozen(ms)` — `Date.now()` and `Performance.now()` always return `ms`.
+    /// `ClockMode::Real` — restore system time (default).
+    fn set_clock(&mut self, mode: ClockMode) -> Result<()> {
+        let _ = mode;
+        Ok(()) // default: no-op (NullBrowserSession-compatible)
+    }
+
+    /// Set the RNG seed for deterministic `Math.random()` (8F.2).
+    ///
+    /// `Some(seed)` — xorshift32 PRNG seeded at `seed`; same seed = same sequence.
+    /// `None` — restore OS entropy.
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()> {
+        let _ = seed;
+        Ok(())
+    }
 }
 
 /// Null implementation of `BrowserSession` — all methods return `NotImplemented`.

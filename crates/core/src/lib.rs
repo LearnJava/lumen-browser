@@ -27,7 +27,7 @@ pub use crash::{format_crash_dump, write_crash_dump, CrashRecorder};
 pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, RequestStage, SubresourceKind, TabId};
 pub use ext::{
-    match_face, BrowserSession, EventSink, FaceRecord, FontProvider, FontStyle,
+    match_face, BrowserSession, ClockMode, EventSink, FaceRecord, FontProvider, FontStyle,
     HyphenationProvider, NullBrowserSession, NullHyphenationProvider,
     JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime, SuspendedHeap,
     MemoryPressureLevel, MemoryPressureSource, NullMemoryPressureSource,

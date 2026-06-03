@@ -116,9 +116,9 @@ impl SessionContext {
     }
 
     /// Set RNG seed for deterministic random numbers in JS Math.random() and crypto.getRandomValues().
-    /// Used for repeatable test automation.
-    pub fn set_rng_seed(&mut self, seed: u64) {
-        self.rng_seed = Some(seed);
+    /// Used for repeatable test automation. `None` clears the seed (resume OS entropy).
+    pub fn set_rng_seed(&mut self, seed: Option<u64>) {
+        self.rng_seed = seed;
     }
 
     /// Clear RNG seed; resume using OS entropy.
