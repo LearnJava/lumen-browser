@@ -7021,6 +7021,72 @@ mod tests {
         assert!((vid.rect.width - 300.0).abs() < 0.1, "width={}", vid.rect.width);
     }
 
+    // ──────── <iframe> placeholder layout ───────────────────────────────────
+
+    fn first_iframe_child(b: &LayoutBox) -> &LayoutBox {
+        b.children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Iframe { .. }))
+            .expect("expected at least one Iframe box")
+    }
+
+    #[test]
+    fn iframe_creates_iframe_box_with_src() {
+        let root = lay(r#"<iframe src="https://example.com"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        match &frame.kind {
+            BoxKind::Iframe { src } => assert_eq!(src, "https://example.com"),
+            other => panic!("expected BoxKind::Iframe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn iframe_ua_default_size_300_by_150() {
+        // HTML spec §4.8.5: UA default intrinsic size is 300×150 CSS px.
+        let root = lay(r#"<iframe src="x.html"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        assert!((frame.rect.width - 300.0).abs() < 0.1, "width={}", frame.rect.width);
+        assert!((frame.rect.height - 150.0).abs() < 0.1, "height={}", frame.rect.height);
+    }
+
+    #[test]
+    fn iframe_html_attribute_dimensions_override_ua_default() {
+        let root = lay(r#"<iframe src="x.html" width="800" height="600"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        assert!((frame.rect.width - 800.0).abs() < 0.1, "width={}", frame.rect.width);
+        assert!((frame.rect.height - 600.0).abs() < 0.1, "height={}", frame.rect.height);
+    }
+
+    #[test]
+    fn iframe_css_overrides_ua_default() {
+        let root = lay(
+            r#"<iframe src="x.html"></iframe>"#,
+            "iframe { width: 400px; height: 300px; }",
+        );
+        let frame = first_iframe_child(&root);
+        assert!((frame.rect.width - 400.0).abs() < 0.1, "width={}", frame.rect.width);
+        assert!((frame.rect.height - 300.0).abs() < 0.1, "height={}", frame.rect.height);
+    }
+
+    #[test]
+    fn iframe_is_replaced_element_does_not_stretch() {
+        // Replaced elements do NOT stretch to fill container width (CSS 2.1 §10.3.2).
+        let root = lay(r#"<iframe src="x.html"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        // UA default 300px, not 800px (viewport width).
+        assert!((frame.rect.width - 300.0).abs() < 0.1, "width={}", frame.rect.width);
+    }
+
+    #[test]
+    fn iframe_empty_src_is_valid() {
+        let root = lay(r#"<iframe></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        match &frame.kind {
+            BoxKind::Iframe { src } => assert_eq!(src, ""),
+            other => panic!("expected BoxKind::Iframe, got {other:?}"),
+        }
+    }
+
     // ──────── <picture> / <img srcset> source-selection integration ────────
 
     /// Рекурсивный поиск первого `Image`-бокса в дереве. Нужен для тестов

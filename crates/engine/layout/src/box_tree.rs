@@ -64,6 +64,14 @@ fn is_audio_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// HTML-имя `<iframe>` для распознавания встроенных документов в layout.
+fn is_iframe_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "iframe"
+    )
+}
+
 /// HTML-имя `<picture>` — обёртка над `<source>`-кандидатами и одним
 /// `<img>`-fallback-ом. Сам по себе пиктур ничего не рендерит, его
 /// единственная роль — переадресовать source-selection на inner `<img>`.
@@ -1118,6 +1126,16 @@ pub enum BoxKind {
         /// Whether the `controls` attribute is present (shows a 40px control bar).
         controls: bool,
     },
+    /// Replaced element: HTML `<iframe>` element (HTML spec §4.8.5).
+    ///
+    /// Phase 0: rendered as a grey `DrawImage` placeholder (no sub-document
+    /// navigation). Intrinsic size comes from `width`/`height` HTML attributes;
+    /// UA defaults are 300×150 CSS px (HTML spec §4.8.5). `src` is the URL
+    /// to display in paint-side label and in JS `src` property.
+    Iframe {
+        /// Primary document URL (`src` attribute), may be empty.
+        src: String,
+    },
     /// Replaced element: HTML form control (`<input>`, `<button>`, `<select>`,
     /// `<textarea>`). Phase 0: block-level replaced. Размеры берутся из
     /// `style.width`/`style.height` (UA defaults из `apply_ua_form_controls`).
@@ -2134,6 +2152,19 @@ fn build_box(
                     style.height = Some(Length::Px(0.0));
                 }
                 BoxKind::Audio { src, controls }
+            } else if is_iframe_element(doc, id) {
+                let node = doc.get(id);
+                let src = node.get_attr("src").unwrap_or("").to_string();
+                // HTML spec §4.8.5: UA default intrinsic size is 300×150 CSS px.
+                // Explicit width/height attrs applied earlier as presentational hints;
+                // fill only if still unset.
+                if style.width.is_none() {
+                    style.width = Some(Length::Px(300.0));
+                }
+                if style.height.is_none() {
+                    style.height = Some(Length::Px(150.0));
+                }
+                BoxKind::Iframe { src }
             } else if is_form_control_element(doc, id) {
                 let kind = {
                     let node = doc.get(id);
@@ -2777,7 +2808,7 @@ fn lay_out(
     // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
-    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::FormControl { .. });
+    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. });
     b.rect.width = if is_replaced {
         0.0
     } else {
@@ -2993,7 +3024,7 @@ fn lay_out(
     let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
-        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::FormControl { .. } => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(

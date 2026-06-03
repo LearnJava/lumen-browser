@@ -80,6 +80,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::Video { .. } => "Video",
         BoxKind::Canvas { .. } => "Canvas",
         BoxKind::Audio { .. } => "Audio",
+        BoxKind::Iframe { .. } => "Iframe",
         BoxKind::FormControl { .. } => "FormControl",
         BoxKind::Skip => "Skip",
         BoxKind::Marker { .. } => "Marker",
@@ -104,6 +105,9 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     }
     if let BoxKind::Audio { src, controls } = &b.kind {
         let _ = write!(out, " src={src:?} controls={controls}");
+    }
+    if let BoxKind::Iframe { src } = &b.kind {
+        let _ = write!(out, " src={src:?}");
     }
     if let BoxKind::SvgShape { shape, .. } = &b.kind {
         use crate::box_tree::SvgShapeKind;
