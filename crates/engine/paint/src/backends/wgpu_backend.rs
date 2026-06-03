@@ -8,7 +8,8 @@
 
 use std::sync::Arc;
 
-use lumen_core::ext::FontProvider;
+use lumen_core::ext::{FontProvider, MemoryPressureLevel};
+use lumen_core::geom::Size;
 use lumen_image::Image;
 use winit::window::Window;
 
@@ -125,6 +126,24 @@ impl RenderBackend for WgpuBackend {
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
         self.renderer.set_font_provider(provider);
     }
+
+    fn viewport_size(&self) -> Size {
+        let s = self.renderer.viewport_size();
+        Size { width: s.width as f32, height: s.height as f32 }
+    }
+
+    fn scale_factor(&self) -> f64 {
+        self.renderer.scale_factor()
+    }
+
+    fn preload_curated_fallbacks(&mut self) {
+        self.renderer.preload_curated_fallbacks();
+    }
+
+    fn on_layer_memory_pressure(&mut self, level: MemoryPressureLevel) {
+        self.renderer.layer_cache_mut().on_memory_pressure(level);
+    }
+
     // screenshot_rgba() → None (windowed; default impl)
 }
 
