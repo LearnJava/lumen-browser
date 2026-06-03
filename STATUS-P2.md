@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+FemtovgBackend эллиптические border-radius  branch: `p2-femtovg-elliptical-radius`
+Next step: Заменить `draw_fill_rounded_rect` на версию с cubic Bézier в `crates/engine/paint/src/backends/femtovg_backend.rs:403`
 
 ---
 
