@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**p1-web-locks** — Web Locks API + compat stubs (Web Share, Wake Lock, Network Information, userActivation, reportError)
+branch: p1-web-locks
+Next step: Web Locks pure-JS impl в dom.rs:8753, тесты в dom.rs:17124+  crates/js/src/dom.rs
 
 ---
 
