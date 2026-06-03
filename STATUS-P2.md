@@ -6,8 +6,7 @@
 
 ## In progress
 
-C8: `column-rule` / `column-span` / `column-fill` wiring  branch: p2-c8-column-extras
-Next step: wire column_span_all + column_fill_balance in lay_out_multicol_children  box_tree.rs:3990
+_(нет)_
 
 ---
 
@@ -19,7 +18,6 @@ Next step: wire column_span_all + column_fill_balance in lay_out_multicol_childr
 
 | # | Task | Crate(s) | Effort |
 |---|------|----------|--------|
-| C8 | **`column-rule` / `column-span` / `column-fill`.** Поля `column_rule_*` + `column_span: ColumnSpan` + `column_fill: ColumnFill`; parse; wire в multi-column layout engine. | `lumen-layout` | S |
 | C9 | **`::marker` рендеринг.** `compute_pseudo_element_style("::marker")`; `content`/color/font поддержка; emit перед list-item боксом в display list. | `lumen-layout`, `lumen-paint` | S |
 | C10 | **`cq*` container query units** (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`). Resolve против ближайшего `container` предка в `compute_length_to_px`. | `lumen-layout` | M |
 | C11 | **`mask-image` CSS wiring.** Parse `mask-image`/`mask-repeat`/`mask-size`/`mask-position`/`mask-mode` в `ComputedStyle`; emit `PushMaskLayer`/`PopMaskLayer` из display list walk. GPU compositing pass (`p2-mask-image-layer`) готов. Entry: `paint/src/display_list.rs` walk. | `lumen-layout`, `lumen-paint` | L |
@@ -39,6 +37,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-c8-column-extras** ✅ 2026-06-03 — C8: `column-span:all` + `column-fill:auto` wiring в multi-column layout (CSS Multi-column L1 §6.1/§4). `lay_out_multicol_children` получил параметр `container_h: Option<f32>`. `column-span:all` — flow-дети разбиваются на сегменты по span-all элементам; span-all элемент размещается на полной ширине контейнера, дети до/после — в своих колонках. `column-fill:auto` — когда `balance=false` и `container_h` задан, `target_h = container_h` вместо `total/n_cols`; колонки заполняются последовательно. Caller передаёт `children_available_height` (вычислен из `s.height`). 4 новых unit-теста; lumen-layout: 2189 (BUG-055 pre-existing). Graphic test 33 обновлён: добавлены секции column-span:all (зелёный) и column-fill:auto (фиолетовый).
 - **p2-c7-counter-style** ✅ 2026-06-03 — C7: `@counter-style` custom counters end-to-end (CSS Counter Styles L3). `CounterStyleDef` struct с дескрипторами `system`/`symbols`/`additive-symbols`/`prefix`/`suffix`/`range`/`pad`/`negative`/`fallback`. `CounterStyleRegistry = HashMap<String, CounterStyleDef>`. `build_counter_style_registry(sheet)` строит реестр из `sheet.counter_styles`. Алгоритмы: `cyclic` (rem_euclid), `numeric` (positional base-N), `alphabetic` (bijective base-N, как spreadsheet-колонки), `symbolic` (повтор символа), `additive` (weighted sum, как Roman numerals), `fixed` (конечный range), `extends` (делегирует). Парсинг CSS-строк с Unicode-escape `\XXXXXX`. Реестр строится внутри `layout`/`layout_measured`/`layout_measured_hyp` и пробрасывается через `build_box`→`collect_inline_segments`→`inject_pseudo`→`content_to_inline_segments`. `format_counter_with_registry` заменяет `format_counter` — custom стили первичны, встроенные — fallback. Публичный API `layout_measured/layout_measured_hyp` не изменён. 34 новых unit-теста; итого lumen-layout: 2186 (1 pre-existing BUG-055).
 - **p2-svg-stroke-advanced** ✅ 2026-06-03 — C6: SVG stroke advanced properties end-to-end (SVG §11.3/11.4). Новые enums `FillRule { NonZero, EvenOdd }`, `StrokeLinecap { Butt, Round, Square }`, `StrokeLinejoin { Miter, Round, Bevel }` в `layout/src/style.rs`. `ComputedStyle` получил 6 новых полей: `svg_fill_rule`, `svg_stroke_linecap`, `svg_stroke_linejoin`, `svg_stroke_miterlimit` (default 4.0), `svg_stroke_dasharray: Vec<f32>`, `svg_stroke_dashoffset`. `apply_declaration` парсит все 6 свойств; наследование в `compute_style` + `apply_css_wide_keyword`. Алгоритмы в `paint/src/svg_path.rs`: `StrokeParams` struct, `apply_dash_pattern()` (разбивка пути на дашированные сегменты, корректный dashoffset), `tessellate_stroke_ex()` (full linecap round/square + linejoin bevel/round + configurable miterlimit). `emit_svg_shape` в `display_list.rs` wires все поля через `StrokeParams`. Graphic test 60-svg-stroke-advanced.html. 12 новых unit-тестов (svg_path). Итого lumen-paint: 529 тестов.
 - **p2-scrollbar-width-color** ✅ 2026-06-03 — C5: `scrollbar-width` / `scrollbar-color` CSS wiring. `DrawScrollbar` расширен полями `thumb_color: [f32;4]`, `track_color: [f32;4]`. `ScrollbarInput` получил `gutter_px`. Emit-блок читает `b.style.scrollbar_width` (auto=12px, thin=6px, none→команда не эмитируется) и `b.style.scrollbar_color` (Some→custom colors, None→defaults). Renderer использует per-command цвета вместо hardcoded констант. 4 новых теста; 518 passed (lumen-paint).
