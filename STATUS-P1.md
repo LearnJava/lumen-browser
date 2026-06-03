@@ -6,8 +6,7 @@
 
 ## In progress
 
-A-11: Storage Access API  branch: p1-storage-access-api
-Next step: завершение и merge в main
+(empty — A-11 завершена)
 
 ---
 
@@ -15,6 +14,7 @@ Next step: завершение и merge в main
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-11: Storage Access API stub | W3C Storage Access API §5: `document.requestStorageAccess()` / `requestStorageAccessFor(origin)` → pre-resolved Promise, `document.hasStorageAccess()` / `hasUnpartitionedCookieAccess()` → Promise<true>. Phase 0: все методы всегда предоставляют доступ (нет проверок). Встроены в WEB_API_SHIM (document prototype). 4 unit-теста. lumen-js: 1183 теста (было 1179). |
 | 2026-06-04 | A-10: Sanitizer API stub | W3C Sanitizer API §3: `new Sanitizer(config)` конструктор (Phase 0: config не используется). `sanitizer.sanitizeFor(element, htmlString)` удаляет `<script>` теги и event handler атрибуты (on*). `element.setHTML(html, {sanitizer})` интеграция в DOM. Регулярная очистка: `/(<script[^>]*>[\s\S]*?<\/script>)/gi` + удаление атрибутов `onload/onerror/onclick/...`. Phase 0: нет конфигурации фильтров. JS-шим в `crates/js/src/sanitizer.rs`. 8 unit-тестов. lumen-js: 1179 тестов (было 1171). |
 | 2026-06-04 | A-9: Trusted Types API stub | W3C Trusted Types §3: `trustedTypes.createPolicy(name, rules)`, `TrustedHTML/Script/ScriptURL/URL` классы оборачивают строки, `.toString()/.valueOf()/.toJSON()` возвращают значение. `TrustedTypePolicy` методы `createHTML/createScript/createScriptURL/createURL` для обёртки. `TrustedTypePolicyFactory` с `createPolicy()`, `getPolicy()`, `getPolicyNames()`, `defaultPolicy` getter, проверяющие функции `isHTML/isScript/isScriptURL/isURL`. Phase 0: нет enforcement (политика проверяется, не блокирует). JS-шим в `crates/js/src/trusted_types.rs`. 16 встроенных тестов. lumen-js: 1171 тест. |
 | 2026-06-04 | A-7: Navigation API | HTML LS §7.8: `window.navigation` singleton с `currentEntry`, `entries()`. Методы `navigate(url, {state?, replace?})` / `back()` / `forward()` / `traverseTo(key)` → Promise. События `navigate` / `navigatesuccess` / `navigateerror` / `currententrychange`. `NavigateEvent.intercept({handler})` для перехвата. Phase 0: в памяти история entries (начинается с 1 записи), синхронная доставка событий, Promise-based API. Чистый JS-шим в `crates/js/src/navigation_api.rs`. lumen-js: 1132 теста. |
@@ -44,8 +44,8 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-7~~ | ~~**Navigation API**~~ — **выполнено** | M | `lumen-js`, `lumen-shell` |
 | ~~A-8~~ | ~~**Import Maps**~~ — **выполнено** | S | `lumen-html-parser`, `lumen-js` |
 | ~~A-9~~ | ~~**Trusted Types API stub**~~ — **выполнено** | S | `lumen-js` |
-| A-10 | **Sanitizer API stub** (W3C Sanitizer API §3) — `new Sanitizer(config)`, `sanitizer.sanitizeFor(element, string)` удаляет `<script>` + event handlers, `element.setHTML(html, {sanitizer})`. | S | `lumen-js` |
-| A-11 | **Storage Access API** — `document.requestStorageAccess()` → granted Promise (Phase 0: всегда yes), `document.hasStorageAccess()` → true, `document.requestStorageAccessFor(origin)`, `hasUnpartitionedCookieAccess()`. | XS | `lumen-js` |
+| ~~A-10~~ | ~~**Sanitizer API stub**~~ — **выполнено** | S | `lumen-js` |
+| ~~A-11~~ | ~~**Storage Access API**~~ — **выполнено** | XS | `lumen-js` |
 | A-12 | **Shape Detection API stub** — `FaceDetector.detect()` → [], `BarcodeDetector.getSupportedFormats()` → [], `TextDetector.detect()` → [], Phase 0. `window.FaceDetector/BarcodeDetector/TextDetector` exports. | XS | `lumen-js` |
 | A-13 | **Document Picture-in-Picture API** — `documentPictureInPicture.requestWindow({width, height})` → Panel overlay с DOM-контентом (расширение `pip_window.rs`), `.window` accessor, `onenter` event, `document.pictureInPictureElement`. | M | `lumen-js`, `lumen-shell` |
 | A-14 | **Screen Orientation API** — `screen.orientation {type, angle}`, `.lock(orientation)` → Promise (winit `set_fullscreen`), `.unlock()`, `onchange`, `ScreenOrientation` событие (landscape-primary/portrait-primary/any). | S | `lumen-js`, `lumen-shell` |
