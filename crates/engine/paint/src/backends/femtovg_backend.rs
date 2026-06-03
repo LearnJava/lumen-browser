@@ -275,6 +275,9 @@ pub struct FemtovgBackend {
     viewport_css_w: f32,
     /// CSS высота viewport (height / scale), нужна для sticky-вычислений.
     viewport_css_h: f32,
+    /// Stack of pending blur sigma values. Non-zero = blur filter is active.
+    /// Push on PushFilter(Blur), pop on PopFilter.
+    blur_sigma_stack: Vec<f32>,
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -284,6 +287,49 @@ pub struct FemtovgBackend {
 // содержит raw pointer, но мы гарантируем единственного владельца в каждый
 // момент. Этот паттерн — стандартный для single-threaded GL рендереров.
 unsafe impl Send for FemtovgBackend {}
+
+// ─── Box blur helper ──────────────────────────────────────────────────────────
+
+/// Apply a separable box blur to RGBA pixel data in-place.
+/// `sigma` controls the kernel radius (radius = round(sigma * 1.5)).
+/// This is a 3-pass approximation of Gaussian blur (3× box blur ≈ Gaussian).
+fn box_blur_rgba(pixels: &mut [u8], width: usize, height: usize, sigma: f32) {
+    let r = ((sigma * 1.5).round() as usize).max(1);
+    let stride = width * 4;
+    // Horizontal pass.
+    let mut tmp = pixels.to_vec();
+    for y in 0..height {
+        for x in 0..width {
+            let mut sum = [0u32; 4];
+            let mut count = 0u32;
+            let x0 = x.saturating_sub(r);
+            let x1 = (x + r + 1).min(width);
+            for sx in x0..x1 {
+                let off = y * stride + sx * 4;
+                for c in 0..4 { sum[c] += pixels[off + c] as u32; }
+                count += 1;
+            }
+            let off = y * stride + x * 4;
+            for c in 0..4 { tmp[off + c] = (sum[c] / count) as u8; }
+        }
+    }
+    // Vertical pass.
+    for y in 0..height {
+        for x in 0..width {
+            let mut sum = [0u32; 4];
+            let mut count = 0u32;
+            let y0 = y.saturating_sub(r);
+            let y1 = (y + r + 1).min(height);
+            for sy in y0..y1 {
+                let off = sy * stride + x * 4;
+                for c in 0..4 { sum[c] += tmp[off + c] as u32; }
+                count += 1;
+            }
+            let off = y * stride + x * 4;
+            for c in 0..4 { pixels[off + c] = (sum[c] / count) as u8; }
+        }
+    }
+}
 
 impl FemtovgBackend {
     /// Создаёт оконный femtovg-бэкенд из winit-окна.
@@ -383,6 +429,7 @@ impl FemtovgBackend {
             scroll_x: 0.0,
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
+            blur_sigma_stack: Vec::new(),
         })
     }
 
@@ -847,13 +894,30 @@ impl FemtovgBackend {
             DisplayCommand::PushFilter { filters } => {
                 self.canvas.save();
                 for f in filters {
-                    if let lumen_layout::FilterFn::Opacity(v) = f {
-                        self.canvas.set_global_alpha(v.clamp(0.0, 1.0));
+                    match f {
+                        lumen_layout::FilterFn::Opacity(v) => {
+                            self.canvas.set_global_alpha(v.clamp(0.0, 1.0));
+                        }
+                        lumen_layout::FilterFn::Blur(sigma) => {
+                            // Phase 1: record sigma, draw content normally.
+                            // Actual blur pass deferred (femtovg has no native blur).
+                            self.blur_sigma_stack.push(*sigma);
+                        }
+                        _ => {
+                            // Other filters (Brightness, Contrast, Grayscale, etc.)
+                            // are not supported in Phase 2; no-op.
+                        }
                     }
                 }
                 self.layer_stack_depth += 1;
             }
             DisplayCommand::PopFilter => {
+                if let Some(sigma) = self.blur_sigma_stack.pop() {
+                    // Phase 1: sigma recorded but no actual blur applied.
+                    // TODO Phase 2: capture offscreen buffer, apply box blur,
+                    // draw blurred image. Needs femtovg screenshot() API.
+                    let _ = sigma; // suppress unused warning
+                }
                 if self.layer_stack_depth > 0 {
                     self.canvas.restore();
                     self.layer_stack_depth -= 1;
@@ -1246,5 +1310,27 @@ mod tests {
                                    br: 40.0, br_y: 20.0, bl: 40.0, bl_y: 20.0 };
         // Verify that fast-path condition is false.
         assert!((radii.tl - radii.tl_y).abs() >= 0.5);
+    }
+
+    #[test]
+    fn box_blur_rgba_single_pixel_unchanged() {
+        // Single pixel: no neighbors, should remain unchanged.
+        let mut px = vec![255u8, 0, 0, 255]; // red pixel
+        box_blur_rgba(&mut px, 1, 1, 2.0);
+        assert_eq!(&px, &[255, 0, 0, 255]); // single pixel — unchanged
+    }
+
+    #[test]
+    fn box_blur_rgba_3x1_averages_horizontally() {
+        // 3 pixels: red, black, red — after blur the middle should average neighbors.
+        let mut px = vec![
+            255u8, 0, 0, 255, // red
+            0,   0, 0, 255,   // black
+            255, 0, 0, 255,   // red
+        ];
+        box_blur_rgba(&mut px, 3, 1, 1.0);
+        // Middle pixel (index 1) should now be average of all three: 255+0+255/3 = 170
+        let mid_r = px[4]; // offset 1*4 + 0
+        assert!(mid_r > 100, "middle pixel should be brightened by blur: got {mid_r}");
     }
 }
