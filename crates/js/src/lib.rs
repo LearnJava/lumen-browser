@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod cookie_banner;
 pub mod credentials;
 pub mod dom;
+pub mod filesystem_access;
 pub mod geolocation;
 pub mod heap_snapshot;
 pub mod intl_bindings;
