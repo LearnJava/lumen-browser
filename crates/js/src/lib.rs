@@ -1,6 +1,7 @@
 pub mod audio_bindings;
 pub mod audio_element;
 pub mod battery_bindings;
+pub mod css_properties_values_api;
 pub mod esm;
 pub mod gamepad;
 pub mod iframe_element;
@@ -41,6 +42,7 @@ use std::sync::{
 
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
+pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest};
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
@@ -387,6 +389,12 @@ impl QuickJsRuntime {
             // Install navigator/screen/timezone normalization (ADR-007 Layer 4, 9D.6) — after DOM.
             if let Err(e) = navigator_bindings::install_navigator_bindings(&ctx) {
                 eprintln!("Navigator bindings init failed: {}", e);
+            }
+
+            // Install CSS Properties & Values API (Houdini) — after DOM/navigator so that CSS object is available.
+            // Enables CSS.registerProperty() for custom property definitions.
+            if let Err(e) = css_properties_values_api::install_css_properties_values_api(&ctx) {
+                eprintln!("CSS Properties & Values API init failed: {}", e);
             }
 
             // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
