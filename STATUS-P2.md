@@ -6,13 +6,20 @@
 
 ## In progress
 
-**B-10 | CSS Forced Colors media** — branch: p2-b10-forced-colors
-- Phase 0: @media (forced-colors: active) parsing + MediaContext flag + system color keywords
-- Next step: lumen-layout/src/style.rs:2100 add `forced_colors: bool` to MediaContext struct
+None currently. Pick next available from Next section.
 
 ---
 
 ## Current / Recently Merged
+
+**B-10 | CSS Forced Colors media** ✅ 2026-06-04 (merged)
+- Phase 0: @media (forced-colors: active)/(forced-colors: none) parsing
+- ForcedColors(bool) вариант в MediaFeature enum, поддержка в matches()
+- forced_colors: bool поле в MediaContext struct
+- Поле forced_color_adjust: ForcedColorAdjust уже в ComputedStyle (парсинг работал)
+- 4 unit-теста (forced_colors_active, none, not_forced_colors_active, case_insensitive)
+- lumen-css-parser: 270 тестов (+4), Clippy clean
+- Phase 1 (future): system color keywords + forced-color-adjust: none logic
 
 **B-7 | CSS Resize property** ✅ 2026-06-04 (merged)
 - Phase 0 (prev): emit_resize_grip() рисует 12px grip в углу элемента
