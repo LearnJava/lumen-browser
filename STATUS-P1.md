@@ -13,6 +13,7 @@
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-04 | A-22: Payment Request API stub | W3C Payment Request API (Phase 0): `new PaymentRequest(methodData, details, options)` конструктор с валидацией аргументов. `.show()` → Promise<reject NotSupportedError> (Phase 0: платёжная система не поддерживается). `.canMakePayment()` → Promise<false>. `.abort()` → Promise<reject InvalidStateError если не в interactive состоянии>. `PaymentResponse` класс (stub) с `requestId`, `methodName`, `details` и `toJSON()`. Экспорт `window.PaymentRequest` и `window.PaymentResponse`. Новый модуль `crates/js/src/payment_request.rs`. 6 unit-тестов (constructor, show_returns_promise, show_rejects_with_not_supported, can_make_payment_returns_false, abort_rejects_when_not_interactive, payment_response_exists). lumen-js: 1255 тестов (было 1249 + 6 новых). Clippy чист. |
 | 2026-06-04 | B-1: DNS over HTTPS | RFC 8484 DoH resolver в `lumen-network/src/doh.rs`. `DohResolver::new(endpoint, transport)` шлёт GET-запросы к DoH сервису с base64url-кодированными DNS запросами (RFC 1035 wire format). Dual-stack: AAAA перед A, kombinuje результаты (IPv6 перед IPv4 per RFC 6724). `CachedDnsResolver` — TTL-aware кеш (default 60s) над любым `DnsResolver` с автоматическим удалением истекших записей. Конфиг `fingerprint.toml`: новое поле `doh_url` (пример: `https://cloudflare-dns.com/dns-query`). `FingerprintProfile::apply_http()` создаёт bootstrap HttpClient → DohResolver → CachedDnsResolver и подключает к основному клиенту. Fallback на system DNS если doh_url не задан. 41 тест в doh::tests (38 существующих + 3 новых для CachedDnsResolver). lumen-network: все 652 теста пройдены. Clippy чист. |
 |
 
@@ -73,7 +74,7 @@ Ordered by priority. Сгруппированы по домену.
 | A-19 | **CSS Scroll Snap L2 events** — `snapChanging`/`snapChanged` события при snap-переходе: `_lumen_fire_snap_changing/changed(nid)` биндинги, shell генерирует при `apply_page_y_snap` когда snap-точка меняется. `SnapChangeEvent {snapTargetBlock, snapTargetInline}`. | S | `lumen-js`, `lumen-shell` |
 | A-20 | **PerformanceObserver: LCP + CLS** — `largest-contentful-paint` (регистрация при первом рендере img/текста >500px² из shell pipeline) и `layout-shift` (CLS: суммирует смещения layout boxes при reflow >5px). `PerformanceLCPEntry`, `LayoutShiftAttribution`. | S | `lumen-js`, `lumen-shell` |
 | A-21 | **Contact Picker API stub** — `navigator.contacts.select(['name','email','tel'], {multiple})` → reject NotSupportedError (нет contact store на desktop), `navigator.contacts.getProperties()` → ['name','email','tel'], `ContactsManager` тип. | XS | `lumen-js` |
-| A-22 | **Payment Request API stub** — `new PaymentRequest(methodData, details, options)`, `.show()` → reject NotSupportedError, `.canMakePayment()` → false, `.abort()`, `PaymentResponse` тип, `window.PaymentRequest` export. | XS | `lumen-js` |
+| ~~A-22~~ | ~~**Payment Request API stub**~~ — **выполнено** | XS | `lumen-js` |
 
 ### B — Сеть
 
