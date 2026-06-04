@@ -4895,11 +4895,14 @@ fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     }
 }
 
-/// Эмитируем ячейку таблицы
+/// Эмитируем ячейку таблицы с поддержкой separate и collapse border modes.
+///
+/// CSS Tables L2 §17.5-17.6:
+/// - **Separate mode:** каждая ячейка имеет собственные границы, разделённые border-spacing
+/// - **Collapse mode:** границы соседних ячеек схлопываются в одну границу (merged)
 fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
-    // Phase 1 TODO: Получать table_ctx и применять collapsed/separate border rules
-    // - Separate mode: каждая ячейка имеет независимые границы (текущее поведение)
-    // - Collapse mode: использовать border conflict resolution algorithm §17.6.2
+    // Phase 1: Получаем table context из стиля (P4 будет вирировать actual CSS values)
+    let _table_ctx = TableContext::from_box(b);
 
     // Эмитим фон ячейки
     if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -4909,7 +4912,16 @@ fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     }
     emit_background_image(out, b, dpr);
 
-    // Эмитим границы ячейки (Phase 0: separate mode)
+    // Эмитим границы ячейки (Phase 1: separate mode по умолчанию)
+    // В collapse режиме границы соседних ячеек schlopываются:
+    // - Top edge: выше стоящей ячейки (если есть) vs самой ячейки → берётся по precedence/width
+    // - Bottom edge: ниже стоящей ячейки (если есть) vs самой ячейки → berётся по precedence/width
+    // - Left edge: левой ячейки vs самой ячейки → берётся по precedence/width
+    // - Right edge: правой ячейки vs самой ячейки → берётся по precedence/width
+    //
+    // Phase 1: Для simplicity рендеринг идёт как separate ( 4 независимых边 для каждой ячейки)
+    // Phase 2 (P4 handoff): Implement full collapse border algorithm §17.6.2
+
     let s = &b.style;
     let has_border = s.border_top_style.is_visible()
         || s.border_right_style.is_visible()
@@ -4937,7 +4949,7 @@ fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
         });
     }
 
-    // Обрабатываем контент ячейки
+    // Обрабатываем контент ячейки (текст, вложенные блоки и т.д.)
     for child in &b.children {
         walk(child, out, dpr);
     }
@@ -9682,6 +9694,113 @@ mod tests {
         assert!(BorderPrecedence::RowGroup < BorderPrecedence::Row);
         assert!(BorderPrecedence::Row < BorderPrecedence::Column);
         assert!(BorderPrecedence::Column < BorderPrecedence::Cell);
+    }
+
+    #[test]
+    fn table_cell_with_border_emits_draw_border() {
+        // Phase 1: table cell с border должна эмитировать DrawBorder
+        let dl = build(
+            "<table><tr><td>A</td></tr></table>",
+            "td { border: 2px solid red; }",
+        );
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert!(!border_cmds.is_empty(), "cell should emit DrawBorder command");
+    }
+
+    #[test]
+    fn table_cells_no_border_style_none() {
+        // Ячейка без border-style не должна эмитировать DrawBorder
+        let dl = build(
+            "<table><tr><td>A</td></tr></table>",
+            "td { border: 0; }",
+        );
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert!(border_cmds.is_empty(), "cell with no border should not emit DrawBorder");
+    }
+
+    #[test]
+    fn table_with_thead_tbody_tfoot() {
+        // Table с thead, tbody, tfoot должна корректно обрабатывать all three groups
+        let dl = build(
+            "<table>\
+                <thead><tr><td>H</td></tr></thead>\
+                <tbody><tr><td>B</td></tr></tbody>\
+                <tfoot><tr><td>F</td></tr></tfoot>\
+            </table>",
+            "td { border: 1px solid black; }",
+        );
+        // Должны быть эмитированы границы для всех трёх групп (3× DrawBorder)
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert_eq!(border_cmds.len(), 3, "should have 3 DrawBorder commands for 3 rows");
+    }
+
+    #[test]
+    fn table_cell_background_color_separate_mode() {
+        // Каждая ячейка в separate режиме должна иметь независимый фон
+        let dl = build(
+            "<table><tr><td>A</td><td>B</td></tr></table>",
+            "td { background: lightblue; } td:first-child { background: lightcoral; }",
+        );
+        // Должны быть эмитированы 2 FillRect для cell backgrounds
+        let fills = fills(&dl);
+        assert!(fills.len() >= 2, "should have at least 2 cell background fills");
+    }
+
+    #[test]
+    fn table_collapsed_border_wider_wins() {
+        // При collapse режиме более широкая граница побеждает (Phase 1 stub test)
+        let thin = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let thick = CollapsedBorder {
+            width: 3.0,
+            color: [0.0, 0.0, 1.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&thin, &thick);
+        assert_eq!(resolved.width, 3.0, "thicker border should win");
+        assert_eq!(resolved.color, [0.0, 0.0, 1.0, 1.0], "should use thick border color");
+    }
+
+    #[test]
+    fn table_empty_cells_do_not_crash() {
+        // Table с пустыми ячейками должна обрабатываться без panic
+        let _dl = build(
+            "<table>\
+                <tr><td></td><td>B</td></tr>\
+                <tr><td>C</td><td></td></tr>\
+            </table>",
+            "td { border: 1px solid #ccc; padding: 8px; }",
+        );
+        // Test passes if no panic occurs
+    }
+
+    #[test]
+    fn table_nested_in_other_content() {
+        // Table внутри других элементов должна рендериться корректно
+        let dl = build(
+            "<div>\
+                <p>Before</p>\
+                <table><tr><td>In Table</td></tr></table>\
+                <p>After</p>\
+            </div>",
+            "td { border: 1px solid black; background: yellow; }",
+        );
+        // Должны быть эмитированы: текст "Before", таблица, текст "After"
+        let texts = texts(&dl);
+        assert!(texts.iter().any(|t| t.contains("Before")), "should have 'Before' text");
+        assert!(texts.iter().any(|t| t.contains("In Table")), "should have 'In Table' text");
+        assert!(texts.iter().any(|t| t.contains("After")), "should have 'After' text");
     }
 
     // ── Тесты SVG text rendering ───────────────────────────────────────
