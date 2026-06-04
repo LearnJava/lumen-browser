@@ -47,14 +47,14 @@ pub fn is_jxl(bytes: &[u8]) -> bool {
 
     if &bytes[4..8] == b"ftyp" {
         // Check if major brand is 'jxl '
-        if bytes.len() >= 12 && &bytes[8..12] == JXL_ISOBMFF_BOX_TYPE {
+        if bytes.len() >= 12 && bytes[8..12] == JXL_ISOBMFF_BOX_TYPE {
             return true;
         }
         // Check compatible brands (offset 16 onwards, each 4 bytes)
         if bytes.len() >= 16 {
             let compatible_start = 16;
             for i in (compatible_start..bytes.len()).step_by(4) {
-                if i + 4 <= bytes.len() && &bytes[i..i + 4] == JXL_ISOBMFF_BOX_TYPE {
+                if i + 4 <= bytes.len() && bytes[i..i + 4] == JXL_ISOBMFF_BOX_TYPE {
                     return true;
                 }
             }
