@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none)
+**B-1: Table layout rendering**  
+Branch: `p2-b1-table-layout`  
+Next step: Implement `emit_table_box()` in `lumen-paint/src/display_list.rs` that renders table cells with borders, backgrounds (crates/engine/paint/src/display_list.rs)
 
 ---
 
