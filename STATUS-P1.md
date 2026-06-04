@@ -6,9 +6,7 @@
 
 ## In progress
 
-B-4: Background Sync API stub  
-branch: p1-b4-background-sync  
-Next step: Create module crates/js/src/background_sync.rs with SyncManager class, implement register('tag')/getTags()/sync event, add native bindings for persistence/shell integration
+(none — last task B-4 completed)
 
 ---
 
