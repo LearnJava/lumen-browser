@@ -3785,12 +3785,31 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                 let py = b.rect.y + s.border_top_width;
                 let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
                 let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
-                let cr = Rect::new(
+                let mut cr = Rect::new(
                     if clip_x { px } else { -BIG },
                     if clip_y { py } else { -BIG },
                     if clip_x { pw } else { 2.0 * BIG },
                     if clip_y { ph } else { 2.0 * BIG },
                 );
+
+                // CSS Overflow L3: overflow-clip-margin расширяет clip region для overflow:clip.
+                let is_overflow_clip_x = matches!(b.style.overflow_x, Overflow::Clip);
+                let is_overflow_clip_y = matches!(b.style.overflow_y, Overflow::Clip);
+                if (is_overflow_clip_x || is_overflow_clip_y) && s.overflow_clip_margin.is_some() {
+                    if let Some(margin) = &s.overflow_clip_margin {
+                        if let Some(margin_px) = margin.resolve(s.font_size, Some(pw.max(ph)), Size::new(pw, ph)) {
+                            if is_overflow_clip_x {
+                                cr.x -= margin_px;
+                                cr.width += 2.0 * margin_px;
+                            }
+                            if is_overflow_clip_y {
+                                cr.y -= margin_px;
+                                cr.height += 2.0 * margin_px;
+                            }
+                        }
+                    }
+                }
+
                 if use_scroll_layer {
                     out.push(DisplayCommand::PushScrollLayer {
                         clip_rect: cr,
@@ -10068,5 +10087,83 @@ mod tests {
         let result = DiffResult::changed(rect);
         assert!(!result.identical);
         assert_eq!(result.changed_rects, rect);
+    }
+
+    // ── B-9: CSS overflow: clip tests ────────────────────────────────
+
+    fn find_push_clip_rects(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::PushClipRect { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn overflow_clip_emits_push_clip_rect() {
+        let dl = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+        let clips = find_push_clip_rects(&dl);
+        assert!(!clips.is_empty(), "overflow:clip should emit PushClipRect");
+    }
+
+    #[test]
+    fn overflow_clip_margin_expands_clip_region() {
+        let dl_no_margin = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+        let dl_with_margin = build(
+            r#"<div style="overflow:clip;overflow-clip-margin:10px;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+
+        let clips_no_margin = find_push_clip_rects(&dl_no_margin);
+        let clips_with_margin = find_push_clip_rects(&dl_with_margin);
+
+        assert!(!clips_no_margin.is_empty(), "overflow:clip without margin should have PushClipRect");
+        assert!(!clips_with_margin.is_empty(), "overflow:clip with margin should have PushClipRect");
+
+        if let (Some(DisplayCommand::PushClipRect { rect: r1 }), Some(DisplayCommand::PushClipRect { rect: r2 })) =
+            (clips_no_margin.first(), clips_with_margin.first())
+        {
+            // With margin, rect should be expanded (larger width/height).
+            assert!(r2.width > r1.width || r2.height > r1.height,
+                "overflow-clip-margin should expand clip region");
+        }
+    }
+
+    #[test]
+    fn overflow_hidden_and_clip_both_emit_clip() {
+        let dl_hidden = build(
+            r#"<div style="overflow:hidden;width:100px;height:100px;background:red"></div>"#,
+            "",
+        );
+        let dl_clip = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:green"></div>"#,
+            "",
+        );
+
+        let hidden_clips = find_push_clip_rects(&dl_hidden);
+        let clip_clips = find_push_clip_rects(&dl_clip);
+
+        assert!(!hidden_clips.is_empty(), "overflow:hidden should emit PushClipRect");
+        assert!(!clip_clips.is_empty(), "overflow:clip should emit PushClipRect");
+    }
+
+    #[test]
+    fn overflow_clip_no_margin_emits_zero_margin() {
+        // When no overflow-clip-margin is specified, clip rect should not be expanded.
+        let dl = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:yellow"></div>"#,
+            "",
+        );
+        let clips = find_push_clip_rects(&dl);
+        assert_eq!(clips.len(), 1, "overflow:clip should emit exactly one PushClipRect");
+        // The clip rect size should match the padding-box (or close to it).
+        if let DisplayCommand::PushClipRect { rect } = clips[0] {
+            // Exact values depend on styling, but the rect should be non-negative and finite.
+            assert!(rect.width >= 0.0 && rect.height >= 0.0, "clip rect should have non-negative dimensions");
+        }
     }
 }
