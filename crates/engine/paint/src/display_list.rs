@@ -271,6 +271,7 @@ pub enum DisplayCommand {
         /// CSS Text L3 §10.1 — pixel width for a tab character (\t).
         /// 0.0 means no tab characters in text (renderer skips tab expansion).
         tab_size: f32,
+        highlight_name: Option<String>
     },
     /// Растровое изображение из `<img>`. `rect` — итоговая коробка после
     /// расчёта по CSS (width/height + HTML presentational hints), `src` —
@@ -1095,6 +1096,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
                 font_variation_axes, tab_size: _,
+                highlight_name: _,
             } => {
                 out.push_str(&format!(
                     "DrawText ({:.2}, {:.2}, {:.2}, {:.2}) {:?} {:.2} #{:02x}{:02x}{:02x}{:02x}",
@@ -1615,6 +1617,7 @@ fn emit_margin_box_text(margin_box: &MarginBox, cmds: &mut DisplayList) {
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 }
@@ -1808,6 +1811,7 @@ fn emit_text_emphasis_marks(
             font_style: frag.style.font_style,
             font_variation_axes: vec![],
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 }
@@ -1859,6 +1863,7 @@ fn emit_text_frags(
                 axes
             },
             tab_size: frag.style.tab_size,
+            highlight_name: None,
         });
         push_text_decoration(out, container_x, frag_y, frag);
         emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
@@ -1930,6 +1935,7 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
                     axes
                 },
                 tab_size: 0.0,
+                highlight_name: None,
             });
         } else {
             emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
@@ -2264,6 +2270,7 @@ fn emit_text_shadows(
                 axes
             },
             tab_size: frag.style.tab_size,
+            highlight_name: None,
         });
         if sigma > 0.0 {
             out.push(DisplayCommand::PopFilter);
@@ -3239,6 +3246,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         axes
                     },
                     tab_size: 0.0,
+                    highlight_name: None,
                 });
             }
         }
@@ -4420,6 +4428,7 @@ fn emit_svg_text(
             font_style: b.style.font_style,
             font_variation_axes: vec![],
             tab_size: b.style.tab_size,
+            highlight_name: None,
         });
     }
 }
@@ -10258,3 +10267,259 @@ mod tests {
         assert!(!dl.is_empty(), "resize:both with overflow:hidden and margin should generate display list");
     }
 }
+
+
+/// CSS Custom Highlight API L1 — helper to emit DrawText with highlight name.
+/// Phase 0: stores highlight name in DrawText for future rendering.
+/// Phase 1: will fetch ranges from CSS.highlights and emit overlay rects.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_text_with_highlights(
+    rect: Rect,
+    text: &str,
+    font_size: f32,
+    color: Color,
+    font_family: Vec<String>,
+    font_weight: FontWeight,
+    font_style: FontStyle,
+    font_variation_axes: Vec<([u8; 4], f32)>,
+    tab_size: f32,
+    highlight_name: Option<String>,
+    out: &mut DisplayList,
+) {
+    out.push(DisplayCommand::DrawText {
+        rect,
+        text: text.to_string(),
+        font_size,
+        color,
+        font_family,
+        font_weight,
+        font_style,
+        font_variation_axes,
+        tab_size,
+        highlight_name,
+    });
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+
+    #[test]
+    fn highlight_field_none_by_default() {
+        // DrawText created without highlight_name should have None
+        let dl = DisplayList::from(vec![DisplayCommand::DrawText {
+            rect: Rect::new(0.0, 0.0, 100.0, 20.0),
+            text: "test".to_string(),
+            font_size: 14.0,
+            color: Color::BLACK,
+            font_family: vec![],
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        }]);
+        
+        if let DisplayCommand::DrawText { highlight_name, .. } = &dl[0] {
+            assert!(highlight_name.is_none());
+        }
+    }
+
+    #[test]
+    fn emit_text_with_highlights_creates_command() {
+        let mut out = Vec::new();
+        emit_text_with_highlights(
+            Rect::new(10.0, 20.0, 100.0, 30.0),
+            "highlighted",
+            16.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            Some("search".to_string()),
+            &mut out,
+        );
+        
+        assert_eq!(out.len(), 1);
+        if let DisplayCommand::DrawText { text, highlight_name, .. } = &out[0] {
+            assert_eq!(text, "highlighted");
+            assert_eq!(highlight_name.as_ref(), Some(&"search".to_string()));
+        }
+    }
+
+    #[test]
+    fn highlight_name_custom_values() {
+        let names = vec!["search", "spelling", "grammar"];
+        for name in names {
+            let mut out = Vec::new();
+            emit_text_with_highlights(
+                Rect::new(0.0, 0.0, 50.0, 20.0),
+                "test",
+                12.0,
+                Color::BLACK,
+                vec![],
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                vec![],
+                0.0,
+                Some(name.to_string()),
+                &mut out,
+            );
+            
+            if let DisplayCommand::DrawText { highlight_name, .. } = &out[0] {
+                assert_eq!(highlight_name.as_ref(), Some(&name.to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn highlight_without_name() {
+        let mut out = Vec::new();
+        emit_text_with_highlights(
+            Rect::new(0.0, 0.0, 50.0, 20.0),
+            "plain",
+            14.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            None,
+            &mut out,
+        );
+        
+        assert_eq!(out.len(), 1);
+        if let DisplayCommand::DrawText { highlight_name, .. } = &out[0] {
+            assert!(highlight_name.is_none());
+        }
+    }
+
+    #[test]
+    fn highlight_preserves_text_attributes() {
+        let mut out = Vec::new();
+        let family = vec!["Arial".to_string()];
+        let weight = FontWeight(600);
+        
+        emit_text_with_highlights(
+            Rect::new(5.0, 10.0, 200.0, 25.0),
+            "styled",
+            18.0,
+            Color::BLACK,
+            family.clone(),
+            weight,
+            FontStyle::Italic,
+            vec![],
+            4.0,
+            Some("custom".to_string()),
+            &mut out,
+        );
+        
+        if let DisplayCommand::DrawText {
+            text, font_size, font_family, font_weight, font_style,
+            highlight_name, tab_size, ..
+        } = &out[0] {
+            assert_eq!(text, "styled");
+            assert_eq!(*font_size, 18.0);
+            assert_eq!(*font_family, family);
+            assert_eq!(*font_weight, weight);
+            assert_eq!(*font_style, FontStyle::Italic);
+            assert_eq!(highlight_name.as_ref(), Some(&"custom".to_string()));
+            assert_eq!(*tab_size, 4.0);
+        }
+    }
+
+    #[test]
+    fn highlight_empty_text() {
+        let mut out = Vec::new();
+        emit_text_with_highlights(
+            Rect::new(0.0, 0.0, 0.0, 0.0),
+            "",
+            12.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            Some("empty".to_string()),
+            &mut out,
+        );
+        
+        assert_eq!(out.len(), 1);
+        if let DisplayCommand::DrawText { text, highlight_name, .. } = &out[0] {
+            assert_eq!(text, "");
+            assert_eq!(highlight_name.as_ref(), Some(&"empty".to_string()));
+        }
+    }
+
+    #[test]
+    fn highlight_multiple_independent_calls() {
+        let mut out1 = Vec::new();
+        let mut out2 = Vec::new();
+        
+        emit_text_with_highlights(
+            Rect::new(0.0, 0.0, 100.0, 20.0),
+            "first",
+            14.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            Some("search".to_string()),
+            &mut out1,
+        );
+        
+        emit_text_with_highlights(
+            Rect::new(0.0, 20.0, 100.0, 20.0),
+            "second",
+            14.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            Some("spelling".to_string()),
+            &mut out2,
+        );
+        
+        if let DisplayCommand::DrawText { text: t1, highlight_name: h1, .. } = &out1[0] {
+            if let DisplayCommand::DrawText { text: t2, highlight_name: h2, .. } = &out2[0] {
+                assert_eq!(t1, "first");
+                assert_eq!(h1.as_ref(), Some(&"search".to_string()));
+                assert_eq!(t2, "second");
+                assert_eq!(h2.as_ref(), Some(&"spelling".to_string()));
+            }
+        }
+    }
+}
+
+    #[test]
+    fn highlight_with_variation_axes() {
+        let mut out = Vec::new();
+        let axes = vec![((*b"wght"), 600.0)];
+        
+        emit_text_with_highlights(
+            Rect::new(0.0, 0.0, 100.0, 20.0),
+            "variable",
+            16.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            axes.clone(),
+            0.0,
+            Some("variable-font".to_string()),
+            &mut out,
+        );
+        
+        if let DisplayCommand::DrawText { font_variation_axes, highlight_name, .. } = &out[0] {
+            assert_eq!(font_variation_axes, &axes);
+            assert_eq!(highlight_name.as_ref(), Some(&"variable-font".to_string()));
+        }
+    }
