@@ -6,13 +6,18 @@
 
 ## In progress
 
-**B-9 | CSS overflow: clip** (S)
-- Branch: `p2-b9-overflow-clip`
-- Next step: Add Overflow::Clip variant, create clip boundary without new BFC, implement overflow-clip-margin
+None currently. Pick next available from Next section.
 
 ---
 
 ## Current / Recently Merged
+
+**B-9 | CSS overflow: clip** ✅ 2026-06-04 (merged)
+- overflow_clip_margin: Option<Length> field added to ComputedStyle
+- Overflow::Clip already existed, now creates clip boundary without new BFC
+- overflow-clip-margin: N px расширяет clip region на N px с каждой стороны
+- 4 unit-тестов в lumen-paint (emits PushClipRect, margin expands region, no margin case, hidden+clip comparison)
+- Clippy чист
 
 **B-4 | CSS Grid: dense packing** ✅ 2026-06-04 (merged)
 - Функциональность grid-auto-flow: row/column dense уже полностью реализована (commit dac28f5)
