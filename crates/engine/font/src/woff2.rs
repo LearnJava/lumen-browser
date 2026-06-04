@@ -92,7 +92,7 @@ struct W2TableEntry {
 /// Phase 0 implementation: if the xform version is 0 (no transformation applied)
 /// the bytes are returned as-is. Version 3 (full glyf transform) rebuilds
 /// the classic glyf + loca table pair.
-fn decode_transformed_glyf(
+pub(crate) fn decode_transformed_glyf(
     data: &[u8],
     loca_entries: &mut Vec<u32>,
     index_to_loc_format: u16,
@@ -118,14 +118,21 @@ fn decode_transformed_glyf(
     let _ = index_format;
     let _ = index_to_loc_format;
 
-    // Extract sub-streams
+    // Extract sub-streams (WOFF2 spec §5.3 Table 6):
+    // nContour stream: i16 per glyph — number of contours
+    // nPoints stream: 255UInt16 per contour of each simple glyph — points per contour
+    // flag stream: u8 per point — triplet-encoded flags + coordinates
+    // glyph stream: instruction count + instruction bytes per simple glyph
+    // composite stream: component data for composite glyphs
+    // bBox stream: bitmap + explicit bounding boxes
+    // instruction stream: instructions for composite glyphs
     let n_contour_stream = data.get(pos..pos + n_contour_stream_size as usize)
         .ok_or(FontError::UnexpectedEof)?;
     pos += n_contour_stream_size as usize;
-    let _n_points_stream = data.get(pos..pos + n_points_stream_size as usize)
+    let n_points_stream = data.get(pos..pos + n_points_stream_size as usize)
         .ok_or(FontError::UnexpectedEof)?;
     pos += n_points_stream_size as usize;
-    let _flag_stream = data.get(pos..pos + flag_stream_size as usize)
+    let flag_stream = data.get(pos..pos + flag_stream_size as usize)
         .ok_or(FontError::UnexpectedEof)?;
     pos += flag_stream_size as usize;
     let glyph_stream = data.get(pos..pos + glyph_stream_size as usize)
@@ -141,6 +148,8 @@ fn decode_transformed_glyf(
         .ok_or(FontError::UnexpectedEof)?;
 
     let mut out = Vec::<u8>::new();
+    let mut npoints_pos = 0usize;
+    let mut flag_pos = 0usize;
     let mut glyph_pos = 0usize;
     let mut composite_pos = 0usize;
     let mut instr_pos = 0usize;
@@ -149,7 +158,6 @@ fn decode_transformed_glyf(
         .ok_or(FontError::UnexpectedEof)?;
     let bbox_bitmap = &bbox_stream[..bbox_bitmap_byte_count];
     let mut bbox_data_pos = 0usize;
-    let _ = bbox_data_pos;
 
     loca_entries.clear();
 
@@ -238,33 +246,49 @@ fn decode_transformed_glyf(
                 }
             }
         } else {
-            // Simple glyph
+            // Simple glyph.
+            // WOFF2 spec §5.3: nPoints per contour are in the nPoints stream (not glyph stream).
+            // Instruction data is in the glyph stream.
+            // Flag/coordinate triplets are in the flag stream (not glyph stream).
             let n_contours = n_contours_signed as usize;
-            // Read n_contours end-point indices from glyph_stream (255UInt16 encoding)
             let mut end_pts = Vec::with_capacity(n_contours);
             let mut total_points: u32 = 0;
+            // Contours with 0 points are degenerate but legal in practice (e.g. space glyph
+            // variants). Skip them so the font loads rather than rejecting the whole face.
+            let mut actual_n_contours: i16 = 0;
             for _ in 0..n_contours {
-                let (v, consumed) = read_255uint16(glyph_stream, glyph_pos)?;
-                glyph_pos += consumed;
+                let (v, consumed) = read_255uint16(n_points_stream, npoints_pos)?;
+                npoints_pos += consumed;
                 if v == 0 {
-                    return Err(FontError::InvalidData("woff2: contour with zero points"));
+                    // Skip the empty contour — it adds no points.
+                    continue;
                 }
                 total_points = total_points
                     .checked_add(v as u32)
                     .ok_or(FontError::InvalidData("woff2: point count overflow"))?;
-                // TrueType endpoint indices are u16 — hard spec limit.
-                // Can't skip gracefully: glyph_pos would corrupt all subsequent glyphs.
                 if total_points > 65535 {
                     return Err(FontError::InvalidData("woff2: glyph exceeds 65535 points"));
                 }
                 end_pts.push(total_points - 1);
+                actual_n_contours += 1;
             }
-            // Read instruction length
+            // Read instruction length from glyph stream (must happen even if all contours empty).
             let (instr_len, consumed) = read_255uint16(glyph_stream, glyph_pos)?;
             glyph_pos += consumed;
+            glyph_pos += instr_len as usize; // advance past instruction bytes
 
-            // Write glyph header
-            out.extend_from_slice(&n_contours_signed.to_be_bytes());
+            // Consume flags/coordinates from flag stream (triplet encoding, WOFF2 spec §5.1).
+            // Must advance flag_pos even when actual_n_contours == 0 (total_points == 0 → no-op).
+            let n_pts = total_points as usize;
+            let (flags_out, xs, ys) = decode_triplet(flag_stream, &mut flag_pos, n_pts)?;
+
+            // If all contours were empty, treat as an empty glyph (no output, like n_contours==0).
+            if actual_n_contours == 0 {
+                continue;
+            }
+
+            // Write glyph header (actual_n_contours excludes the empty contours).
+            out.extend_from_slice(&actual_n_contours.to_be_bytes());
             out.extend_from_slice(&x_min.to_be_bytes());
             out.extend_from_slice(&y_min.to_be_bytes());
             out.extend_from_slice(&x_max.to_be_bytes());
@@ -272,16 +296,13 @@ fn decode_transformed_glyf(
             for ep in &end_pts {
                 out.extend_from_slice(&(*ep as u16).to_be_bytes());
             }
-            out.extend_from_slice(&instr_len.to_be_bytes());
-            // Instructions from glyph_stream immediately after instr_len
-            let instrs = glyph_stream.get(glyph_pos..glyph_pos + instr_len as usize)
+            // Instruction bytes: re-read from glyph_stream at saved position.
+            let instr_start = glyph_pos - instr_len as usize;
+            let instrs = glyph_stream.get(instr_start..glyph_pos)
                 .ok_or(FontError::UnexpectedEof)?;
+            out.extend_from_slice(&instr_len.to_be_bytes());
             out.extend_from_slice(instrs);
-            glyph_pos += instr_len as usize;
 
-            // Flags and coordinates from glyph_stream (triplet encoding)
-            let n_pts = total_points as usize;
-            let (flags_out, xs, ys) = decode_triplet(glyph_stream, &mut glyph_pos, n_pts)?;
             out.extend_from_slice(&flags_out);
             out.extend_from_slice(&xs);
             out.extend_from_slice(&ys);
@@ -807,6 +828,107 @@ mod tests {
     #[test]
     fn table_checksum_empty() {
         assert_eq!(table_checksum(&[]), 0);
+    }
+
+    // Build a minimal transformed glyf data block for use in unit tests.
+    // Encodes `num_glyphs` glyphs: the first glyph is a simple glyph with
+    // `n_contours` contours each having `points_per_contour` points (u8 slices).
+    // All other glyphs are empty (n_contours == 0).
+    fn make_glyf_transform(
+        num_glyphs: u16,
+        n_contours: u16,
+        points_per_contour: &[u8],   // one 255UInt16 value per contour (all < 253 → 1 byte)
+        flag_bytes: &[u8],           // one flag byte per total point
+    ) -> Vec<u8> {
+        // Build each stream independently.
+        let mut ncontour_stream: Vec<u8> = Vec::new();
+        // Glyph 0: n_contours
+        ncontour_stream.extend_from_slice(&(n_contours as i16).to_be_bytes());
+        // Remaining glyphs: empty
+        for _ in 1..num_glyphs {
+            ncontour_stream.extend_from_slice(&0i16.to_be_bytes());
+        }
+
+        // nPoints stream: one 255UInt16 per contour of simple glyph 0.
+        let npoints_stream: Vec<u8> = points_per_contour.to_vec();
+
+        // flag stream: triplet bytes for all points.
+        // Use triplet value 0 (on-curve, dx=nibble, dy=nibble) — requires 1 extra byte.
+        // But for simplicity use xy_flag = 10 (off-curve 1-byte x, 1-byte y) — 2 bytes per point.
+        // Actually for zero points, flag_bytes is empty.
+        let flag_stream: Vec<u8> = flag_bytes.to_vec();
+
+        // glyph stream: instruction length (0) as 255UInt16 single byte 0.
+        let glyph_stream: Vec<u8> = vec![0u8]; // 1 glyph × instr_len=0
+
+        // bbox bitmap: 1 byte for up to 8 glyphs; bit for glyph 0 = 0 (no explicit bbox).
+        let bbox_bitmap_size = num_glyphs.div_ceil(8).max(1) as usize;
+        let mut bbox_stream: Vec<u8> = vec![0u8; bbox_bitmap_size]; // all bits = 0
+        // No explicit bbox entries follow.
+        // composite, instruction streams: empty.
+        let composite_stream: Vec<u8> = Vec::new();
+        let instruction_stream: Vec<u8> = Vec::new();
+
+        let mut data: Vec<u8> = Vec::new();
+        // Header (36 bytes)
+        data.extend_from_slice(&0u16.to_be_bytes()); // reserved
+        data.extend_from_slice(&0u16.to_be_bytes()); // option_flags
+        data.extend_from_slice(&num_glyphs.to_be_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes()); // index_format
+        data.extend_from_slice(&(ncontour_stream.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(npoints_stream.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(flag_stream.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(glyph_stream.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(composite_stream.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(bbox_stream.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(instruction_stream.len() as u32).to_be_bytes());
+        // Streams
+        data.extend_from_slice(&ncontour_stream);
+        data.extend_from_slice(&npoints_stream);
+        data.extend_from_slice(&flag_stream);
+        data.extend_from_slice(&glyph_stream);
+        data.extend_from_slice(&composite_stream);
+        data.extend_from_slice(&bbox_stream);
+        data.extend_from_slice(&instruction_stream);
+        data
+    }
+
+    #[test]
+    fn glyf_transform_zero_point_contour_skipped_gracefully() {
+        // BUG-059: a glyph with 1 contour having 0 points must not return an error.
+        // points_per_contour = [0] → contour has 0 points → skip it.
+        let data = make_glyf_transform(1, 1, &[0u8], &[]);
+        let mut loca = Vec::new();
+        let result = super::decode_transformed_glyf(&data, &mut loca, 1);
+        assert!(result.is_ok(), "zero-point contour should be accepted: {:?}", result.err());
+    }
+
+    #[test]
+    fn glyf_transform_normal_glyph_decoded() {
+        // A simple glyph with 1 contour of 1 point — encoded with triplet byte.
+        // xy_flag 0..=9 range consumes 1 extra byte; use flag=0 (on-curve, 4-bit nibbles).
+        // points_per_contour = [1] (one point, value < 253 → single byte 1)
+        // flag byte: 0x00 (xy_flag=0, on-curve) + nibble byte 0x11 = 2 bytes total for 1 point.
+        let data = make_glyf_transform(1, 1, &[1u8], &[0x00u8, 0x11u8]);
+        let mut loca = Vec::new();
+        let result = super::decode_transformed_glyf(&data, &mut loca, 1);
+        assert!(result.is_ok(), "normal 1-point glyph should decode: {:?}", result.err());
+        let glyf = result.unwrap();
+        // Glyph 0 should be non-empty (has 1 contour).
+        assert!(!glyf.is_empty(), "decoded glyf must not be empty");
+        // The first i16 in output is numberOfContours = 1.
+        let n_contours = i16::from_be_bytes([glyf[0], glyf[1]]);
+        assert_eq!(n_contours, 1);
+    }
+
+    #[test]
+    fn glyf_transform_empty_glyph_produces_no_output() {
+        // n_contours_signed == 0 → empty glyph, no bytes emitted.
+        let data = make_glyf_transform(1, 0, &[], &[]);
+        let mut loca = Vec::new();
+        let result = super::decode_transformed_glyf(&data, &mut loca, 1);
+        assert!(result.is_ok(), "empty glyph must decode OK: {:?}", result.err());
+        assert!(result.unwrap().is_empty(), "empty glyph must emit no bytes");
     }
 
     #[test]

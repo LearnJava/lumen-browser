@@ -16,8 +16,6 @@ _(нет)_
 
 | # | Компонент | Описание | Файл |
 |---|---|---|---|
-| **BUG-059** | font | WOFF2 отклоняет шрифты с контурами из 0 точек — 10 шрифтов CNN не загружаются | `crates/engine/font/src/` |
-| **BUG-060** | font | WOFF2 «unexpected end of font data» для 3 шрифтов CNN — вероятно неверный расчёт буфера | `crates/engine/font/src/` |
 | BUG-055 | layout | `<picture>` с AVIF source не делает fallback на `<img src>` | `crates/engine/layout/src/lib.rs:12366` |
 | BUG-054 | network | `stale_pooled_connection_triggers_retry` падает на Windows (WSAECONNRESET) | `crates/network/src/lib.rs:3161` |
 
@@ -67,6 +65,7 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 ## Recent fixes
 
+- **BUG-059 + BUG-060 WOFF2 stream routing** (2026-06-04) — корневая причина обоих багов: декодер читал количество точек контура из `glyph_stream` вместо `nPoints_stream`, а triplet-координаты из `glyph_stream` вместо `flag_stream` (WOFF2 spec §5.3). При попадании нулевых байт в glyph_stream → «contour with zero points» (BUG-059); для bold/medium поток заканчивался раньше → «unexpected end of font data» (BUG-060). Fix: `n_points_stream`/`flag_stream` теперь используются по назначению; нулевые контуры пропускаются без ошибки. 3 новых теста (`glyf_transform_zero_point_contour_skipped_gracefully` / `_normal_glyph_decoded` / `_empty_glyph_produces_no_output`). font --lib 312/312. Влито в `p3-bug058-contents-flatten`.
 - **BUG-058 display:contents паника в flex/grid/table** (2026-06-04) — `flatten_contents` (`crates/engine/layout/src/box_tree.rs`) вызывался только в `else (non-item-container)` ветке `build_box`, но не для `is_item_container` (flex/grid/table). `display:contents` дочерний элемент попадал в children flex-контейнера как `BoxKind::Contents` без раскрытия → `lay_out` бил `unreachable!`. Fix: `flatten_contents(&mut children)` перенесён за `if is_item_container / else` блок, теперь работает для обоих путей. 2 регрессионных теста: `contents_in_flex_container_no_panic` + `contents_in_grid_container_no_panic`. layout 2349/2349. Влито `p3-bug058-contents-flatten`.
 - **BUG-057 wgpu Vulkan crash** (2026-06-03) — `Renderer::new_async` и `new_headless_async` теперь используют `wgpu::Backends::DX12` по умолчанию на Windows вместо Vulkan (через `InstanceDescriptor + with_env()`). Vulkan-бэкенд вызывал двойную панику при первом рендере страницы: сначала validation error «Encoder is invalid», затем при раскрутке стека Surface drop расил на ещё живом SurfaceTexture. `WGPU_BACKEND` env-var позволяет переопределить. Влито `p3-bug057-wgpu-dx12`.
 - **8A.6 doc-sync** (2026-05-31) — обновлены `lumen-plan.md` (8A.6 🟡→✅, 8A 🟡→✅, cpu_raster 33→57 страниц), `CLAUDE.md` (раздел «Planned migration» заменён на «8A.6 COMPLETE», убрана многостраничная история), `subsystems/driver.md` (57 страниц, invariants). Влито `p3-8a6-doc-sync`.
