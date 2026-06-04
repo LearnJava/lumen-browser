@@ -921,6 +921,8 @@ pub enum MediaFeature {
     // User preferences (MQ L5, commonly used)
     PrefersColorScheme(ColorScheme),
     PrefersReducedMotion(bool),
+    // CSS Forced Colors Mode (Forced Colors L1) — опубликована (active/none)
+    ForcedColors(bool),
 }
 
 impl Eq for MediaFeature {}
@@ -949,6 +951,8 @@ pub struct MediaContext {
     pub prefers_dark: bool,
     /// Соответствует `prefers-reduced-motion: reduce`.
     pub prefers_reduced_motion: bool,
+    /// CSS Forced Colors: соответствует `(forced-colors: active)` media feature.
+    pub forced_colors: bool,
 }
 
 impl Default for MediaContext {
@@ -959,6 +963,7 @@ impl Default for MediaContext {
             height: 0.0,
             prefers_dark: false,
             prefers_reduced_motion: false,
+            forced_colors: false,
         }
     }
 }
@@ -1041,6 +1046,7 @@ impl MediaFeature {
                 ColorScheme::Light => !ctx.prefers_dark,
             },
             Self::PrefersReducedMotion(reduce) => ctx.prefers_reduced_motion == *reduce,
+            Self::ForcedColors(active) => ctx.forced_colors == *active,
         }
     }
 }
@@ -1560,6 +1566,11 @@ fn parse_media_feature(s: &str) -> MediaCondition {
         "prefers-reduced-motion" => match val.to_ascii_lowercase().as_str() {
             "reduce" => MediaCondition::Feature(MediaFeature::PrefersReducedMotion(true)),
             "no-preference" => MediaCondition::Feature(MediaFeature::PrefersReducedMotion(false)),
+            _ => MediaCondition::Unsupported,
+        },
+        "forced-colors" => match val.to_ascii_lowercase().as_str() {
+            "active" => MediaCondition::Feature(MediaFeature::ForcedColors(true)),
+            "none" => MediaCondition::Feature(MediaFeature::ForcedColors(false)),
             _ => MediaCondition::Unsupported,
         },
         _ => MediaCondition::Unsupported,
@@ -5930,6 +5941,7 @@ mod tests {
             height: 600.0,
             prefers_dark: false,
             prefers_reduced_motion: false,
+            forced_colors: false,
         }
     }
 
@@ -6141,6 +6153,47 @@ mod tests {
         assert!(q.matches(&ctx));
     }
 
+    // ── MQ: forced-colors (CSS Forced Colors Mode L1) ──
+
+    #[test]
+    fn media_query_forced_colors_active() {
+        let q = parse_media_query("(forced-colors: active)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.forced_colors = true;
+        assert!(q.matches(&ctx));
+        ctx.forced_colors = false;
+        assert!(!q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_forced_colors_none() {
+        let q = parse_media_query("(forced-colors: none)");
+        let ctx = screen_ctx(1024.0); // forced_colors = false по умолчанию
+        assert!(q.matches(&ctx));
+        let mut active = screen_ctx(1024.0);
+        active.forced_colors = true;
+        assert!(!q.matches(&active));
+    }
+
+    #[test]
+    fn media_query_not_forced_colors_active() {
+        let q = parse_media_query("not all and (forced-colors: active)");
+        assert!(q.clauses[0].negated);
+        let ctx = screen_ctx(1024.0); // forced_colors = false
+        assert!(q.matches(&ctx));
+        let mut active = screen_ctx(1024.0);
+        active.forced_colors = true;
+        assert!(!q.matches(&active));
+    }
+
+    #[test]
+    fn media_query_forced_colors_case_insensitive() {
+        let q = parse_media_query("(forced-colors: ACTIVE)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.forced_colors = true;
+        assert!(q.matches(&ctx));
+    }
+
     // ── Стиль: @media с новыми фичами применяется в каскаде ──
 
     #[test]
@@ -6154,6 +6207,7 @@ mod tests {
             height: 720.0,
             prefers_dark: false,
             prefers_reduced_motion: false,
+            forced_colors: false,
         };
         assert!(s.media_rules[0].query.matches(&ctx));
         let ctx_narrow = MediaContext { width: 600.0, ..ctx.clone() };

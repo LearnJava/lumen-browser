@@ -14565,6 +14565,7 @@ fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext 
         height: viewport.height,
         prefers_dark: dark_mode,
         prefers_reduced_motion: false,
+        forced_colors: false,
     }
 }
 
