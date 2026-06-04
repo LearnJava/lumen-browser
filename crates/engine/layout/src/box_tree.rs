@@ -2936,6 +2936,83 @@ pub(crate) fn parse_circle_px(s: &str) -> Option<f32> {
     digits.parse::<f32>().ok().filter(|&r| r > 0.0)
 }
 
+/// CSS Shapes L1 §5.2 — parse `polygon([<fill-rule>,] x1 y1, x2 y2, ...)`.
+/// Returns vertex list in float-local (margin-box-relative) px coordinates.
+/// Accepts `Npx` or bare `N` (assumed px). Returns `None` for any unknown syntax.
+pub(crate) fn parse_shape_polygon_px(s: &str) -> Option<Vec<(f32, f32)>> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("polygon(")?.strip_suffix(')')?;
+    // Strip optional fill-rule keyword (nonzero | evenodd).
+    let coords_str = if inner.trim_start().starts_with("nonzero")
+        || inner.trim_start().starts_with("evenodd")
+    {
+        inner.split_once(',').map(|x| x.1).unwrap_or("")
+    } else {
+        inner
+    };
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    for pair in coords_str.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let mut it = pair.split_whitespace();
+        let xs = it.next()?;
+        let ys = it.next()?;
+        let x = xs.strip_suffix("px").unwrap_or(xs).parse::<f32>().ok()?;
+        let y = ys.strip_suffix("px").unwrap_or(ys).parse::<f32>().ok()?;
+        pts.push((x, y));
+    }
+    if pts.len() >= 3 { Some(pts) } else { None }
+}
+
+/// CSS Shapes L1 §5.2 — parse `ellipse(<rx> <ry> at <cx> <cy>)`.
+/// Returns `(rx, ry, cx, cy)` in float-local (margin-box-relative) px coords.
+/// Returns `None` for any unknown syntax or zero/negative radii.
+pub(crate) fn parse_shape_ellipse_px(s: &str) -> Option<(f32, f32, f32, f32)> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("ellipse(")?.strip_suffix(')')?;
+    // Expected: "rxpx rypx at cxpx cypx"
+    let at_pos = inner.find(" at ")?;
+    let radii_part = inner[..at_pos].trim();
+    let center_part = inner[at_pos + 4..].trim();
+    let mut ri = radii_part.split_whitespace();
+    let mut ci = center_part.split_whitespace();
+    let rxs = ri.next()?;
+    let rys = ri.next()?;
+    let cxs = ci.next()?;
+    let cys = ci.next()?;
+    let rx = rxs.strip_suffix("px").unwrap_or(rxs).parse::<f32>().ok()?;
+    let ry = rys.strip_suffix("px").unwrap_or(rys).parse::<f32>().ok()?;
+    let cx = cxs.strip_suffix("px").unwrap_or(cxs).parse::<f32>().ok()?;
+    let cy = cys.strip_suffix("px").unwrap_or(cys).parse::<f32>().ok()?;
+    if rx > 0.0 && ry > 0.0 { Some((rx, ry, cx, cy)) } else { None }
+}
+
+/// CSS Shapes L1 §5.2 — polygon shape for `shape-outside` on a float.
+/// Points are stored in content-area coordinates (same as FloatContext).
+struct ShapePolygon {
+    top_y: f32,
+    bottom_y: f32,
+    /// `true` = left float, `false` = right float.
+    is_left: bool,
+    /// Polygon vertices in content-area coordinates.
+    points: Vec<(f32, f32)>,
+}
+
+/// CSS Shapes L1 §5.2 — ellipse shape for `shape-outside` on a float.
+/// All coordinates are in content-area space (same as FloatContext).
+struct ShapeEllipse {
+    top_y: f32,
+    bottom_y: f32,
+    /// `true` = left float, `false` = right float.
+    is_left: bool,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+}
+
 /// CSS 2.1 §9.5 — tracks float placements within a single block formatting
 /// context.  Simplified Phase-0 implementation: only axis-aligned rectangles,
 /// no shape-outside wrapping.  All coordinates are in the same space as the
@@ -2951,11 +3028,21 @@ struct FloatContext {
     /// `(top_y, bottom_y, is_left, center_x, center_y, radius)`.
     /// `is_left=true` → left float, `false` → right float.
     shape_circles: Vec<(f32, f32, bool, f32, f32, f32)>,
+    /// CSS Shapes L1 — `shape-outside: polygon(...)` overrides.
+    shape_polygons: Vec<ShapePolygon>,
+    /// CSS Shapes L1 — `shape-outside: ellipse(...)` overrides.
+    shape_ellipses: Vec<ShapeEllipse>,
 }
 
 impl FloatContext {
     fn new() -> Self {
-        Self { left: Vec::new(), right: Vec::new(), shape_circles: Vec::new() }
+        Self {
+            left: Vec::new(),
+            right: Vec::new(),
+            shape_circles: Vec::new(),
+            shape_polygons: Vec::new(),
+            shape_ellipses: Vec::new(),
+        }
     }
 
     /// Left boundary of available inline space at `y` (= rightmost right-edge
@@ -2966,8 +3053,8 @@ impl FloatContext {
             .filter(|(bot, _)| *bot > y)
             .map(|(_, r)| *r)
             .fold(default_x, f32::max);
-        // CSS Shapes L1: override rectangular edge with circle boundary.
-        self.shape_circles
+        // CSS Shapes L1: circle boundary.
+        let after_circles = self.shape_circles
             .iter()
             .filter(|(top, bot, is_left, ..)| *is_left && *top <= y && *bot > y)
             .map(|(_, _, _, cx, cy, r)| {
@@ -2975,7 +3062,23 @@ impl FloatContext {
                 let hw = (r * r - dy * dy).max(0.0_f32).sqrt();
                 cx + hw
             })
-            .fold(rect_edge, f32::max)
+            .fold(rect_edge, f32::max);
+        // CSS Shapes L1: polygon boundary (rightmost edge at y).
+        let after_polygons = self.shape_polygons
+            .iter()
+            .filter(|p| p.is_left && p.top_y <= y && p.bottom_y > y)
+            .filter_map(|p| polygon_right_edge_at_y(&p.points, y))
+            .fold(after_circles, f32::max);
+        // CSS Shapes L1: ellipse boundary (right edge at y).
+        self.shape_ellipses
+            .iter()
+            .filter(|e| e.is_left && e.top_y <= y && e.bottom_y > y)
+            .filter_map(|e| {
+                let norm = (y - e.cy) / e.ry;
+                if norm.abs() > 1.0 { return None; }
+                Some(e.cx + e.rx * (1.0 - norm * norm).max(0.0).sqrt())
+            })
+            .fold(after_polygons, f32::max)
     }
 
     /// Right boundary of available inline space at `y` (= leftmost left-edge
@@ -2986,8 +3089,8 @@ impl FloatContext {
             .filter(|(bot, _)| *bot > y)
             .map(|(_, l)| *l)
             .fold(default_x, f32::min);
-        // CSS Shapes L1: override rectangular edge with circle boundary.
-        self.shape_circles
+        // CSS Shapes L1: circle boundary.
+        let after_circles = self.shape_circles
             .iter()
             .filter(|(top, bot, is_left, ..)| !is_left && *top <= y && *bot > y)
             .map(|(_, _, _, cx, cy, r)| {
@@ -2995,7 +3098,23 @@ impl FloatContext {
                 let hw = (r * r - dy * dy).max(0.0_f32).sqrt();
                 cx - hw
             })
-            .fold(rect_edge, f32::min)
+            .fold(rect_edge, f32::min);
+        // CSS Shapes L1: polygon boundary (leftmost edge at y).
+        let after_polygons = self.shape_polygons
+            .iter()
+            .filter(|p| !p.is_left && p.top_y <= y && p.bottom_y > y)
+            .filter_map(|p| polygon_left_edge_at_y(&p.points, y))
+            .fold(after_circles, f32::min);
+        // CSS Shapes L1: ellipse boundary (left edge at y).
+        self.shape_ellipses
+            .iter()
+            .filter(|e| !e.is_left && e.top_y <= y && e.bottom_y > y)
+            .filter_map(|e| {
+                let norm = (y - e.cy) / e.ry;
+                if norm.abs() > 1.0 { return None; }
+                Some(e.cx - e.rx * (1.0 - norm * norm).max(0.0).sqrt())
+            })
+            .fold(after_polygons, f32::min)
     }
 
     /// Record a left float occupying `[y_top, bottom_y)` with right margin
@@ -3024,6 +3143,41 @@ impl FloatContext {
     fn is_empty(&self) -> bool {
         self.left.is_empty() && self.right.is_empty()
     }
+}
+
+/// CSS Shapes L1 §4 — rightmost x of polygon boundary at scanline `y`.
+/// Scans all edges that cross `y`; returns `None` if no edge crosses.
+fn polygon_right_edge_at_y(pts: &[(f32, f32)], y: f32) -> Option<f32> {
+    polygon_edge_x_at_y(pts, y, true)
+}
+
+/// CSS Shapes L1 §4 — leftmost x of polygon boundary at scanline `y`.
+fn polygon_left_edge_at_y(pts: &[(f32, f32)], y: f32) -> Option<f32> {
+    polygon_edge_x_at_y(pts, y, false)
+}
+
+/// Shared kernel: iterate polygon edges, return rightmost (want_max=true) or
+/// leftmost (want_max=false) x intersection with horizontal scanline at `y`.
+fn polygon_edge_x_at_y(pts: &[(f32, f32)], y: f32, want_max: bool) -> Option<f32> {
+    let n = pts.len();
+    if n < 2 {
+        return None;
+    }
+    let mut best: Option<f32> = None;
+    for i in 0..n {
+        let (x0, y0) = pts[i];
+        let (x1, y1) = pts[(i + 1) % n];
+        // Edge crosses y iff exactly one endpoint is strictly below y.
+        // Use half-open interval [min, max) to avoid double-counting vertices.
+        if (y0 <= y && y < y1) || (y1 <= y && y < y0) {
+            let x_at_y = x0 + (y - y0) * (x1 - x0) / (y1 - y0);
+            best = Some(match best {
+                None => x_at_y,
+                Some(prev) => if want_max { prev.max(x_at_y) } else { prev.min(x_at_y) },
+            });
+        }
+    }
+    best
 }
 
 /// Crate-internal shim so `vertical.rs` can recursively invoke the main
@@ -3498,13 +3652,25 @@ fn lay_out(
                                 let bot_y  = top_y + fh + fmb;
                                 let right_edge = lx + fml + fw + fmr;
                                 fc.add_left(bot_y, right_edge);
-                                // CSS Shapes L1 — wire circle(r) shape-outside.
-                                #[allow(clippy::collapsible_if)]
+                                // CSS Shapes L1 — wire shape-outside for left float.
+                                // Margin-box origin: (lx, child_y). Points are float-local.
                                 if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
                                     if let Some(r) = parse_circle_px(sv) {
                                         let cx = child.rect.x + fw / 2.0;
                                         let cy = top_y + fh / 2.0;
                                         fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
+                                    } else if let Some(local_pts) = parse_shape_polygon_px(sv) {
+                                        let pts = local_pts.into_iter()
+                                            .map(|(px, py)| (px + lx, py + child_y))
+                                            .collect();
+                                        fc.shape_polygons.push(ShapePolygon {
+                                            top_y, bottom_y: bot_y, is_left: true, points: pts,
+                                        });
+                                    } else if let Some((rx, ry, ecx, ecy)) = parse_shape_ellipse_px(sv) {
+                                        fc.shape_ellipses.push(ShapeEllipse {
+                                            top_y, bottom_y: bot_y, is_left: true,
+                                            cx: ecx + lx, cy: ecy + child_y, rx, ry,
+                                        });
                                     }
                                 }
                             }
@@ -3516,13 +3682,25 @@ fn lay_out(
                                 let bot_y  = top_y + fh + fmb;
                                 let left_edge = rx - fmr - fw - fml;
                                 fc.add_right(bot_y, left_edge);
-                                // CSS Shapes L1 — wire circle(r) shape-outside.
-                                #[allow(clippy::collapsible_if)]
+                                // CSS Shapes L1 — wire shape-outside for right float.
+                                // Margin-box origin: (left_edge, child_y). Points are float-local.
                                 if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
                                     if let Some(r) = parse_circle_px(sv) {
                                         let cx = child.rect.x + fw / 2.0;
                                         let cy = top_y + fh / 2.0;
                                         fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
+                                    } else if let Some(local_pts) = parse_shape_polygon_px(sv) {
+                                        let pts = local_pts.into_iter()
+                                            .map(|(px, py)| (px + left_edge, py + child_y))
+                                            .collect();
+                                        fc.shape_polygons.push(ShapePolygon {
+                                            top_y, bottom_y: bot_y, is_left: false, points: pts,
+                                        });
+                                    } else if let Some((rx_e, ry_e, ecx, ecy)) = parse_shape_ellipse_px(sv) {
+                                        fc.shape_ellipses.push(ShapeEllipse {
+                                            top_y, bottom_y: bot_y, is_left: false,
+                                            cx: ecx + left_edge, cy: ecy + child_y, rx: rx_e, ry: ry_e,
+                                        });
                                     }
                                 }
                             }
@@ -7970,6 +8148,104 @@ mod tests {
         fc.shape_circles.push((0.0, 100.0, true, 100.0, 50.0, 50.0));
         assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
         assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
+    }
+
+    // ── CSS Shapes L1 — shape-outside polygon() ───────────────────────────────
+
+    #[test]
+    fn parse_shape_polygon_valid() {
+        // Triangle with px values.
+        let pts = super::parse_shape_polygon_px("polygon(0px 0px, 100px 0px, 50px 100px)");
+        assert_eq!(pts, Some(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 100.0)]));
+        // Bare numbers (no "px" suffix).
+        let pts2 = super::parse_shape_polygon_px("polygon(0 0, 10 0, 10 10, 0 10)");
+        assert_eq!(pts2, Some(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]));
+        // With fill-rule prefix.
+        let pts3 = super::parse_shape_polygon_px("polygon(nonzero, 0 0, 50 0, 50 50)");
+        assert_eq!(pts3, Some(vec![(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)]));
+    }
+
+    #[test]
+    fn parse_shape_polygon_invalid() {
+        // Fewer than 3 points.
+        assert_eq!(super::parse_shape_polygon_px("polygon(0 0, 10 10)"), None);
+        // Not a polygon.
+        assert_eq!(super::parse_shape_polygon_px("circle(50px)"), None);
+        assert_eq!(super::parse_shape_polygon_px("none"), None);
+    }
+
+    #[test]
+    fn polygon_edge_at_y_triangle() {
+        // Right-triangle: (0,0)→(100,0)→(0,100)→(0,0).
+        // At y=50 the right edge is the hypotenuse at x = 100 - 50 = 50.
+        let pts = vec![(0.0_f32, 0.0), (100.0, 0.0), (0.0, 100.0)];
+        let right = super::polygon_right_edge_at_y(&pts, 50.0);
+        assert!(right.is_some());
+        assert!((right.unwrap() - 50.0).abs() < 0.01, "right edge at y=50 should be 50, got {:?}", right);
+        // Left edge at y=50: leftmost intersection = 0.0 (vertical left side).
+        let left = super::polygon_left_edge_at_y(&pts, 50.0);
+        assert!(left.is_some());
+        assert!((left.unwrap() - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_polygon_left_float() {
+        // Triangle left float: (0,0)→(100,0)→(0,100)→(0,0) in content-area coords.
+        // At y=50: rightmost edge = 50. Should narrow left boundary to 50.
+        let mut fc = super::FloatContext::new();
+        fc.shape_polygons.push(super::ShapePolygon {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            points: vec![(0.0, 0.0), (100.0, 0.0), (0.0, 100.0)],
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+        // Outside float range: falls back to default.
+        assert!((fc.left_edge_at(110.0, 0.0) - 0.0).abs() < 0.01);
+    }
+
+    // ── CSS Shapes L1 — shape-outside ellipse() ───────────────────────────────
+
+    #[test]
+    fn parse_shape_ellipse_valid() {
+        let r = super::parse_shape_ellipse_px("ellipse(50px 80px at 100px 150px)");
+        assert_eq!(r, Some((50.0, 80.0, 100.0, 150.0)));
+        // Bare numbers.
+        let r2 = super::parse_shape_ellipse_px("ellipse(30 40 at 60 70)");
+        assert_eq!(r2, Some((30.0, 40.0, 60.0, 70.0)));
+    }
+
+    #[test]
+    fn parse_shape_ellipse_invalid() {
+        // No "at" keyword.
+        assert_eq!(super::parse_shape_ellipse_px("ellipse(50px 80px)"), None);
+        // Zero radius.
+        assert_eq!(super::parse_shape_ellipse_px("ellipse(0px 40px at 50px 50px)"), None);
+        // Not an ellipse.
+        assert_eq!(super::parse_shape_ellipse_px("circle(50px)"), None);
+    }
+
+    #[test]
+    fn float_context_ellipse_left_float() {
+        // Ellipse: rx=50, ry=50, center (100,50). At y=50 (center): right edge = 150.
+        // At y=0 (top): norm=(0-50)/50=-1.0, hw=0, right edge=100.
+        let mut fc = super::FloatContext::new();
+        fc.shape_ellipses.push(super::ShapeEllipse {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            cx: 100.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
+        assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_ellipse_right_float() {
+        // Ellipse: rx=50, ry=50, center (200,50). Right float.
+        // At y=50 (center): left edge = 200 - 50 = 150.
+        let mut fc = super::FloatContext::new();
+        fc.shape_ellipses.push(super::ShapeEllipse {
+            top_y: 0.0, bottom_y: 100.0, is_left: false,
+            cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        });
+        assert!((fc.right_edge_at(50.0, 400.0) - 150.0).abs() < 0.01);
     }
 
     #[test]
