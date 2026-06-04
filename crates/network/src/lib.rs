@@ -1410,6 +1410,67 @@ fn fetch_with_redirect(
 
 // ── Публичный API ────────────────────────────────────────────────────────────
 
+/// HTTP proxy configuration (RFC 7230 proxy behavior).
+///
+/// Для HTTP: запрос отправляется на proxy-host:proxy-port с абсолютным URL в request line.
+/// Для HTTPS: используется CONNECT-туннель (RFC 7231 §4.3.6) — отправляем
+/// `CONNECT target-host:target-port HTTP/1.1` на proxy, затем TLS handshake
+/// над полученным туннелем, затем обычный HTTPS-запрос с относительным путём.
+/// Если auth присутствует, Proxy-Authorization (Basic) отправляется в обоих случаях.
+pub struct HttpProxy {
+    /// Hostname или IP адрес прокси-сервера.
+    pub host: String,
+    /// Порт прокси-сервера (обычно 3128 для Squid, 8080 для других).
+    pub port: u16,
+    /// Optional username:password для базовой аутентификации прокси.
+    /// Формат: base64(username:password).
+    pub auth: Option<String>,
+}
+
+impl HttpProxy {
+    /// Создать новый прокси без аутентификации.
+    pub fn new(host: String, port: u16) -> Self {
+        Self {
+            host,
+            port,
+            auth: None,
+        }
+    }
+
+    /// Создать прокси с базовой аутентификацией (username:password).
+    pub fn with_basic_auth(mut self, username: &str, password: &str) -> Self {
+        let creds = format!("{}:{}", username, password);
+        self.auth = Some(base64_encode(&creds));
+        self
+    }
+}
+
+/// Encode string to base64 (используется для Basic auth в Proxy-Authorization).
+fn base64_encode(s: &str) -> String {
+    const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = s.as_bytes();
+    let mut result = String::new();
+    for chunk in bytes.chunks(3) {
+        let b1 = chunk[0];
+        let b2 = chunk.get(1).copied().unwrap_or(0);
+        let b3 = chunk.get(2).copied().unwrap_or(0);
+        let n = ((b1 as u32) << 16) | ((b2 as u32) << 8) | (b3 as u32);
+        result.push(BASE64_CHARS[((n >> 18) & 0x3F) as usize] as char);
+        result.push(BASE64_CHARS[((n >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(BASE64_CHARS[((n >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(BASE64_CHARS[(n & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
 /// HTTP/1.1 + HTTPS клиент.
 ///
 /// По умолчанию события никуда не уходят (sink не подключён), блокировок нет
@@ -1445,6 +1506,11 @@ pub struct HttpClient {
     /// TLS fingerprinting profile — cipher suite order, kx_groups, ALPN, protocol versions.
     /// Derived from `fingerprint_profile` by default; can be overridden with `with_tls_profile`.
     tls_profile: tls::TlsProfile,
+    /// HTTP proxy (RFC 7230) for routing requests through proxy server.
+    /// Optional — without it requests go directly to target. With proxy:
+    /// — HTTP: direct GET to proxy with absolute URL
+    /// — HTTPS: CONNECT tunnel to proxy, then TLS over tunnel
+    proxy: Option<Arc<HttpProxy>>,
 }
 
 impl HttpClient {
@@ -1467,6 +1533,7 @@ impl HttpClient {
             top_level_site: None,
             fingerprint_profile: HttpProfile::Chrome,
             tls_profile: tls::TlsProfile::Standard,
+            proxy: None,
         }
     }
 
@@ -1695,6 +1762,17 @@ impl HttpClient {
     #[must_use]
     pub fn with_http_cache(mut self, cache: Arc<http_cache::HttpCache>) -> Self {
         self.http_cache = Some(cache);
+        self
+    }
+
+    /// Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+    /// идут напрямую на целевой сервер. С подключённым прокси:
+    /// — HTTP: запрос отправляется на прокси с абсолютным URL в request line
+    /// — HTTPS: используется CONNECT-туннель (RFC 7231 §4.3.6)
+    /// — оба: если прокси требует аутентификацию, добавляется Proxy-Authorization header
+    #[must_use]
+    pub fn with_proxy(mut self, proxy: Arc<HttpProxy>) -> Self {
+        self.proxy = Some(proxy);
         self
     }
 
