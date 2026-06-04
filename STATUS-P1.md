@@ -6,7 +6,8 @@
 
 ## In progress
 
--
+- **B-4: Background Sync API stub** branch: `p1-b4-background-sync` — `registration.sync.register('tag')`, `SyncManager.getTags()`, `sync` SW-событие на следующей навигации, `_lumen_sw_sync_register/get_tags/clear_tag` биндинги, `SwBackend::pending_syncs` расширение.
+- Next step: начать с `crates/js/src/` — новый модуль для Background Sync API (lumen-js)
 
 ---
 
@@ -88,7 +89,7 @@ Ordered by priority. Сгруппированы по домену.
 |---|--------|--------|--------|
 | ~~B-1~~ | ~~**DNS over HTTPS**~~ — **выполнено** | M | `lumen-network` |
 | 🟡 B-2 | **HTTP Proxy** — Phase 0 ✅ (struct + auth), Phase 1 ✅ (proxy parameter wiring), Phase 2 (CONNECT tunnel), Phase 3 (CLI flag --proxy, shell integration). | M | `lumen-network`, `lumen-shell` |
-| B-3 | **HSTS preload list** — `HstsPreloadList` из embedded JSON (10k+ доменов, chromium формат), `is_preloaded(host) → bool` с eTLD+1 + include_subdomains, HTTP→HTTPS upgrade в `HttpClient::fetch` без редиректа. 6 тестов. | S | `lumen-network` |
+| ~~B-3~~ | ~~**HSTS preload list**~~ — **выполнено** | S | `lumen-network` |
 | B-4 | **Background Sync API stub** — `registration.sync.register('tag')`, `SyncManager.getTags()`, `sync` SW-событие на следующей навигации, `_lumen_sw_sync_register/get_tags/clear_tag` биндинги, `SwBackend::pending_syncs` расширение. | S | `lumen-js`, `lumen-storage` |
 | B-5 | **Push API stub** — `registration.pushManager.subscribe({userVisibleOnly, applicationServerKey})` → `PushSubscription {endpoint, getKey()}` Phase 0 (статический endpoint), `unsubscribe()`, `getSubscription()`, `permissionState()` → granted. | S | `lumen-js` |
 
