@@ -67,7 +67,7 @@ use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
-use lumen_storage::{BfCache, BfCacheEntry, SearchHistory};
+use lumen_storage::{BfCache, BfCacheEntry, History, SearchHistory};
 use lumen_dom::{
     Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
@@ -406,6 +406,8 @@ fn run_window_mode(
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
+        history_store: History::open_in_memory().expect("history_store in-memory"),
+        history_panel: panels::history_panel::HistoryPanel::new(),
         command_palette: panels::command_palette::CommandPalette::new(),
         focus: panels::focus_panel::FocusModePanel::new(),
         pip: panels::pip_window::PipWindow::new(),
@@ -1719,6 +1721,8 @@ enum KeyCommand {
     ToggleSidebar,
     /// Показать/скрыть менеджер закладок (Ctrl+Shift+O, task #22).
     ToggleBookmarks,
+    /// Показать/скрыть панель истории браузера (Ctrl+H, task D-5).
+    ToggleHistory,
     /// Показать/скрыть командную палитру (Ctrl+K, §7E.2, task #23).
     ToggleCommandPalette,
     /// Войти/выйти из focus mode + Pomodoro (Ctrl+Shift+F, task #25, V4).
@@ -1840,6 +1844,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyO if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleBookmarks)
         }
+        // Ctrl+H — toggle browser history panel (task D-5)
+        KeyCode::KeyH if ctrl_only => Some(KeyCommand::ToggleHistory),
         // Ctrl+Shift+F — toggle focus mode + Pomodoro timer (task #25, V4)
         KeyCode::KeyF if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleFocusMode)
@@ -3586,6 +3592,18 @@ struct Lumen {
     /// visibility. Folder tree + bookmark list + search + drag-and-drop re-file
     /// (move bookmark to folder, persisted via `Bookmarks::set_folder`).
     bookmark_panel: panels::bookmark_panel::BookmarkPanel,
+    /// SQLite-backed browsing history store (in-memory for the session, task D-5).
+    ///
+    /// Records each page visit. The history panel reads via `History::recent`
+    /// (50 entries, grouped by date). `History::delete` / `History::clear` are
+    /// called from the panel's delete and clear-all buttons.
+    history_store: History,
+    /// Browser history panel state (task D-5).
+    ///
+    /// Centred floating overlay. `Ctrl+H` toggles visibility. Shows recent pages
+    /// grouped by date with search (via `HistoryFts`), delete per-entry, and a
+    /// "Очистить всё" button.
+    history_panel: panels::history_panel::HistoryPanel,
     /// Command palette modal state (task #23, §7E.2).
     ///
     /// `Ctrl+K` toggles a centred modal that fuzzy-searches across commands,
@@ -4318,13 +4336,18 @@ impl Lumen {
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
 
-        // Индексировать страницу в history_fts для omnibox (@history).
-        // На Phase 0 используем текущий URL и title; extraction текста отложен.
-        // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots индексируются.
+        // Индексировать страницу в history_fts для omnibox (@history) и записать
+        // в history_store для панели истории (Ctrl+H).
+        // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots.
         if let Some(url) = self.source.url_str() {
             let title = page.title.as_deref().unwrap_or("");
             let _ = self.history_fts.index(self.next_history_id, url, title, "");
             self.next_history_id += 1;
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let _ = self.history_store.record_visit(url, title, now_secs);
         }
         // Clear GIF animation state from previous page.
         self.animated_gifs.clear();
@@ -5567,6 +5590,56 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // History panel (task D-5): centred floating overlay.
+                    if self.history_panel.visible {
+                        let (px, py) = self.history_panel_anchor();
+                        use panels::history_panel::HistoryHit;
+                        let hit =
+                            panels::history_panel::hit_test(&self.history_panel, x_css, y_css, px, py);
+                        match hit {
+                            HistoryHit::Close => {
+                                self.history_panel.visible = false;
+                                self.history_panel.search_active = false;
+                            }
+                            HistoryHit::FocusSearch => {
+                                self.history_panel.search_active = true;
+                            }
+                            HistoryHit::ClearAll => {
+                                let _ = self.history_store.clear();
+                                let _ = self.history_fts.clear();
+                                self.refresh_history();
+                            }
+                            HistoryHit::Delete(id) => {
+                                if let Some(url) = self
+                                    .history_panel
+                                    .rows
+                                    .iter()
+                                    .find_map(|r| {
+                                        if let panels::history_panel::HistoryRow::Entry(e) = r {
+                                            if e.id == id { Some(e.url.clone()) } else { None }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                {
+                                    let _ = self.history_store.delete(&url);
+                                    self.refresh_history();
+                                }
+                            }
+                            HistoryHit::Navigate(url) => {
+                                self.history_panel.visible = false;
+                                self.navigate_to(PageSource::Url(url));
+                            }
+                            HistoryHit::Inside => { /* swallow */ }
+                            HistoryHit::Outside => {
+                                self.history_panel.visible = false;
+                                self.history_panel.search_active = false;
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
                     // Sidebar web panel (7D.3): right-docked panel.
                     if self.sidebar.visible {
                         let win_w = self.viewport_width_css();
@@ -5803,6 +5876,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     };
                     // winit: wheel up → lines > 0 → scroll content up (scroll_y -=).
                     self.bookmark_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // History panel intercepts the wheel while visible.
+                if self.history_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.history_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
                     self.request_redraw();
                     return;
                 }
@@ -6369,6 +6452,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut bm_cmds =
                         panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay);
                     overlay_buf.append(&mut bm_cmds);
+                }
+
+                // History panel (task D-5): centred floating overlay.
+                if self.history_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let mut hist_cmds =
+                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h);
+                    overlay_buf.append(&mut hist_cmds);
                 }
 
                 // §12.3 Read-later panel: right-docked overlay.
@@ -6956,6 +7048,12 @@ impl Lumen {
             return;
         }
 
+        // History panel search box: printable input + Backspace + Esc route here.
+        // Arrow keys scroll the list. Modified keys fall through for global shortcuts.
+        if self.history_panel.visible && self.handle_history_key(code, key_event) {
+            return;
+        }
+
         // Vim keybinding mode: intercept navigation keys in Normal state.
         // In Insert state, PassThrough falls through to the keybinding table.
         if let Some(ref mut vm) = self.vim_mode {
@@ -7218,6 +7316,13 @@ impl Lumen {
                 self.bookmark_panel.toggle();
                 if self.bookmark_panel.visible {
                     self.refresh_bookmarks();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleHistory => {
+                self.history_panel.toggle();
+                if self.history_panel.visible {
+                    self.refresh_history();
                 }
                 self.request_redraw();
             }
@@ -7823,6 +7928,60 @@ impl Lumen {
         }
     }
 
+    /// Handle keyboard input when the history panel is visible.
+    ///
+    /// When `search_active`: printable chars → search query, Backspace → delete
+    /// char, Escape → blur search (panel stays open). Arrow keys scroll the list.
+    /// Returns `true` if the key was consumed.
+    fn handle_history_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                if self.history_panel.search_active {
+                    self.history_panel.search_active = false;
+                } else {
+                    self.history_panel.visible = false;
+                }
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.history_panel.search_active => {
+                self.history_panel.backspace_search();
+                self.refresh_history();
+                self.request_redraw();
+                true
+            }
+            KeyCode::ArrowDown => {
+                self.history_panel.scroll_by(LINE_STEP_CSS_PX);
+                self.request_redraw();
+                true
+            }
+            KeyCode::ArrowUp => {
+                self.history_panel.scroll_by(-LINE_STEP_CSS_PX);
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.history_panel.search_active {
+                    if let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.history_panel.append_search(ch);
+                        }
+                        self.refresh_history();
+                        self.request_redraw();
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+    }
+
     /// Обрабатывает клавишный ввод пока hint-режим активен.
     ///
     /// `Escape` — закрыть overlay. Любой одиночный символ (строчный ASCII) —
@@ -8134,6 +8293,51 @@ impl Lumen {
             })
             .collect();
         self.bookmark_panel.set_data(entries);
+    }
+
+    /// Reload the history panel data from `history_store`.
+    ///
+    /// When `history_panel.query` is non-empty, uses `HistoryFts::search` for
+    /// full-text matching. Otherwise falls back to `History::recent(50)`.
+    fn refresh_history(&mut self) {
+        let query = self.history_panel.query.trim().to_owned();
+        let items: Vec<panels::history_panel::HistoryItem> = if query.is_empty() {
+            self.history_store
+                .recent(50)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| panels::history_panel::HistoryItem {
+                    id: e.id,
+                    url: e.url,
+                    title: e.title,
+                    visit_date: e.visit_date,
+                    visit_count: e.visit_count,
+                })
+                .collect()
+        } else {
+            self.history_fts
+                .search(&query, 50)
+                .unwrap_or_default()
+                .into_iter()
+                .enumerate()
+                .map(|(i, hit)| panels::history_panel::HistoryItem {
+                    id: i as i64 + 1,
+                    url: hit.url,
+                    title: hit.title,
+                    visit_date: 0,
+                    visit_count: 1,
+                })
+                .collect()
+        };
+        self.history_panel.set_items(items);
+    }
+
+    /// Top-left corner of the history panel in window-space CSS px.
+    fn history_panel_anchor(&self) -> (f32, f32) {
+        let win_w = self.viewport_width_css();
+        let px = (win_w - panels::history_panel::PANEL_W) * 0.5;
+        let py = tabs::strip::TAB_BAR_HEIGHT + 4.0;
+        (px, py)
     }
 
     /// Rebuild the command-palette item list: curated commands, every bookmark,
