@@ -12,6 +12,13 @@ None currently. Pick next available from Next section.
 
 ## Current / Recently Merged
 
+**B-9 | CSS overflow: clip** ✅ 2026-06-04 (merged)
+- overflow_clip_margin: Option<Length> field added to ComputedStyle
+- Overflow::Clip creates clip boundary without new BFC
+- overflow-clip-margin: N px expands clip region
+- 4 unit-tests (emits PushClipRect, margin expansion, no margin, hidden+clip)
+- Clippy clean
+
 **B-4 | CSS Grid: dense packing** ✅ 2026-06-04 (merged)
 - Функциональность grid-auto-flow: row/column dense уже полностью реализована (commit dac28f5)
 - Pass 2 в lay_out_grid(): dense режим начинает сканирование с (1,1) для каждого элемента, заполняя пробелы
