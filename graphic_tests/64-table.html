@@ -5,12 +5,24 @@
         body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
         .__f { background: white; width: 1022px; height: 718px; margin: 1px; padding: 20px; overflow: hidden; }
 
-        table {
+        /* Phase 1: Test border-collapse: separate + border-spacing */
+        .separate-table {
             border-collapse: separate;
             border-spacing: 4px 2px;
             width: 100%;
             border: 2px solid #333;
             background: #f5f5f5;
+            margin-bottom: 20px;
+        }
+
+        /* Phase 1: Test border-collapse: collapse (TODO: full implementation)
+           Currently renders as separate for visual testing. */
+        .collapse-table {
+            border-collapse: collapse;
+            width: 100%;
+            border: 2px solid #666;
+            background: #e8e8e8;
+            margin-bottom: 20px;
         }
 
         th, td {
@@ -19,9 +31,18 @@
             text-align: left;
         }
 
+        .collapse-table th,
+        .collapse-table td {
+            border: 1px solid #666;
+        }
+
         th {
             background: #ddd;
             font-weight: bold;
+        }
+
+        .collapse-table th {
+            background: #ccc;
         }
 
         tbody tr:nth-child(even) {
@@ -31,11 +52,21 @@
         tbody tr:nth-child(odd) {
             background: #f9f9f9;
         }
+
+        .collapse-table tbody tr:nth-child(even) {
+            background: #f5f5f5;
+        }
+
+        .collapse-table tbody tr:nth-child(odd) {
+            background: #efefef;
+        }
     </style>
 </head>
 <body>
     <div class="__f">
-        <table>
+        <!-- Phase 1: Test border-collapse: separate with border-spacing -->
+        <h3>Separate Mode (border-spacing: 4px 2px)</h3>
+        <table class="separate-table">
             <thead>
                 <tr>
                     <th>Name</th>
@@ -58,6 +89,30 @@
                     <td>Charlie</td>
                     <td>35</td>
                     <td>Paris</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <!-- Phase 1: Test border-collapse: collapse (currently renders as separate) -->
+        <h3>Collapse Mode (pending full implementation)</h3>
+        <table class="collapse-table">
+            <thead>
+                <tr>
+                    <th>Product</th>
+                    <th>Stock</th>
+                    <th>Price</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Laptop</td>
+                    <td>15</td>
+                    <td>$999</td>
+                </tr>
+                <tr>
+                    <td>Phone</td>
+                    <td>42</td>
+                    <td>$599</td>
                 </tr>
             </tbody>
         </table>
