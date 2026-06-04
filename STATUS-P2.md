@@ -6,7 +6,7 @@
 
 ## In progress
 
-- **A-5: WebGL2 context** — `getContext('webgl2')` → `WebGL2RenderingContext`. Branch: `p2-webgl2-ctx-2`. Next step: создать `WebGL2RenderingContext` шим в `lumen-js/src/webgl_bindings.rs`, расширить `SoftwareWebGl` поддержкой VAOs, draw instanced методов и 3D-текстур.
+(none)
 
 
 
@@ -91,6 +91,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-webgl2-ctx-2** ✅ 2026-06-04 — A-5: WebGL2 context Phase 0. `lumen-js/src/webgl_bindings.rs`: расширена функция `_makeWebGLContext` поддержкой WebGL2-методов. VAO registry (`_vaos: {}`, `_vaoIndex`, `_boundVao`) с методами `createVertexArray()`→VTO с уникальным ID, `bindVertexArray(vao)`→tracking, `deleteVertexArray(vao)`. Draw instanced методы `drawArraysInstanced/drawElementsInstanced` реализованы как no-op stubs. Integer uniforms `uniform1ui/2ui/3ui/4ui` — no-op stubs. `texImage3D(target, level, ..., pixels)` stub для 3D-текстур (Phase 0 поддержка). GL версия возвращает 'WebGL 2.0' для webgl2 context, GLSL версия 'WebGL GLSL ES 3.0'. 10 новых unit-тестов (webgl2_returns_webgl_2_0_version, webgl2_returns_glsl_3_0_version, webgl2_create_vertex_array, webgl2_bind_vertex_array, webgl2_delete_vertex_array, webgl2_draw_arrays_instanced, webgl2_draw_elements_instanced, webgl2_uniform_integer_methods, webgl2_tex_image_3d). Кроме того, исправлен повреждённый файл `crates/engine/layout/src/lib.rs` (восстановлена правильная версия из коммита 1d63a3e — побочный результат merge B-2). 21 тест webgl_bindings ✅. 487 тестов lumen-paint ✅.
 
 - **p2-flex-align-content** ✅ 2026-06-04 — B-2: CSS Flex align-content для многострочного flexbox (CSS Flexbox L1 §8.3). `lay_out_flex` получил отслеживание `line_cross_sizes: Vec<f32>` каждой flex line. После разметки items по cross-axis, применяется `align-content` для распределения оставшегося пространства между линиями: flex-start (по умолчанию), flex-end, center, space-between, space-around, space-evenly, stretch. Алгоритм вычисляет `free_cross = container_width - total_lines_size - gaps` и распределяет его согласно значению. Stretch пропорционально увеличивает cross-размеры линий; остальные применяют offset к элементам каждой линии. 6 новых unit-тестов (flex_start/center/space-between/flex-end/space-evenly/stretch). lumen-layout: 2283 тестов ✅. Clippy чист.
 
