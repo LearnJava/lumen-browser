@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none — ready for next task)
+**A-19: CSS Scroll Snap L2 events**  branch: `p1-a19-snap-events`
+Next step: Implement `SnapChangeEvent` class in `crates/js/src/scroll_snap_events.rs`
 
 ---
 
