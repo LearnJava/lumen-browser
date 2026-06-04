@@ -6,7 +6,9 @@
 
 ## In progress
 
-*(свободен)*
+C-5: CSS shape-outside polygon + ellipse  
+branch: p1-c5-shape-outside  
+Next step: Add ShapePolygon/ShapeEllipse structs to FloatContext, parse_shape_polygon_px/parse_shape_ellipse_px, ray-intersection in left_edge_at/right_edge_at, wire float placement. box_tree.rs:2943
 
 ---
 
