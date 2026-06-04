@@ -6,14 +6,14 @@
 
 ## In progress
 
-D-7: Settings page  branch: p1-d7-settings
-Next step: BrowserSettings in lumen-storage/src/browser_settings.rs, then settings_panel.rs
+*(свободен)*
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-04 | D-7: Settings page | Ctrl+, / `about:settings`: `panels/settings_panel.rs` центрированный overlay 640×480px с 4 секциями (Общие/Конфиденц./Вид/Загрузки). Тогглы shields/DoH, пиллы fingerprint/theme, кнопки ±2px font-size, текстовые поля homepage/download_path с keyboard focus. `lumen_storage::BrowserSettings` SQLite с snapshot/apply_snapshot. 10 тестов storage + 10 тестов panel. lumen-shell + lumen-storage: clippy чист. |
 | 2026-06-04 | D-5: Browser history panel | Ctrl+H floating overlay: `panels/history_panel.rs` с HistoryPanel, HistoryItem, HistoryRow. Группировка по датам (Today/Yesterday/YYYY-MM-DD). Поиск через HistoryFts::search или History::recent(50). Удаление записи (×), "Очистить всё" (History::clear + HistoryFts::clear). Ctrl+H → KeyCommand::ToggleHistory, Esc=закрыть, ↑/↓=скролл, wheel scroll. history_store: History::open_in_memory() в Lumen, record_visit при каждой навигации. Центрированный оверлей 480×500px. 15 unit-тестов. lumen-shell: cargo check OK, 15/15 тестов. |
 | 2026-06-04 | D-3: Reader View | F9 toggle: `extract_article(html)` ищет `<article>`/`<main>`/`role="main"`, вырезает `<script>`/`<nav>`/`<aside>`/`<header>`/`<footer>`, извлекает title из `<title>` или первого `<h1>`. `build_reader_html()` → clean HTML (max-width:680px, 1.1rem, line-height:1.6). `toggle_reader_view()` в shell: вход — reload как PageSource::Snapshot, выход — восстановление оригинала. Keybinding F9 (Ctrl+Shift+R занят Read-later). `reader_original_source: Option<PageSource>` в Lumen + PageSnapshot (save/restore/reset). lumen-shell: clippy чист, 16/16 unit-тестов. |
 | 2026-06-04 | C-5: CSS shape-outside polygon + ellipse | CSS Shapes L1 §4–5.2: `parse_shape_polygon_px()` / `parse_shape_ellipse_px()`, `ShapePolygon`/`ShapeEllipse` в `FloatContext`, `polygon_edge_x_at_y()` ray-intersection, `left_edge_at`/`right_edge_at` circle→polygon→ellipse chain, wiring в float placement. // CSS: shape-outside, shape-margin. lumen-layout: 2357 тестов (+8). Clippy чист. |
@@ -119,7 +119,7 @@ Ordered by priority. Сгруппированы по домену.
 |---|--------|--------|------|--------|
 | ~~D-3~~ | ~~**Reader View**~~ — **выполнено** | M | **1** | `lumen-js`, `lumen-shell` |
 | ~~D-5~~ | ~~**Browser history panel**~~ — **выполнено** | M | **1** | `lumen-shell` |
-| D-7 | **Settings page** — `about:settings`: `panels/settings_panel.rs` full-page overlay, секции General (homepage, search engine) / Privacy (shields, fingerprint, DoH) / Appearance (font-size, theme) / Downloads (default path), `lumen-storage::BrowserSettings` SQLite. 10 тестов. | M | **1** | `lumen-shell`, `lumen-storage` |
+| ~~D-7~~ | ~~**Settings page**~~ — **выполнено** | M | **1** | `lumen-shell`, `lumen-storage` |
 | D-2 | **Page source viewer** — `view-source:` URI схема в `navigate_to`: fetch raw bytes → `PageSource::Source(html)` → layout как `<pre>` с 4-цветным syntax highlight (тег/атрибут/строка/комментарий). `KeyCommand::ViewSource` + `Ctrl+U`. | S | **1** | `lumen-shell` |
 | D-8 | **Encoding API streaming** — `TextDecoder {stream: true}`: `decode(chunk, {stream: true})` не сбрасывает частичный многобайтовый символ, финальный `decode()` flush. `TextDecoderStream` использует streaming decode. 6 тестов. | XS | **1** | `lumen-js` |
 | D-4 | **Keyboard shortcuts settings panel** — `panels/shortcuts_panel.rs` (360×500px), список всех `KeyCommand` + бинд, клик → rebind mode (ожидание нажатия), `lumen-storage::KeyboardShortcuts` SQLite `(command, modifier, key)`, загрузка при старте. 12 тестов. | M | 2 | `lumen-shell`, `lumen-storage` |
