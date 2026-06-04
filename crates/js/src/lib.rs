@@ -12,6 +12,7 @@ pub mod canvas2d;
 pub mod clipboard;
 pub mod contacts;
 pub mod cookie_banner;
+pub mod payment_request;
 pub mod credentials;
 pub mod device_sensors;
 pub mod document_pip;
@@ -513,6 +514,13 @@ impl QuickJsRuntime {
             // navigator.contacts.getProperties() returns Promise<['name', 'email', 'tel']>.
             if let Err(e) = contacts::init_contacts_manager(&ctx) {
                 eprintln!("Contact Picker API init failed: {}", e);
+            }
+
+            // Install Payment Request API stub (W3C Payment Request API) — after DOM/window.
+            // Phase 0: PaymentRequest.show() always rejects with NotSupportedError;
+            // PaymentRequest.canMakePayment() always returns Promise<false>.
+            if let Err(e) = payment_request::init_payment_request(&ctx) {
+                eprintln!("Payment Request API init failed: {}", e);
             }
 
             // Install Layer 1 surface API protection (ADR-007 Layer 1, 9A) — after navigator.

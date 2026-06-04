@@ -6,7 +6,9 @@
 
 ## In progress
 
--
+- **A-22: Payment Request API stub**  
+  Branch: `p1-a22-payment-request`  
+  Next step: реализовать `PaymentRequest` класс и методы в `crates/js/src/payment_request.rs`
 
 ---
 
