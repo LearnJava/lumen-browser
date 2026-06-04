@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+In progress: D-3 Reader View  branch: p1-reader-view
+Next step: commit and merge  crates/shell/src/reader_view.rs, main.rs
 
 ---
 
