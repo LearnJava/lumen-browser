@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none)
+**A-20: PerformanceObserver: LCP + CLS**  
+Branch: `p1-a20-lcp-cls`  
+Next step: Реализовать `PerformanceObserver.takeRecords()` в JS и вспомогательные методы `BrowserSession::deliver_lcp_entry()` / `deliver_layout_shift()` для интеграции с shell pipeline (перехват первого рендера и reflow-событий для LCP и CLS метрик). Phase 0 stub с unit-тестами без реальной доставки от shell.
 
 ---
 
