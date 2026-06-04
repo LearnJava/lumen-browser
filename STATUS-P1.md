@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none)
+**A-21: Contact Picker API stub**  
+branch: `p1-contact-api`  
+Next step: Implement ContactsManager in `crates/js/src/contacts.rs`, wire to window object
 
 ---
 
