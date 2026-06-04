@@ -29,6 +29,7 @@ pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod offscreen_canvas;
 pub mod pointer_lock;
+pub mod push_api;
 pub mod shape_detection;
 pub mod shared_worker;
 pub mod speech;
@@ -565,6 +566,13 @@ impl QuickJsRuntime {
             // Phase 0: tags stored in-memory; actual sync-on-next-navigation wiring is P2/P3.
             if let Err(e) = background_sync::init_background_sync(&ctx) {
                 eprintln!("Background Sync API init failed: {}", e);
+            }
+
+            // Install Push API stub (W3C Push API L1, Phase 0) — after DOM so Promise is
+            // available. Provides registration.pushManager.subscribe() / getSubscription() /
+            // permissionState(). Phase 0: static endpoint, in-memory subscriptions.
+            if let Err(e) = push_api::init_push_api(&ctx) {
+                eprintln!("Push API init failed: {}", e);
             }
 
             // Install cookie-banner auto-dismiss shim (7C.3) — last, after full DOM.

@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none — ready for next task)
+- **B-5: Push API stub** branch: `p1-b5-push-api` — `registration.pushManager.subscribe({userVisibleOnly, applicationServerKey})` → `PushSubscription {endpoint, getKey()}` Phase 0 (статический endpoint), `unsubscribe()`, `getSubscription()`, `permissionState()` → granted.
+- Next step: начать с `crates/js/src/` — новый модуль для Push API (lumen-js)
 
 ---
 
