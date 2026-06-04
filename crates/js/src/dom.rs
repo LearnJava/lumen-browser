@@ -6844,7 +6844,7 @@ function _lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms) {
         startTime: start_ms,
         duration: render_time_ms - start_ms,
         size: size,
-        element: _get_element_by_nid(element_id) || null,
+        element: element_id >= 0 ? _lumen_make_element(element_id) : null,
         url: '',
         id: '',
         activationStart: 0,
