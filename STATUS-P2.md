@@ -12,6 +12,14 @@ None currently. Pick next available from Next section.
 
 ## Current / Recently Merged
 
+**B-4 | CSS Grid: dense packing** ✅ 2026-06-04 (merged)
+- Функциональность grid-auto-flow: row/column dense уже полностью реализована (commit dac28f5)
+- Pass 2 в lay_out_grid(): dense режим начинает сканирование с (1,1) для каждого элемента, заполняя пробелы
+- 4 новых unit-теста: grid_dense_fills_gaps, grid_column_dense_backfill, grid_dense_vs_sparse_layout, grid_dense_explicit_placement_respected
+- Тестовая страница: samples/grid-dense-test.html (сравнение sparse vs dense раскладки)
+- 2331 тест lumen-layout (было 2328, +3)
+- Clippy чист
+
 **B-1 | Table layout rendering** ✅ 2026-06-04 (merged)
 - Phase 1: emit_table_box/row_group/row/cell with separate border mode
 - Cell backgrounds (FillRect) and 4-sided borders (DrawBorder) per cell
