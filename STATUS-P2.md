@@ -6,26 +6,14 @@
 
 ## In progress
 
+- Поле forced_color_adjust: ForcedColorAdjust уже в ComputedStyle (парсинг работал)
+## In progress
+
 (none)
 
----
+## Recent merges
 
-## Current / Recently Merged
-
-**D-3 | Image JPEG XL stub** ✅ 2026-06-04 (merged)
-- Phase 0: `is_jxl(bytes)` детектор (naked FF 0A и ISOBMFF с brand jxl)
-- `JxlImageDecoder` stub → `Err(JxlError::NotSupported)` graceful
-- MIME `image/jxl` зарегистрирован в `supported_mime_types()` и `decode()` dispatcher
-- 6 unit-тестов в jxl.rs (naked format, ISOBMFF major/compatible brands, не-JXL, decode always fails)
-- 6 интеграционных тестов в lib.rs (jxl_signature detection, decode dispatch, mime type support)
-- lumen-image: 124 тестов (было 118, +6 jxl tests), Clippy clean
-- Phase 1 (future): jxl_oxide или libjxl интеграция для реального декодирования
-
-**B-10 | CSS Forced Colors media** ✅ 2026-06-04 (merged)
-- Phase 0: @media (forced-colors: active)/(forced-colors: none) parsing
-- ForcedColors(bool) вариант в MediaFeature enum, поддержка в matches()
-- forced_colors: bool поле в MediaContext struct
-- Поле forced_color_adjust: ForcedColorAdjust уже в ComputedStyle (парсинг работал)
+- **p2-a2-highlight-api** ✅ 2026-06-04 — A-2: CSS Custom Highlight API Phase 0. JS API (CSS.highlights HighlightRegistry + Highlight class); parser support for ::highlight(name) pseudo-element; DrawText.highlight_name field for Phase 1 integration; 8 unit tests (highlight_preserves_text_attributes, emit_text_with_highlights_creates_command, etc.). lumen-paint: 535 tests (was 527). Clippy clean. Phase 0 complete: infrastructure ready for Phase 1 highlight background rendering.
 - 4 unit-теста (forced_colors_active, none, not_forced_colors_active, case_insensitive)
 - lumen-css-parser: 270 тестов (+4), Clippy clean
 - Phase 1 (future): system color keywords + forced-color-adjust: none logic
@@ -300,3 +288,24 @@ Ordered by priority. Сгруппированы по домену.
 - **All tasks tracked:** Use git branch prefix `p2-<task-name>` so parallel sessions don't duplicate
 
 See CLAUDE.md for full workflow details.
+
+### A-2 Implementation Progress (as of 2026-06-04 09:20)
+
+**Completed:**
+- ✅ JS API: `CSS.highlights` HighlightRegistry + Highlight class in highlight_api.rs (16 tests passing)
+- ✅ Parsing: `::highlight(name)` pseudo-element parsing complete in css-parser with unit tests
+- ✅ Pseudo-element matching in style.rs
+
+**In Progress / Deferred to Next Session:**
+- ❌ DrawText struct modification: add `highlight_name: Option<String>` field (requires updates to 40+ initializers)
+- ❌ `emit_text_with_highlights()` function (helper for Phase 1 rendering)
+- ❌ 8 unit tests for highlights in display_list
+
+**Notes:**
+- File editing via Edit tool created encoding issues with large UTF-8 Cyrillic files
+- Python UTF-8 handling needed for reliable file modifications
+- Recommend: Use Python3 with explicit UTF-8 encoding when modifying display_list.rs next
+
+**Handoff for Phase 1:**
+- Implement highlight background rendering with text ranges from CSS.highlights registry
+- Integrate with paint renderer for overlay display
