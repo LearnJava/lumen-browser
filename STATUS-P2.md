@@ -6,7 +6,14 @@
 
 ## In progress
 
-(none)
+**C-1 | HTTP Cache RFC 7234** (branch: `p2-http-cache`)
+- Phase 0: `HttpCache` struct in `lumen-network/src/cache.rs`
+- `CacheEntry {url, status, headers, body, cached_at, max_age}`
+- `Cache-Control` directive parsing (max-age, no-cache, no-store, must-revalidate, private)
+- `ETag/If-None-Match` → 304 reuse
+- `Last-Modified/If-Modified-Since` validation
+- In-memory LRU 50 MB
+- Next step: Design CacheEntry structure and LRU eviction strategy
 
 ---
 
