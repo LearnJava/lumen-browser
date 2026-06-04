@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-1: CSS Properties & Values API (Houdini)** — `CSS.registerProperty({name, syntax, inherits, initialValue})` в JS, `@property` at-rule в css-parser, `StyleSheet.registered_properties`, `compute_style` применяет `initial-value` как fallback при сломанной var(). 8 тестов.
-branch: p2-a1-css-houdini
-next step: lumen-js CSS.registerProperty shim + global registry
+None
 
 ---
 
@@ -87,6 +85,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-a1-css-properties-values** ✅ 2026-06-04 — A-1: CSS Properties & Values API (Houdini) Phase 0–1. `CSS.registerProperty({name, syntax, inherits, initialValue})` IIFE-шим в `lumen-js`, парсинг `@property` at-rule в `lumen-css-parser` (PropertyRule struct с name/syntax/inherits/initial-value дескрипторами), `CSS._getRegisteredProperties()` API. `compute_style` применяет `initial-value` как fallback через `apply_property_initial_values` когда зарегистрированное свойство не объявлено. Registry строится из `Stylesheet.properties`, `inherits: false` сбрасывает родительское значение, `inherits: true` сохраняет наследование. `syntax` валидируется через `validate_against_syntax` при применении initial-value. 8 новых unit-тестов в lumen-layout (parse_property_rule, initial_value_fallback, no_initial_value, declared_overrides_initial, inherits_true, universal_syntax, var_substitution_with_fallback, multiple_properties). lumen-layout: 2306 тестов (было 2298 + 8 новых). Clippy чист. Phase 1 завершена (registry + initial-value fallback + syntax validation). Phase 2 (P4 handoff): синтаксис-валидация в `@property` дескрипторах, интеграция fallback в `expand_vars` для `var()`.
 
 - **p2-a10-display-list-diffing** ✅ 2026-06-04 — A-10: Display list diffing Phase 0. Функция `diff_display_lists(prev, next) -> DiffResult` сравнивает два display list-а по Debug hash каждой команды (как в hash_display_list). `DiffResult` содержит `identical: bool` и `changed_rects: Rect` для dirty-rect tracking. Алгоритм: быстрая проверка длины, затем поэлементное сравнение хешей Debug-представления. Вспомогательные функции: `get_command_rect()` извлекает rect из command, `union_rects()` объединяет два прямоугольника, `union_all_rects()` собирает bounding rect всех команд. 9 unit-тестов (diff_identical_empty_lists, diff_identical_single_command, diff_different_lengths, diff_different_colors, diff_changed_rects_bounds, diff_multiple_commands_one_changed, diff_empty_to_non_empty, diff_result_identical_constructor, diff_result_changed_constructor). lumen-paint: 506 тестов (было 497 + 9 новых). Clippy чист. Phase 0 завершена. Phase 1 (future): интеграция в shell для RedrawRequested skip, diff_count метрика для bench.
 
