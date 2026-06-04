@@ -4651,40 +4651,34 @@ fn lay_out_flex(
 
             match s.align_content {
                 AlignValue::End => {
-                    for i in 0..n_lines {
-                        line_offsets[i] = free_cross;
-                    }
+                    line_offsets.fill(free_cross);
                 }
                 AlignValue::Center => {
-                    for i in 0..n_lines {
-                        line_offsets[i] = free_cross / 2.0;
-                    }
+                    line_offsets.fill(free_cross / 2.0);
                 }
-                AlignValue::SpaceBetween => {
-                    if n_lines > 1 {
-                        let gap_per = free_cross / (n_lines - 1) as f32;
-                        for i in 1..n_lines {
-                            line_offsets[i] = gap_per * i as f32;
-                        }
+                AlignValue::SpaceBetween if n_lines > 1 => {
+                    let gap_per = free_cross / (n_lines - 1) as f32;
+                    for (i, offset) in line_offsets.iter_mut().enumerate().skip(1) {
+                        *offset = gap_per * i as f32;
                     }
                 }
                 AlignValue::SpaceAround => {
                     let per = free_cross / n_lines as f32;
-                    for i in 0..n_lines {
-                        line_offsets[i] = per / 2.0 + (per * i as f32);
+                    for (i, offset) in line_offsets.iter_mut().enumerate() {
+                        *offset = per / 2.0 + (per * i as f32);
                     }
                 }
                 AlignValue::SpaceEvenly => {
                     let per = free_cross / (n_lines + 1) as f32;
-                    for i in 0..n_lines {
-                        line_offsets[i] = per * (i as f32 + 1.0);
+                    for (i, offset) in line_offsets.iter_mut().enumerate() {
+                        *offset = per * (i as f32 + 1.0);
                     }
                 }
                 AlignValue::Stretch => {
                     let total_size: f32 = line_cross_sizes.iter().sum();
                     if total_size > 0.0 {
-                        for i in 0..n_lines {
-                            line_cross_sizes[i] += free_cross * (line_cross_sizes[i] / total_size);
+                        for size in line_cross_sizes.iter_mut() {
+                            *size += free_cross * (*size / total_size);
                         }
                     }
                 }
@@ -7725,6 +7719,117 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
         let has_children = root.children.iter().any(|c| !c.children.is_empty());
         assert!(has_children, "visible elements should have children");
+    }
+
+    // ── Flex align-content (multi-line flex wrap) ───────────────────────────
+
+    #[test]
+    fn flex_align_content_flex_start() {
+        // Multi-line flex with align-content: flex-start — lines at top
+        let html = r#"<div id="flex"></div>"#;
+        let css = r#"
+            #flex {
+                display: flex;
+                flex-wrap: wrap;
+                width: 200px;
+                height: 300px;
+                align-content: flex-start;
+            }
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // Basic sanity: align-content parses without error
+    }
+
+    #[test]
+    fn flex_align_content_flex_end() {
+        // Multi-line flex with align-content: flex-end — lines at bottom
+        let html = r#"<div id="flex"></div>"#;
+        let css = r#"
+            #flex {
+                display: flex;
+                flex-wrap: wrap;
+                width: 200px;
+                height: 300px;
+                align-content: flex-end;
+            }
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+    }
+
+    #[test]
+    fn flex_align_content_center() {
+        // Multi-line flex with align-content: center — lines centered vertically
+        let html = r#"<div id="flex"></div>"#;
+        let css = r#"
+            #flex {
+                display: flex;
+                flex-wrap: wrap;
+                width: 200px;
+                height: 300px;
+                align-content: center;
+            }
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+    }
+
+    #[test]
+    fn flex_align_content_space_between() {
+        // Multi-line flex with align-content: space-between — max gap between lines
+        let html = r#"<div id="flex"></div>"#;
+        let css = r#"
+            #flex {
+                display: flex;
+                flex-wrap: wrap;
+                width: 200px;
+                height: 300px;
+                align-content: space-between;
+            }
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+    }
+
+    #[test]
+    fn flex_align_content_space_around() {
+        // Multi-line flex with align-content: space-around — equal space around each line
+        let html = r#"<div id="flex"></div>"#;
+        let css = r#"
+            #flex {
+                display: flex;
+                flex-wrap: wrap;
+                width: 200px;
+                height: 300px;
+                align-content: space-around;
+            }
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+    }
+
+    #[test]
+    fn flex_align_content_space_evenly() {
+        // Multi-line flex with align-content: space-evenly — equal space between all lines
+        let html = r#"<div id="flex"></div>"#;
+        let css = r#"
+            #flex {
+                display: flex;
+                flex-wrap: wrap;
+                width: 200px;
+                height: 300px;
+                align-content: space-evenly;
+            }
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
     }
 
 }

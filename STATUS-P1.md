@@ -6,8 +6,8 @@
 
 ## In progress
 
-A-19: CSS Scroll Snap L2 events  branch: p1-snap-events
-Next step: Реализовать JavaScript события `snapChanging` и `snapChanged` при переходе snap-точек (crates/js/src/)
+A-20: PerformanceObserver: LCP + CLS  branch: p1-lcp-cls
+Next step: `largest-contentful-paint` в shell при первом рендере img/текста >500px² (crates/shell/src/) + `layout-shift` при reflow смещениях (crates/engine/layout/src/)
 
 ---
 

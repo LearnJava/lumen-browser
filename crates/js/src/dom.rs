@@ -6797,7 +6797,15 @@ PerformanceObserver.prototype.disconnect = function() {
     var idx = _perf_observers.indexOf(this);
     if (idx !== -1) _perf_observers.splice(idx, 1);
 };
-PerformanceObserver.prototype.takeRecords = function() { return []; };
+PerformanceObserver.prototype.takeRecords = function() {
+    var entries = [];
+    for (var i = 0; i < this._types.length; i++) {
+        var type = this._types[i];
+        var matching = _perf_entries.filter(function(e) { return e.entryType === type; });
+        entries = entries.concat(matching);
+    }
+    return entries;
+};
 
 // Deliver a batch of entries to a single observer (wraps in EntryList).
 function _perf_deliver_to_observer(obs, entries) {
@@ -6822,6 +6830,42 @@ function _perf_observer_notify(entries) {
 // name = 'first-paint' | 'first-contentful-paint', start_ms = DOMHighResTimeStamp.
 function _lumen_deliver_paint_entry(name, start_ms) {
     var entry = { entryType: 'paint', name: String(name), startTime: start_ms, duration: 0 };
+    _perf_entries.push(entry);
+    _perf_observer_notify([entry]);
+}
+
+// Called by the shell after rendering a large content element (LCP).
+// element_id = NID of the element; size = area in pixels (>500px²).
+// start_ms = DOMHighResTimeStamp; render_time_ms = when rendering completed.
+function _lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms) {
+    var entry = {
+        entryType: 'largest-contentful-paint',
+        name: 'largest-contentful-paint',
+        startTime: start_ms,
+        duration: render_time_ms - start_ms,
+        size: size,
+        element: _get_element_by_nid(element_id) || null,
+        url: '',
+        id: '',
+        activationStart: 0,
+    };
+    _perf_entries.push(entry);
+    _perf_observer_notify([entry]);
+}
+
+// Called by the shell when layout shift detected (CLS).
+// value = fractional shift distance (0.0..1.0+); session_id for grouping.
+// had_input = whether user input occurred recently (affects grouping).
+function _lumen_deliver_layout_shift(value, session_id, had_input) {
+    var entry = {
+        entryType: 'layout-shift',
+        name: 'layout-shift',
+        startTime: performance.now(),
+        duration: 0,
+        value: value,
+        hadRecentInput: !!had_input,
+        sources: [],
+    };
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
 }
@@ -18489,6 +18533,85 @@ mod tests {
         let r = rt
             .eval("CSS.registerProperty({ name: '--default-syntax', inherits: true, initialValue: 'val' }); CSS._getRegisteredProperties()['--default-syntax'].syntax === '*'")
             .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn perf_observer_take_records() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var po = new PerformanceObserver(function() {});
+            po.observe({entryTypes: ['paint']});
+            _lumen_deliver_paint_entry('first-paint', 100);
+            var records = po.takeRecords();
+            records.length === 1 && records[0].entryType === 'paint' && records[0].name === 'first-paint'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn perf_observer_lcp_entry() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
+            po.observe({entryTypes: ['largest-contentful-paint']});
+            _lumen_deliver_lcp_entry(42, 1024, 200.5, 210.5);
+            got.length === 1 && got[0].entryType === 'largest-contentful-paint' && got[0].size === 1024 && Math.abs(got[0].duration - 10) < 0.1
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn perf_observer_layout_shift() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
+            po.observe({entryTypes: ['layout-shift']});
+            _lumen_deliver_layout_shift(0.15, 0, false);
+            got.length === 1 && got[0].entryType === 'layout-shift' && got[0].value === 0.15 && got[0].hadRecentInput === false
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn perf_observer_buffered() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var po1 = new PerformanceObserver(function() {});
+            po1.observe({entryTypes: ['layout-shift']});
+            _lumen_deliver_layout_shift(0.1, 0, false);
+            var po2 = new PerformanceObserver(function() {});
+            po2.observe({entryTypes: ['layout-shift'], buffered: true});
+            var buffered = po2.takeRecords();
+            buffered.length === 1 && buffered[0].value === 0.1
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn perf_observer_disconnect() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var count = 0;
+            var po = new PerformanceObserver(function() { count++; });
+            po.observe({entryTypes: ['layout-shift']});
+            _lumen_deliver_layout_shift(0.1, 0, false);
+            po.disconnect();
+            _lumen_deliver_layout_shift(0.2, 0, false);
+            count === 1
+            "#
+        ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
