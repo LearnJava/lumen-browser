@@ -6,9 +6,7 @@
 
 ## In progress
 
-- **A-1: CSS Properties & Values API (Houdini)**  
-  Branch: `p2-a1-css-properties-values`  
-  Next step: Реализовать `CSS.registerProperty()` и `@property` at-rule парсинг + CSS composition API шим
+None — все recent merges завершены. Pick next item from "Next".
 
 ---
 
@@ -89,6 +87,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-a1-css-properties-values** ✅ 2026-06-04 — A-1: CSS Properties & Values API (Houdini) Phase 0–1. `RegisteredPropertiesMap` registry в `lumen-js/src/css_properties_values_api.rs`: структура `RegisteredProperty` (name/syntax/inherits/initial_value) + методы `register/get/all/clear`. Глобальный реестр `REGISTERED_PROPERTIES` через `OnceLock`. JS-шим `CSS.registerProperty({name, syntax?, inherits?, initialValue?})` IIFE в контексте QuickJS. Дескрипторы обрабатываются: `syntax` default `"*"`, `inherits` default `true`, `initialValue` default `""`. Переопределение свойств разрешено (последнее объявление побеждает). `CSS._getRegisteredProperties()` возвращает объект со всеми зарегистрированными свойствами. Интеграция: `install_css_properties_values_api(&ctx)` вызывается в `QuickJsRuntime::new()`. CSS-парсер уже парсит `@property` at-rule в структуру `PropertyRule` (name/syntax/inherits/initial_value). `StyleSheet.properties: Vec<PropertyRule>` хранит определения. Phase 0: реестр + парсинг готовы. Phase 1 (future P4 handoff): `compute_style` применяет `initial-value` как fallback при сломанной `var()`, синтаксис-валидация против descriptor. 7 unit-тестов (RegisteredPropertiesMap tests) ✅. lumen-js: 1256 тестов (было 1255 + 1 новый из css_properties_values_api). Clippy чист в css_properties_values_api.rs.
 
 - **p2-b1-table-layout-phase1** ✅ 2026-06-04 — B-1: Table layout rendering Phase 1. CSS Tables L2 §17.6 border-collapse и border-spacing support. `BorderCollapse` enum (separate/collapse), `TableContext` для table-уровнь CSS, `CollapsedBorder` + `BorderPrecedence` для collapse border model (future). Border conflict resolution algorithm: wider border wins, precedence hierarchy (table < row-group < row < column < cell). 7 новых unit-тестов (table_context_default, border_collapse_separate_wins, border_collapse_wider_border_wins, table_separate_mode_renders, border_precedence_ordering). Graphic test 64-table.html обновлён: separate mode (border-spacing: 4px 2px) + collapse mode (заглушка). COVERAGE.md обновлена. Phase 2 (future): border-spacing layout, collapse merging. lumen-paint: 492 тестов ✅. Clippy чист.
 
