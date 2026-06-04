@@ -6,9 +6,9 @@
 
 ## In progress
 
-B-6 | **CSS image-rendering**  
-branch: `p2-b6-image-rendering`  
-Next step: Add FilterMode handling for image-rendering property in display list
+B-8 | **CSS Appearance property**  
+branch: `p2-b8-appearance`  
+Next step: Implement apply_ua_appearance(style, tag) in compute_style that removes UA styling when appearance: none
 
 ---
 
@@ -87,6 +87,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-b6-image-rendering** ✅ 2026-06-04 — B-6: CSS image-rendering FilterMode Phase 0. `FilterMode` enum (Linear/Nearest) с методом `from_image_rendering(ImageRendering) → FilterMode`. Преобразование: auto/smooth/high-quality → Linear; crisp-edges/pixelated → Nearest. 4 unit-теста (from_auto_is_linear, from_smooth_is_linear, from_crisp_edges_is_nearest, from_pixelated_is_nearest). lumen-paint: 510 тестов. Clippy чист. Phase 0 завершена (conversion enum). Phase 1 (future P2/Renderer): использовать FilterMode в GPU sampler при рендере DrawImage/DrawBackgroundImage.
 
 - **p2-b5-column-rule** ✅ 2026-06-04 — B-5: CSS Multi-column column-rule rendering Phase 0. `emit_column_rules(b, out)` в `paint/src/display_list.rs`: вычисляет позиции колонок по `column-count/width/gap`, эмитит вертикальные разделители `DrawBorder` с `column-rule-width/style/color` из ComputedStyle. Геометрия зеркалирует `lay_out_multicol_children` — разделитель центрируется в gap (gap_left + (col_gap - rule_w) * 0.5). Поддержка: Solid/Dashed/Dotted через существующий `DrawBorder` (правая сторона rect); Double и прочие как Solid (Phase 0). Вызывается в 3 местах walk-цикла. 6 unit-тестов (column_rule_cmds helper): emits_separators/none_style/zero_width/single_column/no_column_props/separator_centered_in_gap. Graphic test 33-multi-column.html (7 контейнеров с разными column-count и column-rule стилями: solid red / dashed cyan / dotted yellow). Phase 0 завершена (visual rendering). Phase 1 (future): позиционирование column-span:all + column-fill поддержка (P1/P4).
 
