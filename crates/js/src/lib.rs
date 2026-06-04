@@ -13,6 +13,7 @@ pub mod cookie_banner;
 pub mod credentials;
 pub mod device_sensors;
 pub mod document_pip;
+pub mod eye_dropper;
 pub mod dom;
 pub mod filesystem_access;
 pub mod geolocation;
@@ -637,6 +638,13 @@ impl QuickJsRuntime {
             // requestPermission() always resolves to 'granted'.
             if let Err(e) = device_sensors::install_device_sensors_bindings(&ctx) {
                 eprintln!("Device Sensors bindings init failed: {}", e);
+            }
+
+            // Install Eye Dropper API (W3C Color WG) — pure JS implementation with native binding stub.
+            // Phase 0: EyeDropper.open() returns Promise<{sRGBHex}> with AbortSignal support.
+            // Platform integration (P3) implements _lumen_eye_dropper_open for each OS.
+            if let Err(e) = eye_dropper::install_eye_dropper_bindings(&ctx) {
+                eprintln!("Eye Dropper API init failed: {}", e);
             }
 
             // Install Document Picture-in-Picture API (W3C Document PiP §4) — pure JS implementation.
