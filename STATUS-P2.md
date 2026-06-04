@@ -6,7 +6,9 @@
 
 ## In progress
 
-None — все recent merges завершены. Pick next item from "Next".
+- **A-1: CSS Properties & Values API (Houdini)**  
+  Branch: `p2-a1-css-properties-values`  
+  Next step: Реализовать `CSS.registerProperty()` и `@property` at-rule парсинг + CSS composition API шим
 
 ---
 
