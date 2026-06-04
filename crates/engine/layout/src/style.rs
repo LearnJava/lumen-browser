@@ -2361,6 +2361,44 @@ pub struct ComputedStyle {
     pub svg_stroke_dasharray: Vec<f32>,
     /// SVG §11.4 — `stroke-dashoffset`. Inherited. In resolved px. Initial: 0.0.
     pub svg_stroke_dashoffset: f32,
+    // CSS Logical Properties L1 §2 — temporary storage for logical properties.
+    // These are resolved to physical properties in resolve_logical_properties().
+    /// CSS Logical Properties L1 — `inline-size`. `None` = auto.
+    pub inline_size: Option<Length>,
+    /// CSS Logical Properties L1 — `block-size`. `None` = auto.
+    pub block_size: Option<Length>,
+    /// CSS Logical Properties L1 — `inset-inline-start`.
+    pub inset_inline_start: LengthOrAuto,
+    /// CSS Logical Properties L1 — `inset-inline-end`.
+    pub inset_inline_end: LengthOrAuto,
+    /// CSS Logical Properties L1 — `inset-block-start`.
+    pub inset_block_start: LengthOrAuto,
+    /// CSS Logical Properties L1 — `inset-block-end`.
+    pub inset_block_end: LengthOrAuto,
+    /// CSS Logical Properties L1 — `margin-inline-start`.
+    pub margin_inline_start: LengthOrAuto,
+    /// CSS Logical Properties L1 — `margin-inline-end`.
+    pub margin_inline_end: LengthOrAuto,
+    /// CSS Logical Properties L1 — `margin-block-start`.
+    pub margin_block_start: LengthOrAuto,
+    /// CSS Logical Properties L1 — `margin-block-end`.
+    pub margin_block_end: LengthOrAuto,
+    /// CSS Logical Properties L1 — `padding-inline-start`.
+    pub padding_inline_start: Length,
+    /// CSS Logical Properties L1 — `padding-inline-end`.
+    pub padding_inline_end: Length,
+    /// CSS Logical Properties L1 — `padding-block-start`.
+    pub padding_block_start: Length,
+    /// CSS Logical Properties L1 — `padding-block-end`.
+    pub padding_block_end: Length,
+    /// CSS Logical Properties L1 — `border-inline-start-width`.
+    pub border_inline_start_width: f32,
+    /// CSS Logical Properties L1 — `border-inline-end-width`.
+    pub border_inline_end_width: f32,
+    /// CSS Logical Properties L1 — `border-block-start-width`.
+    pub border_block_start_width: f32,
+    /// CSS Logical Properties L1 — `border-block-end-width`.
+    pub border_block_end_width: f32,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -4367,6 +4405,25 @@ impl ComputedStyle {
             svg_stroke_miterlimit: 4.0,
             svg_stroke_dasharray: Vec::new(),
             svg_stroke_dashoffset: 0.0,
+            // CSS Logical Properties L1 — initial values.
+            inline_size: None,
+            block_size: None,
+            inset_inline_start: LengthOrAuto::Auto,
+            inset_inline_end: LengthOrAuto::Auto,
+            inset_block_start: LengthOrAuto::Auto,
+            inset_block_end: LengthOrAuto::Auto,
+            margin_inline_start: LengthOrAuto::ZERO,
+            margin_inline_end: LengthOrAuto::ZERO,
+            margin_block_start: LengthOrAuto::ZERO,
+            margin_block_end: LengthOrAuto::ZERO,
+            padding_inline_start: Length::Px(0.0),
+            padding_inline_end: Length::Px(0.0),
+            padding_block_start: Length::Px(0.0),
+            padding_block_end: Length::Px(0.0),
+            border_inline_start_width: 0.0,
+            border_inline_end_width: 0.0,
+            border_block_start_width: 0.0,
+            border_block_end_width: 0.0,
         }
     }
 }
@@ -4649,6 +4706,25 @@ pub fn compute_style(
         svg_stroke_miterlimit: inherited.svg_stroke_miterlimit,
         svg_stroke_dasharray: inherited.svg_stroke_dasharray.clone(),
         svg_stroke_dashoffset: inherited.svg_stroke_dashoffset,
+        // CSS Logical Properties L1 — not inherited. Initial values.
+        inline_size: None,
+        block_size: None,
+        inset_inline_start: LengthOrAuto::Auto,
+        inset_inline_end: LengthOrAuto::Auto,
+        inset_block_start: LengthOrAuto::Auto,
+        inset_block_end: LengthOrAuto::Auto,
+        margin_inline_start: LengthOrAuto::ZERO,
+        margin_inline_end: LengthOrAuto::ZERO,
+        margin_block_start: LengthOrAuto::ZERO,
+        margin_block_end: LengthOrAuto::ZERO,
+        padding_inline_start: Length::Px(0.0),
+        padding_inline_end: Length::Px(0.0),
+        padding_block_start: Length::Px(0.0),
+        padding_block_end: Length::Px(0.0),
+        border_inline_start_width: 0.0,
+        border_inline_end_width: 0.0,
+        border_block_start_width: 0.0,
+        border_block_end_width: 0.0,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -5011,6 +5087,9 @@ pub fn compute_style(
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
 
+    // CSS Logical Properties L1 — resolve logical properties to physical.
+    resolve_logical_properties(&mut style);
+
     // CSS Basic UI L4 §5 — appearance: none removes UA styling from form controls.
     // Applied after CSS declarations so author `appearance: none` takes effect.
     apply_ua_appearance(doc, node, &mut style);
@@ -5024,6 +5103,80 @@ fn coerce_overflow_axes(ox: Overflow, oy: Overflow) -> (Overflow, Overflow) {
     let new_ox = if ox == Overflow::Visible && oy != Overflow::Visible { Overflow::Auto } else { ox };
     let new_oy = if oy == Overflow::Visible && ox != Overflow::Visible { Overflow::Auto } else { oy };
     (new_ox, new_oy)
+}
+
+/// CSS Logical Properties L1 — resolve logical properties to physical.
+/// Depends on writing-mode to determine which physical properties correspond to inline/block axis.
+/// Phase 0: horizontal-tb only (inline-start=left, inline-end=right, block-start=top, block-end=bottom).
+fn resolve_logical_properties(style: &mut ComputedStyle) {
+    // In horizontal-tb writing mode (default, Phase 0):
+    // inline-start = left, inline-end = right, block-start = top, block-end = bottom.
+    // For other writing modes, mapping differs; Phase 1+ will implement full support.
+
+    // CSS Logical Properties L1 §2 — inline-size / block-size → width / height.
+    if style.inline_size.is_some() && style.width.is_none() {
+        style.width = style.inline_size.clone();
+    }
+    if style.block_size.is_some() && style.height.is_none() {
+        style.height = style.block_size.clone();
+    }
+
+    // CSS Logical Properties L1 §4 — inset-inline-* / inset-block-* → top/right/bottom/left.
+    // Phase 0: horizontal-tb (inline-start=left, inline-end=right).
+    if style.inset_inline_start != LengthOrAuto::Auto && style.left == LengthOrAuto::Auto {
+        style.left = style.inset_inline_start.clone();
+    }
+    if style.inset_inline_end != LengthOrAuto::Auto && style.right == LengthOrAuto::Auto {
+        style.right = style.inset_inline_end.clone();
+    }
+    if style.inset_block_start != LengthOrAuto::Auto && style.top == LengthOrAuto::Auto {
+        style.top = style.inset_block_start.clone();
+    }
+    if style.inset_block_end != LengthOrAuto::Auto && style.bottom == LengthOrAuto::Auto {
+        style.bottom = style.inset_block_end.clone();
+    }
+
+    // CSS Logical Properties L1 §5 — margin-inline-* / margin-block-* → margin-left/right/top/bottom.
+    if style.margin_inline_start != LengthOrAuto::ZERO && style.margin_left == LengthOrAuto::ZERO {
+        style.margin_left = style.margin_inline_start.clone();
+    }
+    if style.margin_inline_end != LengthOrAuto::ZERO && style.margin_right == LengthOrAuto::ZERO {
+        style.margin_right = style.margin_inline_end.clone();
+    }
+    if style.margin_block_start != LengthOrAuto::ZERO && style.margin_top == LengthOrAuto::ZERO {
+        style.margin_top = style.margin_block_start.clone();
+    }
+    if style.margin_block_end != LengthOrAuto::ZERO && style.margin_bottom == LengthOrAuto::ZERO {
+        style.margin_bottom = style.margin_block_end.clone();
+    }
+
+    // CSS Logical Properties L1 §6 — padding-inline-* / padding-block-* → padding-left/right/top/bottom.
+    if style.padding_inline_start != Length::Px(0.0) && style.padding_left == Length::Px(0.0) {
+        style.padding_left = style.padding_inline_start.clone();
+    }
+    if style.padding_inline_end != Length::Px(0.0) && style.padding_right == Length::Px(0.0) {
+        style.padding_right = style.padding_inline_end.clone();
+    }
+    if style.padding_block_start != Length::Px(0.0) && style.padding_top == Length::Px(0.0) {
+        style.padding_top = style.padding_block_start.clone();
+    }
+    if style.padding_block_end != Length::Px(0.0) && style.padding_bottom == Length::Px(0.0) {
+        style.padding_bottom = style.padding_block_end.clone();
+    }
+
+    // CSS Logical Properties L1 §7 — border-inline-*-width / border-block-*-width.
+    if style.border_inline_start_width > 0.0 && style.border_left_width == 0.0 {
+        style.border_left_width = style.border_inline_start_width;
+    }
+    if style.border_inline_end_width > 0.0 && style.border_right_width == 0.0 {
+        style.border_right_width = style.border_inline_end_width;
+    }
+    if style.border_block_start_width > 0.0 && style.border_top_width == 0.0 {
+        style.border_top_width = style.border_block_start_width;
+    }
+    if style.border_block_end_width > 0.0 && style.border_bottom_width == 0.0 {
+        style.border_bottom_width = style.border_block_end_width;
+    }
 }
 
 // ── Pseudo-element style matching ───────────────────────────────────────────
@@ -9545,6 +9698,13 @@ fn apply_declaration(
         "height" => {
             style.height = parse_sizing_length(val, is_quirks);
         }
+        // CSS Logical Properties L1 §2.1 — inline-size / block-size.
+        "inline-size" => {
+            style.inline_size = parse_sizing_length(val, is_quirks);
+        }
+        "block-size" => {
+            style.block_size = parse_sizing_length(val, is_quirks);
+        }
         // CSS 2.1 §10.4: min-/max- ширина и высота. Отрицательные `<length>`
         // запрещены — сохраняем typed, фильтрация при resolve в box_tree.
         // `auto` для min-* = None (Phase 0: эквивалентно 0); `none` для
@@ -10446,21 +10606,22 @@ fn apply_declaration(
             set_margin_side(&mut style.left, l, is_quirks);
         }
         // CSS Logical Properties L1 §8.2 — inset-inline-* / inset-block-*.
-        "inset-inline-start" => set_margin_side(&mut style.left, val, is_quirks),
-        "inset-inline-end"   => set_margin_side(&mut style.right, val, is_quirks),
-        "inset-block-start"  => set_margin_side(&mut style.top, val, is_quirks),
-        "inset-block-end"    => set_margin_side(&mut style.bottom, val, is_quirks),
+        // Stored in logical fields; resolved to physical (top/right/bottom/left) in resolve_logical_properties().
+        "inset-inline-start" => set_margin_side(&mut style.inset_inline_start, val, is_quirks),
+        "inset-inline-end"   => set_margin_side(&mut style.inset_inline_end, val, is_quirks),
+        "inset-block-start"  => set_margin_side(&mut style.inset_block_start, val, is_quirks),
+        "inset-block-end"    => set_margin_side(&mut style.inset_block_end, val, is_quirks),
         "inset-inline" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_margin_side(&mut style.left, s, is_quirks);
-            set_margin_side(&mut style.right, e, is_quirks);
+            set_margin_side(&mut style.inset_inline_start, s, is_quirks);
+            set_margin_side(&mut style.inset_inline_end, e, is_quirks);
         }
         "inset-block" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_margin_side(&mut style.top, s, is_quirks);
-            set_margin_side(&mut style.bottom, e, is_quirks);
+            set_margin_side(&mut style.inset_block_start, s, is_quirks);
+            set_margin_side(&mut style.inset_block_end, e, is_quirks);
         }
         "z-index" => {
             // CSS Positioned Layout L3 §9.3 — `auto | <integer>`.
@@ -11229,21 +11390,22 @@ fn apply_declaration(
         // CSS Logical Properties L1 §6.1 — margin-inline-* / margin-block-*.
         // Phase 0: LTR horizontal → inline-start=left, inline-end=right,
         //          block-start=top, block-end=bottom.
-        "margin-inline-start" => set_margin_side(&mut style.margin_left, val, is_quirks),
-        "margin-inline-end"   => set_margin_side(&mut style.margin_right, val, is_quirks),
-        "margin-block-start"  => set_margin_side(&mut style.margin_top, val, is_quirks),
-        "margin-block-end"    => set_margin_side(&mut style.margin_bottom, val, is_quirks),
+        // Stored in logical fields; resolved to physical (left/right/top/bottom) in resolve_logical_properties().
+        "margin-inline-start" => set_margin_side(&mut style.margin_inline_start, val, is_quirks),
+        "margin-inline-end"   => set_margin_side(&mut style.margin_inline_end, val, is_quirks),
+        "margin-block-start"  => set_margin_side(&mut style.margin_block_start, val, is_quirks),
+        "margin-block-end"    => set_margin_side(&mut style.margin_block_end, val, is_quirks),
         "margin-inline" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_margin_side(&mut style.margin_left, s, is_quirks);
-            set_margin_side(&mut style.margin_right, e, is_quirks);
+            set_margin_side(&mut style.margin_inline_start, s, is_quirks);
+            set_margin_side(&mut style.margin_inline_end, e, is_quirks);
         }
         "margin-block" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_margin_side(&mut style.margin_top, s, is_quirks);
-            set_margin_side(&mut style.margin_bottom, e, is_quirks);
+            set_margin_side(&mut style.margin_block_start, s, is_quirks);
+            set_margin_side(&mut style.margin_block_end, e, is_quirks);
         }
         "padding" => {
             if let Some((t, r, b, l)) = parse_padding_shorthand(val, is_quirks) {
@@ -11258,21 +11420,22 @@ fn apply_declaration(
         "padding-bottom" => set_padding_side(&mut style.padding_bottom, val, is_quirks),
         "padding-left" => set_padding_side(&mut style.padding_left, val, is_quirks),
         // CSS Logical Properties L1 §6.2 — padding-inline-* / padding-block-*.
-        "padding-inline-start" => set_padding_side(&mut style.padding_left, val, is_quirks),
-        "padding-inline-end"   => set_padding_side(&mut style.padding_right, val, is_quirks),
-        "padding-block-start"  => set_padding_side(&mut style.padding_top, val, is_quirks),
-        "padding-block-end"    => set_padding_side(&mut style.padding_bottom, val, is_quirks),
+        // Stored in logical fields; resolved to physical (left/right/top/bottom) in resolve_logical_properties().
+        "padding-inline-start" => set_padding_side(&mut style.padding_inline_start, val, is_quirks),
+        "padding-inline-end"   => set_padding_side(&mut style.padding_inline_end, val, is_quirks),
+        "padding-block-start"  => set_padding_side(&mut style.padding_block_start, val, is_quirks),
+        "padding-block-end"    => set_padding_side(&mut style.padding_block_end, val, is_quirks),
         "padding-inline" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_padding_side(&mut style.padding_left, s, is_quirks);
-            set_padding_side(&mut style.padding_right, e, is_quirks);
+            set_padding_side(&mut style.padding_inline_start, s, is_quirks);
+            set_padding_side(&mut style.padding_inline_end, e, is_quirks);
         }
         "padding-block" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_padding_side(&mut style.padding_top, s, is_quirks);
-            set_padding_side(&mut style.padding_bottom, e, is_quirks);
+            set_padding_side(&mut style.padding_block_start, s, is_quirks);
+            set_padding_side(&mut style.padding_block_end, e, is_quirks);
         }
         "text-decoration" => {
             // Shorthand: `<line> || <style> || <color>` в любом порядке (CSS Text
@@ -11396,10 +11559,12 @@ fn apply_declaration(
                 &mut style.border_bottom_width, &mut style.border_bottom_style,
                 &mut style.border_bottom_color, val, em_basis, viewport, is_quirks);
         }
-        "border-inline-start-width" => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_left_width = v; } }
-        "border-inline-end-width"   => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_right_width = v; } }
-        "border-block-start-width"  => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_top_width = v; } }
-        "border-block-end-width"    => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_bottom_width = v; } }
+        // CSS Logical Properties L1 — border-inline-*-width / border-block-*-width.
+        // Stored in logical fields; resolved to physical (left/right/top/bottom) in resolve_logical_properties().
+        "border-inline-start-width" => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_inline_start_width = v; } }
+        "border-inline-end-width"   => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_inline_end_width = v; } }
+        "border-block-start-width"  => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_block_start_width = v; } }
+        "border-block-end-width"    => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_block_end_width = v; } }
         "border-inline-start-style" => style.border_left_style = parse_border_style_kw(val),
         "border-inline-end-style"   => style.border_right_style = parse_border_style_kw(val),
         "border-block-start-style"  => style.border_top_style = parse_border_style_kw(val),
@@ -12451,6 +12616,9 @@ fn apply_css_wide_keyword(
         }
         "width" => style.width = if inh_only_inherit { inherited.width.clone() } else { init.width.clone() },
         "height" => style.height = if inh_only_inherit { inherited.height.clone() } else { init.height.clone() },
+        // CSS Logical Properties L1 — inline-size / block-size.
+        "inline-size" => style.inline_size = if inh_only_inherit { inherited.inline_size.clone() } else { init.inline_size.clone() },
+        "block-size" => style.block_size = if inh_only_inherit { inherited.block_size.clone() } else { init.block_size.clone() },
         "min-width" => style.min_width = if inh_only_inherit { inherited.min_width.clone() } else { init.min_width.clone() },
         "max-width" => style.max_width = if inh_only_inherit { inherited.max_width.clone() } else { init.max_width.clone() },
         "min-height" => style.min_height = if inh_only_inherit { inherited.min_height.clone() } else { init.min_height.clone() },
@@ -12466,19 +12634,20 @@ fn apply_css_wide_keyword(
             style.margin_bottom = src.margin_bottom.clone();
             style.margin_left = src.margin_left.clone();
         }
-        "margin-inline-start" => style.margin_left = if inh_only_inherit { inherited.margin_left.clone() } else { init.margin_left.clone() },
-        "margin-inline-end"   => style.margin_right = if inh_only_inherit { inherited.margin_right.clone() } else { init.margin_right.clone() },
-        "margin-block-start"  => style.margin_top = if inh_only_inherit { inherited.margin_top.clone() } else { init.margin_top.clone() },
-        "margin-block-end"    => style.margin_bottom = if inh_only_inherit { inherited.margin_bottom.clone() } else { init.margin_bottom.clone() },
+        // CSS Logical Properties L1 — margin-inline-* / margin-block-*.
+        "margin-inline-start" => style.margin_inline_start = if inh_only_inherit { inherited.margin_inline_start.clone() } else { init.margin_inline_start.clone() },
+        "margin-inline-end"   => style.margin_inline_end = if inh_only_inherit { inherited.margin_inline_end.clone() } else { init.margin_inline_end.clone() },
+        "margin-block-start"  => style.margin_block_start = if inh_only_inherit { inherited.margin_block_start.clone() } else { init.margin_block_start.clone() },
+        "margin-block-end"    => style.margin_block_end = if inh_only_inherit { inherited.margin_block_end.clone() } else { init.margin_block_end.clone() },
         "margin-inline" => {
             let src = if inh_only_inherit { inherited } else { &init };
-            style.margin_left = src.margin_left.clone();
-            style.margin_right = src.margin_right.clone();
+            style.margin_inline_start = src.margin_inline_start.clone();
+            style.margin_inline_end = src.margin_inline_end.clone();
         }
         "margin-block" => {
             let src = if inh_only_inherit { inherited } else { &init };
-            style.margin_top = src.margin_top.clone();
-            style.margin_bottom = src.margin_bottom.clone();
+            style.margin_block_start = src.margin_block_start.clone();
+            style.margin_block_end = src.margin_block_end.clone();
         }
         "padding-top" => style.padding_top = if inh_only_inherit { inherited.padding_top.clone() } else { init.padding_top.clone() },
         "padding-right" => style.padding_right = if inh_only_inherit { inherited.padding_right.clone() } else { init.padding_right.clone() },
@@ -12491,8 +12660,9 @@ fn apply_css_wide_keyword(
             style.padding_bottom = src.padding_bottom.clone();
             style.padding_left = src.padding_left.clone();
         }
-        "padding-inline-start" => style.padding_left = if inh_only_inherit { inherited.padding_left.clone() } else { init.padding_left.clone() },
-        "padding-inline-end"   => style.padding_right = if inh_only_inherit { inherited.padding_right.clone() } else { init.padding_right.clone() },
+        // CSS Logical Properties L1 — padding-inline-* / padding-block-*.
+        "padding-inline-start" => style.padding_inline_start = if inh_only_inherit { inherited.padding_inline_start.clone() } else { init.padding_inline_start.clone() },
+        "padding-inline-end"   => style.padding_inline_end = if inh_only_inherit { inherited.padding_inline_end.clone() } else { init.padding_inline_end.clone() },
         "padding-block-start"  => style.padding_top = if inh_only_inherit { inherited.padding_top.clone() } else { init.padding_top.clone() },
         "padding-block-end"    => style.padding_bottom = if inh_only_inherit { inherited.padding_bottom.clone() } else { init.padding_bottom.clone() },
         "padding-inline" => {
@@ -12815,17 +12985,20 @@ fn apply_css_wide_keyword(
             style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
             style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
         }
-        "inset-inline-start" => style.left   = if inh_only_inherit { inherited.left.clone()   } else { init.left.clone()   },
-        "inset-inline-end"   => style.right  = if inh_only_inherit { inherited.right.clone()  } else { init.right.clone()  },
-        "inset-block-start"  => style.top    = if inh_only_inherit { inherited.top.clone()    } else { init.top.clone()    },
-        "inset-block-end"    => style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() },
+        // CSS Logical Properties L1 — inset-inline-* / inset-block-*.
+        "inset-inline-start" => style.inset_inline_start = if inh_only_inherit { inherited.inset_inline_start.clone() } else { init.inset_inline_start.clone() },
+        "inset-inline-end"   => style.inset_inline_end = if inh_only_inherit { inherited.inset_inline_end.clone() } else { init.inset_inline_end.clone() },
+        "inset-block-start"  => style.inset_block_start = if inh_only_inherit { inherited.inset_block_start.clone() } else { init.inset_block_start.clone() },
+        "inset-block-end"    => style.inset_block_end = if inh_only_inherit { inherited.inset_block_end.clone() } else { init.inset_block_end.clone() },
         "inset-inline" => {
-            style.left  = if inh_only_inherit { inherited.left.clone()  } else { init.left.clone()  };
-            style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.inset_inline_start = src.inset_inline_start.clone();
+            style.inset_inline_end = src.inset_inline_end.clone();
         }
         "inset-block" => {
-            style.top    = if inh_only_inherit { inherited.top.clone()    } else { init.top.clone()    };
-            style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.inset_block_start = src.inset_block_start.clone();
+            style.inset_block_end = src.inset_block_end.clone();
         }
         "z-index" => {
             style.z_index = if inh_only_inherit { inherited.z_index } else { init.z_index };
@@ -23567,4 +23740,5 @@ mod tests {
         let parsed = GridTrackSize::parse_track_list("repeat(auto-fill, fit-content(200px))", false);
         assert!(!parsed.is_empty(), "auto-fill with fit-content should parse");
     }
+
 }

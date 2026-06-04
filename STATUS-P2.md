@@ -12,6 +12,19 @@
 
 ## Current / Recently Merged
 
+**A-3 | CSS Typed OM (partial)** ✅ 2026-06-04 (merged)
+- Phase 0: CSSStyleValue class hierarchy — base + CSSUnitValue + CSSKeywordValue + CSSNumericValue
+- CSSUnitValue fields: value (number), unit (string), to(unit) method
+- StylePropertyMap interface: get/set/delete/has/entries/keys/values methods
+- element.attributeStyleMap getter returns StylePropertyMap
+- element.computedStyleMap() method returns ComputedStylePropertyMap (read-only stub)
+- Rust native bindings: _lumen_get/set/delete/has_style_property, _lumen_get_style_entries
+- Helper functions: _parse_style_string, _serialize_style_map, _camel_to_kebab
+- 12 unit tests (css_typed_om_*): class hierarchy, property maps, CSSUnitValue methods, read-only semantics
+- lumen-js: 1279 тестов (было 1267 + 12 новых), Clippy clean
+- Phase 0 завершена (class hierarchy + basic map structure)
+- Phase 1 (future P4): wire CSS Typed OM into computed style access, implement CSSNumericValue operations
+
 **C-1 | HTTP Cache RFC 7234** ✅ 2026-06-04 (merged)
 - Phase 0–1: `HttpCache` struct с LRU эвикцией в `lumen-network/src/cache.rs`
 - `CacheEntry {body, headers, status, etag, last_modified, expires_at, must_revalidate}`
