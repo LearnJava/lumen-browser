@@ -6,7 +6,9 @@
 
 ## In progress
 
-(empty)
+A-17: Eye Dropper API  
+branch: p1-eye-dropper  
+Next step: реализовать EyeDropper класс в `crates/js/src/eye_dropper.rs` с `open()` методом, платформенный биндинг `_lumen_eye_dropper_open()` для P3
 
 ---
 
