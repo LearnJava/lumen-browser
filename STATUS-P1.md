@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty)
+A-19: CSS Scroll Snap L2 events  branch: p1-snap-events
+Next step: Реализовать JavaScript события `snapChanging` и `snapChanged` при переходе snap-точек (crates/js/src/)
 
 ---
 
