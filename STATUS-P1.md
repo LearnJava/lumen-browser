@@ -6,8 +6,7 @@
 
 ## In progress
 
-A-16: Device Orientation/Motion API stub  branch: p1-device-orientation-motion
-Next step: implement DeviceOrientationEvent/DeviceMotionEvent and requestPermission stubs  `crates/js/src/`
+(empty)
 
 ---
 
@@ -15,6 +14,7 @@ Next step: implement DeviceOrientationEvent/DeviceMotionEvent and requestPermiss
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-16: Device Orientation/Motion API stub | W3C Device Orientation L2 & L3 (Phase 0): DeviceOrientationEvent {alpha, beta, gamma, absolute} с дефолтом {0,0,0,false}, requestPermission() → Promise<'granted'>, addEventListener('deviceorientation') фаерит событие с дефолтными значениями. W3C Device Motion L3 (Phase 0): DeviceMotionEvent {acceleration, accelerationIncludingGravity, rotationRate, interval}, requestPermission() → Promise<'granted'>, addEventListener('devicemotion'). Новый модуль device_sensors.rs, экспорт на window и globalThis. 6 unit-тестов. lumen-js: 1223 тестов (было 1217). |
 | 2026-06-04 | A-15: Pointer Lock API | W3C Pointer Lock L2 §2-4: `element.requestPointerLock()` → Promise (фаза 0: локальное состояние), `document.exitPointerLock()`, `document.pointerLockElement` getter, события `pointerlockchange`/`pointerlockerror`, `movementX`/`movementY` в MouseEvent. Новый модуль `crates/js/src/pointer_lock.rs`: thread-local state с locked_element_nid и movement_x/y. Нативные биндинги `_lumen_ptr_lock_request`, `_lumen_exit_ptr_lock`, `_lumen_ptr_lock_element`. DOM API: Element.prototype.requestPointerLock(), document.exitPointerLock(), document.pointerLockElement. Фаза 0: локальное состояние, фаза 1 добавит интеграцию с winit set_cursor_grab. 5 unit-тестов. lumen-js: 1217 тестов (было 1212). |
 | 2026-06-04 | A-14: Screen Orientation API | W3C Screen Orientation API §3-4: `screen.orientation.{type, angle}` с дефолтом 'portrait-primary' и 0; `.lock(orientation)` → Promise (валидирует 7 типов), `.unlock()` → Promise, события `onchange`, `addEventListener('change')`. Новый модуль `crates/js/src/screen_orientation.rs`: JS-шим с классами ScreenOrientation, ScreenOrientationEvent. Phase 0: блокировка не интегрирована в shell; подготовлены нативные биндинги `_lumen_set_fullscreen` для P3. 9 unit-тестов. lumen-js: 1195 тестов (было 1187). |
 | 2026-06-04 | A-13: Document Picture-in-Picture API | W3C Document Picture-in-Picture §4: `documentPictureInPicture.requestWindow({width, height})` → Promise<PictureInPictureWindow> с .window accessor, onenter event, document.pictureInPictureElement getter. Новый модуль crates/js/src/document_pip.rs: JS-шим с классами PictureInPictureWindow, DocumentPictureInPictureEvent, DocumentPictureInPicture. Phase 0: простой overlay без интеграции в shell, нативный binding _lumen_pip_request_window для P3. 8 unit-тестов. lumen-js: 1187 тестов (было 1179). |
