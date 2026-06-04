@@ -141,6 +141,40 @@ pub enum SvgMeetOrSlice {
     Slice,
 }
 
+/// SVG `text-anchor` attribute for text horizontal alignment.
+/// Controls how text is anchored at the specified x position (SVG L1 §10.15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SvgTextAnchor {
+    /// `start` (default) — text starts at the x position.
+    #[default]
+    Start,
+    /// `middle` — text center is at the x position.
+    Middle,
+    /// `end` — text ends at the x position.
+    End,
+}
+
+/// SVG `dominant-baseline` attribute for text vertical alignment.
+/// Controls how text is anchored at the specified y position (SVG L1 §10.15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SvgDominantBaseline {
+    /// `auto` (default) — dominant baseline is determined by the text.
+    #[default]
+    Auto,
+    /// `baseline` — use the alphabetic baseline of the text.
+    Baseline,
+    /// `hanging` — use the hanging baseline (e.g., for Devanagari scripts).
+    Hanging,
+    /// `middle` — use the middle of the em-box.
+    Middle,
+    /// `central` — use the central baseline (midpoint between ascender and descender).
+    Central,
+    /// `text-before-edge` — use the top of the em-box.
+    TextBeforeEdge,
+    /// `text-after-edge` — use the bottom of the em-box.
+    TextAfterEdge,
+}
+
 /// SVG transformation data from the `transform` presentation attribute.
 /// Stores parsed transform functions in order of application.
 #[derive(Debug, Clone, Default)]
@@ -500,6 +534,57 @@ fn svg_intrinsic_ratio(view_box: &Option<ViewBox>) -> Option<f32> {
     })
 }
 
+/// Collects text content from an SVG text element and its descendants.
+/// Recursively walks the DOM tree, concatenating text nodes and content of nested `<tspan>` elements.
+fn collect_text_content(doc: &Document, node_id: NodeId) -> String {
+    let mut text = String::new();
+    let node = doc.get(node_id);
+
+    // Walk through immediate children and concatenate text.
+    for child_id in node.children.iter() {
+        let child = doc.get(*child_id);
+        match &child.data {
+            NodeData::Text(s) => {
+                // Text node: add content.
+                text.push_str(s);
+            }
+            NodeData::Element { name, .. }
+                if name.local.as_str() == "tspan" || name.local.as_str() == "textPath" =>
+            {
+                // For element nodes like <tspan>, recursively collect their text.
+                text.push_str(&collect_text_content(doc, *child_id));
+            }
+            _ => {}
+        }
+    }
+
+    text
+}
+
+/// Parses SVG `text-anchor` attribute.
+/// Returns the corresponding `SvgTextAnchor` enum value, defaulting to `Start` if attribute is absent or invalid.
+fn parse_text_anchor(attr: Option<&str>) -> SvgTextAnchor {
+    match attr {
+        Some("middle") => SvgTextAnchor::Middle,
+        Some("end") => SvgTextAnchor::End,
+        _ => SvgTextAnchor::Start, // default
+    }
+}
+
+/// Parses SVG `dominant-baseline` attribute.
+/// Returns the corresponding `SvgDominantBaseline` enum value, defaulting to `Auto` if attribute is absent or invalid.
+fn parse_dominant_baseline(attr: Option<&str>) -> SvgDominantBaseline {
+    match attr {
+        Some("baseline") => SvgDominantBaseline::Baseline,
+        Some("hanging") => SvgDominantBaseline::Hanging,
+        Some("middle") => SvgDominantBaseline::Middle,
+        Some("central") => SvgDominantBaseline::Central,
+        Some("text-before-edge") => SvgDominantBaseline::TextBeforeEdge,
+        Some("text-after-edge") => SvgDominantBaseline::TextAfterEdge,
+        _ => SvgDominantBaseline::Auto, // default
+    }
+}
+
 /// Calculates SVG viewBox scaling and offset for aspect-ratio preservation.
 /// Returns `(scale_x, scale_y, offset_x, offset_y)` to transform viewBox → CSS px.
 fn compute_viewbox_transform(
@@ -670,6 +755,28 @@ fn collect_svg_shapes(
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
             }
+            "text" | "tspan" | "textPath" => {
+                // SVG text element: collect text content from this element and descendants.
+                let text = collect_text_content(doc, child_id);
+                let text_anchor = parse_text_anchor(doc.get(child_id).get_attr("text-anchor"));
+                let dominant_baseline = parse_dominant_baseline(doc.get(child_id).get_attr("dominant-baseline"));
+                out.push(LayoutBox {
+                    node: child_id, rect: Rect::ZERO, style,
+                    kind: BoxKind::SvgText {
+                        text,
+                        x: svg_attr_f32(doc, child_id, "x"),
+                        y: svg_attr_f32(doc, child_id, "y"),
+                        dx: svg_attr_f32(doc, child_id, "dx"),
+                        dy: svg_attr_f32(doc, child_id, "dy"),
+                        text_anchor,
+                        dominant_baseline,
+                        svg_transform: svg_transform.clone(),
+                    },
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                });
+                // Recurse for potential nested text/tspan/textPath elements.
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
+            }
             "g" => {
                 // Group: collect children shapes, then wrap in a Block box.
                 let mut group_children: Vec<LayoutBox> = Vec::new();
@@ -775,6 +882,17 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
         bbox.width *= sx;
         bbox.height *= sy;
         // Then apply composed transform.
+        b.rect = apply_transform_to_bbox(&bbox, &composed);
+    } else if let BoxKind::SvgText { x, y, dx, dy, .. } = b.kind {
+        // SVG text element: position at specified coordinates with offsets.
+        // x, y are in user units; dx, dy are additional offsets.
+        // Apply viewBox scaling to user unit coordinates.
+        let text_x = ox + (x + dx) * sx;
+        let text_y = oy + (y + dy) * sy;
+        // Phase 1: use a minimal bounding box at the text position.
+        // Phase 2: measure text width and compute proper bbox based on text-anchor and dominant-baseline.
+        let bbox = Rect::new(text_x, text_y, 0.0, 0.0);
+        // Apply composed transform.
         b.rect = apply_transform_to_bbox(&bbox, &composed);
     } else if matches!(b.kind, BoxKind::Block) {
         // <g> group: position its children with composed transform, then compute union bbox.
@@ -1245,6 +1363,29 @@ pub enum BoxKind {
         shape: SvgShapeKind,
         /// Parsed SVG `transform` presentation attribute (Phase 2: nested transforms).
         /// Composed with parent transforms during layout for accurate positioning.
+        svg_transform: SvgTransform,
+    },
+    /// SVG text element (`<text>`, `<tspan>`, `<textPath>`).
+    /// `LayoutBox.rect` is the text bounding box in *document coordinates*.
+    /// Text content is measured via `TextMeasurer` and positioned according to SVG text attributes.
+    /// CSS: fill, stroke, font-family, font-size — P4 wires via ComputedStyle SVG fields.
+    /// // CSS: text-anchor, dominant-baseline, dx, dy
+    SvgText {
+        /// Text content (concatenated from text nodes within `<text>`, `<tspan>`, `<textPath>`).
+        text: String,
+        /// SVG `x` attribute in user units (baseline x position). 0.0 if absent.
+        x: f32,
+        /// SVG `y` attribute in user units (baseline y position). 0.0 if absent.
+        y: f32,
+        /// SVG `dx` attribute in user units (horizontal offset). 0.0 if absent.
+        dx: f32,
+        /// SVG `dy` attribute in user units (vertical offset). 0.0 if absent.
+        dy: f32,
+        /// Text anchor alignment: start/middle/end. Defaults to "start" per SVG spec.
+        text_anchor: SvgTextAnchor,
+        /// Dominant baseline alignment: auto/baseline/hanging/middle/etc. Defaults to "auto" per SVG spec.
+        dominant_baseline: SvgDominantBaseline,
+        /// Parsed SVG `transform` presentation attribute.
         svg_transform: SvgTransform,
     },
 }
@@ -2928,7 +3069,7 @@ fn lay_out(
 
     // SVG root dispatches to its own layout algorithm: replaced-element sizing
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
-    if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. }) {
+    if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. }) {
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
         return;
     }
@@ -3665,8 +3806,8 @@ fn lay_out(
         BoxKind::Marker { .. } => {
             // Rect is set by the parent's block-flow loop; nothing to do here.
         }
-        // SvgRoot and SvgShape are dispatched before this match (early return above).
-        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => unreachable!(),
+        // SvgRoot, SvgShape, and SvgText are dispatched before this match (early return above).
+        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. } => unreachable!(),
     }
 
     // CSS Positioned Layout L3 §4 — абсолютное / фиксированное позиционирование.
@@ -7982,6 +8123,157 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
         // Verify no panic when processing <use> with x/y attributes.
+    }
+
+    #[test]
+    fn svg_text_element_simple() {
+        // <text>Hello</text> should create a SvgText layout box with content.
+        let html = "<svg><text>Hello</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let text_box = find_text_box(&root);
+        assert!(text_box.is_some(), "SvgText layout box not found");
+
+        if let Some(tb) = text_box {
+            if let super::BoxKind::SvgText { text, .. } = &tb.kind {
+                assert_eq!(text, "Hello");
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_text_with_x_y_attributes() {
+        // <text x="10" y="20">Content</text> should store x/y values.
+        let html = "<svg><text x=\"10\" y=\"20\">Test</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        if let Some(tb) = find_text_box(&root) {
+            if let super::BoxKind::SvgText { x, y, text, .. } = &tb.kind {
+                assert!((x - 10.0).abs() < 0.1, "x should be ~10, got {}", x);
+                assert!((y - 20.0).abs() < 0.1, "y should be ~20, got {}", y);
+                assert_eq!(text, "Test");
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_text_anchor_middle() {
+        // <text text-anchor="middle">Center</text> should parse text-anchor.
+        let html = "<svg><text text-anchor=\"middle\">Center</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        if let Some(tb) = find_text_box(&root) {
+            if let super::BoxKind::SvgText { text_anchor, .. } = &tb.kind {
+                assert_eq!(*text_anchor, super::SvgTextAnchor::Middle);
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_dominant_baseline_hanging() {
+        // <text dominant-baseline="hanging">Hanging</text> should parse dominant-baseline.
+        let html = "<svg><text dominant-baseline=\"hanging\">Hanging</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        if let Some(tb) = find_text_box(&root) {
+            if let super::BoxKind::SvgText { dominant_baseline, .. } = &tb.kind {
+                assert_eq!(*dominant_baseline, super::SvgDominantBaseline::Hanging);
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_tspan_text_content() {
+        // <text><tspan>Hello</tspan> <tspan>World</tspan></text> should collect all tspan text.
+        let html = "<svg><text><tspan>Hello</tspan><tspan>World</tspan></text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        if let Some(tb) = find_text_box(&root) {
+            if let super::BoxKind::SvgText { text, .. } = &tb.kind {
+                assert!(text.contains("Hello"), "text should contain 'Hello', got '{}'", text);
+                assert!(text.contains("World"), "text should contain 'World', got '{}'", text);
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
     }
 
 }

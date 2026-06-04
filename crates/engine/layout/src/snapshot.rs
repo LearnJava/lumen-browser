@@ -88,6 +88,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::Contents => "Contents",
         BoxKind::SvgRoot { .. } => "SvgRoot",
         BoxKind::SvgShape { .. } => "SvgShape",
+        BoxKind::SvgText { .. } => "SvgText",
     };
     let _ = write!(
         out,

@@ -50,7 +50,7 @@ pub use box_tree::{
     apply_container_styles,
     collect_background_image_requests, collect_image_requests, layout, layout_measured,
     layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
-    PseudoKind, SvgShapeKind, ViewBox,
+    PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, ViewBox,
 };
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
