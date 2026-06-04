@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty)
+A-16: Device Orientation/Motion API stub  branch: p1-device-orientation-motion
+Next step: implement DeviceOrientationEvent/DeviceMotionEvent and requestPermission stubs  `crates/js/src/`
 
 ---
 

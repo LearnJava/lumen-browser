@@ -11,6 +11,7 @@ pub mod canvas2d;
 pub mod clipboard;
 pub mod cookie_banner;
 pub mod credentials;
+pub mod device_sensors;
 pub mod document_pip;
 pub mod dom;
 pub mod filesystem_access;
@@ -629,6 +630,13 @@ impl QuickJsRuntime {
             // No actual detection is performed.
             if let Err(e) = shape_detection::install_shape_detection_bindings(&ctx) {
                 eprintln!("Shape Detection bindings init failed: {}", e);
+            }
+
+            // Install Device Orientation and Device Motion APIs (W3C Device Orientation L2/L3) — pure JS implementation.
+            // Phase 0: DeviceOrientationEvent and DeviceMotionEvent with default values {0,0,0};
+            // requestPermission() always resolves to 'granted'.
+            if let Err(e) = device_sensors::install_device_sensors_bindings(&ctx) {
+                eprintln!("Device Sensors bindings init failed: {}", e);
             }
 
             // Install Document Picture-in-Picture API (W3C Document PiP §4) — pure JS implementation.
