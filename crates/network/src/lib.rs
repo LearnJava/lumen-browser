@@ -45,6 +45,7 @@ pub mod h2;
 pub mod http;
 pub mod http_cache;
 mod hsts;
+mod hsts_preload;
 mod mixed_content;
 mod mock;
 mod origin;
@@ -76,6 +77,7 @@ pub use cors::{
 pub use dns::SystemDnsResolver;
 pub use doh::{CachedDnsResolver, DohResolver};
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
+pub use hsts_preload::{HstsPreloadList, get_preload_list};
 pub use mixed_content::{
     MixedContentLevel, MixedContentMode, MixedContentPolicy, RequestDestination,
     block_reason as mixed_content_block_reason, classify_subresource_request,

@@ -1,0 +1,13 @@
+[
+  {"name": "github.com", "include_subdomains": true},
+  {"name": "google.com", "include_subdomains": true},
+  {"name": "facebook.com", "include_subdomains": true},
+  {"name": "twitter.com", "include_subdomains": true},
+  {"name": "amazon.com", "include_subdomains": true},
+  {"name": "youtube.com", "include_subdomains": true},
+  {"name": "wikipedia.org", "include_subdomains": true},
+  {"name": "paypal.com", "include_subdomains": true},
+  {"name": "dropbox.com", "include_subdomains": true},
+  {"name": "slack.com", "include_subdomains": true},
+  {"name": "stripe.com", "include_subdomains": false}
+]
