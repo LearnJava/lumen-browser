@@ -6,7 +6,7 @@
 
 ## In progress
 
-None — все recent merges завершены. Pick next item from "Next".
+None — задача завершена.
 
 ---
 
@@ -86,6 +86,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-a9-svg-text-rendering** ✅ 2026-06-04 — A-9: SVG text rendering Phase 0. `BoxKind::SvgText` variant для `<text>`, `<tspan>`, `<textPath>` элементов. `collect_text_content(doc, node_id)` рекурсивно собирает текст из DOM узлов. `SvgTextAnchor` enum (Start/Middle/End, default Start) и `SvgDominantBaseline` enum (Auto/Baseline/Hanging/Middle/Central/TextBeforeEdge/TextAfterEdge, default Auto) с `#[derive(Default)]`. `parse_text_anchor()` и `parse_dominant_baseline()` парсят SVG атрибуты. Layout: `lay_out_svg_element_position` позиционирует текст по x/y + dx/dy смещениям (Phase 1: minimal bbox с zero width/height). Paint: `emit_svg_text()` эмитит `DrawText` команды с SVG fill color, font settings. 5 новых lumen-layout unit-тестов (svg_text_element_simple, svg_text_with_x_y_attributes, svg_text_anchor_middle, svg_dominant_baseline_hanging, svg_tspan_text_content). 4 новых lumen-paint unit-тестов (svg_text_emits_drawtext_command, svg_text_with_fill_color, svg_text_with_font_size, svg_textpath_collects_content). lumen-layout: 2298 тестов (было 2293), lumen-paint: 497 тестов (было 492). Clippy чист. Phase 0 завершена (parsing + basic emit). Phase 2 (future P4 handoff): text measurement via TextMeasurer, text-anchor horizontal alignment, dominant-baseline vertical alignment.
 
 - **p2-svg-layout-improvements** ✅ 2026-06-04 — A-8: Inline SVG layout improvements Phase 1. `<defs>` контейнер обрабатывается как invisible (BoxKind::Skip). SVG intrinsic ratio из viewBox: функция `svg_intrinsic_ratio(view_box: &Option<ViewBox>) -> Option<f32>` вычисляет width/height для aspect-ratio preserved sizing. `SvgTransform::translate(tx, ty)` конструктор для x/y трансформов. Handoff комментарии для P4: `object-fit`, `object-position` могут переопределять viewBox scaling (Phase 2). Новые функции проверки: `is_svg_defs()`, `is_svg_use()`. `<use href="#id">` элементы отложены на Phase 2 (требуют cycle detection). 7 новых unit-тестов (svg_defs, intrinsic_ratio, preserve_aspect_ratio variants). lumen-layout: 2293 тестов ✅ (было 2286). Clippy чист. Phase 1 завершена (intrinsic ratio + <defs> invisible). Phase 2 (future): `<use>` с cycle detection, object-fit override.
 
