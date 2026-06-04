@@ -6,12 +6,12 @@
 
 ## In progress
 
-B-3 | **CSS Grid: auto-fill/auto-fit tracks**  
-branch: `p2-b3-grid-auto`  
-Next step: Research grid.rs, implement `resolve_auto_fill_fit_count`, add 8 unit tests
+B-4 | **CSS Grid: dense packing** (or next available from B section)
+branch: `p2-b4-...`
+Next step: Research grid auto-flow dense algorithm, implement back-fill pass
 
-Summary of B-3: `repeat(auto-fill, minmax(200px, 1fr))` вычисляет track count из available space,
-`auto-fit` коллапсирует пустые треки. `fit-content(N)` track size. 8 тестов в grid.
+Summary of B-4: `grid-auto-flow: dense` — второй проход заполняет holes не-positioned items.
+Обновление `place_auto_items()`. 4 теста.
 
 ---
 
@@ -90,6 +90,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-b3-grid-auto** ✅ 2026-06-04 — B-3: CSS Grid auto-fill/auto-fit/fit-content Phase 1. GridTrackSize::FitContent(Box<GridTrackSize>) variant для fit-content(<limit>) (CSS Grid L3 §9.1); GridRepeat struct + RepeatCount enum для store repeat(auto-fill|auto-fit) metadata. parse_track_list() детектит 'auto-fill' и 'auto-fit' keywords (case-insensitive), expands fixed repeats, preserves auto-fill/auto-fit для resolver на Phase 2. resolve_auto_fill_fit_count(avail_w, tracks, gap) → usize вычисляет track count = floor((avail_w + gap) / (track_min_width + gap)), min 1, из доступной ширины и min-width треков (из minmax/fit-content/length). 14 unit-тестов (parse fit-content px/%, auto-fill/auto-fit, fixed/mixed repeat, resolve count basic/with-gap/zero-width/large-gap/multiple-tracks/small-container/empty-tracks). lumen-layout: 2311 тестов. Clippy чист. Phase 1 завершена (parsing + resolve_auto_fill_fit_count). Phase 2 (future): integrate GridRepeat into lay_out_grid() resolver, expand at layout. Phase 3 (future): auto-fit collapse empty tracks.
 
 - **p2-b8-appearance** ✅ 2026-06-04 — B-8: CSS Appearance property Phase 0. `apply_ua_appearance(style, tag)` в `compute_style`: при `appearance: none` убирает UA border/padding/background у `<input>/<button>/<select>/<textarea>/<progress>/<meter>`. Функция вызывается ПОСЛЕ apply_declaration, чтобы author-CSS `appearance: none` имел приоритет над UA стилями. 6 новых unit-тестов (appearance_none_removes_*_ua_styling variants + appearance_auto_preserves_ua_styling). lumen-layout: 2311 тестов. Clippy чист. Phase 0 завершена (parsing + ComputedStyle field + apply logic). Phase 1 (future): убирать UA dimensions/height при appearance:none.
 
