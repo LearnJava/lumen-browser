@@ -6,15 +6,14 @@
 
 ## In progress
 
-C-5: CSS shape-outside polygon + ellipse  
-branch: p1-c5-shape-outside  
-Next step: Add ShapePolygon/ShapeEllipse structs to FloatContext, parse_shape_polygon_px/parse_shape_ellipse_px, ray-intersection in left_edge_at/right_edge_at, wire float placement. box_tree.rs:2943
+*(свободен)*
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-04 | C-5: CSS shape-outside polygon + ellipse | CSS Shapes L1 §4–5.2: `parse_shape_polygon_px()` / `parse_shape_ellipse_px()`, `ShapePolygon`/`ShapeEllipse` в `FloatContext`, `polygon_edge_x_at_y()` ray-intersection, `left_edge_at`/`right_edge_at` circle→polygon→ellipse chain, wiring в float placement. // CSS: shape-outside, shape-margin. lumen-layout: 2357 тестов (+8). Clippy чист. |
 | 2026-06-04 | C-4: CSS logical properties resolver | CSS Logical Properties L1 §2–8 Phase 0: `resolve_logical_properties(style, writing_mode)` в `layout/src/style.rs`. Временные поля в ComputedStyle: inline-size, block-size, inset-inline-*, inset-block-*, margin-inline/block-*, padding-inline/block-*, border-inline/block-*-width. `apply_declaration()` парсит logical свойства в temp-поля; `resolve_logical_properties()` маппирует logical→physical после cascade. Phase 0: horizontal-tb (inline-start→left, inline-end→right, block-start→top, block-end→bottom). Vertical writing modes — Phase 1. // CSS: inline-size, block-size, inset-*, margin-*, padding-*, border-*-width. lumen-layout: 2349 тестов. Clippy чист. |
 | 2026-06-04 | C-3: MathML Core layout stub | MathML Core layout Phase 0: New module `crates/engine/layout/src/mathml.rs` with `MathmlBox` struct (main_boxes, denominator_boxes, annotation_boxes, annotation_scale), `MathmlElementKind` enum (Math, Mrow, Mi, Mn, Mo, Mfrac, Msqrt, Msup, Msub). Functions: `lay_out_mathml(mathml)` entry point, `collect_mathml_structure(root)` for DOM scanning, `collect_mfrac_structure()`, `collect_msqrt_structure()`, `collect_msup_structure()`, `collect_msub_structure()`. Layout algorithms: `lay_out_mfrac()` stacks numerator/denominator vertically, `lay_out_msqrt()` returns radicand (Phase 0), `lay_out_msup()` positions exponent at top-right with scaling, `lay_out_msub()` positions subscript at bottom-right with scaling. Helpers: `stack_boxes_horizontal()`, `stack_boxes_vertical()`, `scale_box()`, `position_annotation_at_top_right()`, `position_annotation_at_bottom_right()`. Phase 0: basic stacking and composition; Phase 1: math-style, math-depth CSS properties (P4 wiring). 8 unit-tests (element kinds, box creation, builder chain, denominator/annotation, scale clamping). // CSS: math-style, math-depth. lumen-layout: 2347 tests (was 2339 + 8 new). Clippy clean. |
 | 2026-06-04 | C-2: CSS Ruby layout stub | CSS Ruby L3 Phase 0: New module `crates/engine/layout/src/ruby.rs` with `RubyBox` struct (base_boxes, ruby_text_boxes, position: Over/Under, inter_char_spacing). `RubyPosition` enum: Over (default, ruby above base) / Under (ruby below base). `lay_out_ruby(ruby)` → LayoutBox: stack base + ruby-text vertically with center alignment. Helper functions: `stack_ruby_over()` / `stack_ruby_under()` position ruby text relative to base width, `stack_boxes_horizontal()` for multi-box composition, `measure_total_width/height()` for dimension queries. Phase 0: basic stacking; Phase 1: ruby-align, ruby-merge properties (P4 wiring). 8 unit-tests (creation, positioning, measurements, builder chain). // CSS: ruby-align, ruby-merge, ruby-position. lumen-layout: 2339 тестов (было 2331 + 8 новых). Clippy чист. |
