@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+A-20: PerformanceObserver: LCP + CLS  branch: p1-a20-perf-observer
+Next step: создать модули в crates/js/src/ для PerformanceEntry и интеграции с shell
 
 ---
 
