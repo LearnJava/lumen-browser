@@ -6,9 +6,9 @@
 
 ## In progress
 
-B-5 | **CSS Multi-column: column-rule rendering**  
-branch: `p2-b5-column-rule`  
-Next step: Check ComputedStyle for column-rule-width/style/color fields, implement `emit_column_rules()` in `lumen-paint/src/display_list.rs`
+B-6 | **CSS image-rendering**  
+branch: `p2-b6-image-rendering`  
+Next step: Add FilterMode handling for image-rendering property in display list
 
 ---
 
@@ -87,6 +87,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-b5-column-rule** ✅ 2026-06-04 — B-5: CSS Multi-column column-rule rendering Phase 0. `emit_column_rules(b, out)` в `paint/src/display_list.rs`: вычисляет позиции колонок по `column-count/width/gap`, эмитит вертикальные разделители `DrawBorder` с `column-rule-width/style/color` из ComputedStyle. Геометрия зеркалирует `lay_out_multicol_children` — разделитель центрируется в gap (gap_left + (col_gap - rule_w) * 0.5). Поддержка: Solid/Dashed/Dotted через существующий `DrawBorder` (правая сторона rect); Double и прочие как Solid (Phase 0). Вызывается в 3 местах walk-цикла. 6 unit-тестов (column_rule_cmds helper): emits_separators/none_style/zero_width/single_column/no_column_props/separator_centered_in_gap. Graphic test 33-multi-column.html (7 контейнеров с разными column-count и column-rule стилями: solid red / dashed cyan / dotted yellow). Phase 0 завершена (visual rendering). Phase 1 (future): позиционирование column-span:all + column-fill поддержка (P1/P4).
 
 - **p2-a1-css-properties-values** ✅ 2026-06-04 — A-1: CSS Properties & Values API (Houdini) Phase 0–1. `CSS.registerProperty({name, syntax, inherits, initialValue})` IIFE-шим в `lumen-js`, парсинг `@property` at-rule в `lumen-css-parser` (PropertyRule struct с name/syntax/inherits/initial-value дескрипторами), `CSS._getRegisteredProperties()` API. `compute_style` применяет `initial-value` как fallback через `apply_property_initial_values` когда зарегистрированное свойство не объявлено. Registry строится из `Stylesheet.properties`, `inherits: false` сбрасывает родительское значение, `inherits: true` сохраняет наследование. `syntax` валидируется через `validate_against_syntax` при применении initial-value. 8 новых unit-тестов в lumen-layout (parse_property_rule, initial_value_fallback, no_initial_value, declared_overrides_initial, inherits_true, universal_syntax, var_substitution_with_fallback, multiple_properties). lumen-layout: 2306 тестов (было 2298 + 8 новых). Clippy чист. Phase 1 завершена (registry + initial-value fallback + syntax validation). Phase 2 (P4 handoff): синтаксис-валидация в `@property` дескрипторах, интеграция fallback в `expand_vars` для `var()`.
 
