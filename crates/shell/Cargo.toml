@@ -12,13 +12,16 @@ name = "lumen"
 path = "src/main.rs"
 
 [features]
+# Phase 2 defaults: femtovg primary + wgpu fallback (ADR-010 RB-9).
+# Both must be in default so that #[cfg(feature = "backend-*")] guards in
+# backend_factory.rs compile the real backends, not the stub error paths.
+default = ["backend-femtovg", "backend-wgpu"]
+
 # Enable QuickJS JavaScript engine (rquickjs). Without this feature the shell
 # falls back to NullJsRuntime which silently ignores all inline scripts.
 quickjs = ["dep:lumen-js"]
 
 # femtovg rendering backend — Phase 2 default (ADR-010 RB-9).
-# Shell inherits this through lumen-paint's default = ["backend-femtovg"].
-# Listed explicitly here to allow: cargo run -p lumen-shell --features backend-femtovg
 backend-femtovg = ["lumen-paint/backend-femtovg"]
 
 # wgpu rendering backend — Phase 1 / Phase 2 fallback (ADR-010 §Migration path).
@@ -37,9 +40,8 @@ lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true
 lumen-dom.workspace = true
 lumen-layout.workspace = true
-# Phase 2 default: shell uses femtovg backend (ADR-010 RB-9).
-# wgpu is kept as compile-time fallback via backend-wgpu feature.
-lumen-paint = { workspace = true, features = ["backend-femtovg", "backend-wgpu"] }
+# Phase 2: backend features are activated via [features] default above (ADR-010 RB-9).
+lumen-paint = { workspace = true }
 lumen-font.workspace = true
 lumen-encoding.workspace = true
 lumen-image.workspace = true

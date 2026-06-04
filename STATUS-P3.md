@@ -12,9 +12,11 @@ _(нет)_
 
 Приоритет сверху вниз. Каждая — отдельная ветка `p3-bug-<id>`, отдельный worktree.
 
-### 1. Новые баги (если появятся)
+### 1. Открытые баги (приоритет сверху вниз)
 
-Следить за `grep "OPEN" BUGS.md`. Текущий статус: OPEN-багов нет (все BUG-001..BUG-052 FIXED).
+_(нет открытых — см. `grep "OPEN" BUGS.md`)_
+
+Следить за новыми: `grep "OPEN" BUGS.md`.
 
 ### 2. Регрессии тестов (приоритет 0)
 
@@ -60,6 +62,11 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 ## Recent fixes
 
+- **BUG-062/063 clippy lint-нарушения** (2026-06-04) — layout: `manual_clamp` → `scale.clamp()`, удалён `#[expect(dead_code)]` (функция оказалась используемой), 5 `collapsible_if` схлопнуты через `&&`, `unneeded_struct_pattern` (`BoxKind::Block { .. }` → `BoxKind::Block`). network: тип `Arc<Mutex<HashMap<(String,u16),(Vec<SocketAddr>,u64)>>>` вынесен в type alias `DnsCacheMap`. layout 2349/2349, network 667/667. Влито `p3-bug062-063-clippy`.
+- **BUG-061 test_32_list_markers regression** (2026-06-04) — `test_32_list_markers` падал (26 li вместо 22): коммит d70391d9 (C9/P4) добавил 2 новые секции в `32-list-markers.html` (custom-marker + content-marker, 4 новых `<li>`), не обновив тест. Ожидания: 22 → 26 li, 20 → 24 маркеров (маркер-ширина всегда `em×1.5 = 24px` независимо от content). Попутно добавлены BUG-062/063 (pre-existing clippy ошибки в lumen-network и lumen-layout). Влито `p3-bug-test32-list-markers`.
+- **BUG-054 is_stale_error Windows WSAECONNABORTED** (2026-06-04) — `is_stale_error()` (`crates/network/src/lib.rs:662`) не распознавал stale-соединение на Windows: `io::Error::from_raw_os_error(10053)` форматируется с локализованным OS-сообщением («Программа на вашем хост-компьютере...»), а не Rust `ErrorKind` именем — паттерны «ConnectionReset»/«ConnectionAborted» не совпадали. Fix: добавлены «os error 10053» (WSAECONNABORTED) и «os error 10054» (WSAECONNRESET) в список паттернов. Тест `stale_pooled_connection_triggers_retry` теперь проходит. **BUG-055** помечен FIXED: AVIF поддерживается, тест переписан на `image/heic` в BUG-046. Влито `p3-bug054-stale-conn`.
+- **BUG-059 + BUG-060 WOFF2 stream routing** (2026-06-04) — корневая причина обоих багов: декодер читал количество точек контура из `glyph_stream` вместо `nPoints_stream`, а triplet-координаты из `glyph_stream` вместо `flag_stream` (WOFF2 spec §5.3). При попадании нулевых байт в glyph_stream → «contour with zero points» (BUG-059); для bold/medium поток заканчивался раньше → «unexpected end of font data» (BUG-060). Fix: `n_points_stream`/`flag_stream` теперь используются по назначению; нулевые контуры пропускаются без ошибки. 3 новых теста (`glyf_transform_zero_point_contour_skipped_gracefully` / `_normal_glyph_decoded` / `_empty_glyph_produces_no_output`). font --lib 312/312. Влито в `p3-bug058-contents-flatten`.
+- **BUG-058 display:contents паника в flex/grid/table** (2026-06-04) — `flatten_contents` (`crates/engine/layout/src/box_tree.rs`) вызывался только в `else (non-item-container)` ветке `build_box`, но не для `is_item_container` (flex/grid/table). `display:contents` дочерний элемент попадал в children flex-контейнера как `BoxKind::Contents` без раскрытия → `lay_out` бил `unreachable!`. Fix: `flatten_contents(&mut children)` перенесён за `if is_item_container / else` блок, теперь работает для обоих путей. 2 регрессионных теста: `contents_in_flex_container_no_panic` + `contents_in_grid_container_no_panic`. layout 2349/2349. Влито `p3-bug058-contents-flatten`.
 - **BUG-057 wgpu Vulkan crash** (2026-06-03) — `Renderer::new_async` и `new_headless_async` теперь используют `wgpu::Backends::DX12` по умолчанию на Windows вместо Vulkan (через `InstanceDescriptor + with_env()`). Vulkan-бэкенд вызывал двойную панику при первом рендере страницы: сначала validation error «Encoder is invalid», затем при раскрутке стека Surface drop расил на ещё живом SurfaceTexture. `WGPU_BACKEND` env-var позволяет переопределить. Влито `p3-bug057-wgpu-dx12`.
 - **8A.6 doc-sync** (2026-05-31) — обновлены `lumen-plan.md` (8A.6 🟡→✅, 8A 🟡→✅, cpu_raster 33→57 страниц), `CLAUDE.md` (раздел «Planned migration» заменён на «8A.6 COMPLETE», убрана многостраничная история), `subsystems/driver.md` (57 страниц, invariants). Влито `p3-8a6-doc-sync`.
 - **8A.6(б-20) расширение PAGES snapshot_cpu 56 → 57** (2026-05-31) — `PAGES` (`crates/driver/tests/snapshot_cpu.rs`) расширен с 56 до 57 страниц: добавлена `54-svg-path-stroke` (SVG `<path>` со stroke-only и fill+stroke — stroke-тесселятор `tessellate_stroke` эмитит треугольники как `DrawSvgPath`, cpu_raster поддерживал с б-4, новый примитив не нужен; 22 КБ — 4 ряда: open stroked/closed stroked/fill+stroke/varying-width). 56 прежних эталонов перегенерировались байт-в-байт идентично → детерминизм. clippy чист (driver `--all-targets --features cpu-render`), `snapshot_cpu` 57-страничный 1/1. **Все graphic_tests/*.html теперь покрыты snapshot_cpu.** Влито `p3-8a6-more-pages-b20`.

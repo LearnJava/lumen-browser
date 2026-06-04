@@ -3110,9 +3110,13 @@ impl Renderer {
             let bytes = match maybe_decode_font(&raw) {
                 Ok(Some(decoded)) => decoded,
                 Ok(None) => raw,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("[font] WOFF decode failed {}: {e}", rec.path.display());
+                    continue;
+                }
             };
-            if Font::parse(&bytes).is_err() {
+            if let Err(e) = Font::parse(&bytes) {
+                eprintln!("[font] parse failed {}: {e}", rec.path.display());
                 continue;
             }
             let id = self.faces.len();

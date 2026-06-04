@@ -3042,6 +3042,26 @@ fn emit_resize_grip(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     });
 }
 
+/// Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента.
+///
+/// Grip — это 12×12 px область в правом нижнем углу `b.rect`. Присутствует
+/// только когда `resize != None` и хотя бы одна ось `overflow` ≠ Visible.
+pub fn point_on_resize_grip(b: &LayoutBox, px: f32, py: f32) -> bool {
+    let s = &b.style;
+    if s.resize == Resize::None {
+        return false;
+    }
+    let overflow_hidden = matches!(s.overflow_x, Overflow::Hidden | Overflow::Clip | Overflow::Auto | Overflow::Scroll)
+        || matches!(s.overflow_y, Overflow::Hidden | Overflow::Clip | Overflow::Auto | Overflow::Scroll);
+    if !overflow_hidden {
+        return false;
+    }
+    let grip_size = 12.0_f32;
+    let grip_x = b.rect.x + b.rect.width - grip_size;
+    let grip_y = b.rect.y + b.rect.height - grip_size;
+    px >= grip_x && px < grip_x + grip_size && py >= grip_y && py < grip_y + grip_size
+}
+
 /// CSS Multi-column Layout L1 §3.3 — рисует разделители колонок
 /// (`column-rule`) между каждой парой соседних колонок.
 ///

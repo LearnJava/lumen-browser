@@ -398,11 +398,14 @@ impl DnsResolver for DohResolver {
 /// per-entry TTL (default 60 seconds), returning cached addresses if fresh.
 /// Expired entries are re-queried from the underlying resolver.
 ///
+/// Cached DNS entries: (host, port) → (addresses, expiry_timestamp_ms).
+type DnsCacheMap = std::collections::HashMap<(String, u16), (Vec<SocketAddr>, u64)>;
+
 /// Used to reduce DoH / system DNS lookups when resolving frequently-used hosts.
 pub struct CachedDnsResolver {
     inner: Arc<dyn DnsResolver>,
     /// (host, port) → (addresses, expiry_timestamp_ms)
-    cache: Arc<Mutex<std::collections::HashMap<(String, u16), (Vec<SocketAddr>, u64)>>>,
+    cache: Arc<Mutex<DnsCacheMap>>,
 }
 
 impl CachedDnsResolver {
