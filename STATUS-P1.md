@@ -6,9 +6,9 @@
 
 ## In progress
 
-- **A-22: Payment Request API stub**  
-  Branch: `p1-a22-payment-request`  
-  Next step: реализовать `PaymentRequest` класс и методы в `crates/js/src/payment_request.rs`
+- **A-19: CSS Scroll Snap L2 events**  
+  Branch: `p1-a19-snap-events`  
+  Next step: создать модуль `crates/js/src/scroll_snap_events.rs` с классом `SnapChangeEvent`, методами доставки событий `snapchanging` и `snapchanged`
 
 ---
 
