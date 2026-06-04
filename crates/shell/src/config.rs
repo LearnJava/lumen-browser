@@ -23,6 +23,7 @@
 //! device_memory       = 8
 //! platform            = "Win32"
 //! languages           = "en-US,en"      # comma-separated; first entry = navigator.language
+//! doh_url             = "https://cloudflare-dns.com/dns-query"  # DNS over HTTPS resolver (optional)
 //! ```
 //!
 //! Applied at startup: [`FingerprintProfile::install_navigator`] pushes the
@@ -30,6 +31,7 @@
 //! [`FingerprintProfile::apply_http`] stamps the HTTP/TLS fingerprint onto an
 //! [`HttpClient`].
 
+use lumen_core::url::Url;
 use lumen_network::{HttpClient, HttpProfile, TlsProfile};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -81,6 +83,9 @@ pub struct FingerprintProfile {
     pub color_depth: u32,
     /// `Date.prototype.getTimezoneOffset()` value in minutes (+ = behind UTC).
     pub timezone_offset: i32,
+    /// DNS over HTTPS resolver URL. `None` disables DoH; falls back to system DNS.
+    /// Example: `https://cloudflare-dns.com/dns-query`.
+    pub doh_url: Option<String>,
 }
 
 impl Default for FingerprintProfile {
@@ -98,6 +103,7 @@ impl Default for FingerprintProfile {
             screen_height: 1080,
             color_depth: 24,
             timezone_offset: 0,
+            doh_url: None,
         }
     }
 }
@@ -136,10 +142,33 @@ impl FingerprintProfile {
 
     /// Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder.
     #[must_use]
-    pub fn apply_http(&self, client: HttpClient) -> HttpClient {
-        client
+    pub fn apply_http(&self, mut client: HttpClient) -> HttpClient {
+        client = client
             .with_fingerprint_profile(self.http_profile)
-            .with_tls_profile(self.effective_tls_profile())
+            .with_tls_profile(self.effective_tls_profile());
+
+        // Wire DoH resolver if configured
+        if let Some(doh_url) = &self.doh_url {
+            if let Ok(endpoint) = Url::parse(doh_url) {
+                // Bootstrap HttpClient for DoH queries (uses system DNS to resolve DoH endpoint itself).
+                let bootstrap_client = std::sync::Arc::new(
+                    HttpClient::new()
+                        .with_fingerprint_profile(self.http_profile)
+                        .with_tls_profile(self.effective_tls_profile()),
+                );
+                // Create DoH resolver wrapping the bootstrap HTTP client.
+                let doh_resolver = std::sync::Arc::new(
+                    lumen_network::DohResolver::new(endpoint, bootstrap_client),
+                );
+                // Cache the DoH resolver results to reduce redundant queries.
+                let cached = std::sync::Arc::new(
+                    lumen_network::CachedDnsResolver::new(doh_resolver),
+                );
+                client = client.with_dns_resolver(cached);
+            }
+        }
+
+        client
     }
 }
 
@@ -280,6 +309,9 @@ fn apply_key(p: &mut FingerprintProfile, key: &str, value: &str) {
             if let Ok(v) = value.parse() {
                 p.timezone_offset = v;
             }
+        }
+        "doh_url" if !value.is_empty() => {
+            p.doh_url = Some(value.to_string());
         }
         _ => {}
     }

@@ -74,7 +74,7 @@ pub use cors::{
     needs_preflight, unsafe_request_header_names,
 };
 pub use dns::SystemDnsResolver;
-pub use doh::DohResolver;
+pub use doh::{CachedDnsResolver, DohResolver};
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
 pub use mixed_content::{
     MixedContentLevel, MixedContentMode, MixedContentPolicy, RequestDestination,
