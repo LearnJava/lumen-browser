@@ -23222,4 +23222,118 @@ mod tests {
         assert_eq!(parse_paint_function("paint(test"), None);
         assert_eq!(parse_paint_function("paint(test))"), None);
     }
+
+    #[test]
+    fn css_properties_values_api_parse_property_rule() {
+        // CSS Properties and Values L1 — @property at-rule parsing
+        let sheet = lumen_css_parser::parse(
+            "@property --my-color { syntax: \"<color>\"; inherits: true; initial-value: blue; }"
+        );
+        assert_eq!(sheet.properties.len(), 1);
+        let prop = &sheet.properties[0];
+        assert_eq!(prop.name, "--my-color");
+        assert_eq!(prop.syntax, "<color>");
+        assert!(prop.inherits);
+        assert_eq!(prop.initial_value, Some("blue".to_string()));
+    }
+
+    #[test]
+    fn css_properties_values_api_initial_value_fallback() {
+        // CSS Properties and Values L1 §1.1 — initial-value fallback when property not set
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --size { syntax: \"<length>\"; inherits: false; initial-value: 10px; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.custom_props.get("--size").map(String::as_str), Some("10px"));
+    }
+
+    #[test]
+    fn css_properties_values_api_no_initial_value() {
+        // CSS Properties and Values L1 — no initial-value means property stays empty
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --no-initial { syntax: \"<custom-ident>\"; inherits: true; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(!style.custom_props.contains_key("--no-initial"));
+    }
+
+    #[test]
+    fn css_properties_values_api_declared_overrides_initial() {
+        // CSS Properties and Values L1 — declared value overrides initial-value
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --color-prop { syntax: \"<color>\"; inherits: false; initial-value: red; } div { --color-prop: green; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.custom_props.get("--color-prop").map(String::as_str), Some("green"));
+    }
+
+    #[test]
+    fn css_properties_values_api_inherits_true() {
+        // CSS Properties and Values L1 — inherits: true property inherits from parent
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --inherit-prop { syntax: \"<custom-ident>\"; inherits: true; initial-value: initial-val; } body { --inherit-prop: parent-val; }"
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().unwrap();
+
+        let body_style = compute_style(&doc, body, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(body_style.custom_props.get("--inherit-prop").map(String::as_str), Some("parent-val"));
+
+        let div = doc.get(body).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &body_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.custom_props.get("--inherit-prop").map(String::as_str), Some("parent-val"));
+    }
+
+    #[test]
+    fn css_properties_values_api_multiple_properties() {
+        // CSS Properties and Values L1 — multiple @property rules
+        let sheet = lumen_css_parser::parse(
+            "@property --col1 { syntax: \"<color>\"; inherits: true; initial-value: red; } @property --col2 { syntax: \"<color>\"; inherits: false; initial-value: blue; }"
+        );
+        assert_eq!(sheet.properties.len(), 2);
+    }
+
+    #[test]
+    fn css_properties_values_api_universal_syntax() {
+        // CSS Properties and Values L1 — universal syntax "*" accepts any value
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --any-value { syntax: \"*\"; inherits: true; initial-value: calc(100% - 10px); }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Universal syntax should accept any value including calc()
+        assert_eq!(style.custom_props.get("--any-value").map(String::as_str), Some("calc(100% - 10px)"));
+    }
+
+    #[test]
+    fn css_properties_values_api_var_substitution_with_fallback() {
+        // CSS Properties and Values L1 — var() with fallback when initial-value not used
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --size { syntax: \"<length>\"; inherits: false; initial-value: 5px; } div { width: var(--size, 10px); }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        // Compute style for div — should use initial-value for --size
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Custom property should be set via initial-value
+        assert_eq!(style.custom_props.get("--size").map(String::as_str), Some("5px"));
+    }
 }
