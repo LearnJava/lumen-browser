@@ -6,7 +6,7 @@
 
 ## In progress
 
-(none)
+- **A-5: WebGL2 context** — `getContext('webgl2')` → `WebGL2RenderingContext`. Branch: `p2-webgl2-ctx-2`. Next step: создать `WebGL2RenderingContext` шим в `lumen-js/src/webgl_bindings.rs`, расширить `SoftwareWebGl` поддержкой VAOs, draw instanced методов и 3D-текстур.
 
 
 
