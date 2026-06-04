@@ -298,27 +298,4 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
 "#;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use lumen_core::JsRuntime as _;
-    use lumen_dom::Document;
-    use crate::QuickJsRuntime;
-    use std::sync::{Arc, Mutex};
-
-    fn make_rt() -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None)
-            .unwrap();
-        rt
-    }
-
-    fn bool_eval(rt: &QuickJsRuntime, script: &str) -> bool {
-        match rt.eval(script) {
-            Ok(lumen_core::JsValue::Bool(b)) => b,
-            Ok(other) => panic!("expected bool from `{script}`, got {other:?}"),
-            Err(e) => panic!("eval error in `{script}`: {e}"),
-        }
-    }
-
-}
+mod tests {}

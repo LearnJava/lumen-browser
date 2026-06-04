@@ -207,6 +207,7 @@ pub struct QuickJsRuntime {
     ///
     /// Shared with the `LumenResolver`'s import_map field. Set via `set_import_map()`
     /// before evaluating modules. Maps bare specifiers like "react" to URLs like "/vendor/react.js".
+    #[allow(dead_code)]
     module_import_map: Arc<Mutex<esm::ImportMap>>,
 }
 

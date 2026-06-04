@@ -187,10 +187,10 @@ impl LumenResolver {
             return resolve_relative(&effective_base, name);
         }
         // (4) Bare specifier — try import map
-        if let Ok(map) = self.import_map.lock() {
-            if let Some(resolved) = map.resolve(name, Some(base)) {
-                return resolved;
-            }
+        if let Ok(map) = self.import_map.lock()
+            && let Some(resolved) = map.resolve(name, Some(base))
+        {
+            return resolved;
         }
         // Fall back to returning as-is
         name.to_owned()

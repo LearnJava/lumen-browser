@@ -448,7 +448,6 @@ mod tests {
         // WebOTP API rejection is tested in JS integration tests in lumen-shell.
         // This test documents that the behavior is intentional: navigator.credentials.get({otp: ...})
         // always rejects with NotSupportedError since SMS-based OTP requires platform integration.
-        assert!(true, "WebOTP API rejection validated via JS shim integration");
     }
 
     #[test]

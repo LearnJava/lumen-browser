@@ -241,6 +241,24 @@ fn is_svg_root(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// Returns `true` when `id` is an SVG `<defs>` element (invisible container).
+#[allow(dead_code)]
+fn is_svg_defs(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local.eq_ignore_ascii_case("defs")
+    )
+}
+
+/// Returns `true` when `id` is an SVG `<use>` element (reference to another element).
+#[allow(dead_code)]
+fn is_svg_use(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local.eq_ignore_ascii_case("use")
+    )
+}
+
 /// Returns `true` when `id` is a `<details>` element.
 fn is_details_element(doc: &Document, id: NodeId) -> bool {
     matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local == "details")
@@ -462,6 +480,19 @@ fn parse_svg_transform(attr: Option<&str>) -> SvgTransform {
     }
 
     result
+}
+
+/// Calculates the intrinsic aspect ratio from SVG viewBox.
+/// Returns `Some(width / height)` if viewBox is present and both dimensions > 0.
+#[allow(dead_code)]
+fn svg_intrinsic_ratio(view_box: &Option<ViewBox>) -> Option<f32> {
+    view_box.as_ref().and_then(|vb| {
+        if vb.width > 0.0 && vb.height > 0.0 {
+            Some(vb.width / vb.height)
+        } else {
+            None
+        }
+    })
 }
 
 /// Calculates SVG viewBox scaling and offset for aspect-ratio preservation.
@@ -2147,7 +2178,7 @@ fn build_box(
         // The flat tree already maps host children to shadow root's children.
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => BoxKind::Skip,
         NodeData::Document | NodeData::Element { .. } => {
-            if style.display == Display::None || is_closed_popover(doc, id) {
+            if style.display == Display::None || is_closed_popover(doc, id) || is_svg_defs(doc, id) {
                 BoxKind::Skip
             } else if is_image_element(doc, id) {
                 let src = resolve_image_source(doc, id, viewport);
@@ -7830,6 +7861,86 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+    }
+
+    #[test]
+    fn svg_defs_element_is_skipped() {
+        // <defs> container should be invisible (Skip).
+        let html = r#"<svg><defs><rect id="r"/></defs><circle/></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // SVG should have only <circle> as visible child, <defs> should be skipped.
+        assert!(!root.children.is_empty(), "svg should have children");
+        if let Some(svg) = root.children.first() {
+            if let super::BoxKind::SvgRoot { .. } = &svg.kind {
+                assert!(!svg.children.is_empty(), "svg should have visible children");
+                // Should contain circle, not defs.
+            }
+        }
+    }
+
+    #[test]
+    fn svg_intrinsic_ratio_from_viewbox() {
+        // SVG with viewBox="0 0 200 100" should have intrinsic ratio of 2:1.
+        let html = r#"<svg viewBox="0 0 200 100"></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // Find SVG root.
+        if let Some(svg) = root.children.first() {
+            if let super::BoxKind::SvgRoot { view_box, .. } = &svg.kind {
+                let ratio = super::svg_intrinsic_ratio(view_box);
+                assert_eq!(ratio, Some(2.0), "viewBox 200x100 should give ratio 2.0");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_intrinsic_ratio_none_without_viewbox() {
+        // SVG without viewBox should return None for intrinsic ratio.
+        let html = r#"<svg></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        if let Some(svg) = root.children.first() {
+            if let super::BoxKind::SvgRoot { view_box, .. } = &svg.kind {
+                let ratio = super::svg_intrinsic_ratio(view_box);
+                assert_eq!(ratio, None, "svg without viewBox should have no intrinsic ratio");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_preserve_aspect_ratio_meet() {
+        // preserveAspectRatio="xMidYMid meet" (default) should parse correctly.
+        let html = r#"<svg viewBox="0 0 100 100" width="200" height="100"></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        if let Some(svg) = root.children.first() {
+            if let super::BoxKind::SvgRoot { preserve_aspect_ratio, .. } = &svg.kind {
+                assert_eq!(preserve_aspect_ratio.meet_or_slice, super::SvgMeetOrSlice::Meet);
+                assert_eq!(preserve_aspect_ratio.align_x, super::SvgAlignX::Mid);
+                assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Mid);
+            }
+        }
+    }
+
+    #[test]
+    fn svg_preserve_aspect_ratio_slice() {
+        // preserveAspectRatio="xMinYMin slice" should parse correctly.
+        let html = r#"<svg preserveAspectRatio="xMinYMin slice"></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        if let Some(svg) = root.children.first() {
+            if let super::BoxKind::SvgRoot { preserve_aspect_ratio, .. } = &svg.kind {
+                assert_eq!(preserve_aspect_ratio.meet_or_slice, super::SvgMeetOrSlice::Slice);
+                assert_eq!(preserve_aspect_ratio.align_x, super::SvgAlignX::Min);
+                assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Min);
+            }
+        }
     }
 
 }

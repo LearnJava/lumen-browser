@@ -6,9 +6,7 @@
 
 ## In progress
 
-- **A-19: CSS Scroll Snap L2 events**  
-  Branch: `p1-a19-snap-events`  
-  Next step: создать модуль `crates/js/src/scroll_snap_events.rs` с классом `SnapChangeEvent`, методами доставки событий `snapchanging` и `snapchanged`
+(none)
 
 ---
 
