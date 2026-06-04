@@ -184,3 +184,5 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **scroll-snap-type** — ✅ shell integration реализована (CSS Scroll Snap L1 §3.1): collect_snap_containers + find_snap_target подключены к shell scroll handler; page-level snap (y/x mandatory + proximity) применяется в start_smooth_scroll/scroll_x_by с корректным viewport snap-port; snap_containers кэшируется и обновляется после каждого layout; тест 62
 - **scroll-snap-align** — ✅ shell integration реализована (CSS Scroll Snap L1 §6.1): start/end/center keyword alignment на обоих осях; тест 62
 - **scroll-snap-stop** — ✅ shell integration реализована (CSS Scroll Snap L1 §6.2): always barrier корректно останавливает fling-scroll; тест 62
+
+- **display: masonry** — 🟡 Phase 0 реализована (CSS Masonry Layout L1): lay_out_masonry() алгоритм в layout/src/masonry.rs; waterfall grid с column-count колонками, items размещаются в колонку с минимальной высотой; dispatch в box_tree.rs для Display::Masonry; gap поддержана через существующие CSS свойства; align-tracks/justify-tracks отложены на Phase 1; тест 63
