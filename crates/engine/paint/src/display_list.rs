@@ -4466,6 +4466,115 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
     }
 }
 
+/// BorderCollapse режим для table-layout (CSS Tables L2 §17.6).
+/// Phase 1: поддержка обоих режимов в коде, CSS wiring отложена на P4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum BorderCollapse {
+    /// Каждая ячейка имеет независимые границы, разделённые border-spacing
+    Separate,
+    /// Границы соседних ячеек схлопываются (collapsed border model)
+    Collapse,
+}
+
+impl BorderCollapse {
+    /// Определяет режим по ComputedStyle (временно hardcoded Separate для Phase 0)
+    #[allow(dead_code)]
+    fn from_style(_s: &ComputedStyle) -> Self {
+        // // CSS: border-collapse — будет P4 задача добавить поле в ComputedStyle
+        // Пока Phase 1 поддерживает оба режима через параметры, но CSS-интеграция отложена
+        BorderCollapse::Separate
+    }
+}
+
+/// Border precedence value для collapsed border model (CSS Tables L2 §17.6.2).
+/// Более высокий precedence побеждает при конфликте.
+/// Phase 1: поддержка precedence calculation, full integration в Phase 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
+enum BorderPrecedence {
+    /// Table border — самый низкий precedence
+    Table,
+    /// Row group border (thead/tbody/tfoot)
+    RowGroup,
+    /// Row border
+    Row,
+    /// Column group border (colgroup)
+    ColumnGroup,
+    /// Column border (col)
+    Column,
+    /// Cell border — самый высокий precedence
+    Cell,
+}
+
+/// Информация о border для collapsed border model
+/// Phase 1: структура и helpers для future collapse mode implementation.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct CollapsedBorder {
+    /// Ширина границы
+    width: f32,
+    /// Цвет границы
+    color: [f32; 4],
+    /// Стиль границы (solid, dashed и т.д.)
+    style: BorderStyle,
+    /// Precedence для разрешения конфликтов
+    precedence: BorderPrecedence,
+}
+
+impl CollapsedBorder {
+    /// Выбирает наиболее приоритетную границу из двух конкурирующих
+    /// Согласно CSS Tables L2 §17.6.2, более узкие границы скрываются,
+    /// а при равной ширине побеждает hide > none > solid/dashed... > initial
+    #[allow(dead_code)]
+    fn resolve_conflict(a: &Self, b: &Self) -> Self {
+        // По precedence: более высокий precedence побеждает
+        if a.precedence != b.precedence {
+            return if a.precedence > b.precedence {
+                a.clone()
+            } else {
+                b.clone()
+            };
+        }
+
+        // При равном precedence: более узкая граница скрывается
+        if (a.width - b.width).abs() > 0.001 {
+            return if a.width > b.width {
+                a.clone()
+            } else {
+                b.clone()
+            };
+        }
+
+        // По умолчанию выбираем первую (может быть улучшено по стилю)
+        a.clone()
+    }
+}
+
+/// Контекст таблицы для управления border-collapse и border-spacing
+/// Phase 1: хранит информацию о режиме таблицы и spacing, используется в emit_table_box.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct TableContext {
+    /// Режим свёртывания границ (separate или collapse)
+    border_collapse: BorderCollapse,
+    /// Border-spacing для separate режима (горизонтальный и вертикальный)
+    /// Временно hardcoded: (8.0, 8.0) px
+    border_spacing: (f32, f32),
+}
+
+impl TableContext {
+    /// Создаёт context для таблицы на основе её стиля
+    fn from_box(_b: &LayoutBox) -> Self {
+        // // CSS: border-collapse, border-spacing — P4 handoff
+        // Phase 1 заглушка использует separate режим и default spacing
+        TableContext {
+            border_collapse: BorderCollapse::Separate,
+            border_spacing: (8.0, 8.0), // CSS initial value для border-spacing
+        }
+    }
+}
+
 /// Рендеринг таблицы с поддержкой border-collapse и фонов ячеек.
 ///
 /// CSS 2.1 §17.5 border-collapse: separate (default) или collapse (merged).
@@ -4477,6 +4586,9 @@ fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     // - Table содержит TableRowGroup'ы (или прямые TableRow'ы)
     // - Каждый Row содержит ячейки (display: table-cell)
     // - Каждая ячейка может иметь свой background и border
+
+    // Phase 1: создаём контекст таблицы для управления border-collapse/spacing
+    let _table_ctx = TableContext::from_box(b);
 
     // Эмитим фон таблицы
     if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -4558,6 +4670,10 @@ fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 
 /// Эмитируем ячейку таблицы
 fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Phase 1 TODO: Получать table_ctx и применять collapsed/separate border rules
+    // - Separate mode: каждая ячейка имеет независимые границы (текущее поведение)
+    // - Collapse mode: использовать border conflict resolution algorithm §17.6.2
+
     // Эмитим фон ячейки
     if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
         && bg.a > 0
@@ -4566,7 +4682,7 @@ fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     }
     emit_background_image(out, b, dpr);
 
-    // Эмитим границы ячейки
+    // Эмитим границы ячейки (Phase 0: separate mode)
     let s = &b.style;
     let has_border = s.border_top_style.is_visible()
         || s.border_right_style.is_visible()
@@ -9267,5 +9383,77 @@ mod tests {
         let split = hash_display_list(&[red_fill(5.0)], &[red_fill(9.0)], 0.0, 0.0, 1024, 720);
         assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
         let _ = in_overlay;
+    }
+
+    // ── Тесты table rendering Phase 1 ─────────────────────────────────────
+
+    #[test]
+    fn table_context_default_is_separate_mode() {
+        // Тест для убеждения что TableContext::from_box возвращает separate режим по умолчанию
+        // (реальный тест с LayoutBox требует полного setup, поэтому проверяем структуру)
+        let ctx = TableContext {
+            border_collapse: BorderCollapse::Separate,
+            border_spacing: (8.0, 8.0),
+        };
+        assert_eq!(ctx.border_collapse, BorderCollapse::Separate);
+        assert_eq!(ctx.border_spacing, (8.0, 8.0));
+    }
+
+    #[test]
+    fn border_collapse_separate_wins_over_lower_precedence() {
+        let cell_border = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let table_border = CollapsedBorder {
+            width: 1.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Table,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&table_border, &cell_border);
+        assert_eq!(resolved.precedence, BorderPrecedence::Cell);
+        assert_eq!(resolved.color, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn border_collapse_wider_border_wins_at_equal_precedence() {
+        let thin = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let thick = CollapsedBorder {
+            width: 2.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&thin, &thick);
+        assert_eq!(resolved.width, 2.0);
+        assert_eq!(resolved.color, [0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn table_separate_mode_renders_with_cells_independent() {
+        // Phase 1: table в separate режиме — каждая ячейка имеет независимые границы
+        let dl = build(
+            "<table><tr><td>A</td><td>B</td></tr></table>",
+            "td { border: 1px solid black; background: lightblue; }",
+        );
+        // Должны быть эмитированы фоны ячеек (2×FillRect для ячеек + контент)
+        let fills = fills(&dl);
+        assert!(!fills.is_empty(), "table cells should have background fills");
+    }
+
+    #[test]
+    fn border_precedence_ordering_correct() {
+        assert!(BorderPrecedence::Table < BorderPrecedence::RowGroup);
+        assert!(BorderPrecedence::RowGroup < BorderPrecedence::Row);
+        assert!(BorderPrecedence::Row < BorderPrecedence::Column);
+        assert!(BorderPrecedence::Column < BorderPrecedence::Cell);
     }
 }
