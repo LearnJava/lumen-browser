@@ -6,7 +6,13 @@
 
 ## In progress
 
-(none — ready for next task)
+B-7 | **CSS Resize property**  
+branch: `p2-b7-resize`  
+Next step: Create worktree and design resize control UI (12px grip in corner)
+
+Summary of B-7: `resize: both/horizontal/vertical` на overflow≠visible элементах создаёт 12px grip в углу,
+эмитит как `DrawSvgPath`. `MouseInput Pressed` на grip → `resize_active`, `CursorMoved` меняет inline width/height.
+Shell integration + paint layer. 6 тестов.
 
 ---
 
