@@ -5459,6 +5459,7 @@ fn lay_out_grid(
 /// # Returns
 /// The minimum number of tracks that fit in available space, with preference
 /// for auto-fill (leave empty) over auto-fit (collapse).
+#[expect(dead_code)]
 fn resolve_auto_fill_fit_count(
     available_width: f32,
     track_sizes: &[GridTrackSize],
@@ -5470,7 +5471,7 @@ fn resolve_auto_fill_fit_count(
 
     // Compute minimum track width: the min() sizing function of each track.
     // For minmax(min, max), use min. For auto/fr/max-content, use 0 as placeholder (content-sized).
-    let mut track_min_width: f64 = 0.0;
+    let mut track_min_width: f32 = 0.0;
     for track in track_sizes {
         let w = match track {
             GridTrackSize::Length(len) => {
