@@ -6,9 +6,9 @@
 
 ## In progress
 
-B-2: CSS Flex align-content
-  Branch: worktree-p2-flex-align-content
-  Next step: реализовать align_flex_lines() в layout/src/flex.rs
+(none)
+
+
 
 ---
 
@@ -91,6 +91,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-flex-align-content** ✅ 2026-06-04 — B-2: CSS Flex align-content для многострочного flexbox (CSS Flexbox L1 §8.3). `lay_out_flex` получил отслеживание `line_cross_sizes: Vec<f32>` каждой flex line. После разметки items по cross-axis, применяется `align-content` для распределения оставшегося пространства между линиями: flex-start (по умолчанию), flex-end, center, space-between, space-around, space-evenly, stretch. Алгоритм вычисляет `free_cross = container_width - total_lines_size - gaps` и распределяет его согласно значению. Stretch пропорционально увеличивает cross-размеры линий; остальные применяют offset к элементам каждой линии. 6 новых unit-тестов (flex_start/center/space-between/flex-end/space-evenly/stretch). lumen-layout: 2283 тестов ✅. Clippy чист.
 
 - **p2-offscreen-canvas** ✅ 2026-06-04 — A-4: OffscreenCanvas API Phase 0. `crates/js/src/offscreen_canvas.rs`: `OffscreenCanvas` struct с thread-local registry для off-DOM canvas-ов с уникальными ID. Native bindings для всех Context2D методов (fillRect, clearRect, strokeRect, arc, fill, stroke, property setters). `install_offscreen_canvas_bindings` регистрирует `_lumen_offscreen_canvas_*` функции + JS shim, определяющий класс OffscreenCanvas: `new OffscreenCanvas(w, h)`, `getContext('2d')` → Context2D прокси, `transferToImageBitmap()` → {width, height, data}, `convertToBlob()` стаб. Phase 0: чистый JS-шим. Phase 1 (future): createImageBitmap() из Canvas/ImageData/Blob. 13 новых unit-тестов (6 Rust + 7 JS интеграционных: constructor clamping/uniqueness, getContext caching, invalid types, fillRect, transferToImageBitmap). lumen-js: 1150 ✅ (+13).
 
