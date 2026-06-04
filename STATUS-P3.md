@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BUG-058: display:contents не сглажен в flex/grid/table — паника в lay_out  branch: p3-bug058-contents-flatten
+Next step: fix flatten_contents placement + тесты  crates/engine/layout/src/box_tree.rs:2670
 
 ## Next
 
