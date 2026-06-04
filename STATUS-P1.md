@@ -6,8 +6,7 @@
 
 ## In progress
 
-A-12: Shape Detection API stub  branch: p1-shape-detection-api
-Next step: реализовать FaceDetector/BarcodeDetector/TextDetector stubs  crates/js/src/shape_detection.rs
+(empty)
 
 ---
 
@@ -15,6 +14,7 @@ Next step: реализовать FaceDetector/BarcodeDetector/TextDetector stub
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-12: Shape Detection API stub | W3C Shape Detection API §3–4: `FaceDetector.detect()` → [], `BarcodeDetector.getSupportedFormats()` → [], `BarcodeDetector.detect()` → [], `TextDetector.detect()` → [], Phase 0. Экспорт на window и globalThis. 7 unit-тестов. lumen-js: 1190 тестов (было 1183). |
 | 2026-06-04 | A-11: Storage Access API stub | W3C Storage Access API §5: `document.requestStorageAccess()` / `requestStorageAccessFor(origin)` → pre-resolved Promise, `document.hasStorageAccess()` / `hasUnpartitionedCookieAccess()` → Promise<true>. Phase 0: все методы всегда предоставляют доступ (нет проверок). Встроены в WEB_API_SHIM (document prototype). 4 unit-теста. lumen-js: 1183 теста (было 1179). |
 | 2026-06-04 | A-10: Sanitizer API stub | W3C Sanitizer API §3: `new Sanitizer(config)` конструктор (Phase 0: config не используется). `sanitizer.sanitizeFor(element, htmlString)` удаляет `<script>` теги и event handler атрибуты (on*). `element.setHTML(html, {sanitizer})` интеграция в DOM. Регулярная очистка: `/(<script[^>]*>[\s\S]*?<\/script>)/gi` + удаление атрибутов `onload/onerror/onclick/...`. Phase 0: нет конфигурации фильтров. JS-шим в `crates/js/src/sanitizer.rs`. 8 unit-тестов. lumen-js: 1179 тестов (было 1171). |
 | 2026-06-04 | A-9: Trusted Types API stub | W3C Trusted Types §3: `trustedTypes.createPolicy(name, rules)`, `TrustedHTML/Script/ScriptURL/URL` классы оборачивают строки, `.toString()/.valueOf()/.toJSON()` возвращают значение. `TrustedTypePolicy` методы `createHTML/createScript/createScriptURL/createURL` для обёртки. `TrustedTypePolicyFactory` с `createPolicy()`, `getPolicy()`, `getPolicyNames()`, `defaultPolicy` getter, проверяющие функции `isHTML/isScript/isScriptURL/isURL`. Phase 0: нет enforcement (политика проверяется, не блокирует). JS-шим в `crates/js/src/trusted_types.rs`. 16 встроенных тестов. lumen-js: 1171 тест. |
@@ -47,7 +47,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-9~~ | ~~**Trusted Types API stub**~~ — **выполнено** | S | `lumen-js` |
 | ~~A-10~~ | ~~**Sanitizer API stub**~~ — **выполнено** | S | `lumen-js` |
 | ~~A-11~~ | ~~**Storage Access API**~~ — **выполнено** | XS | `lumen-js` |
-| A-12 | **Shape Detection API stub** — `FaceDetector.detect()` → [], `BarcodeDetector.getSupportedFormats()` → [], `TextDetector.detect()` → [], Phase 0. `window.FaceDetector/BarcodeDetector/TextDetector` exports. | XS | `lumen-js` |
+| ~~A-12~~ | ~~**Shape Detection API stub**~~ — **выполнено** | XS | `lumen-js` |
 | A-13 | **Document Picture-in-Picture API** — `documentPictureInPicture.requestWindow({width, height})` → Panel overlay с DOM-контентом (расширение `pip_window.rs`), `.window` accessor, `onenter` event, `document.pictureInPictureElement`. | M | `lumen-js`, `lumen-shell` |
 | A-14 | **Screen Orientation API** — `screen.orientation {type, angle}`, `.lock(orientation)` → Promise (winit `set_fullscreen`), `.unlock()`, `onchange`, `ScreenOrientation` событие (landscape-primary/portrait-primary/any). | S | `lumen-js`, `lumen-shell` |
 | A-15 | **Pointer Lock API** — `element.requestPointerLock()` → Promise (winit `set_cursor_grab(Locked)`), `document.exitPointerLock()`, `document.pointerLockElement`, `pointerlockchange`/`pointerlockerror`, `movementX/Y` в MouseEvent из winit raw delta. | S | `lumen-js`, `lumen-shell` |
