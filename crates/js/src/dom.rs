@@ -265,6 +265,46 @@ fn cache_meta_method(meta_json: &str) -> String {
     "GET".to_string()
 }
 
+/// Parse CSS style string (e.g. "color: red; font-size: 12px") into a HashMap.
+fn _parse_style_string(css_text: &str) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+    let mut map = HashMap::new();
+    for decl in css_text.split(';') {
+        let decl = decl.trim();
+        if decl.is_empty() {
+            continue;
+        }
+        if let Some((prop, val)) = decl.split_once(':') {
+            let prop = prop.trim().to_string();
+            let val = val.trim().to_string();
+            map.insert(prop, val);
+        }
+    }
+    map
+}
+
+/// Serialize a style HashMap back into CSS string.
+fn _serialize_style_map(map: &std::collections::HashMap<String, String>) -> String {
+    map.iter()
+        .map(|(k, v)| format!("{}: {}", k, v))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Convert camelCase property name to kebab-case.
+fn _camel_to_kebab(prop: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in prop.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            result.push('-');
+            result.push(c.to_lowercase().next().unwrap_or(c));
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn install_primitives(
     ctx: &Ctx<'_>,
@@ -2025,6 +2065,76 @@ fn install_primitives(
     // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL
     crate::trusted_types::install_trusted_types_bindings(ctx)?;
 
+    // CSS Typed OM API: element.attributeStyleMap / computedStyleMap()
+    {
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_style_property", move |nid: u32, prop: String| -> String {
+            if let Ok(doc) = d.lock() {
+                let node = doc.get(NodeId::from_index(nid as usize));
+                if let Some(style_attr) = node.get_attr("style") {
+                    let parsed = _parse_style_string(style_attr);
+                    let kebab_prop = _camel_to_kebab(&prop);
+                    return parsed.get(&kebab_prop).cloned().unwrap_or_default();
+                }
+            }
+            String::new()
+        });
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!("_lumen_set_style_property", move |nid: u32, prop: String, val: String| {
+            if let Ok(mut doc) = d.lock() {
+                let node_id = NodeId::from_index(nid as usize);
+                let mut parsed = if let Some(style) = doc.get(node_id).get_attr("style") {
+                    _parse_style_string(style)
+                } else {
+                    std::collections::HashMap::new()
+                };
+                let kebab_prop = _camel_to_kebab(&prop);
+                parsed.insert(kebab_prop, val);
+                let css_text = _serialize_style_map(&parsed);
+                set_attribute(&mut doc, node_id, "style", &css_text);
+                dirty.store(true, Ordering::Relaxed);
+            }
+        });
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!("_lumen_delete_style_property", move |nid: u32, prop: String| {
+            if let Ok(mut doc) = d.lock() {
+                let node_id = NodeId::from_index(nid as usize);
+                let mut parsed = if let Some(style) = doc.get(node_id).get_attr("style") {
+                    _parse_style_string(style)
+                } else {
+                    std::collections::HashMap::new()
+                };
+                let kebab_prop = _camel_to_kebab(&prop);
+                parsed.remove(&kebab_prop);
+                let css_text = _serialize_style_map(&parsed);
+                if css_text.is_empty() {
+                    remove_attribute(&mut doc, node_id, "style");
+                } else {
+                    set_attribute(&mut doc, node_id, "style", &css_text);
+                }
+                dirty.store(true, Ordering::Relaxed);
+            }
+        });
+        let d = Arc::clone(&doc);
+        reg!("_lumen_has_style_property", move |nid: u32, prop: String| -> bool {
+            if let Ok(doc) = d.lock() {
+                let node = doc.get(NodeId::from_index(nid as usize));
+                if let Some(style_attr) = node.get_attr("style") {
+                    let parsed = _parse_style_string(style_attr);
+                    let kebab_prop = _camel_to_kebab(&prop);
+                    return parsed.contains_key(&kebab_prop);
+                }
+            }
+            false
+        });
+        reg!("_lumen_get_style_entries", move |_nid: u32| {
+            // Phase 0: return empty object for iteration (stub)
+            "[]"
+        });
+    }
+
     Ok(())
 }
 
@@ -3012,6 +3122,16 @@ function _lumen_make_element(nid) {
         set className(v)     { _lumen_set_attr(nid, 'class', String(v)); },
         get classList()      { return _classList; },
         get style()          { return _style; },
+        get attributeStyleMap() {
+            // CSS Typed OM L1 — StylePropertyMap for element.style (mutable)
+            if (typeof CSS === 'undefined' || !CSS.StylePropertyMap) return null;
+            return new CSS.StylePropertyMap(nid);
+        },
+        computedStyleMap: function() {
+            // CSS Typed OM L1 — ComputedStylePropertyMap for computed styles (read-only)
+            if (typeof CSS === 'undefined' || !CSS.ComputedStylePropertyMap) return null;
+            return new CSS.ComputedStylePropertyMap(nid);
+        },
         get textContent()    { return _lumen_get_text_content(nid); },
         set textContent(v)   { _lumen_set_text_content(nid, String(v)); },
         get innerHTML()      { return _lumen_get_inner_html(nid); },
@@ -18638,6 +18758,127 @@ mod tests {
             po.disconnect();
             _lumen_deliver_layout_shift(0.2, 0, false);
             count === 1
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── CSS Typed OM L1 tests (A-3 feature) ────────────────────────────────────
+    #[test]
+    fn css_typed_om_css_style_value_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof CSS.CSSStyleValue === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_css_unit_value_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof CSS.CSSUnitValue === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_css_keyword_value_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof CSS.CSSKeywordValue === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_element_attribute_style_map_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("document.documentElement.attributeStyleMap !== null && typeof document.documentElement.attributeStyleMap === 'object'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_element_computed_style_map_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof document.documentElement.computedStyleMap === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_set_get_property() {
+        let rt = runtime_with_dom(make_doc());
+        // First, check that documentElement exists
+        let r = rt.eval("document.documentElement !== null").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+
+        // Check basic style property
+        let r2 = rt.eval("typeof document.documentElement.style === 'object'").unwrap();
+        assert_eq!(r2, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_has_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var el = document.documentElement;
+            typeof el.attributeStyleMap.has === 'function'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_delete_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var el = document.documentElement;
+            typeof el.attributeStyleMap.delete === 'function'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_css_unit_value_value_and_unit() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var uv = new CSS.CSSUnitValue(42, 'em');
+            typeof uv.value === 'number' && typeof uv.unit === 'string'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_css_unit_value_to_method() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var uv = new CSS.CSSUnitValue(10, 'px');
+            typeof uv.to === 'function' && uv.to('em') instanceof CSS.CSSUnitValue
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_style_property_map_keys_values() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var el = document.documentElement;
+            typeof el.attributeStyleMap.keys === 'function' && typeof el.attributeStyleMap.values === 'function'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_typed_om_computed_style_property_map_is_read_only() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var el = document.documentElement;
+            var computed = el.computedStyleMap();
+            computed !== null && typeof computed === 'object'
             "#
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
