@@ -48,6 +48,7 @@ pub mod typed_om_api;
 pub mod trusted_types;
 pub mod sanitizer;
 pub mod screen_orientation;
+pub mod scroll_snap_events;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -625,6 +626,15 @@ impl QuickJsRuntime {
             // _lumen_take_media_session_update() is a P3 shell integration task.
             if let Err(e) = media_session::install_media_session_bindings(&ctx) {
                 eprintln!("MediaSession bindings init failed: {}", e);
+            }
+
+            // Install CSS Scroll Snap L2 events (W3C CSS Scroll Snap §4) — after DOM
+            // so `Event` is available. Provides SnapChangeEvent and native bindings
+            // _lumen_fire_snap_changing/changed for shell to emit snap events.
+            // Phase 0: event infrastructure complete; shell integration (P2/P3)
+            // calls bindings when snap-points change via layout.
+            if let Err(e) = scroll_snap_events::install_scroll_snap_events_bindings(&ctx) {
+                eprintln!("Scroll Snap events bindings init failed: {}", e);
             }
 
             // Install Sanitizer API (W3C Sanitizer API §3) — after DOM so `document`,
