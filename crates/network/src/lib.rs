@@ -659,6 +659,11 @@ fn check_negotiated_alpn(alpn: Option<&[u8]>) -> Result<bool> {
 /// Решить, выглядит ли ошибка как «stale keep-alive»: сервер закрыл idle
 /// соединение, и наш write / первый read получил EOF или RST. Такие ошибки
 /// заслуживают однократного retry на свежем соединении.
+///
+/// На Windows `io::Error::from_raw_os_error` форматируется с локализованным
+/// OS-сообщением вместо Rust `ErrorKind` имени, поэтому "ConnectionReset" /
+/// "ConnectionAborted" не появятся в строке. Проверяем Windows-коды явно:
+/// os error 10053 = WSAECONNABORTED, os error 10054 = WSAECONNRESET.
 fn is_stale_error(err: &Error) -> bool {
     let msg = format!("{err:?}");
     msg.contains("BrokenPipe")
@@ -667,6 +672,8 @@ fn is_stale_error(err: &Error) -> bool {
         || msg.contains("UnexpectedEof")
         || msg.contains("EOF before status line")
         || msg.contains("EOF in headers")
+        || msg.contains("os error 10053")
+        || msg.contains("os error 10054")
 }
 
 /// Один полный HTTP-запрос: acquire из пула (или connect), write_request,
@@ -2949,6 +2956,15 @@ mod tests {
         )));
         assert!(is_stale_error(&Error::Network(
             "read body: ConnectionReset".to_owned()
+        )));
+        // Windows: WSAECONNABORTED (10053) и WSAECONNRESET (10054) форматируются
+        // с локализованным OS-сообщением — "ConnectionAborted"/"ConnectionReset"
+        // в строке отсутствуют, но код "(os error 10053/10054)" присутствует.
+        assert!(is_stale_error(&Error::Network(
+            "read status: An established connection was aborted by the software in your host machine. (os error 10053)".to_owned()
+        )));
+        assert!(is_stale_error(&Error::Network(
+            "read status: An existing connection was forcibly closed by the remote host. (os error 10054)".to_owned()
         )));
         assert!(!is_stale_error(&Error::Network("HTTP 500".to_owned())));
         assert!(!is_stale_error(&Error::Network("blocked: tracker".to_owned())));
