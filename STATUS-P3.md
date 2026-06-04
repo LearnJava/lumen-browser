@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BUG-064: test_33_multi_column регрессия после C8  branch: p3-bug064-test33-mc
+Next step: обновить ожидания в crates/driver/tests/test_33.rs:34
 
 ## Next
 
