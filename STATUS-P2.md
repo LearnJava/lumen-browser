@@ -6,7 +6,9 @@
 
 ## In progress
 
-None
+B-5 | **CSS Multi-column: column-rule rendering**  
+branch: `p2-b5-column-rule`  
+Next step: Check ComputedStyle for column-rule-width/style/color fields, implement `emit_column_rules()` in `lumen-paint/src/display_list.rs`
 
 ---
 
