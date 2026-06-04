@@ -6,7 +6,9 @@
 
 ## In progress
 
-None — все recent merges завершены. Pick next item from "Next".
+**A-1: CSS Properties & Values API (Houdini)**  
+Branch: `p2-a1-css-properties-values`  
+Next step: Implement `RegisteredPropertiesMap` registry + JS shim for `CSS.registerProperty()` in lumen-js/src/css_properties_values_api.rs
 
 ---
 
