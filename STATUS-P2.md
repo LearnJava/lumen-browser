@@ -301,3 +301,24 @@ Ordered by priority. Сгруппированы по домену.
 - **All tasks tracked:** Use git branch prefix `p2-<task-name>` so parallel sessions don't duplicate
 
 See CLAUDE.md for full workflow details.
+
+### A-2 Implementation Progress (as of 2026-06-04 09:20)
+
+**Completed:**
+- ✅ JS API: `CSS.highlights` HighlightRegistry + Highlight class in highlight_api.rs (16 tests passing)
+- ✅ Parsing: `::highlight(name)` pseudo-element parsing complete in css-parser with unit tests
+- ✅ Pseudo-element matching in style.rs
+
+**In Progress / Deferred to Next Session:**
+- ❌ DrawText struct modification: add `highlight_name: Option<String>` field (requires updates to 40+ initializers)
+- ❌ `emit_text_with_highlights()` function (helper for Phase 1 rendering)
+- ❌ 8 unit tests for highlights in display_list
+
+**Notes:**
+- File editing via Edit tool created encoding issues with large UTF-8 Cyrillic files
+- Python UTF-8 handling needed for reliable file modifications
+- Recommend: Use Python3 with explicit UTF-8 encoding when modifying display_list.rs next
+
+**Handoff for Phase 1:**
+- Implement highlight background rendering with text ranges from CSS.highlights registry
+- Integrate with paint renderer for overlay display
