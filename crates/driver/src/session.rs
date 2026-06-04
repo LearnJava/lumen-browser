@@ -657,6 +657,30 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
         self.context.set_rng_seed(seed);
         Ok(())
     }
+
+    fn deliver_lcp_entry(
+        &mut self,
+        element_id: i32,
+        size: u32,
+        start_ms: f64,
+        render_time_ms: f64,
+    ) -> Result<()> {
+        let script = format!(
+            "_lumen_deliver_lcp_entry({}, {}, {}, {})",
+            element_id, size, start_ms, render_time_ms
+        );
+        self.eval(&script)?;
+        Ok(())
+    }
+
+    fn deliver_layout_shift(&mut self, value: f64, session_id: u32, had_input: bool) -> Result<()> {
+        let script = format!(
+            "_lumen_deliver_layout_shift({}, {}, {})",
+            value, session_id, had_input as u8
+        );
+        self.eval(&script)?;
+        Ok(())
+    }
 }
 
 // ── Вспомогательные функции ─────────────────────────────────────────────────

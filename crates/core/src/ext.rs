@@ -1889,6 +1889,30 @@ pub trait BrowserSession: Send {
         let _ = seed;
         Ok(())
     }
+
+    /// Deliver a Largest Contentful Paint (LCP) entry to the Performance Timeline.
+    ///
+    /// Called by shell pipeline when a large content element (img/text >500px²) is first rendered.
+    /// Registers a 'largest-contentful-paint' entry accessible via PerformanceObserver.
+    fn deliver_lcp_entry(
+        &mut self,
+        element_id: i32,
+        size: u32,
+        start_ms: f64,
+        render_time_ms: f64,
+    ) -> Result<()> {
+        let _ = (element_id, size, start_ms, render_time_ms);
+        Ok(()) // default: no-op
+    }
+
+    /// Deliver a Layout Shift entry to the Performance Timeline for CLS (Cumulative Layout Shift).
+    ///
+    /// Called by shell when a layout reflow causes visible displacement >5px.
+    /// Registers a 'layout-shift' entry with fractional shift distance and input-blocking info.
+    fn deliver_layout_shift(&mut self, value: f64, session_id: u32, had_input: bool) -> Result<()> {
+        let _ = (value, session_id, had_input);
+        Ok(()) // default: no-op
+    }
 }
 
 /// Null implementation of `BrowserSession` — all methods return `NotImplemented`.
@@ -1954,6 +1978,12 @@ impl BrowserSession for NullBrowserSession {
         Err(crate::error::Error::Other(
             "BrowserSession not implemented".into(),
         ))
+    }
+    fn deliver_lcp_entry(&mut self, _: i32, _: u32, _: f64, _: f64) -> Result<()> {
+        Ok(())
+    }
+    fn deliver_layout_shift(&mut self, _: f64, _: u32, _: bool) -> Result<()> {
+        Ok(())
     }
 }
 
