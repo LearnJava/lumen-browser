@@ -6,14 +6,16 @@
 
 ## In progress
 
-- A-21: Contact Picker API stub  branch: p1-a21-contact-picker
-- Next step: implement navigator.contacts.select() stub in crates/js/src/contacts.rs
+-
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-04 | A-21: Contact Picker API stub | W3C Contact Picker API Phase 0: `navigator.contacts.select(properties, options)` → Promise<rejected NotSupportedError>. `navigator.contacts.getProperties()` → Promise<['name', 'email', 'tel']>. Новый модуль `crates/js/src/contacts.rs`: JS-шим с классом ContactsManager. Методы select/getProperties. Phase 0: нет реального доступа к контактам. 4 unit-теста (contacts_manager_exists, select_returns_promise, get_properties_returns_promise, get_properties_returns_correct_array). lumen-js: 1249 тестов (было 1245 + 4 новых). Clippy чист. |
+| Дата | Задача | Описание |
+|------|--------|---------|
 | 2026-06-04 | A-20: PerformanceObserver: LCP + CLS | W3C Performance Timeline L2 §5.2: PerformanceObserver.takeRecords() реализована для возврата buffered entries. Новые методы BrowserSession: deliver_lcp_entry() и deliver_layout_shift() для доставки LCP и CLS событий. JS: _lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms) регистрирует LargestContentfulPaint entry с element property (по NID через _lumen_make_element). _lumen_deliver_layout_shift(value, session_id, had_input) регистрирует LayoutShift entry для CLS метрики. Phase 0: Event infrastructure готова. Shell integration (call при render и reflow) — P2/P3 спринт. 5 unit-тестов (perf_observer_take_records, perf_observer_lcp_entry, perf_observer_layout_shift, perf_observer_buffered, perf_observer_disconnect). lumen-js: 1245 тестов (было 1240 + 5 новых). Clippy чист. |
 | Дата | Задача | Описание |
 |------|--------|---------|
