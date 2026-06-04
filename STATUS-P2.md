@@ -6,13 +6,12 @@
 
 ## In progress
 
-B-7 | **CSS Resize property**  
-branch: `p2-b7-resize`  
-Next step: Create worktree and design resize control UI (12px grip in corner)
+B-3 | **CSS Grid: auto-fill/auto-fit tracks**  
+branch: `p2-b3-grid-auto`  
+Next step: Research grid.rs, implement `resolve_auto_fill_fit_count`, add 8 unit tests
 
-Summary of B-7: `resize: both/horizontal/vertical` на overflow≠visible элементах создаёт 12px grip в углу,
-эмитит как `DrawSvgPath`. `MouseInput Pressed` на grip → `resize_active`, `CursorMoved` меняет inline width/height.
-Shell integration + paint layer. 6 тестов.
+Summary of B-3: `repeat(auto-fill, minmax(200px, 1fr))` вычисляет track count из available space,
+`auto-fit` коллапсирует пустые треки. `fit-content(N)` track size. 8 тестов в grid.
 
 ---
 
