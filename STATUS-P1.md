@@ -6,13 +6,14 @@
 
 ## In progress
 
-A-20: PerformanceObserver: LCP + CLS  branch: p1-lcp-cls
-Next step: `largest-contentful-paint` в shell при первом рендере img/текста >500px² (crates/shell/src/) + `layout-shift` при reflow смещениях (crates/engine/layout/src/)
+-
 
 ---
 
 ## Recent merges
 
+| Дата | Задача | Описание |
+| 2026-06-04 | A-20: PerformanceObserver: LCP + CLS | W3C Performance Timeline L2 §5.2: PerformanceObserver.takeRecords() реализована для возврата buffered entries. Новые методы BrowserSession: deliver_lcp_entry() и deliver_layout_shift() для доставки LCP и CLS событий. JS: _lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms) регистрирует LargestContentfulPaint entry с element property (по NID через _lumen_make_element). _lumen_deliver_layout_shift(value, session_id, had_input) регистрирует LayoutShift entry для CLS метрики. Phase 0: Event infrastructure готова. Shell integration (call при render и reflow) — P2/P3 спринт. 5 unit-тестов (perf_observer_take_records, perf_observer_lcp_entry, perf_observer_layout_shift, perf_observer_buffered, perf_observer_disconnect). lumen-js: 1245 тестов (было 1240 + 5 новых). Clippy чист. |
 | Дата | Задача | Описание |
 |------|--------|---------|
 | 2026-06-04 | A-19: CSS Scroll Snap L2 events | W3C CSS Scroll Snap §4: SnapChangeEvent класс с snapTargetBlock, snapTargetInline properties. События 'snapchanging' (cancelable) и 'snapchanged' (non-cancelable) для scroll containers. Новый модуль `crates/js/src/scroll_snap_events.rs`. Нативные биндинги `_lumen_fire_snap_changing` / `_lumen_fire_snap_changed` для shell. Phase 0: event infrastructure готова. Shell integration (call из apply_page_y_snap при snap-point изменениях) — P2/P3 спринт. 5 unit-тестов. lumen-js: 1248 тестов (было 1242 + 5 новых). Clippy чист. |
