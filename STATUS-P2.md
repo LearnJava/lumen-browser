@@ -6,10 +6,7 @@
 
 ## In progress
 
-**B-2 — CSS Flex align-content**  
-Branch: `p2-flex-align-content`  
-Next step: Реализовать `resolve_flex_lines()` и `align_flex_lines()` в `crates/engine/layout/src/flex.rs` — многострочный flexbox с `flex-wrap: wrap`  
-file: `crates/engine/layout/src/flex.rs` (см. `lay_out_flex` function)
+(none)
 
 ---
 
@@ -90,6 +87,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-flex-align-content** ✅ 2026-06-04 — B-2: CSS Flex align-content (CSS Flexbox L1 §9.5). `lay_out_flex()` в `box_tree.rs` распределяет пространство между flex lines на кросс-оси: `align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch`. Парсинг и ComputedStyle.align_content уже были; реализовано значение логики в match-блоке (строки 4650–4693). Оптимизация: `fill()` вместо loop, `skip(1)` для SpaceBetween, `iter_mut().enumerate()` вместо индексного цикла. Графический тест 65-flex-align-content.html (7 контейнеров × 6 items wrap) + демонстрация в 1000000-final.html. 6 новых unit-тестов (flex_align_content_flex_start/end/center/space_between/around/evenly). Итого lumen-layout: 2286 тестов. Clippy чист.
 
 - **p2-masonry-layout** ✅ 2026-06-04 — A-7: CSS Masonry layout stub (Houdini) Phase 0. `layout/src/masonry.rs`: `lay_out_masonry()` реализует waterfall grid алгоритм — каждый item размещается в колонку с минимальной высотой. `column_count` и `gap` поддерживаются (используют существующие CSS свойства). `Display::Masonry` вариант в style.rs, парсинг "masonry" keyword. Dispatch в box_tree.rs перед block-flow layout. `// CSS: masonry-auto-flow, align-tracks, justify-tracks` комментарий. Graphic test 63-masonry.html с 3-колонным waterfall демо + 1000000-final.html запись. Phase 0 завершена; Phase 1 (future): align-tracks/justify-tracks, dense-fill, aspect-ratio-aware sizing. 2280 unit-тестов lumen-layout ✅. Clippy чист (fixed needless_range_loop в flex align-content коде).
 
