@@ -7,8 +7,13 @@
 ## In progress
 
 **B-1: Table layout rendering**  
-Branch: `p2-b1-table-layout`  
-Next step: Implement `emit_table_box()` in `lumen-paint/src/display_list.rs` that renders table cells with borders, backgrounds (crates/engine/paint/src/display_list.rs)
+Branch: `p2-b1-table-layout` / commit `4de3993`  
+Status: Phase 0 complete (emit_table_box() implemented)
+Next step: Implement border-collapse mode and border-spacing support in Phase 1  
+- emit_table_box() рендерит структуру таблицы
+- Каждая ячейка имеет собственные фон и границы
+- Поддержка col_span/row_span через LayoutBox.col_span/row_span
+- Phase 1: merged border mode, border-spacing, caption
 
 ---
 
