@@ -22,6 +22,7 @@ pub mod motion_path;
 pub mod page;
 pub mod pagination;
 pub mod property_trees;
+pub mod ruby;
 pub mod selection;
 pub mod selector_query;
 pub mod scroll_timeline;
