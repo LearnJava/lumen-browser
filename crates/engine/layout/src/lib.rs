@@ -97,7 +97,7 @@ pub use style::{
     FontVariant, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient,
+    OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
     PointerEvents,
     Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
