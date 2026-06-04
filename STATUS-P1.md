@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+D-5: Browser history panel  branch: p1-d5-history-panel
+Next step: create history_panel.rs + wire Ctrl+H in main.rs  crates/shell/src/panels/
 
 ---
 

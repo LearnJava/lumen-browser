@@ -3,6 +3,7 @@
 
 pub mod bookmark_panel;
 pub mod command_palette;
+pub mod history_panel;
 pub mod focus_panel;
 pub mod permission_panel;
 pub mod pip_window;
