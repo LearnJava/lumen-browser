@@ -6,7 +6,9 @@
 
 ## In progress
 
-None currently. Pick next available from Next section.
+**D-3 | Image JPEG XL stub**
+- Branch: `p2-d3-jxl`
+- Next step: Phase 0: `is_jxl(bytes)` detector, `JxlImageDecoder` stub, MIME registration, 5 unit-tests
 
 ---
 
