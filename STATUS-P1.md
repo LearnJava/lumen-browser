@@ -6,7 +6,8 @@
 
 ## In progress
 
--
+- A-21: Contact Picker API stub  branch: p1-a21-contact-picker
+- Next step: implement navigator.contacts.select() stub in crates/js/src/contacts.rs
 
 ---
 
