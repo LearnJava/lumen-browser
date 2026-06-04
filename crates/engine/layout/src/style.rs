@@ -3092,6 +3092,9 @@ pub enum BackgroundImage {
         /// Blend factor clamped to `[0.0, 1.0]`.
         t: f32,
     },
+    /// CSS Paint API (Houdini) — `paint(name)` generates dynamic image via registered worklet.
+    /// Phase 0: stored as placeholder grey `DrawImage`; Phase 1: calls worklet `paint()` callback.
+    Paint(String),
 }
 
 /// CSS Backgrounds L3 §3.4 — `background-repeat`.
@@ -13736,6 +13739,41 @@ fn is_image_set_value(s: &str) -> bool {
     v.starts_with("image-set(") || v.starts_with("-webkit-image-set(")
 }
 
+/// CSS Paint API (Houdini) — parse `paint(name)` and extract the worklet name.
+/// Returns `Some(name)` if the function is recognized; `None` otherwise.
+fn parse_paint_function(s: &str) -> Option<String> {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("paint(") && s.ends_with(')') && !lower.ends_with("))") {
+        // Extract content between "paint(" and the final ")".
+        let start = "paint(".len();
+        let end = s.len() - 1;
+        if start >= end {
+            return None;  // Empty payload.
+        }
+        let inner = s[start..end].trim();
+        // Check for any stray closing parens in the extracted part.
+        if inner.contains(')') {
+            return None;
+        }
+        // Remove surrounding quotes if present (e.g., `paint("my-paint")` → `my-paint`).
+        let name = if (inner.starts_with('"') && inner.ends_with('"')) ||
+                     (inner.starts_with('\'') && inner.ends_with('\'')) {
+            if inner.len() < 2 {
+                return None;  // Quote-only string.
+            }
+            &inner[1..inner.len() - 1]
+        } else {
+            inner
+        };
+        if name.is_empty() {
+            return None;  // Empty name.
+        }
+        return Some(name.to_string());
+    }
+    None
+}
+
 /// Parse one image value into a `BackgroundImage` (used by `parse_cross_fade`).
 fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
     let s = s.trim();
@@ -13874,7 +13912,7 @@ fn parse_single_bg_layer(
     while idx < n {
         let t = tokens[idx];
 
-        // image: none / url(...) / gradient(...)
+        // image: none / url(...) / gradient(...) / paint(...) / cross-fade(...)
         if t.eq_ignore_ascii_case("none") && layer.image == BackgroundImage::None {
             // "none" as image — keep None (default already)
             idx += 1;
@@ -13882,6 +13920,14 @@ fn parse_single_bg_layer(
         }
         if is_gradient_function(t) {
             layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            idx += 1;
+            continue;
+        }
+        if let Some(name) = parse_paint_function(t) {
+            // CSS Paint API (Houdini) — `paint(name)` → fetch registered worklet.
+            // Phase 0: stores as Paint(name); Phase 1: invokes worklet paint() callback.
+            // `// CSS: background: paint(name)`
+            layer.image = BackgroundImage::Paint(name);
             idx += 1;
             continue;
         }
@@ -23150,5 +23196,30 @@ mod tests {
         let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
         assert_eq!(style.color.b, 255, ":popover-open rule should apply when sentinel attr present");
         assert_eq!(style.color.r, 0);
+    }
+
+    #[test]
+    fn parse_paint_function_basic() {
+        // CSS Paint API (Houdini) — parse paint(name) function.
+        assert_eq!(parse_paint_function("paint(my-paint)"), Some("my-paint".to_string()));
+        assert_eq!(parse_paint_function("paint('my-paint')"), Some("my-paint".to_string()));
+        assert_eq!(parse_paint_function("paint(\"my-paint\")"), Some("my-paint".to_string()));
+    }
+
+    #[test]
+    fn parse_paint_function_with_whitespace() {
+        // paint() name trimmed; outer whitespace ignored, inner whitespace preserved.
+        assert_eq!(parse_paint_function("  paint(test)  "), Some("test".to_string()));
+        // Interior whitespace is trimmed during parsing (inner trim).
+        assert_eq!(parse_paint_function("paint( test )"), Some("test".to_string()));
+    }
+
+    #[test]
+    fn parse_paint_function_invalid() {
+        // Invalid: missing parentheses, wrong function name, or no closing paren.
+        assert_eq!(parse_paint_function("paint"), None);
+        assert_eq!(parse_paint_function("gradient(test)"), None);
+        assert_eq!(parse_paint_function("paint(test"), None);
+        assert_eq!(parse_paint_function("paint(test))"), None);
     }
 }

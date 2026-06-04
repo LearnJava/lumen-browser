@@ -3,6 +3,7 @@ pub mod audio_element;
 pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
+pub mod paint_worklet;
 pub mod gamepad;
 pub mod highlight_api;
 pub mod iframe_element;
@@ -60,6 +61,7 @@ use std::sync::{
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
 pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
+pub use paint_worklet::{install_paint_worklet_api, PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest};
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
@@ -437,6 +439,13 @@ impl QuickJsRuntime {
             // Enables element.attributeStyleMap, element.computedStyleMap(), CSSStyleValue, CSSUnitValue, CSSKeywordValue.
             if let Err(e) = typed_om_api::install_typed_om_api(&ctx) {
                 eprintln!("CSS Typed OM init failed: {}", e);
+            }
+
+            // Install CSS Paint Worklet API stub (Houdini) — after DOM/CSS so that CSS object is available.
+            // Phase 0: registerPaint() registers worklet definitions; Phase 1 (future): worker execution.
+            // Enables CSS.paintWorklet.addModule() and registerPaint() calls.
+            if let Err(e) = paint_worklet::install_paint_worklet_api(&ctx) {
+                eprintln!("Paint Worklet API init failed: {}", e);
             }
 
             // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
