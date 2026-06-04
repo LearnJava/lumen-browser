@@ -82,9 +82,9 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-16~~ | ~~**Device Orientation/Motion API stub**~~ — **выполнено** | XS | `lumen-js` |
 | ~~A-17~~ | ~~**Eye Dropper API**~~ — **выполнено** | S | `lumen-js` |
 | ~~A-18~~ | ~~**WebOTP API stub**~~ — **выполнено** | XS | `lumen-js` |
-| A-19 | **CSS Scroll Snap L2 events** — `snapChanging`/`snapChanged` события при snap-переходе: `_lumen_fire_snap_changing/changed(nid)` биндинги, shell генерирует при `apply_page_y_snap` когда snap-точка меняется. `SnapChangeEvent {snapTargetBlock, snapTargetInline}`. | S | `lumen-js`, `lumen-shell` |
-| A-20 | **PerformanceObserver: LCP + CLS** — `largest-contentful-paint` (регистрация при первом рендере img/текста >500px² из shell pipeline) и `layout-shift` (CLS: суммирует смещения layout boxes при reflow >5px). `PerformanceLCPEntry`, `LayoutShiftAttribution`. | S | `lumen-js`, `lumen-shell` |
-| A-21 | **Contact Picker API stub** — `navigator.contacts.select(['name','email','tel'], {multiple})` → reject NotSupportedError (нет contact store на desktop), `navigator.contacts.getProperties()` → ['name','email','tel'], `ContactsManager` тип. | XS | `lumen-js` |
+| ~~A-19~~ | ~~**CSS Scroll Snap L2 events**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
+| ~~A-20~~ | ~~**PerformanceObserver: LCP + CLS**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
+| ~~A-21~~ | ~~**Contact Picker API stub**~~ — **выполнено** | XS | `lumen-js` |
 | ~~A-22~~ | ~~**Payment Request API stub**~~ — **выполнено** | XS | `lumen-js` |
 
 ### B — Сеть
@@ -92,33 +92,36 @@ Ordered by priority. Сгруппированы по домену.
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~B-1~~ | ~~**DNS over HTTPS**~~ — **выполнено** | M | `lumen-network` |
-| B-2 | **HTTP Proxy** — `--proxy http://host:port` CLI флаг, `HttpProxy {host, port, auth}` в `HttpClient`, CONNECT-туннель для HTTPS, `Proxy-Authorization: Basic`, прямой GET для HTTP. Wired в shell `main.rs`. 6 тестов. | M | `lumen-network`, `lumen-shell` |
-| B-3 | **HSTS preload list** — `HstsPreloadList` из embedded JSON (10k+ доменов, chromium формат), `is_preloaded(host) → bool` с eTLD+1 + include_subdomains, HTTP→HTTPS upgrade в `HttpClient::fetch` без редиректа. 6 тестов. | S | `lumen-network` |
-| B-4 | **Background Sync API stub** — `registration.sync.register('tag')`, `SyncManager.getTags()`, `sync` SW-событие на следующей навигации, `_lumen_sw_sync_register/get_tags/clear_tag` биндинги, `SwBackend::pending_syncs` расширение. | S | `lumen-js`, `lumen-storage` |
-| B-5 | **Push API stub** — `registration.pushManager.subscribe({userVisibleOnly, applicationServerKey})` → `PushSubscription {endpoint, getKey()}` Phase 0 (статический endpoint), `unsubscribe()`, `getSubscription()`, `permissionState()` → granted. | S | `lumen-js` |
+| ~~B-2~~ | ~~**HTTP Proxy**~~ — **выполнено** | M | `lumen-network`, `lumen-shell` |
+| ~~B-3~~ | ~~**HSTS preload list**~~ — **выполнено** | S | `lumen-network` |
+| ~~B-4~~ | ~~**Background Sync API stub**~~ — **выполнено** | S | `lumen-js`, `lumen-storage` |
+| ~~B-5~~ | ~~**Push API stub**~~ — **выполнено** | S | `lumen-js` |
 
 ### C — Layout algorithm stubs (// CSS: handoff для P4)
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~C-1~~ | ~~**CSS Table layout**~~ — **выполнено** | L | `lumen-layout` |
-| C-2 | **CSS Ruby layout stub** — `layout/src/ruby.rs`: `RubyBox {base_boxes, ruby_text, position: Over/Under}`, `lay_out_ruby()` стекает base + ruby-text с выравниванием по центру, inter-character spacing. `// CSS: ruby-align, ruby-merge, ruby-position`. 8 тестов. | M | `lumen-layout` |
-| C-3 | **MathML Core layout stub** — `layout/src/mathml.rs`: распознаёт `<math>/<mi>/<mn>/<mo>/<mrow>/<mfrac>/<msqrt>/<msup>/<msub>`, базовая фракция / sqrt-наклон / sup-sub offset. `// CSS: math-style, math-depth`. 8 тестов. | M | `lumen-layout` |
+| ~~C-2~~ | ~~**CSS Ruby layout stub**~~ — **выполнено** | M | `lumen-layout` |
+| ~~C-3~~ | ~~**MathML Core layout stub**~~ — **выполнено** | M | `lumen-layout` |
 | C-4 | **CSS logical properties resolver** — `resolve_logical_properties(style, writing_mode)` в `style.rs`: `inline-size`→`width/height`, `block-size`, `inset-inline-*`, `margin-inline/block`, `padding-inline/block`, `border-inline/block`. `// CSS: inline-size, block-size, inset-*`. 10 тестов. | M | `lumen-layout` |
 | C-5 | **CSS shape-outside: polygon + ellipse** — расширение `FloatContext`: `ShapePolygon {points}` + `ShapeEllipse {cx,cy,rx,ry}`, `parse_shape_polygon_px()`/`parse_shape_ellipse_px()`, ray-intersection в `left_edge_at/right_edge_at`. `// CSS: shape-outside, shape-margin`. 8 тестов. | M | `lumen-layout` |
 
 ### D — Shell / UI
 
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| D-1 | **Certificate viewer panel** — `Ctrl+Shift+C`: `panels/cert_panel.rs`, из `TlsHandshakeInfo`: subject CN/O, issuer, not-before/after, SHA-256 fingerprint, SAN list, TLS version. Per-tab `cert_info: Option<TlsHandshakeInfo>` в `PageSnapshot`. 10 тестов. | S | `lumen-shell` |
-| D-2 | **Page source viewer** — `view-source:` URI схема в `navigate_to`: fetch raw bytes → `PageSource::Source(html)` → layout как `<pre>` с 4-цветным syntax highlight (тег/атрибут/строка/комментарий). `KeyCommand::ViewSource` + `Ctrl+U`. | S | `lumen-shell` |
-| D-3 | **Reader View** — `Ctrl+Shift+R`: `extract_article(doc) → Option<ArticleContent>` ищет `<article>/role=main/<main>`, удаляет nav/aside/header/footer/script, переоборачивает в clean HTML (max-width:680px, font 1.1rem, line-height:1.6). Toggle → оригинал. | M | `lumen-js`, `lumen-shell` |
-| D-4 | **Keyboard shortcuts settings panel** — `panels/shortcuts_panel.rs` (360×500px), список всех `KeyCommand` + бинд, клик → rebind mode (ожидание нажатия), `lumen-storage::KeyboardShortcuts` SQLite `(command, modifier, key)`, загрузка при старте. 12 тестов. | M | `lumen-shell`, `lumen-storage` |
-| D-5 | **Browser history panel** — `Ctrl+H`: `panels/history_panel.rs` full-page overlay, список из `HistoryFts` (50/стр., пагинация), группировка по дате, поиск, клик → navigate, delete entry, "Очистить всё". Wheel scroll + keyboard nav. 12 тестов. | M | `lumen-shell` |
-| D-6 | **Extension system stub** — `shell/src/extensions/`: `ExtensionManifest {name, version, permissions, content_scripts}`, `ExtensionRegistry`, загрузка из `~/.config/lumen/extensions/<id>/manifest.json`, инъекция `content_scripts` как `extra_scripts`, `chrome.runtime.sendMessage()` stub. 10 тестов. | M | `lumen-shell` |
-| D-7 | **Settings page** — `about:settings`: `panels/settings_panel.rs` full-page overlay, секции General (homepage, search engine) / Privacy (shields, fingerprint, DoH) / Appearance (font-size, theme) / Downloads (default path), `lumen-storage::BrowserSettings` SQLite. 10 тестов. | M | `lumen-shell`, `lumen-storage` |
-| D-8 | **Encoding API streaming** — `TextDecoder {stream: true}`: `decode(chunk, {stream: true})` не сбрасывает частичный многобайтовый символ, финальный `decode()` flush. `TextDecoderStream` использует streaming decode. 6 тестов. | XS | `lumen-js` |
+> Фаза 1 (Reader — «открыть Habr-статью»): D-3, D-5, D-7, D-2, D-8 — брать в этом порядке.  
+> Фаза 2 (Interactive): D-4, D-1, D-6 — после закрытия Фазы 1.
+
+| # | Задача | Размер | Фаза | Крейты |
+|---|--------|--------|------|--------|
+| D-3 | **Reader View** — `Ctrl+Shift+R`: `extract_article(doc) → Option<ArticleContent>` ищет `<article>/role=main/<main>`, удаляет nav/aside/header/footer/script, переоборачивает в clean HTML (max-width:680px, font 1.1rem, line-height:1.6). Toggle → оригинал. | M | **1** | `lumen-js`, `lumen-shell` |
+| D-5 | **Browser history panel** — `Ctrl+H`: `panels/history_panel.rs` full-page overlay, список из `HistoryFts` (50/стр., пагинация), группировка по дате, поиск, клик → navigate, delete entry, "Очистить всё". Wheel scroll + keyboard nav. 12 тестов. | M | **1** | `lumen-shell` |
+| D-7 | **Settings page** — `about:settings`: `panels/settings_panel.rs` full-page overlay, секции General (homepage, search engine) / Privacy (shields, fingerprint, DoH) / Appearance (font-size, theme) / Downloads (default path), `lumen-storage::BrowserSettings` SQLite. 10 тестов. | M | **1** | `lumen-shell`, `lumen-storage` |
+| D-2 | **Page source viewer** — `view-source:` URI схема в `navigate_to`: fetch raw bytes → `PageSource::Source(html)` → layout как `<pre>` с 4-цветным syntax highlight (тег/атрибут/строка/комментарий). `KeyCommand::ViewSource` + `Ctrl+U`. | S | **1** | `lumen-shell` |
+| D-8 | **Encoding API streaming** — `TextDecoder {stream: true}`: `decode(chunk, {stream: true})` не сбрасывает частичный многобайтовый символ, финальный `decode()` flush. `TextDecoderStream` использует streaming decode. 6 тестов. | XS | **1** | `lumen-js` |
+| D-4 | **Keyboard shortcuts settings panel** — `panels/shortcuts_panel.rs` (360×500px), список всех `KeyCommand` + бинд, клик → rebind mode (ожидание нажатия), `lumen-storage::KeyboardShortcuts` SQLite `(command, modifier, key)`, загрузка при старте. 12 тестов. | M | 2 | `lumen-shell`, `lumen-storage` |
+| D-1 | **Certificate viewer panel** — `Ctrl+Shift+C`: `panels/cert_panel.rs`, из `TlsHandshakeInfo`: subject CN/O, issuer, not-before/after, SHA-256 fingerprint, SAN list, TLS version. Per-tab `cert_info: Option<TlsHandshakeInfo>` в `PageSnapshot`. 10 тестов. | S | 2 | `lumen-shell` |
+| D-6 | **Extension system stub** — `shell/src/extensions/`: `ExtensionManifest {name, version, permissions, content_scripts}`, `ExtensionRegistry`, загрузка из `~/.config/lumen/extensions/<id>/manifest.json`, инъекция `content_scripts` как `extra_scripts`, `chrome.runtime.sendMessage()` stub. 10 тестов. | M | 2 | `lumen-shell` |
 
 ---
 
