@@ -22,6 +22,7 @@ pub mod media_session;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod offscreen_canvas;
+pub mod pointer_lock;
 pub mod shape_detection;
 pub mod shared_worker;
 pub mod speech;

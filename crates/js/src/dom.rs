@@ -1523,6 +1523,23 @@ fn install_primitives(
         });
     }
 
+    // ── Pointer Lock API (W3C Pointer Lock L2 §2-4) ────────────────────────────────
+    // requestPointerLock(element_nid) — lock pointer to element.
+    // Phase 0: in-memory lock. Phase 1: integrate with shell to capture cursor.
+    reg!("_lumen_ptr_lock_request", move |nid: u32| {
+        crate::pointer_lock::request_pointer_lock(nid);
+    });
+
+    // exitPointerLock() — release pointer lock.
+    reg!("_lumen_exit_ptr_lock", move || {
+        crate::pointer_lock::exit_pointer_lock();
+    });
+
+    // pointerLockElement getter — returns locked element or null.
+    reg!("_lumen_ptr_lock_element", move || -> Option<u32> {
+        crate::pointer_lock::get_locked_element_nid()
+    });
+
     // ── Computed styles (window.getComputedStyle) ────────────────────────────────
     // Returns the resolved CSS value for `prop` on node `nid`, or "" if unknown.
     {
@@ -3089,8 +3106,22 @@ function _lumen_make_element(nid) {
                 resolve();
             });
         },
+        requestPointerLock: function() {
+            var self = _obj;
+            return new Promise(function(resolve, reject) {
+                // Phase 0: synchronously lock pointer (Phase 1: integrate with shell winit).
+                if (typeof _lumen_ptr_lock_request === 'function') {
+                    _lumen_ptr_lock_request(nid);
+                }
+                self.dispatchEvent(new Event('pointerlockchange', { bubbles: true }));
+                document.dispatchEvent(new Event('pointerlockchange'));
+                resolve();
+            });
+        },
         onfullscreenchange: null,
         onfullscreenerror:  null,
+        onpointerlockchange: null,
+        onpointerlockerror: null,
         appendChild:     function(c) {
             if (!c || c.__nid__ === undefined) return c;
             if (c.__isDocumentFragment__) {
@@ -3805,6 +3836,15 @@ var document = {
     },
     onfullscreenchange: null,
     onfullscreenerror:  null,
+    // Pointer Lock API (W3C Pointer Lock L2 §2-4) — Phase 0: local state only
+    get pointerLockElement() {
+        return typeof _lumen_ptr_lock_element !== 'function' ? null : _lumen_ptr_lock_element();
+    },
+    exitPointerLock: function() {
+        if (typeof _lumen_exit_ptr_lock === 'function') { _lumen_exit_ptr_lock(); }
+    },
+    onpointerlockchange: null,
+    onpointerlockerror: null,
     // Storage Access API (W3C Storage Access API §5) — Phase 0: always granted
     requestStorageAccess: function() {
         return Promise.resolve();
