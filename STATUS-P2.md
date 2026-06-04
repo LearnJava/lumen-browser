@@ -6,18 +6,22 @@
 
 ## In progress
 
-**C-1 | HTTP Cache RFC 7234** (branch: `p2-http-cache`)
-- Phase 0: `HttpCache` struct in `lumen-network/src/cache.rs`
-- `CacheEntry {url, status, headers, body, cached_at, max_age}`
-- `Cache-Control` directive parsing (max-age, no-cache, no-store, must-revalidate, private)
-- `ETag/If-None-Match` → 304 reuse
-- `Last-Modified/If-Modified-Since` validation
-- In-memory LRU 50 MB
-- Next step: Design CacheEntry structure and LRU eviction strategy
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**C-1 | HTTP Cache RFC 7234** ✅ 2026-06-04 (merged)
+- Phase 0–1: `HttpCache` struct с LRU эвикцией в `lumen-network/src/cache.rs`
+- `CacheEntry {body, headers, status, etag, last_modified, expires_at, must_revalidate}`
+- `CacheControl` парсинг (max-age, no-cache, no-store, must-revalidate, s-maxage)
+- `ETag/If-None-Match` → 304 reuse, `Last-Modified/If-Modified-Since` валидация
+- LRU эвикция с лимитом 50 MB: удаляются least-recently-used entries при превышении
+- `lookup()`, `get()`, `store()`, `revalidate()` методы, отслеживание размера entry
+- 21 unit-тест (12 base + 3 LRU eviction) + 5 integration тестов
+- lumen-network: 21 тест ✅, Clippy clean в http_cache.rs
+- Phase 1 завершена (LRU + размер-based eviction)
 
 **A-2 | CSS Custom Highlight API** ✅ 2026-06-04 (merged)
 - Phase 0–1: HighlightRegistry {set/get/has/delete/clear} в Rust
