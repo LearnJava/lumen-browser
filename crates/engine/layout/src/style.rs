@@ -1953,6 +1953,9 @@ pub struct ComputedStyle {
     /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    /// CSS Overflow L3 §overflow-clip-margin — расширяет clip region при overflow:clip.
+    /// Default: 0px. Не наследуется.
+    pub overflow_clip_margin: Option<Length>,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
@@ -4217,6 +4220,7 @@ impl ComputedStyle {
             text_shadow: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            overflow_clip_margin: None,
             text_overflow: TextOverflow::Clip,
             opacity: 1.0,
             outline_width: 3.0,
@@ -4472,6 +4476,7 @@ pub fn compute_style(
         box_shadow: Vec::new(),
         overflow_x: Overflow::Visible,
         overflow_y: Overflow::Visible,
+        overflow_clip_margin: None,
         text_overflow: TextOverflow::Clip,
         opacity: 1.0,
         outline_width: 3.0,
@@ -9727,6 +9732,10 @@ fn apply_declaration(
             if let Some(o) = parse_overflow_kw(val.trim()) {
                 style.overflow_y = o;
             }
+        }
+        "overflow-clip-margin" => {
+            // CSS Overflow L3: <visual-box> | <length>. Phase 0: поддерживаем только <length>.
+            style.overflow_clip_margin = parse_length(val);
         }
         "text-overflow" => {
             // CSS UI L4: clip | ellipsis. <string> (custom marker) и
