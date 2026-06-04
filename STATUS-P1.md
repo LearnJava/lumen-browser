@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty)
+A-13: Document Picture-in-Picture API  branch: p1-pip-api
+Next step: реализовать JS-шим в `crates/js/src/document_pip.rs`  crates/js/src/lib.rs
 
 ---
 

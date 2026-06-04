@@ -11,6 +11,7 @@ pub mod canvas2d;
 pub mod clipboard;
 pub mod cookie_banner;
 pub mod credentials;
+pub mod document_pip;
 pub mod dom;
 pub mod filesystem_access;
 pub mod geolocation;
@@ -619,6 +620,13 @@ impl QuickJsRuntime {
             // No actual detection is performed.
             if let Err(e) = shape_detection::install_shape_detection_bindings(&ctx) {
                 eprintln!("Shape Detection bindings init failed: {}", e);
+            }
+
+            // Install Document Picture-in-Picture API (W3C Document PiP §4) — pure JS implementation.
+            // Phase 0: documentPictureInPicture.requestWindow() creates a PiP window overlay.
+            // Shell integration (P3) registers the window via _lumen_pip_request_window.
+            if let Err(e) = document_pip::install_document_pip_api(&ctx) {
+                eprintln!("Document Picture-in-Picture API init failed: {}", e);
             }
 
             Ok(())

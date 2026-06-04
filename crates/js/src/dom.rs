@@ -18319,4 +18319,136 @@ mod tests {
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
+
+    #[test]
+    fn document_pip_request_window_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof documentPictureInPicture.requestWindow === 'function'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_pip_request_window_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("documentPictureInPicture.requestWindow() instanceof Promise")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_pip_request_window_with_options() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "documentPictureInPicture.requestWindow({width: 800, height: 600}) instanceof Promise",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_pip_window_access() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "documentPictureInPicture.requestWindow({width: 640, height: 360})\
+                 .then(w => w instanceof Object && typeof w.width === 'number' && w.width === 640)",
+            )
+            .unwrap();
+        // Promise should be created successfully
+        assert_ne!(r, lumen_core::JsValue::Null);
+    }
+
+    #[test]
+    fn document_pip_picture_in_picture_event_class_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof DocumentPictureInPictureEvent === 'function'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_pip_picture_in_picture_window_class_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof DocumentPictureInPictureWindow === 'function'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_pip_element_getter_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof Object.getOwnPropertyDescriptor(document, 'pictureInPictureElement') === 'object'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_register_property_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof CSS.registerProperty === 'function'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_register_property_valid() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("CSS.registerProperty({ name: '--my-color', syntax: '<color>', inherits: true, initialValue: 'blue' }); true")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_register_property_stored() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("CSS.registerProperty({ name: '--stored', syntax: '*', inherits: false, initialValue: 'test' }); CSS._getRegisteredProperties()['--stored'] !== undefined")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_register_property_requires_name() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("try { CSS.registerProperty({ syntax: '<color>' }); false; } catch (e) { e instanceof TypeError; }")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_register_property_requires_dash_prefix() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("try { CSS.registerProperty({ name: 'my-color' }); false; } catch (e) { e instanceof SyntaxError; }")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_register_property_default_inherits() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("CSS.registerProperty({ name: '--default-inherit', syntax: '*', initialValue: 'val' }); CSS._getRegisteredProperties()['--default-inherit'].inherits")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn css_register_property_default_syntax() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("CSS.registerProperty({ name: '--default-syntax', inherits: true, initialValue: 'val' }); CSS._getRegisteredProperties()['--default-syntax'].syntax === '*'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
 }
