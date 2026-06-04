@@ -880,13 +880,14 @@ fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
     (found, rest)
 }
 
-/// Извлечь `--click-log` из аргументов, вернуть (flag, остальные аргументы).
-/// Также активируется переменной окружения `LUMEN_CLICK_LOG=1`.
+/// Извлечь `--activity-log` (или `--click-log`) из аргументов.
+/// Также активируется переменной окружения `LUMEN_ACTIVITY_LOG=1`.
 fn extract_click_log(args: &[String]) -> (bool, Vec<String>) {
-    let mut found = std::env::var("LUMEN_CLICK_LOG").is_ok_and(|v| v == "1");
+    let mut found = std::env::var("LUMEN_ACTIVITY_LOG").is_ok_and(|v| v == "1")
+        || std::env::var("LUMEN_CLICK_LOG").is_ok_and(|v| v == "1");
     let mut rest = Vec::new();
     for arg in args {
-        if arg == "--click-log" {
+        if arg == "--activity-log" || arg == "--click-log" {
             found = true;
         } else {
             rest.push(arg.clone());
@@ -4063,6 +4064,7 @@ impl Lumen {
                 .and_then(|lb| forms::find_box_rect(lb, nid))
                 .map(|r| r.y)
         });
+        click_log::log_fragment(&fragment, target_y.is_some());
         if let Some(y) = target_y {
             self.scroll_to(y);
         }
@@ -4075,6 +4077,7 @@ impl Lumen {
         if matches!(self.source, PageSource::Empty) {
             return;
         }
+        click_log::log_load_start(&self.source.describe());
         println!("Reload: {}", self.source.describe());
 
         // Phase 4c: попробовать загрузить через GpuSession (WinitSession)
@@ -4184,8 +4187,12 @@ impl Lumen {
                 // JS may have requested navigation via location.href= etc.
                 // Store it for processing in about_to_wait (after first render).
                 self.pending_js_navigate = page.js_navigate;
+                let title = self.title.as_deref().unwrap_or("");
+                click_log::log_load_ok(&self.source.describe(), title);
+                click_log::log_page_ready(&self.source.describe(), self.scroll_y);
             }
             Err(err) => {
+                click_log::log_load_err(&self.source.describe(), &err.to_string());
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
             }
         }
@@ -4567,14 +4574,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
                 match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
+                        click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
+                        click_log::log_page_ready(&self.source.describe(), self.scroll_y);
                     }
                     Err(e) => {
+                        click_log::log_load_err(&self.source.describe(), &e.to_string());
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
                     }
                 }
             }
             LoadEvent::LoadError(msg) => {
+                click_log::log_load_err(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
                 self.stream_builder = None;
             }
@@ -4905,9 +4916,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // before the redirect completes (matches browser behaviour).
         if let Some(nav) = self.pending_js_navigate.take() {
             match nav {
-                JsNavigateRequest::Push(url)    => self.navigate_to(PageSource::Url(url)),
-                JsNavigateRequest::Replace(url) => self.navigate_replace(PageSource::Url(url)),
-                JsNavigateRequest::Reload       => self.reload(),
+                JsNavigateRequest::Push(url) => {
+                    click_log::log_js_nav("pushState/location.href", &url);
+                    self.navigate_to(PageSource::Url(url));
+                }
+                JsNavigateRequest::Replace(url) => {
+                    click_log::log_js_nav("replaceState/location.replace", &url);
+                    self.navigate_replace(PageSource::Url(url));
+                }
+                JsNavigateRequest::Reload => {
+                    click_log::log_js_nav("location.reload", &self.source.describe());
+                    self.reload();
+                }
             }
         }
     }
@@ -7052,28 +7072,28 @@ impl Lumen {
             match &form_action {
                 forms::FormClickAction::Nothing => {} // logged in the Nothing branch below
                 forms::FormClickAction::ToggleCheckbox(_) => {
-                    click_log::log(&click_log::ClickInfo {
+                    click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
                         hit: hit_ref,
                         outcome: click_log::ClickOutcome::FormAction("ToggleCheckbox"),
                     });
                 }
                 forms::FormClickAction::ToggleRadio { .. } => {
-                    click_log::log(&click_log::ClickInfo {
+                    click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
                         hit: hit_ref,
                         outcome: click_log::ClickOutcome::FormAction("ToggleRadio"),
                     });
                 }
                 forms::FormClickAction::OpenColorPicker(_) => {
-                    click_log::log(&click_log::ClickInfo {
+                    click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
                         hit: hit_ref,
                         outcome: click_log::ClickOutcome::FormAction("OpenColorPicker"),
                     });
                 }
                 forms::FormClickAction::SubmitForm(_) => {
-                    click_log::log(&click_log::ClickInfo {
+                    click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
                         hit: hit_ref,
                         outcome: click_log::ClickOutcome::FormAction("SubmitForm"),
@@ -7175,7 +7195,7 @@ impl Lumen {
                             let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
                                 node_id: *nid, tag, id_attr: id, class_attr: cls,
                             });
-                            click_log::log(&click_log::ClickInfo {
+                            click_log::log_click(&click_log::ClickInfo {
                                 win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
                                 hit: hit_ref,
                                 outcome: click_log::ClickOutcome::LinkFragment(frag),
@@ -7189,7 +7209,7 @@ impl Lumen {
                             let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
                                 node_id: *nid, tag, id_attr: id, class_attr: cls,
                             });
-                            click_log::log(&click_log::ClickInfo {
+                            click_log::log_click(&click_log::ClickInfo {
                                 win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
                                 hit: hit_ref,
                                 outcome: click_log::ClickOutcome::LinkNavigate {
@@ -7205,7 +7225,7 @@ impl Lumen {
                             let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
                                 node_id: *nid, tag, id_attr: id, class_attr: cls,
                             });
-                            click_log::log(&click_log::ClickInfo {
+                            click_log::log_click(&click_log::ClickInfo {
                                 win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
                                 hit: hit_ref,
                                 outcome: click_log::ClickOutcome::LinkBlocked(&href),
@@ -7221,7 +7241,7 @@ impl Lumen {
                     } else {
                         click_log::ClickOutcome::NoLink
                     };
-                    click_log::log(&click_log::ClickInfo {
+                    click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
                         hit: hit_ref,
                         outcome,
@@ -7692,6 +7712,7 @@ impl Lumen {
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
+        click_log::log_nav(&source.describe());
         self.hint.close();
         // Snapshot current page into bfcache if it has an HTML source.
         if let Some(ref ls) = self.layout_source
