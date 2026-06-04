@@ -6,7 +6,13 @@
 
 ## In progress
 
-None currently. Pick next available from Next section.
+**B-7 | CSS Resize property**  branch: p2-b7-resize
+- Implement `resize: both/horizontal/vertical` on overflow≠visible elements
+- 12px grip in corner as DrawSvgPath
+- MouseInput handler for active resize
+- CursorMoved updates inline width/height via _lumen_set_style_prop
+- 6 tests + graphic test validation
+Next step: layout/src/box_tree.rs — emit_box_self region
 
 ---
 
