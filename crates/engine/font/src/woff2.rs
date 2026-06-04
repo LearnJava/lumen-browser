@@ -246,7 +246,17 @@ fn decode_transformed_glyf(
             for _ in 0..n_contours {
                 let (v, consumed) = read_255uint16(glyph_stream, glyph_pos)?;
                 glyph_pos += consumed;
-                total_points += v as u32;
+                if v == 0 {
+                    return Err(FontError::InvalidData("woff2: contour with zero points"));
+                }
+                total_points = total_points
+                    .checked_add(v as u32)
+                    .ok_or(FontError::InvalidData("woff2: point count overflow"))?;
+                // TrueType endpoint indices are u16 — hard spec limit.
+                // Can't skip gracefully: glyph_pos would corrupt all subsequent glyphs.
+                if total_points > 65535 {
+                    return Err(FontError::InvalidData("woff2: glyph exceeds 65535 points"));
+                }
                 end_pts.push(total_points - 1);
             }
             // Read instruction length
@@ -566,21 +576,29 @@ fn build_sfnt(
     entries: &[W2TableEntry],
     table_data: &[Vec<u8>],
 ) -> Result<Vec<u8>, FontError> {
-    let num_tables = entries.len() as u16;
+    let num_tables = u16::try_from(entries.len())
+        .map_err(|_| FontError::InvalidData("woff2: too many tables"))?;
     let (search_range, entry_selector, range_shift) = sfnt_search_params(num_tables);
 
-    let header_size = 12 + num_tables as usize * 16;
-    let mut offset_after_header = header_size as u32;
+    let header_size = 12usize
+        .checked_add(num_tables as usize * 16)
+        .ok_or(FontError::InvalidData("woff2: header size overflow"))?;
+    let mut offset_after_header = u32::try_from(header_size)
+        .map_err(|_| FontError::InvalidData("woff2: font too large"))?;
 
     // Pre-compute padded offsets
     let mut offsets = Vec::with_capacity(entries.len());
     for data in table_data {
         offsets.push(offset_after_header);
-        let padded = (data.len() as u32 + 3) & !3;
-        offset_after_header += padded;
+        let padded = u32::try_from((data.len() + 3) & !3)
+            .map_err(|_| FontError::InvalidData("woff2: table too large"))?;
+        offset_after_header = offset_after_header
+            .checked_add(padded)
+            .ok_or(FontError::InvalidData("woff2: total font size overflow"))?;
     }
 
-    let total_size = offset_after_header as usize;
+    let total_size = usize::try_from(offset_after_header)
+        .map_err(|_| FontError::InvalidData("woff2: font too large for allocation"))?;
     let mut out = vec![0u8; total_size];
 
     // Write offset table
@@ -607,19 +625,22 @@ fn build_sfnt(
     Ok(out)
 }
 
+// searchRange/entrySelector/rangeShift are binary-search hints in the sfnt header.
+// Parsers (including ours) iterate linearly, so zeroing these on overflow is safe.
 fn sfnt_search_params(num_tables: u16) -> (u16, u16, u16) {
     if num_tables == 0 {
         return (0, 0, 0);
     }
-    let mut search_range = 1u16;
+    let n = num_tables as u32;
+    let mut search_range = 1u32;
     let mut entry_selector = 0u16;
-    while search_range * 2 <= num_tables {
+    while search_range * 2 <= n {
         search_range *= 2;
         entry_selector += 1;
     }
-    search_range *= 16;
-    let range_shift = num_tables * 16 - search_range;
-    (search_range, entry_selector, range_shift)
+    let Some(sr) = search_range.checked_mul(16) else { return (0, 0, 0) };
+    let Some(rs) = n.checked_mul(16).and_then(|v| v.checked_sub(sr)) else { return (0, 0, 0) };
+    (sr as u16, entry_selector, rs as u16)
 }
 
 fn table_checksum(data: &[u8]) -> u32 {
