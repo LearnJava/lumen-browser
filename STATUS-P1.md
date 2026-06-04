@@ -6,14 +6,14 @@
 
 ## In progress
 
-A-20: PerformanceObserver: LCP + CLS  branch: p1-a20-perf-observer
-Next step: создать модули в crates/js/src/ для PerformanceEntry и интеграции с shell
+(none)
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-04 | A-20: PerformanceObserver: LCP + CLS | W3C Performance Timeline L2 §5.2: `PerformanceObserver.takeRecords()` возвращает buffered entries по типам. Новые методы `BrowserSession::deliver_lcp_entry()` и `BrowserSession::deliver_layout_shift()` для доставки PerformanceEntry в JS контекст. JS функции `_lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms)` и `_lumen_deliver_layout_shift(value, session_id, had_input)` уже реализованы в dom.rs и создают PerformanceEntry записи с типами 'largest-contentful-paint' и 'layout-shift'. Реализовано в `InProcessSession` с вызовом JS функций через `eval()`, в `WinitSession` — no-op (Phase 4). 5 unit-тестов (perf_observer_take_records, perf_observer_lcp_entry, perf_observer_layout_shift, perf_observer_buffered, perf_observer_disconnect). lumen-core: 200 тестов, lumen-driver: 54 теста. Clippy чист. |
 | 2026-06-04 | A-22: Payment Request API stub | W3C Payment Request API (Phase 0): `new PaymentRequest(methodData, details, options)` конструктор с валидацией аргументов. `.show()` → Promise<reject NotSupportedError> (Phase 0: платёжная система не поддерживается). `.canMakePayment()` → Promise<false>. `.abort()` → Promise<reject InvalidStateError если не в interactive состоянии>. `PaymentResponse` класс (stub) с `requestId`, `methodName`, `details` и `toJSON()`. Экспорт `window.PaymentRequest` и `window.PaymentResponse`. Новый модуль `crates/js/src/payment_request.rs`. 6 unit-тестов (constructor, show_returns_promise, show_rejects_with_not_supported, can_make_payment_returns_false, abort_rejects_when_not_interactive, payment_response_exists). lumen-js: 1255 тестов (было 1249 + 6 новых). Clippy чист. |
 | 2026-06-04 | B-1: DNS over HTTPS | RFC 8484 DoH resolver в `lumen-network/src/doh.rs`. `DohResolver::new(endpoint, transport)` шлёт GET-запросы к DoH сервису с base64url-кодированными DNS запросами (RFC 1035 wire format). Dual-stack: AAAA перед A, kombinuje результаты (IPv6 перед IPv4 per RFC 6724). `CachedDnsResolver` — TTL-aware кеш (default 60s) над любым `DnsResolver` с автоматическим удалением истекших записей. Конфиг `fingerprint.toml`: новое поле `doh_url` (пример: `https://cloudflare-dns.com/dns-query`). `FingerprintProfile::apply_http()` создаёт bootstrap HttpClient → DohResolver → CachedDnsResolver и подключает к основному клиенту. Fallback на system DNS если doh_url не задан. 41 тест в doh::tests (38 существующих + 3 новых для CachedDnsResolver). lumen-network: все 652 теста пройдены. Clippy чист. |
 |
