@@ -5898,3 +5898,53 @@ mod http_cache_tests {
         server.join().unwrap();
     }
 }
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+
+    #[test]
+    fn http_proxy_new_no_auth() {
+        let proxy = HttpProxy::new("proxy.local".to_string(), 3128);
+        assert_eq!(proxy.host, "proxy.local");
+        assert_eq!(proxy.port, 3128);
+        assert_eq!(proxy.auth, None);
+    }
+
+    #[test]
+    fn http_proxy_with_basic_auth() {
+        let proxy = HttpProxy::new("proxy.local".to_string(), 3128)
+            .with_basic_auth("user", "pass");
+        assert_eq!(proxy.host, "proxy.local");
+        assert_eq!(proxy.port, 3128);
+        assert!(proxy.auth.is_some());
+        // Basic auth for "user:pass" should be base64-encoded "dXNlcjpwYXNz"
+        assert_eq!(proxy.auth.as_ref().unwrap(), "dXNlcjpwYXNz");
+    }
+
+    #[test]
+    fn http_client_with_proxy() {
+        let proxy = Arc::new(HttpProxy::new("proxy.local".to_string(), 3128));
+        let client = HttpClient::new().with_proxy(Arc::clone(&proxy));
+        // Verify that the proxy was attached (no public accessor, so we just verify it doesn't crash)
+        assert!(client.proxy.is_some());
+    }
+
+    #[test]
+    fn base64_encode_empty_string() {
+        let encoded = base64_encode("");
+        assert_eq!(encoded, "");
+    }
+
+    #[test]
+    fn base64_encode_single_byte() {
+        let encoded = base64_encode("a");
+        assert_eq!(encoded, "YQ==");
+    }
+
+    #[test]
+    fn base64_encode_user_pass() {
+        let encoded = base64_encode("user:pass");
+        assert_eq!(encoded, "dXNlcjpwYXNz");
+    }
+}
