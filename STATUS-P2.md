@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+B-2: CSS Flex align-content
+  Branch: worktree-p2-flex-align-content
+  Next step: реализовать align_flex_lines() в layout/src/flex.rs
 
 ---
 
