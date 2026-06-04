@@ -6,7 +6,10 @@
 
 ## In progress
 
-(none)
+**B-2 — CSS Flex align-content**  
+Branch: `p2-flex-align-content`  
+Next step: Реализовать `resolve_flex_lines()` и `align_flex_lines()` в `crates/engine/layout/src/flex.rs` — многострочный flexbox с `flex-wrap: wrap`  
+file: `crates/engine/layout/src/flex.rs` (см. `lay_out_flex` function)
 
 ---
 
