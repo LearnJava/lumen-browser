@@ -18,6 +18,7 @@ pub mod box_tree;
 pub mod color_mix;
 pub mod counters;
 pub mod image_gating;
+pub mod mathml;
 pub mod motion_path;
 pub mod page;
 pub mod pagination;
