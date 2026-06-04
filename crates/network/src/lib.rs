@@ -760,9 +760,10 @@ fn fetch_single(
     let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile)?;
 
     // Если используется HTTPS-прокси: выполнить CONNECT-туннель.
+    #[allow(clippy::collapsible_if)]
     if let Some(proxy) = proxy {
         if is_tls {
-            // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту.
+            // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту через прокси.
             let mut stream = conn.into_stream();
             let connect_request = format!(
                 "CONNECT {host}:{port} HTTP/1.1\r\n\
