@@ -6,12 +6,20 @@
 
 ## In progress
 
-B-4 | **CSS Grid: dense packing** (or next available from B section)
-branch: `p2-b4-...`
-Next step: Research grid auto-flow dense algorithm, implement back-fill pass
+None currently. Pick next available from Next section.
 
-Summary of B-4: `grid-auto-flow: dense` — второй проход заполняет holes не-positioned items.
-Обновление `place_auto_items()`. 4 теста.
+---
+
+## Current / Recently Merged
+
+**B-1 | Table layout rendering** ✅ 2026-06-04 (merged)
+- Phase 1: emit_table_box/row_group/row/cell with separate border mode
+- Cell backgrounds (FillRect) and 4-sided borders (DrawBorder) per cell
+- TableContext/BorderCollapse/BorderPrecedence/CollapsedBorder enums for Phase 2 collapse
+- 9 unit tests (table_context, separate_mode, cell_border, no_border, groups, backgrounds, collapsed_border, empty_cells, nested)
+- Graphic test 64-table.html validates visual rendering
+- CSS handoff: // CSS: border-collapse, border-spacing, empty-cells (P4 Phase 2)
+- Fixed: resolve_auto_fill_fit_count type mismatch from B-3
 
 ---
 
