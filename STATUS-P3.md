@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(нет)_
+BUG-062/063: clippy lint fixes (lumen-layout + lumen-network)  branch: p3-bug062-063-clippy
 
 ## Next
 

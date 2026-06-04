@@ -85,7 +85,7 @@ impl MathmlBox {
 
     /// Set the scaling factor for annotations (superscript/subscript).
     pub fn with_annotation_scale(mut self, scale: f32) -> Self {
-        self.annotation_scale = scale.max(0.1).min(1.0);
+        self.annotation_scale = scale.clamp(0.1, 1.0);
         self
     }
 }

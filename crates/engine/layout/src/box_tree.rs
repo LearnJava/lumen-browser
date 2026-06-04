@@ -5459,7 +5459,6 @@ fn lay_out_grid(
 /// # Returns
 /// The minimum number of tracks that fit in available space, with preference
 /// for auto-fill (leave empty) over auto-fit (collapse).
-#[expect(dead_code)]
 pub fn resolve_auto_fill_fit_count(
     available_width: f32,
     track_sizes: &[GridTrackSize],
@@ -8120,11 +8119,11 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
         // SVG should have only <circle> as visible child, <defs> should be skipped.
         assert!(!root.children.is_empty(), "svg should have children");
-        if let Some(svg) = root.children.first() {
-            if let super::BoxKind::SvgRoot { .. } = &svg.kind {
-                assert!(!svg.children.is_empty(), "svg should have visible children");
-                // Should contain circle, not defs.
-            }
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { .. } = &svg.kind
+        {
+            assert!(!svg.children.is_empty(), "svg should have visible children");
+            // Should contain circle, not defs.
         }
     }
 
@@ -8136,11 +8135,11 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
         // Find SVG root.
-        if let Some(svg) = root.children.first() {
-            if let super::BoxKind::SvgRoot { view_box, .. } = &svg.kind {
-                let ratio = super::svg_intrinsic_ratio(view_box);
-                assert_eq!(ratio, Some(2.0), "viewBox 200x100 should give ratio 2.0");
-            }
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { view_box, .. } = &svg.kind
+        {
+            let ratio = super::svg_intrinsic_ratio(view_box);
+            assert_eq!(ratio, Some(2.0), "viewBox 200x100 should give ratio 2.0");
         }
     }
 
@@ -8151,11 +8150,11 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
-        if let Some(svg) = root.children.first() {
-            if let super::BoxKind::SvgRoot { view_box, .. } = &svg.kind {
-                let ratio = super::svg_intrinsic_ratio(view_box);
-                assert_eq!(ratio, None, "svg without viewBox should have no intrinsic ratio");
-            }
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { view_box, .. } = &svg.kind
+        {
+            let ratio = super::svg_intrinsic_ratio(view_box);
+            assert_eq!(ratio, None, "svg without viewBox should have no intrinsic ratio");
         }
     }
 
@@ -8166,12 +8165,12 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
-        if let Some(svg) = root.children.first() {
-            if let super::BoxKind::SvgRoot { preserve_aspect_ratio, .. } = &svg.kind {
-                assert_eq!(preserve_aspect_ratio.meet_or_slice, super::SvgMeetOrSlice::Meet);
-                assert_eq!(preserve_aspect_ratio.align_x, super::SvgAlignX::Mid);
-                assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Mid);
-            }
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { preserve_aspect_ratio, .. } = &svg.kind
+        {
+            assert_eq!(preserve_aspect_ratio.meet_or_slice, super::SvgMeetOrSlice::Meet);
+            assert_eq!(preserve_aspect_ratio.align_x, super::SvgAlignX::Mid);
+            assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Mid);
         }
     }
 
@@ -8182,12 +8181,12 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
-        if let Some(svg) = root.children.first() {
-            if let super::BoxKind::SvgRoot { preserve_aspect_ratio, .. } = &svg.kind {
-                assert_eq!(preserve_aspect_ratio.meet_or_slice, super::SvgMeetOrSlice::Slice);
-                assert_eq!(preserve_aspect_ratio.align_x, super::SvgAlignX::Min);
-                assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Min);
-            }
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { preserve_aspect_ratio, .. } = &svg.kind
+        {
+            assert_eq!(preserve_aspect_ratio.meet_or_slice, super::SvgMeetOrSlice::Slice);
+            assert_eq!(preserve_aspect_ratio.align_x, super::SvgAlignX::Min);
+            assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Min);
         }
     }
 
@@ -8200,12 +8199,12 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
         // SVG should have at least the <use> element (which should create referenced content).
-        if let Some(svg) = root.children.first() {
-            if let super::BoxKind::SvgRoot { .. } = &svg.kind {
-                // <use> should have been processed and added to the layout.
-                // The exact structure depends on implementation, but we verify no panic.
-                assert!(!svg.children.is_empty(), "svg should have layout children from <use>");
-            }
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { .. } = &svg.kind
+        {
+            // <use> should have been processed and added to the layout.
+            // The exact structure depends on implementation, but we verify no panic.
+            assert!(!svg.children.is_empty(), "svg should have layout children from <use>");
         }
     }
 
@@ -8496,7 +8495,7 @@ mod tests {
         fn find_grid_items(b: &super::LayoutBox) -> Vec<(f32, f32)> {
             let mut items = Vec::new();
             for child in &b.children {
-                if matches!(child.kind, super::BoxKind::Block { .. }) && !child.children.is_empty() {
+                if matches!(child.kind, super::BoxKind::Block) && !child.children.is_empty() {
                     // This is a grid item (has content)
                     items.push((child.rect.x, child.rect.y));
                 }
