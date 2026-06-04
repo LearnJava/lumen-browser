@@ -6,17 +6,24 @@
 
 ## In progress
 
-**B-7 | CSS Resize property**  branch: p2-b7-resize
-- Implement `resize: both/horizontal/vertical` on overflow≠visible elements
-- 12px grip in corner as DrawSvgPath
-- MouseInput handler for active resize
-- CursorMoved updates inline width/height via _lumen_set_style_prop
-- 6 tests + graphic test validation
-Next step: layout/src/box_tree.rs — emit_box_self region
+**B-10 | CSS Forced Colors media** — branch: p2-b10-forced-colors
+- Phase 0: @media (forced-colors: active) parsing + MediaContext flag + system color keywords
+- Next step: lumen-layout/src/style.rs:2100 add `forced_colors: bool` to MediaContext struct
 
 ---
 
 ## Current / Recently Merged
+
+**B-7 | CSS Resize property** ✅ 2026-06-04 (merged)
+- Phase 0 (prev): emit_resize_grip() рисует 12px grip в углу элемента
+- Phase 1 (new): point_on_resize_grip() детектирование клика на grip
+- find_resize_grip_node() поиск элемента с grip в layout tree
+- MouseInput Pressed: активирует resize, MouseInput Released: очищает resize
+- CursorMoved: вычисляет delta и вызывает JS binding _lumen_apply_resize()
+- JS binding _lumen_apply_resize(nid, delta_x, delta_y) обновляет width/height
+- Export типа Resize из lumen-layout для использования в lumen-paint
+- Компиляция чиста, 521 тест lumen-paint пройден
+- Phase 2 (future): ограничивающий контейнер, дополнительные points resize, touch
 
 **B-9 | CSS overflow: clip** ✅ 2026-06-04 (merged)
 - overflow_clip_margin: Option<Length> field added to ComputedStyle
