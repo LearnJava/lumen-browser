@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty)
+A-15: Pointer Lock API  branch: p1-pointer-lock
+Next step: Implement pointer-lock.rs with requestPointerLock, exitPointerLock, pointerLockElement, movementX/Y tracking  crates/js/src/
 
 ---
 
