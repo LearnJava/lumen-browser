@@ -855,6 +855,167 @@ pub fn hash_display_list(
     hasher.finish()
 }
 
+/// Результат сравнения двух display-list-ов.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DiffResult {
+    /// Если true, то оба display list-а идентичны — можно пропустить GPU upload.
+    pub identical: bool,
+    ///累積bounding rectangle всех команд, которые изменились или добавились.
+    /// Используется для dirty-rect tracking в renderer-е.
+    /// `Rect { x: f32::NAN, y: f32::NAN, width: 0.0, height: 0.0 }` если нет изменений.
+    pub changed_rects: Rect,
+}
+
+impl DiffResult {
+    /// Создаёт DiffResult для идентичных display list-ов.
+    #[inline]
+    pub fn identical() -> Self {
+        Self {
+            identical: true,
+            changed_rects: Rect {
+                x: f32::NAN,
+                y: f32::NAN,
+                width: 0.0,
+                height: 0.0,
+            },
+        }
+    }
+
+    /// Создаёт DiffResult для изменённых display list-ов с заданным bounding rect.
+    #[inline]
+    pub fn changed(changed_rects: Rect) -> Self {
+        Self {
+            identical: false,
+            changed_rects,
+        }
+    }
+}
+
+/// Сравнивает два display list-а по Debug hash каждой команды.
+/// Возвращает DiffResult с флагом `identical` и bounding rectangle всех изменений.
+///
+/// Алгоритм:
+/// 1. Если длины списков различаются → список изменился
+/// 2. Для каждой пары команд вычисляем Debug hash и сравниваем
+/// 3. Если все хеши совпадают → `identical = true`
+/// 4. Если есть отличия → собираем bounding rect всех `rect`-полей из изменённых команд
+pub fn diff_display_lists(prev: &[DisplayCommand], next: &[DisplayCommand]) -> DiffResult {
+    // Быстрая проверка: если длины различаются, список точно изменился.
+    if prev.len() != next.len() {
+        return DiffResult::changed(union_all_rects(next));
+    }
+
+    // Вычисляем hashes обеих последовательностей и сравниваем поэлементно.
+    use std::hash::{Hash, Hasher};
+    let mut all_identical = true;
+    let mut changed_rects = Rect {
+        x: f32::INFINITY,
+        y: f32::INFINITY,
+        width: 0.0,
+        height: 0.0,
+    };
+
+    for (prev_cmd, next_cmd) in prev.iter().zip(next.iter()) {
+        // Используем Debug-представление для хеширования (как в hash_display_list).
+        let prev_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            let mut hasher = DefaultHasher::new();
+            format!("{:?}", prev_cmd).hash(&mut hasher);
+            hasher.finish()
+        };
+        let next_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            let mut hasher = DefaultHasher::new();
+            format!("{:?}", next_cmd).hash(&mut hasher);
+            hasher.finish()
+        };
+
+        if prev_hash != next_hash {
+            all_identical = false;
+            // Собираем rect из обеих команд (старая + новая).
+            if let Some(rect) = get_command_rect(prev_cmd) {
+                changed_rects = union_rects(changed_rects, rect);
+            }
+            if let Some(rect) = get_command_rect(next_cmd) {
+                changed_rects = union_rects(changed_rects, rect);
+            }
+        }
+    }
+
+    if all_identical {
+        DiffResult::identical()
+    } else {
+        DiffResult::changed(changed_rects)
+    }
+}
+
+/// Извлекает rect из DisplayCommand, если применимо.
+fn get_command_rect(cmd: &DisplayCommand) -> Option<Rect> {
+    match cmd {
+        DisplayCommand::FillRect { rect, .. } => Some(*rect),
+        DisplayCommand::FillRoundedRect { rect, .. } => Some(*rect),
+        DisplayCommand::DrawBorder { rect, .. } => Some(*rect),
+        DisplayCommand::DrawOutline { rect, .. } => Some(*rect),
+        DisplayCommand::DrawText { rect, .. } => Some(*rect),
+        DisplayCommand::DrawImage { rect, .. } => Some(*rect),
+        DisplayCommand::DrawBackgroundImage { rect, .. } => Some(*rect),
+        DisplayCommand::DrawLinearGradient { rect, .. } => Some(*rect),
+        DisplayCommand::DrawRadialGradient { rect, .. } => Some(*rect),
+        DisplayCommand::DrawConicGradient { rect, .. } => Some(*rect),
+        _ => None,
+    }
+}
+
+/// Объединяет two rectangles в их bounding rect.
+fn union_rects(a: Rect, b: Rect) -> Rect {
+    if a.width == 0.0 && a.height == 0.0 {
+        return b;
+    }
+    if b.width == 0.0 && b.height == 0.0 {
+        return a;
+    }
+
+    let x1 = a.x.min(b.x);
+    let y1 = a.y.min(b.y);
+    let x2 = (a.x + a.width).max(b.x + b.width);
+    let y2 = (a.y + a.height).max(b.y + b.height);
+
+    Rect {
+        x: x1,
+        y: y1,
+        width: (x2 - x1).max(0.0),
+        height: (y2 - y1).max(0.0),
+    }
+}
+
+/// Собирает bounding rect всех команд в display list.
+fn union_all_rects(cmds: &[DisplayCommand]) -> Rect {
+    let mut result = Rect {
+        x: f32::INFINITY,
+        y: f32::INFINITY,
+        width: 0.0,
+        height: 0.0,
+    };
+
+    for cmd in cmds {
+        if let Some(rect) = get_command_rect(cmd) {
+            result = union_rects(result, rect);
+        }
+    }
+
+    // Если нет ни одного rect-команды, вернуть нулевой rect.
+    if result.x == f32::INFINITY {
+        result = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+    }
+
+    result
+}
+
 pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
     let mut out = String::new();
     for cmd in dl {
@@ -9548,5 +9709,195 @@ mod tests {
         // Phase 1: just collect and emit content, ignore path rendering
         assert!(texts.iter().any(|t| t.contains("OnPath")) || texts.is_empty(),
                 "should have collected textPath content or empty is acceptable in Phase 1");
+    }
+
+    // Display list diffing tests (A-10)
+    #[test]
+    fn diff_identical_empty_lists() {
+        let empty1: Vec<DisplayCommand> = vec![];
+        let empty2: Vec<DisplayCommand> = vec![];
+        let result = diff_display_lists(&empty1, &empty2);
+        assert!(result.identical, "two empty lists should be identical");
+    }
+
+    #[test]
+    fn diff_identical_single_command() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(result.identical, "identical FillRect commands should be identical");
+    }
+
+    #[test]
+    fn diff_different_lengths() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1 = vec![cmd.clone()];
+        let list2 = vec![cmd.clone(), cmd];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "lists with different lengths should not be identical");
+    }
+
+    #[test]
+    fn diff_different_colors() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect,
+            color: blue,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "FillRects with different colors should not be identical");
+        assert!(!result.changed_rects.width.is_nan(), "changed_rects should be valid");
+    }
+
+    #[test]
+    fn diff_changed_rects_bounds() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect1 = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let rect2 = Rect {
+            x: 30.0,
+            y: 40.0,
+            width: 80.0,
+            height: 60.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect: rect1,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect: rect2,
+            color: red,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "FillRects with different positions should not be identical");
+        // changed_rects should be the union of rect1 and rect2
+        assert_eq!(result.changed_rects.x, 10.0, "left edge should be min of both rects");
+        assert_eq!(result.changed_rects.y, 20.0, "top edge should be min of both rects");
+    }
+
+    #[test]
+    fn diff_multiple_commands_one_changed() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let fill1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let fill2 = DisplayCommand::FillRect {
+            rect,
+            color: blue,
+        };
+
+        let list1 = vec![fill1.clone(), fill1.clone()];
+        let list2 = vec![fill1, fill2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "lists differing in one command should not be identical");
+    }
+
+    #[test]
+    fn diff_empty_to_non_empty() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1: Vec<DisplayCommand> = vec![];
+        let list2 = vec![cmd];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "empty list vs non-empty should not be identical");
+        assert_eq!(result.changed_rects.x, 10.0, "changed_rects should reflect added command");
+    }
+
+    #[test]
+    fn diff_result_identical_constructor() {
+        let result = DiffResult::identical();
+        assert!(result.identical);
+        assert!(result.changed_rects.width == 0.0 && result.changed_rects.height == 0.0);
+    }
+
+    #[test]
+    fn diff_result_changed_constructor() {
+        let rect = Rect {
+            x: 5.0,
+            y: 10.0,
+            width: 50.0,
+            height: 60.0,
+        };
+        let result = DiffResult::changed(rect);
+        assert!(!result.identical);
+        assert_eq!(result.changed_rects, rect);
     }
 }
