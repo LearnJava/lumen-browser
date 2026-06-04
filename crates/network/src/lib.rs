@@ -691,17 +691,26 @@ fn fetch_single(
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
     extra_headers: &str,
-    _proxy: Option<&HttpProxy>,
+    proxy: Option<&HttpProxy>,
 ) -> Result<Response> {
+    // Если proxy используется, определяем актуальный host:port для подключения.
+    let (connect_host, connect_port, connect_is_tls) = if let Some(proxy) = proxy {
+        // Прокси — подключаемся к прокси-серверу через незащищённое TCP.
+        (proxy.host.as_str(), proxy.port, false)
+    } else {
+        // Нет прокси — подключаемся напрямую.
+        (host, port, is_tls)
+    };
+
     let key = PoolKey {
-        host: host.to_owned(),
-        port,
-        is_tls,
+        host: connect_host.to_owned(),
+        port: connect_port,
+        is_tls: connect_is_tls,
     };
 
     // HTTP/2 pool: try reusing an existing H2 connection for this origin.
     if let Some(h2p) = h2_pool {
-        let h2_key = pool::PoolKey { host: host.to_owned(), port, is_tls };
+        let h2_key = pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls };
         if let Some(h2_conn) = h2p.acquire(&h2_key) {
             let scheme = if is_tls { "https" } else { "http" };
             match h2_do_request_conn(h2_conn, scheme, request_host_header, request_path, extra_headers) {
@@ -712,7 +721,7 @@ fn fetch_single(
                 Err(e) if is_stale_error(&e) => {
                     // H2 conn went stale (server sent GOAWAY or closed socket).
                     // Evict and fall through to fresh connect below.
-                    h2p.evict(&pool::PoolKey { host: host.to_owned(), port, is_tls });
+                    h2p.evict(&pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls });
                 }
                 Err(e) => return Err(e),
             }
@@ -748,7 +757,79 @@ fn fetch_single(
     }
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
-    let conn = connect(host, port, is_tls, resolver, tls_profile)?;
+    let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile)?;
+
+    // Если используется HTTPS-прокси: выполнить CONNECT-туннель.
+    if let Some(proxy) = proxy {
+        if is_tls {
+            // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту.
+            let mut stream = conn.into_stream();
+            let connect_request = format!(
+                "CONNECT {host}:{port} HTTP/1.1\r\n\
+                Host: {host}:{port}\r\n\
+                Connection: keep-alive\r\n"
+            );
+            let auth_header = if let Some(auth) = &proxy.auth {
+                format!("Proxy-Authorization: Basic {auth}\r\n")
+            } else {
+                String::new()
+            };
+            let full_request = format!("{}{}\r\n", connect_request, auth_header);
+
+            stream.write_all(full_request.as_bytes())
+                .map_err(|e| Error::Network(format!("write CONNECT request: {e}")))?;
+            stream.flush()
+                .map_err(|e| Error::Network(format!("flush CONNECT request: {e}")))?;
+
+            // Читаем ответ на CONNECT (должен быть 200 OK).
+            let mut reader = BufReader::new(stream);
+            let mut status_line = String::new();
+            let n = reader.read_line(&mut status_line)
+                .map_err(|e| Error::Network(format!("read CONNECT status: {e}")))?;
+            if n == 0 {
+                return Err(Error::Network("EOF before CONNECT status line".to_owned()));
+            }
+
+            if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
+                return Err(Error::Network(format!("CONNECT tunnel failed: {}", status_line.trim())));
+            }
+
+            // Читаем оставшиеся заголовки CONNECT ответа (до пустой строки).
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line)
+                    .map_err(|e| Error::Network(format!("read CONNECT header: {e}")))?;
+                if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
+                    break;
+                }
+            }
+
+            // Теперь stream находится над HTTP-туннелем. Устанавливаем TLS.
+            let tunnel_stream = reader.into_inner();
+
+            // RawStream::Plain содержит TcpStream внутри.
+            let tcp = match tunnel_stream {
+                RawStream::Plain(t) => t,
+                _ => return Err(Error::Network("unexpected tunnel stream type".to_owned())),
+            };
+
+            let server_name = ServerName::try_from(host.to_owned())
+                .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+
+            let tls_config = tls_config_for_profile(tls_profile);
+            let mut tls_conn = ClientConnection::new(tls_config, server_name)
+                .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+            let mut tcp_copy = tcp;
+            tls_conn.complete_io(&mut tcp_copy)
+                .map_err(|e| Error::Network(format!("TLS handshake over tunnel: {e}")))?;
+
+            let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
+
+            conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
+            conn.is_h2 = is_h2;
+        }
+    }
 
     // HTTP/2: establish fresh H2Conn, use it, then store back in h2_pool.
     if conn.is_h2 {
@@ -756,11 +837,18 @@ fn fetch_single(
         return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls, http_profile);
     }
 
+    // Для HTTP-прокси: отправляем абсолютный URL вместо относительного пути.
+    let request_path_to_use = if proxy.is_some() && !is_tls {
+        format!("http://{host}:{port}{request_path}")
+    } else {
+        request_path.to_string()
+    };
+
     let (resp, conn) = do_request(
         conn,
         method,
         request_host_header,
-        request_path,
+        &request_path_to_use,
         range,
         if_range,
         authorization,

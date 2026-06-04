@@ -86,6 +86,9 @@ pub struct FingerprintProfile {
     /// DNS over HTTPS resolver URL. `None` disables DoH; falls back to system DNS.
     /// Example: `https://cloudflare-dns.com/dns-query`.
     pub doh_url: Option<String>,
+    /// HTTP proxy URL. `None` means no proxy; goes directly to target.
+    /// Example: `http://proxy.local:3128` or `http://user:pass@proxy.local:8080`.
+    pub proxy: Option<String>,
 }
 
 impl Default for FingerprintProfile {
@@ -104,6 +107,7 @@ impl Default for FingerprintProfile {
             color_depth: 24,
             timezone_offset: 0,
             doh_url: None,
+            proxy: None,
         }
     }
 }
@@ -165,6 +169,13 @@ impl FingerprintProfile {
                     lumen_network::CachedDnsResolver::new(doh_resolver),
                 );
                 client = client.with_dns_resolver(cached);
+            }
+        }
+
+        // Wire HTTP proxy if configured
+        if let Some(proxy_str) = &self.proxy {
+            if let Some(proxy) = parse_http_proxy(proxy_str) {
+                client = client.with_proxy(std::sync::Arc::new(proxy));
             }
         }
 
@@ -313,6 +324,9 @@ fn apply_key(p: &mut FingerprintProfile, key: &str, value: &str) {
         "doh_url" if !value.is_empty() => {
             p.doh_url = Some(value.to_string());
         }
+        "proxy" if !value.is_empty() => {
+            p.proxy = Some(value.to_string());
+        }
         _ => {}
     }
 }
@@ -339,6 +353,38 @@ fn parse_tls_profile(value: &str) -> Option<TlsProfile> {
         "tor" => Some(TlsProfile::Tor),
         _ => None,
     }
+}
+
+/// Parse HTTP proxy URL into an [`HttpProxy`] struct.
+/// Format: `http://[user:pass@]host:port` or `https://[user:pass@]host:port` (both treated as plain HTTP).
+fn parse_http_proxy(proxy_url: &str) -> Option<lumen_network::HttpProxy> {
+    use lumen_network::HttpProxy;
+
+    // Strip scheme (http:// or https://)
+    let url_str = proxy_url
+        .strip_prefix("http://")
+        .or_else(|| proxy_url.strip_prefix("https://"))?;
+
+    // Parse [user:pass@]host:port
+    let (auth_part, host_port) = if let Some(at_idx) = url_str.rfind('@') {
+        (&url_str[..at_idx], &url_str[at_idx + 1..])
+    } else {
+        ("", url_str)
+    };
+
+    // Parse host:port
+    let (host, port_str) = host_port.rsplit_once(':')?;
+    let port: u16 = port_str.parse().ok()?;
+
+    let mut proxy = HttpProxy::new(host.to_string(), port);
+    if !auth_part.is_empty() {
+        if let Some(colon_idx) = auth_part.find(':') {
+            let user = &auth_part[..colon_idx];
+            let pass = &auth_part[colon_idx + 1..];
+            proxy = proxy.with_basic_auth(user, pass);
+        }
+    }
+    Some(proxy)
 }
 
 #[cfg(test)]

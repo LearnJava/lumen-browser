@@ -198,6 +198,21 @@ fn main() -> ExitCode {
     let (det_mode, rest_args) = deterministic::extract_deterministic(&rest_args);
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
+    let (proxy, rest_args) = match extract_proxy(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Ошибка --proxy: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Если прокси передан в командной строке, переопределить конфиг.
+    if let Some(proxy_str) = proxy {
+        let mut cfg = config::global().clone();
+        cfg.proxy = Some(proxy_str);
+        config::init_global(cfg);
+    }
+
     let cli = if let Some(output) = pdf_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
         CliMode::PrintToPdf { source, output }
@@ -687,6 +702,7 @@ fn print_usage() {
     eprintln!("  lumen --print-to-pdf <out.pdf> <path-or-url>   — сохранить страницу как PDF");
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
+    eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
     eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
     eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
@@ -888,6 +904,24 @@ fn extract_bidi_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), Stri
         i += 1;
     }
     Ok((port, rest))
+}
+
+/// Извлечь `--proxy http://host:port` из аргументов.
+fn extract_proxy(args: &[String]) -> Result<(Option<String>, Vec<String>), String> {
+    let mut proxy: Option<String> = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--proxy" {
+            i += 1;
+            let s = args.get(i).ok_or("--proxy требует адрес (http://host:port или https://host:port)")?;
+            proxy = Some(s.clone());
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    Ok((proxy, rest))
 }
 
 /// Источник страницы. Запоминается в `Lumen`, чтобы reload (F5/Ctrl+R) мог
