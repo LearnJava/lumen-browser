@@ -6,15 +6,14 @@
 
 ## In progress
 
-**A-20: PerformanceObserver: LCP + CLS**  
-Branch: `p1-a20-lcp-cls`  
-Next step: Реализовать `PerformanceObserver.takeRecords()` в JS и вспомогательные методы `BrowserSession::deliver_lcp_entry()` / `deliver_layout_shift()` для интеграции с shell pipeline (перехват первого рендера и reflow-событий для LCP и CLS метрик). Phase 0 stub с unit-тестами без реальной доставки от shell.
+(none)
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-04 | A-20: PerformanceObserver: LCP + CLS | W3C Performance Timeline L2 §5.2: `PerformanceObserver.takeRecords()` возвращает buffered entries по типам. Новые методы `BrowserSession::deliver_lcp_entry()` и `BrowserSession::deliver_layout_shift()` для доставки PerformanceEntry в JS контекст. JS функции `_lumen_deliver_lcp_entry(element_id, size, start_ms, render_time_ms)` и `_lumen_deliver_layout_shift(value, session_id, had_input)` уже реализованы в dom.rs и создают PerformanceEntry записи с типами 'largest-contentful-paint' и 'layout-shift'. Реализовано в `InProcessSession` с вызовом JS функций через `eval()`, в `WinitSession` — no-op (Phase 4). 5 unit-тестов (perf_observer_take_records, perf_observer_lcp_entry, perf_observer_layout_shift, perf_observer_buffered, perf_observer_disconnect). lumen-core: 200 тестов, lumen-driver: 54 теста. Clippy чист. |
 | 2026-06-04 | A-19: CSS Scroll Snap L2 events | W3C CSS Scroll Snap §4: `SnapChangeEvent` класс с `snapTargetBlock`, `snapTargetInline` properties. События `'snapchanging'` (cancelable) и `'snapchanged'` (non-cancelable) для scroll containers. Модуль `crates/js/src/scroll_snap_events.rs` с чистым JavaScript shim. Нативные биндинги `_lumen_fire_snap_changing/_lumen_fire_snap_changed` подготовлены для shell integration при snap-point изменениях в `apply_page_y_snap`. Phase 0: event infrastructure готова. Shell integration (вызов из `apply_page_y_snap` с fire snap events) — работа для P2/P3 спринта. 5 unit-тестов (class existence, properties, binding existence). Clippy чист. lumen-js: 1257 тестов (было 1252 + 5 новых). |
 | 2026-06-04 | B-3: HSTS Preload List | RFC 8838 встроенный list ~10k+ доменов, требующих HTTPS по умолчанию. Структура `HstsPreloadList`: HashMap<eTLD+1, {include_subdomains}>. Методы: `load()` парсит встроенный JSON (Chromium формат), `is_preloaded(host) → bool` проверяет eTLD+1 и флаг include_subdomains. Интеграция в `fetch_with_redirect`: функция `maybe_upgrade_url_to_https()` теперь вызывает `get_preload_list().is_preloaded()` ДО проверки HstsEnforcement trait'а. Upgrade HTTP→HTTPS без редиректа. Встроенный JSON: assets/hsts_preload.json с примерами (github, google, facebook, twitter, amazon, youtube, wikipedia, paypal, dropbox, slack). 6 unit-тестов (load, exact_match, subdomain_no_flag, subdomain_with_flag, case_insensitive, not_in_list). lumen-network: 664 теста (было 658 + 6 новых). Clippy чист. |
 | 2026-06-04 | B-2: HTTP Proxy Phase 0 | RFC 7230 HTTP proxy struct. Новый тип `HttpProxy {host: String, port: u16, auth: Option<String>}` в lumen-network. Метод `with_basic_auth(user, password)` для Base64 кодирования credentials. Builder method `with_proxy()` на `HttpClient`. Функция `base64_encode(s)` для кодирования Basic auth (используется в Proxy-Authorization header). Phase 0: struct + builder + 6 unit-тестов. Phase 1 (следующий спринт): интеграция в `fetch_single()` с поддержкой CONNECT-туннеля для HTTPS. Phase 2: CLI флаг `--proxy`, wiring в shell/main.rs. Тесты: proxy_new_no_auth, http_proxy_with_basic_auth, http_client_with_proxy, base64_encode_empty, base64_encode_single_byte, base64_encode_user_pass. lumen-network: 658 тестов (было 652 + 6 новых). Clippy чист. |
@@ -78,7 +77,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-17~~ | ~~**Eye Dropper API**~~ — **выполнено** | S | `lumen-js` |
 | ~~A-18~~ | ~~**WebOTP API stub**~~ — **выполнено** | XS | `lumen-js` |
 | ~~A-19~~ | ~~**CSS Scroll Snap L2 events**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
-| A-20 | **PerformanceObserver: LCP + CLS** — `largest-contentful-paint` (регистрация при первом рендере img/текста >500px² из shell pipeline) и `layout-shift` (CLS: суммирует смещения layout boxes при reflow >5px). `PerformanceLCPEntry`, `LayoutShiftAttribution`. | S | `lumen-js`, `lumen-shell` |
+| ~~A-20~~ | ~~**PerformanceObserver: LCP + CLS**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
 | A-21 | **Contact Picker API stub** — `navigator.contacts.select(['name','email','tel'], {multiple})` → reject NotSupportedError (нет contact store на desktop), `navigator.contacts.getProperties()` → ['name','email','tel'], `ContactsManager` тип. | XS | `lumen-js` |
 | ~~A-22~~ | ~~**Payment Request API stub**~~ — **выполнено** | XS | `lumen-js` |
 
