@@ -6,9 +6,7 @@
 
 ## In progress
 
-B-8 | **CSS Appearance property**  
-branch: `p2-b8-appearance`  
-Next step: Implement apply_ua_appearance(style, tag) in compute_style that removes UA styling when appearance: none
+(none — ready for next task)
 
 ---
 
@@ -87,6 +85,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-b8-appearance** ✅ 2026-06-04 — B-8: CSS Appearance property Phase 0. `apply_ua_appearance(style, tag)` в `compute_style`: при `appearance: none` убирает UA border/padding/background у `<input>/<button>/<select>/<textarea>/<progress>/<meter>`. Функция вызывается ПОСЛЕ apply_declaration, чтобы author-CSS `appearance: none` имел приоритет над UA стилями. 6 новых unit-тестов (appearance_none_removes_*_ua_styling variants + appearance_auto_preserves_ua_styling). lumen-layout: 2311 тестов. Clippy чист. Phase 0 завершена (parsing + ComputedStyle field + apply logic). Phase 1 (future): убирать UA dimensions/height при appearance:none.
 
 - **p2-b6-image-rendering** ✅ 2026-06-04 — B-6: CSS image-rendering FilterMode Phase 0. `FilterMode` enum (Linear/Nearest) с методом `from_image_rendering(ImageRendering) → FilterMode`. Преобразование: auto/smooth/high-quality → Linear; crisp-edges/pixelated → Nearest. 4 unit-теста (from_auto_is_linear, from_smooth_is_linear, from_crisp_edges_is_nearest, from_pixelated_is_nearest). lumen-paint: 510 тестов. Clippy чист. Phase 0 завершена (conversion enum). Phase 1 (future P2/Renderer): использовать FilterMode в GPU sampler при рендере DrawImage/DrawBackgroundImage.
 
