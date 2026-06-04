@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-21: Contact Picker API stub**  
-branch: `p1-contact-api`  
-Next step: Implement ContactsManager in `crates/js/src/contacts.rs`, wire to window object
+-
 
 ---
 
@@ -80,7 +78,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-18~~ | ~~**WebOTP API stub**~~ — **выполнено** | XS | `lumen-js` |
 | ~~A-19~~ | ~~**CSS Scroll Snap L2 events**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
 | ~~A-20~~ | ~~**PerformanceObserver: LCP + CLS**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
-| A-21 | **Contact Picker API stub** — `navigator.contacts.select(['name','email','tel'], {multiple})` → reject NotSupportedError (нет contact store на desktop), `navigator.contacts.getProperties()` → ['name','email','tel'], `ContactsManager` тип. | XS | `lumen-js` |
+| ~~A-21~~ | ~~**Contact Picker API stub**~~ — **выполнено** | XS | `lumen-js` |
 | ~~A-22~~ | ~~**Payment Request API stub**~~ — **выполнено** | XS | `lumen-js` |
 
 ### B — Сеть
