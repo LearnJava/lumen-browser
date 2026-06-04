@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none — last task B-4 completed)
+C-4: CSS logical properties resolver  
+branch: p1-c4-logical-properties  
+Next step: Implement resolve_logical_properties(style, writing_mode) in layout/src/style.rs: inline-size→width/height, block-size, inset-inline-*, margin-inline/block, padding-inline/block, border-inline/block. 10 unit tests.
 
 ---
 
