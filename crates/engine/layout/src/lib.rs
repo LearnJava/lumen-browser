@@ -18,6 +18,7 @@ pub mod box_tree;
 pub mod color_mix;
 pub mod counters;
 pub mod image_gating;
+pub mod mathml;
 pub mod motion_path;
 pub mod page;
 pub mod pagination;
@@ -41,6 +42,7 @@ pub use counters::{
 };
 pub use color_mix::{MixColorSpace, mix_colors};
 pub use image_gating::gate_image_requests;
+pub use mathml::{MathmlBox, MathmlElementKind, lay_out_mathml, collect_mathml_structure};
 pub use ruby::{RubyBox, RubyPosition, lay_out_ruby};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
