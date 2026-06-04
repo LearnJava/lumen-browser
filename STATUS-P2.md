@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none)
+**A-3 | CSS Typed OM (partial)**
+- Branch: `p2-a3-typed-om`
+- Next step: `lumen-js/src/main.rs` — implement `element.attributeStyleMap` and `element.computedStyleMap()` with `CSSStyleValue` wrappers
 
 ---
 
