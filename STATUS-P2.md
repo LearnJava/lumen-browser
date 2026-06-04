@@ -6,14 +6,18 @@
 
 ## In progress
 
-**B-1: Table layout rendering**  
-Branch: `p2-b1-table-layout` / commit `4de3993`  
-Status: Phase 0 complete (emit_table_box() implemented)
-Next step: Implement border-collapse mode and border-spacing support in Phase 1  
-- emit_table_box() рендерит структуру таблицы
-- Каждая ячейка имеет собственные фон и границы
-- Поддержка col_span/row_span через LayoutBox.col_span/row_span
-- Phase 1: merged border mode, border-spacing, caption
+**B-1: Table layout rendering Phase 1**  
+Branch: `p2-b1-table-layout-phase1`  
+Status: Phase 0 ✅ merged, Phase 1 in progress  
+Next step: Implement border-collapse:collapse mode (merged borders per CSS Tables L2 §17.6)
+- emit_table_box() рендерит структуру таблицы (Phase 0 ✅)
+- Каждая ячейка имеет собственные фон и границы (Phase 0 ✅)
+- Поддержка col_span/row_span через LayoutBox.col_span/row_span (Phase 0 ✅)
+- Phase 1: border-collapse modes, border-spacing, collapsed/separate border resolution
+  - border-collapse: separate (Phase 0 ✅)
+  - border-collapse: collapse (Phase 1 WIP)
+  - border-spacing in separate mode
+  - Cell border precedence and merging in collapse mode
 
 ---
 
