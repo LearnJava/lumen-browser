@@ -6,9 +6,7 @@
 
 ## In progress
 
-A-17: Eye Dropper API  
-branch: p1-eye-dropper  
-Next step: реализовать EyeDropper класс в `crates/js/src/eye_dropper.rs` с `open()` методом, платформенный биндинг `_lumen_eye_dropper_open()` для P3
+(empty)
 
 ---
 
@@ -16,6 +14,7 @@ Next step: реализовать EyeDropper класс в `crates/js/src/eye_dr
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-04 | A-17: Eye Dropper API | W3C Color WG Eye Dropper API (Phase 0): `new EyeDropper()` конструктор, `dropper.open(options?)` → `Promise<{sRGBHex}>` с `AbortSignal` поддержкой. Платформенный нативный биндинг `_lumen_eye_dropper_open()` для каждой ОС (P3 реализует Windows PowerShell ColorDialog / Linux zenity / macOS osascript). JS shim в `crates/js/src/eye_dropper.rs` с обработкой abort-сигнала, fallback на #ffffff если binding недоступен. Экспорт на window и globalThis. 6 unit-тестов. lumen-js: 1229 тестов (было 1223). |
 | 2026-06-04 | A-16: Device Orientation/Motion API stub | W3C Device Orientation L2 & L3 (Phase 0): DeviceOrientationEvent {alpha, beta, gamma, absolute} с дефолтом {0,0,0,false}, requestPermission() → Promise<'granted'>, addEventListener('deviceorientation') фаерит событие с дефолтными значениями. W3C Device Motion L3 (Phase 0): DeviceMotionEvent {acceleration, accelerationIncludingGravity, rotationRate, interval}, requestPermission() → Promise<'granted'>, addEventListener('devicemotion'). Новый модуль device_sensors.rs, экспорт на window и globalThis. 6 unit-тестов. lumen-js: 1223 тестов (было 1217). |
 | 2026-06-04 | A-15: Pointer Lock API | W3C Pointer Lock L2 §2-4: `element.requestPointerLock()` → Promise (фаза 0: локальное состояние), `document.exitPointerLock()`, `document.pointerLockElement` getter, события `pointerlockchange`/`pointerlockerror`, `movementX`/`movementY` в MouseEvent. Новый модуль `crates/js/src/pointer_lock.rs`: thread-local state с locked_element_nid и movement_x/y. Нативные биндинги `_lumen_ptr_lock_request`, `_lumen_exit_ptr_lock`, `_lumen_ptr_lock_element`. DOM API: Element.prototype.requestPointerLock(), document.exitPointerLock(), document.pointerLockElement. Фаза 0: локальное состояние, фаза 1 добавит интеграцию с winit set_cursor_grab. 5 unit-тестов. lumen-js: 1217 тестов (было 1212). |
 | 2026-06-04 | A-14: Screen Orientation API | W3C Screen Orientation API §3-4: `screen.orientation.{type, angle}` с дефолтом 'portrait-primary' и 0; `.lock(orientation)` → Promise (валидирует 7 типов), `.unlock()` → Promise, события `onchange`, `addEventListener('change')`. Новый модуль `crates/js/src/screen_orientation.rs`: JS-шим с классами ScreenOrientation, ScreenOrientationEvent. Phase 0: блокировка не интегрирована в shell; подготовлены нативные биндинги `_lumen_set_fullscreen` для P3. 9 unit-тестов. lumen-js: 1195 тестов (было 1187). |
@@ -57,8 +56,8 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-13~~ | ~~**Document Picture-in-Picture API**~~ — **выполнено** | M | `lumen-js` |
 | ~~A-14~~ | ~~**Screen Orientation API**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
 | ~~A-15~~ | ~~**Pointer Lock API**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
-| A-16 | **Device Orientation/Motion API stub** — `DeviceOrientationEvent {alpha, beta, gamma, absolute}`, `requestPermission()` → granted, `addEventListener('deviceorientation')` фаерит `{0,0,0}` один раз, `DeviceMotionEvent {acceleration, rotationRate, interval}` аналогично. | XS | `lumen-js` |
-| A-17 | **Eye Dropper API** — `new EyeDropper()`, `dropper.open()` → `Promise<{sRGBHex}>` через платформенный пикер (PowerShell `ColorDialog` / `zenity --color-selection` / `osascript`), `AbortSignal` support в опциях. | S | `lumen-js`, `lumen-shell` |
+| ~~A-16~~ | ~~**Device Orientation/Motion API stub**~~ — **выполнено** | XS | `lumen-js` |
+| ~~A-17~~ | ~~**Eye Dropper API**~~ — **выполнено** | S | `lumen-js` |
 | A-18 | **WebOTP API stub** — `navigator.credentials.get({otp: {transport:['sms']}})` → reject NotSupportedError, `OTPCredential {code}` тип, интеграция в существующий `credentials.rs`. | XS | `lumen-js` |
 | A-19 | **CSS Scroll Snap L2 events** — `snapChanging`/`snapChanged` события при snap-переходе: `_lumen_fire_snap_changing/changed(nid)` биндинги, shell генерирует при `apply_page_y_snap` когда snap-точка меняется. `SnapChangeEvent {snapTargetBlock, snapTargetInline}`. | S | `lumen-js`, `lumen-shell` |
 | A-20 | **PerformanceObserver: LCP + CLS** — `largest-contentful-paint` (регистрация при первом рендере img/текста >500px² из shell pipeline) и `layout-shift` (CLS: суммирует смещения layout boxes при reflow >5px). `PerformanceLCPEntry`, `LayoutShiftAttribution`. | S | `lumen-js`, `lumen-shell` |
