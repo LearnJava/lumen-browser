@@ -49,6 +49,12 @@ pub struct HitTestResult {
     /// DOM-узел верхнего слоя, попавшего под курсор. Для InlineRun — это
     /// DOM-предок (тот же, кому принадлежит inline-контент).
     pub node: NodeId,
+    /// Конкретный DOM-узел, породивший попавший под курсор `InlineFrag`.
+    /// Для `InlineRun` это текстовый DOM-узел (дочерний по отношению к `<a>`,
+    /// `<span>` и т.д.), что позволяет `find_link_href` найти `<a>` при
+    /// обходе вверх: `text_node → <a href="…"> → найдено`.
+    /// Для не-InlineRun боксов равен `node`.
+    pub source_node: NodeId,
     /// Координаты попадания в системе hit-узла после всех transform-инверсий
     /// по цепочке предков (та же система, в которой `b.rect` валиден).
     pub local_point: Point,
@@ -145,13 +151,56 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     if matches!(b.style.pointer_events, PointerEvents::None) {
         return None;
     }
+    let source_node = find_inline_source(b, child_point);
     Some(HitTestResult {
         node: b.node,
+        source_node,
         local_point: child_point,
         path: vec![b.node],
         cursor: b.style.cursor,
         user_select: b.style.user_select,
     })
+}
+
+/// Для `InlineRun`-бокса возвращает `source_node` того `InlineFrag`, под
+/// который попала точка. Это позволяет `find_link_href` в shell стартовать
+/// обход DOM с текстового узла (child of `<a>`), а не с блочного контейнера
+/// (`<p>`), и правильно найти ссылку.
+///
+/// Возвращает `b.node` если бокс не `InlineRun`, строки пустые, или ни один
+/// фрагмент не попал под точку. `source_node == NodeId(0)` используется в
+/// layout как маркер анонимного/сгенерированного контента — такие узлы не
+/// несут реального DOM-предка и тоже заменяются на `b.node`.
+fn find_inline_source(b: &LayoutBox, point: Point) -> NodeId {
+    let BoxKind::InlineRun { lines, .. } = &b.kind else {
+        return b.node;
+    };
+    let line_h = b.style.font_size * b.style.line_height;
+    if line_h <= 0.0 || lines.is_empty() {
+        return b.node;
+    }
+    let rel_y = point.y - b.rect.y;
+    let line_idx = (rel_y / line_h).floor().max(0.0) as usize;
+    let line = lines.get(line_idx).or_else(|| lines.last());
+    let Some(line) = line else { return b.node; };
+    let rel_x = point.x - b.rect.x;
+    for frag in line {
+        let start = frag.x - frag.padding_left;
+        let end = frag.x + frag.width + frag.padding_right;
+        if rel_x >= start && rel_x < end {
+            let src = frag.source_node;
+            if src.index() != 0 {
+                return src;
+            }
+        }
+    }
+    // Fallback: return source_node of the last frag on the line (closest to right edge).
+    if let Some(last) = line.last() {
+        if last.source_node.index() != 0 {
+            return last.source_node;
+        }
+    }
+    b.node
 }
 
 /// `Rect::contains(Point)`. Включаем левую/верхнюю границы, исключаем

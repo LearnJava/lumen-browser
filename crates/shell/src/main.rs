@@ -6959,12 +6959,16 @@ impl Lumen {
         });
 
         // Debug click log — активируется флагом --click-log или LUMEN_CLICK_LOG=1.
+        // For click log: report both the hit box node (<p>) and the inline source_node
+        // (<a> text node) so the log shows what find_link_href actually searches from.
         let click_log_hit: Option<(u32, String, String, String)> =
             if click_log::is_enabled() {
                 hit_result.as_ref().and_then(|r| {
                     self.layout_source.as_ref().map(|src| {
                         let doc = src.document.lock().unwrap();
-                        let node = doc.get(r.node);
+                        // Use source_node for tag/class info — it reveals the inline element.
+                        let effective_id = r.source_node;
+                        let node = doc.get(effective_id);
                         let (tag, id_attr, class_attr) =
                             if let NodeData::Element { name, attrs } = &node.data {
                                 let id = attrs.iter()
@@ -6976,10 +6980,24 @@ impl Lumen {
                                     .map(|a| a.value.as_str())
                                     .unwrap_or("");
                                 (name.local.to_string(), id.to_owned(), cls.to_owned())
+                            } else if let NodeData::Text(t) = &node.data {
+                                // Show which text we clicked and note the parent element.
+                                let parent_tag = node.parent
+                                    .map(|pid| {
+                                        let pn = doc.get(pid);
+                                        if let NodeData::Element { name, .. } = &pn.data {
+                                            format!("<{}>", name.local)
+                                        } else {
+                                            "?".to_owned()
+                                        }
+                                    })
+                                    .unwrap_or_default();
+                                let preview: String = t.chars().take(30).collect();
+                                (format!("#text in {parent_tag}"), String::new(), format!("\"{preview}\""))
                             } else {
-                                ("#text".to_owned(), String::new(), String::new())
+                                ("#other".to_owned(), String::new(), String::new())
                             };
-                        (r.node.index() as u32, tag, id_attr, class_attr)
+                        (effective_id.index() as u32, tag, id_attr, class_attr)
                     })
                 })
             } else {
@@ -7143,10 +7161,13 @@ impl Lumen {
                 // ── Link click ───────────────────────────
                 // No form control was activated — check if
                 // the clicked node is inside an <a href>.
+                // Use source_node (text node inside inline element) so find_link_href
+                // can walk up and find the <a> parent: text → <a href="…"> → found.
+                // Falls back to r.node for non-inline boxes.
                 let href = hit_result.as_ref().and_then(|r| {
                     self.layout_source
                         .as_ref()
-                        .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.node))
+                        .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.source_node))
                 });
                 if let Some(href) = href {
                     if let Some(frag) = links::fragment_only(&href) {
