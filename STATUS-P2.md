@@ -6,18 +6,7 @@
 
 ## In progress
 
-**B-1: Table layout rendering Phase 1**  
-Branch: `p2-b1-table-layout-phase1`  
-Status: Phase 0 ✅ merged, Phase 1 in progress  
-Next step: Implement border-collapse:collapse mode (merged borders per CSS Tables L2 §17.6)
-- emit_table_box() рендерит структуру таблицы (Phase 0 ✅)
-- Каждая ячейка имеет собственные фон и границы (Phase 0 ✅)
-- Поддержка col_span/row_span через LayoutBox.col_span/row_span (Phase 0 ✅)
-- Phase 1: border-collapse modes, border-spacing, collapsed/separate border resolution
-  - border-collapse: separate (Phase 0 ✅)
-  - border-collapse: collapse (Phase 1 WIP)
-  - border-spacing in separate mode
-  - Cell border precedence and merging in collapse mode
+None — все recent merges завершены. Pick next item from "Next".
 
 ---
 
@@ -98,6 +87,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-b1-table-layout-phase1** ✅ 2026-06-04 — B-1: Table layout rendering Phase 1. CSS Tables L2 §17.6 border-collapse и border-spacing support. `BorderCollapse` enum (separate/collapse), `TableContext` для table-уровнь CSS, `CollapsedBorder` + `BorderPrecedence` для collapse border model (future). Border conflict resolution algorithm: wider border wins, precedence hierarchy (table < row-group < row < column < cell). 7 новых unit-тестов (table_context_default, border_collapse_separate_wins, border_collapse_wider_border_wins, table_separate_mode_renders, border_precedence_ordering). Graphic test 64-table.html обновлён: separate mode (border-spacing: 4px 2px) + collapse mode (заглушка). COVERAGE.md обновлена. Phase 2 (future): border-spacing layout, collapse merging. lumen-paint: 492 тестов ✅. Clippy чист.
 
 - **p2-flex-align-content** ✅ 2026-06-04 — B-2: CSS Flex align-content (CSS Flexbox L1 §9.5). `lay_out_flex()` в `box_tree.rs` распределяет пространство между flex lines на кросс-оси: `align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch`. Парсинг и ComputedStyle.align_content уже были; реализовано значение логики в match-блоке (строки 4650–4693). Оптимизация: `fill()` вместо loop, `skip(1)` для SpaceBetween, `iter_mut().enumerate()` вместо индексного цикла. Графический тест 65-flex-align-content.html (7 контейнеров × 6 items wrap) + демонстрация в 1000000-final.html. 6 новых unit-тестов (flex_align_content_flex_start/end/center/space_between/around/evenly). Итого lumen-layout: 2286 тестов. Clippy чист.
 
