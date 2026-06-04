@@ -31,6 +31,30 @@ use lumen_layout::{
     Visibility,
 };
 
+/// CSS Images L3 §4.3 — image-rendering filter mode (scaling algorithm).
+/// Determines how textures are sampled when an image is scaled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FilterMode {
+    /// `auto` (default), `smooth`, `high-quality` — high-quality scaling (bilinear).
+    #[default]
+    Linear,
+    /// `crisp-edges`, `pixelated` — preserve sharp edges (nearest-neighbour).
+    Nearest,
+}
+
+impl FilterMode {
+    /// Преобразует `ImageRendering` в `FilterMode`.
+    /// `auto`/`smooth`/`high-quality` → `Linear` (bilinear).
+    /// `crisp-edges`/`pixelated` → `Nearest` (pixel-perfect).
+    #[must_use]
+    pub fn from_image_rendering(ir: ImageRendering) -> Self {
+        match ir {
+            ImageRendering::Auto | ImageRendering::Smooth | ImageRendering::HighQuality => Self::Linear,
+            ImageRendering::CrispEdges | ImageRendering::Pixelated => Self::Nearest,
+        }
+    }
+}
+
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
 /// `Normal` (no-op); остальные 16 mode-ов парсятся в CSS-каскаде, но
 /// реальный composite-pipeline для них — задача P2 п.4 (mix-blend-mode).
@@ -9709,6 +9733,32 @@ mod tests {
         // Phase 1: just collect and emit content, ignore path rendering
         assert!(texts.iter().any(|t| t.contains("OnPath")) || texts.is_empty(),
                 "should have collected textPath content or empty is acceptable in Phase 1");
+    }
+
+    // ── FilterMode conversion tests (B-6) ──────────────────────────────────
+
+    #[test]
+    fn filter_mode_from_auto_is_linear() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Auto);
+        assert_eq!(mode, FilterMode::Linear, "auto → Linear (bilinear)");
+    }
+
+    #[test]
+    fn filter_mode_from_smooth_is_linear() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Smooth);
+        assert_eq!(mode, FilterMode::Linear, "smooth → Linear (bilinear)");
+    }
+
+    #[test]
+    fn filter_mode_from_crisp_edges_is_nearest() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::CrispEdges);
+        assert_eq!(mode, FilterMode::Nearest, "crisp-edges → Nearest (pixel-perfect)");
+    }
+
+    #[test]
+    fn filter_mode_from_pixelated_is_nearest() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Pixelated);
+        assert_eq!(mode, FilterMode::Nearest, "pixelated → Nearest (pixel-perfect)");
     }
 
     // Display list diffing tests (A-10)

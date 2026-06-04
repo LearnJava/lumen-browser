@@ -293,6 +293,7 @@ unsafe impl Send for FemtovgBackend {}
 /// Apply a separable box blur to RGBA pixel data in-place.
 /// `sigma` controls the kernel radius (radius = round(sigma * 1.5)).
 /// This is a 3-pass approximation of Gaussian blur (3× box blur ≈ Gaussian).
+#[allow(dead_code)]
 fn box_blur_rgba(pixels: &mut [u8], width: usize, height: usize, sigma: f32) {
     let r = ((sigma * 1.5).round() as usize).max(1);
     let stride = width * 4;
