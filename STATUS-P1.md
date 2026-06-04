@@ -6,7 +6,7 @@
 
 ## In progress
 
-(none — last task B-3 completed)
+(none — last task B-4 completed)
 
 ---
 
