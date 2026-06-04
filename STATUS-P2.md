@@ -6,27 +6,14 @@
 
 ## In progress
 
-A-2 | CSS Custom Highlight API — branch: `p2-a2-highlight-api`
-- Next step: Phase 1 integration with CSS.highlights registry
-
----
-
-## Current / Recently Merged
-
-**D-3 | Image JPEG XL stub** ✅ 2026-06-04 (merged)
-- Phase 0: `is_jxl(bytes)` детектор (naked FF 0A и ISOBMFF с brand jxl)
-- `JxlImageDecoder` stub → `Err(JxlError::NotSupported)` graceful
-- MIME `image/jxl` зарегистрирован в `supported_mime_types()` и `decode()` dispatcher
-- 6 unit-тестов в jxl.rs (naked format, ISOBMFF major/compatible brands, не-JXL, decode always fails)
-- 6 интеграционных тестов в lib.rs (jxl_signature detection, decode dispatch, mime type support)
-- lumen-image: 124 тестов (было 118, +6 jxl tests), Clippy clean
-- Phase 1 (future): jxl_oxide или libjxl интеграция для реального декодирования
-
-**B-10 | CSS Forced Colors media** ✅ 2026-06-04 (merged)
-- Phase 0: @media (forced-colors: active)/(forced-colors: none) parsing
-- ForcedColors(bool) вариант в MediaFeature enum, поддержка в matches()
-- forced_colors: bool поле в MediaContext struct
 - Поле forced_color_adjust: ForcedColorAdjust уже в ComputedStyle (парсинг работал)
+## In progress
+
+(none)
+
+## Recent merges
+
+- **p2-a2-highlight-api** ✅ 2026-06-04 — A-2: CSS Custom Highlight API Phase 0. JS API (CSS.highlights HighlightRegistry + Highlight class); parser support for ::highlight(name) pseudo-element; DrawText.highlight_name field for Phase 1 integration; 8 unit tests (highlight_preserves_text_attributes, emit_text_with_highlights_creates_command, etc.). lumen-paint: 535 tests (was 527). Clippy clean. Phase 0 complete: infrastructure ready for Phase 1 highlight background rendering.
 - 4 unit-теста (forced_colors_active, none, not_forced_colors_active, case_insensitive)
 - lumen-css-parser: 270 тестов (+4), Clippy clean
 - Phase 1 (future): system color keywords + forced-color-adjust: none logic
