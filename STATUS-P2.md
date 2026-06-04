@@ -6,7 +6,9 @@
 
 ## In progress
 
-None currently. Pick next available from Next section.
+**B-9 | CSS overflow: clip** (S)
+- Branch: `p2-b9-overflow-clip`
+- Next step: Add Overflow::Clip variant, create clip boundary without new BFC, implement overflow-clip-margin
 
 ---
 
