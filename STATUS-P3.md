@@ -14,10 +14,7 @@ _(нет)_
 
 ### 1. Открытые баги (приоритет сверху вниз)
 
-| # | Компонент | Описание | Файл |
-|---|---|---|---|
-| BUG-055 | layout | `<picture>` с AVIF source не делает fallback на `<img src>` | `crates/engine/layout/src/lib.rs:12366` |
-| BUG-054 | network | `stale_pooled_connection_triggers_retry` падает на Windows (WSAECONNRESET) | `crates/network/src/lib.rs:3161` |
+_(нет открытых — см. `grep "OPEN" BUGS.md`)_
 
 Следить за новыми: `grep "OPEN" BUGS.md`.
 
