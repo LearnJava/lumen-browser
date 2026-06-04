@@ -6,7 +6,8 @@
 
 ## In progress
 
-(empty)
+A-14: Screen Orientation API  branch: p1-screen-orientation
+Next step: Implement screen.orientation object + events in lumen-js  crates/js/src/screen_orientation.rs
 
 ---
 
