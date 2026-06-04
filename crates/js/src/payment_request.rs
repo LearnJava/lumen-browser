@@ -106,7 +106,7 @@ const PAYMENT_REQUEST_SHIM: &str = r#"(function() {
 
 #[cfg(test)]
 mod tests {
-    use rquickjs::{Runtime, Context, Ctx};
+    use rquickjs::{Context, Ctx, Runtime};
 
     fn make_ctx() -> (Runtime, Context) {
         let rt = Runtime::new().expect("Runtime::new");
@@ -122,8 +122,9 @@ mod tests {
               this.message = msg;
               this.name = name;
             };
-            "#
-        ).expect("install stubs");
+            "#,
+        )
+        .expect("install stubs");
     }
 
     #[test]
@@ -132,8 +133,9 @@ mod tests {
         ctx.with(|ctx| {
             install_stubs(&ctx);
             super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx.eval(
-                r#"
+            let result: String = ctx
+                .eval(
+                    r#"
                 (function() {
                   try {
                     var pr = new PaymentRequest(
@@ -145,8 +147,9 @@ mod tests {
                     return 'error: ' + e.message;
                   }
                 })()
-                "#
-            ).expect("eval");
+                "#,
+                )
+                .expect("eval");
             assert_eq!(result, "created");
         });
     }
@@ -157,8 +160,9 @@ mod tests {
         ctx.with(|ctx| {
             install_stubs(&ctx);
             super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx.eval(
-                r#"
+            let result: String = ctx
+                .eval(
+                    r#"
                 (function() {
                   var pr = new PaymentRequest(
                     [{supportedMethods: 'basic-card'}],
@@ -166,8 +170,9 @@ mod tests {
                   );
                   return pr.show() instanceof Promise ? 'promise' : 'not_promise';
                 })()
-                "#
-            ).expect("eval");
+                "#,
+                )
+                .expect("eval");
             assert_eq!(result, "promise");
         });
     }
@@ -178,8 +183,9 @@ mod tests {
         ctx.with(|ctx| {
             install_stubs(&ctx);
             super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx.eval(
-                r#"
+            let result: String = ctx
+                .eval(
+                    r#"
                 (function() {
                   var pr = new PaymentRequest(
                     [{supportedMethods: 'basic-card'}],
@@ -194,8 +200,9 @@ mod tests {
                   // Just verify it's a promise and will reject
                   return show_promise instanceof Promise ? 'is_promise' : 'not_promise';
                 })()
-                "#
-            ).expect("eval");
+                "#,
+                )
+                .expect("eval");
             assert_eq!(result, "is_promise");
         });
     }
@@ -206,8 +213,9 @@ mod tests {
         ctx.with(|ctx| {
             install_stubs(&ctx);
             super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx.eval(
-                r#"
+            let result: String = ctx
+                .eval(
+                    r#"
                 (function() {
                   var pr = new PaymentRequest(
                     [{supportedMethods: 'basic-card'}],
@@ -221,8 +229,9 @@ mod tests {
                   // In synchronous context, just verify it returns a promise
                   return can_pay_promise instanceof Promise ? 'is_promise' : 'not_promise';
                 })()
-                "#
-            ).expect("eval");
+                "#,
+                )
+                .expect("eval");
             assert_eq!(result, "is_promise");
         });
     }
@@ -233,8 +242,9 @@ mod tests {
         ctx.with(|ctx| {
             install_stubs(&ctx);
             super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx.eval(
-                r#"
+            let result: String = ctx
+                .eval(
+                    r#"
                 (function() {
                   var pr = new PaymentRequest(
                     [{supportedMethods: 'basic-card'}],
@@ -248,8 +258,9 @@ mod tests {
                   // Just verify it returns a promise
                   return abort_promise instanceof Promise ? 'is_promise' : 'not_promise';
                 })()
-                "#
-            ).expect("eval");
+                "#,
+                )
+                .expect("eval");
             assert_eq!(result, "is_promise");
         });
     }
@@ -260,13 +271,15 @@ mod tests {
         ctx.with(|ctx| {
             install_stubs(&ctx);
             super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx.eval(
-                r#"
+            let result: String = ctx
+                .eval(
+                    r#"
                 (function() {
                   return typeof PaymentResponse === 'function' ? 'exists' : 'missing';
                 })()
-                "#
-            ).expect("eval");
+                "#,
+                )
+                .expect("eval");
             assert_eq!(result, "exists");
         });
     }
