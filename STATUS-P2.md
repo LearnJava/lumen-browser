@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+A-2 | CSS Custom Highlight API — branch: `p2-a2-highlight-api`
+- Next step: Phase 1 integration with CSS.highlights registry
 
 ---
 
