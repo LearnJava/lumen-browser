@@ -22,6 +22,7 @@ pub mod motion_path;
 pub mod page;
 pub mod pagination;
 pub mod property_trees;
+pub mod ruby;
 pub mod selection;
 pub mod selector_query;
 pub mod scroll_timeline;
@@ -40,6 +41,7 @@ pub use counters::{
 };
 pub use color_mix::{MixColorSpace, mix_colors};
 pub use image_gating::gate_image_requests;
+pub use ruby::{RubyBox, RubyPosition, lay_out_ruby};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
