@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none — ready for next task)
+C-2: CSS Ruby layout stub  branch: p1-c2-ruby-layout
+Next step: Implement RubyBox struct in layout/src/ruby.rs + lay_out_ruby() function  lumen-layout/src/ruby.rs:1
 
 ---
 
