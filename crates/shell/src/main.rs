@@ -365,6 +365,9 @@ fn run_window_mode(
         ls_storage: HashMap::new(),
         idb_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
         sw_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+        cookie_jar: Arc::new(
+            lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
+        ),
         js_ctx: None,
         no_scrollbar,
         first_paint_delivered: false,
@@ -502,7 +505,7 @@ fn do_print_to_pdf(
     use lumen_layout::{paginate, PaginationContext};
     use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
 
-    let raw = source.load_bytes(event_sink.clone())?;
+    let raw = source.load_bytes(event_sink.clone(), None)?;
     let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
     let parsed = parse_and_layout(
         &raw.bytes,
@@ -518,6 +521,7 @@ fn do_print_to_pdf(
         false, // headless PDF mode: no interactive JS needed
         false, // deterministic: not needed for PDF rendering
         false, // dark_mode: light mode for PDF output
+        None,  // cookie_jar: not available in standalone PDF mode
     )?;
 
     let ctx = PaginationContext {
@@ -677,7 +681,7 @@ fn run_dump(
     kind: DumpKind,
     event_sink: Arc<dyn EventSink>,
 ) -> Result<(), Box<dyn Error>> {
-    let raw = source.load_bytes(event_sink.clone())?;
+    let raw = source.load_bytes(event_sink.clone(), None)?;
     match kind {
         DumpKind::Source => {
             let encoding = lumen_encoding::detect(&raw.bytes, raw.content_type);
@@ -688,13 +692,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -1474,7 +1478,11 @@ impl PageSource {
     /// Прочитать байты страницы с диска или из сети, плюс вернуть базу для
     /// относительных URL и подсказку о content-type. Используется и обычным
     /// `load`, и dump-режимами.
-    fn load_bytes(&self, sink: Arc<dyn EventSink>) -> Result<RawPage, Box<dyn Error>> {
+    fn load_bytes(
+        &self,
+        sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    ) -> Result<RawPage, Box<dyn Error>> {
         match self {
             PageSource::Empty => Err("источник пуст — нечего загружать".into()),
             PageSource::File(path) => {
@@ -1491,11 +1499,16 @@ impl PageSource {
                 use lumen_network::{BrotliContentDecoder, HttpClient};
 
                 let lumen_url = Url::parse(url)?;
-                let client = crate::config::global().apply_http(
-                    HttpClient::new()
-                        .with_sink(sink)
-                        .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new())),
-                );
+                let mut builder = HttpClient::new()
+                    .with_sink(sink)
+                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+                if let Some(jar) = cookie_jar {
+                    builder = builder.with_cookie_jar(
+                        Arc::new(lumen_storage::CookieJarProvider::new(jar)),
+                        None,
+                    );
+                }
+                let client = crate::config::global().apply_http(builder);
                 let bytes = client.fetch(&lumen_url)?;
                 eprintln!("Получено {} байт", bytes.len());
                 Ok(RawPage {
@@ -1529,9 +1542,9 @@ impl PageSource {
         if matches!(self, PageSource::Empty) {
             return Ok((LoadedPage::empty(), None, None));
         }
-        let raw = self.load_bytes(sink.clone())?;
+        let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1976,13 +1989,19 @@ impl ResourceBase {
     fn http_client_for_subresource(
         &self,
         sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     ) -> lumen_network::HttpClient {
         use lumen_network::{BrotliContentDecoder, HttpClient, MixedContentMode};
-        let client = crate::config::global().apply_http(
-            HttpClient::new()
-                .with_sink(sink)
-                .with_content_decoder(Arc::new(BrotliContentDecoder::new())),
-        );
+        let mut builder = HttpClient::new()
+            .with_sink(sink)
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()));
+        if let Some(jar) = cookie_jar {
+            builder = builder.with_cookie_jar(
+                Arc::new(lumen_storage::CookieJarProvider::new(jar)),
+                None,
+            );
+        }
+        let client = crate::config::global().apply_http(builder);
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
         {
@@ -1999,7 +2018,7 @@ enum ResolvedResource {
 
 // ── Загрузка внешних CSS ─────────────────────────────────────────────────────
 
-fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>) -> String {
+fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>) -> String {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs);
 
@@ -2038,7 +2057,7 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
                     continue;
                 }
 
-                let client = base.http_client_for_subresource(sink.clone());
+                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                 match client.fetch_subresource(&sub_url, RequestDestination::Style) {
                     Ok(bytes) => {
                         let content = String::from_utf8_lossy(&bytes);
@@ -2103,6 +2122,7 @@ fn fetch_and_decode_images(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     viewport: lumen_core::geom::Size,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> (Vec<(String, lumen_image::Image)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
@@ -2115,7 +2135,7 @@ fn fetch_and_decode_images(
             lazy_pairs.push((req.node_id.index() as u32, req.url));
             continue;
         }
-        let bytes = match fetch_image_bytes(&req.url, base, sink) {
+        let bytes = match fetch_image_bytes(&req.url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск картинки {}: {e}", req.url);
@@ -2205,6 +2225,7 @@ fn fetch_image_bytes(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     match base.resolve(raw_src) {
         ResolvedResource::File(path) => std::fs::read(&path).map_err(|e| {
@@ -2217,7 +2238,7 @@ fn fetch_image_bytes(
             // Images are loaded in no-cors mode: cross-origin allowed, but
             // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
-            let client = base.http_client_for_subresource(sink.clone());
+            let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
             Ok(client.fetch_subresource(&lumen_url, RequestDestination::Image)?)
         }
     }
@@ -2364,6 +2385,7 @@ fn parse_and_layout(
     cookie_banner_dismiss: bool,
     deterministic: bool,
     dark_mode: bool,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -2387,7 +2409,7 @@ fn parse_and_layout(
     // sse_provider — в new EventSource(). Все три используют один HttpClient.
     let (fetch_provider, ws_provider, sse_provider) = match base {
         ResourceBase::Url(_) => {
-            let client = base.http_client_for_subresource(Arc::clone(sink));
+            let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar.clone());
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
@@ -2454,14 +2476,14 @@ fn parse_and_layout(
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
     let (images, animated_gifs, lazy_pairs) = {
         let mut d = doc_arc.lock().unwrap();
-        fetch_and_decode_images(&mut d, base, sink, viewport)
+        fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone())
     };
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let css = {
         let d = doc_arc.lock().unwrap();
         let mut css = extract_style_blocks(&d);
-        css.push_str(&load_linked_stylesheets(&d, base, sink));
+        css.push_str(&load_linked_stylesheets(&d, base, sink, cookie_jar.clone()));
         css
     };
 
@@ -2469,7 +2491,7 @@ fn parse_and_layout(
 
     // @font-face: загружаем url()-источники до layout.
     // CSS: @font-face multi-font TextMeasurer — P1 нужно поддержать font-family в layout
-    let font_registry = load_font_faces(&sheet.font_faces, base, sink);
+    let font_registry = load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone());
 
     // Populate document.fonts with FontFace objects from @font-face rules.
     // Phase 1: store FontFace metadata; status marked as Loaded after successful load.
@@ -2510,7 +2532,7 @@ fn parse_and_layout(
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
     let mut images = images;
-    for (src, image) in fetch_and_decode_background_images(&layout, base, sink) {
+    for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone()) {
         images.push((src, image));
     }
 
@@ -2541,11 +2563,12 @@ fn fetch_and_decode_background_images(
     layout: &LayoutBox,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Vec<(String, lumen_image::Image)> {
     let urls = lumen_layout::collect_background_image_requests(layout);
     let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
     for url in urls {
-        let bytes = match fetch_image_bytes(&url, base, sink) {
+        let bytes = match fetch_image_bytes(&url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск bg-картинки {url}: {e}");
@@ -2608,6 +2631,7 @@ fn load_font_faces(
     font_faces: &[lumen_css_parser::FontFaceRule],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> lumen_font::FontRegistry {
     use lumen_css_parser::FontFaceSourceKind;
     use lumen_core::FontStyle;
@@ -2631,7 +2655,7 @@ fn load_font_faces(
                 continue;
             }
 
-            let raw = match fetch_image_bytes(&src.value, base, sink) {
+            let raw = match fetch_image_bytes(&src.value, base, sink, cookie_jar.clone()) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
@@ -2828,8 +2852,9 @@ fn render_bytes(
     cookie_banner_dismiss: bool,
     deterministic: bool,
     dark_mode: bool,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -3461,6 +3486,11 @@ struct Lumen {
     /// `SwStore` is built over this for each page load so SW registrations survive
     /// page navigations within the session (same pattern as `idb_backend`).
     sw_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
+    /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
+    /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
+    /// wired to a per-profile SQLite file in Phase 2.
+    cookie_jar: Arc<lumen_storage::CookieJar>,
     /// Live JS context for the current page — keeps event listeners active after
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
@@ -3947,7 +3977,7 @@ impl Lumen {
             PageSource::Empty => return,
         };
         for (nid, url) in requests {
-            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink) {
+            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
@@ -4277,9 +4307,10 @@ impl Lumen {
         let source = self.source.clone();
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
+        let cookie_jar = Arc::clone(&self.cookie_jar);
 
         std::thread::spawn(move || {
-            let raw = match source.load_bytes(Arc::clone(&sink)) {
+            let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
@@ -4572,7 +4603,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar))) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
@@ -8015,7 +8046,7 @@ impl Lumen {
             if !sidebar_url.is_empty() {
                 let sink = Arc::clone(&self.event_sink);
                 let src = PageSource::from_arg(Some(&sidebar_url));
-                match src.load_bytes(sink) {
+                match src.load_bytes(sink, Some(Arc::clone(&self.cookie_jar))) {
                     Ok(raw) => {
                         self.open_sidebar_page(sidebar_url, &raw.bytes, String::new());
                     }
@@ -9511,6 +9542,7 @@ impl Lumen {
             &self.sw_backend,
             cookie_banner_dismiss,
             deterministic,
+            Some(Arc::clone(&self.cookie_jar)),
         );
 
         let layout_source = LayoutSource {
