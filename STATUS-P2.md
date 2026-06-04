@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-10: Display list diffing**
-- branch: p2-a10-display-list-diffing
-- Next step: Implement `DisplayList::diff()` algorithm. See [lumen-paint/src/display_list.rs:1](crates/engine/paint/src/display_list.rs)
+None — задача завершена.
 
 ---
 
@@ -26,7 +24,6 @@ Ordered by priority. Сгруппированы по домену.
 | A-4 | **OffscreenCanvas** — `new OffscreenCanvas(w, h)`, `getContext('2d')` → `lumen_canvas::Context2D`, `transferToImageBitmap()` → `ImageBitmap {width, height, close()}`, `createImageBitmap(source)` из Blob/ImageData/HTMLImageElement, доступен в Workers. 8 тестов. | M | `lumen-js` |
 | A-5 | **WebGL2 context** — `getContext('webgl2')` → `WebGL2RenderingContext`, расширяет `SoftwareWebGl`: VAOs (`createVertexArray/bindVertexArray/deleteVertexArray`), `drawArraysInstanced/drawElementsInstanced`, integer uniforms (`uniform1ui/2ui/3ui/4ui`), `texImage3D` stub. 10 тестов. | M | `lumen-paint`, `lumen-js` |
 | A-9 | **SVG text rendering** — `<text>/<tspan>/<textPath>` элементы: `BoxKind::SvgText`, измерение через `TextMeasurer`, emit `DrawText` с SVG coordinate transform, `text-anchor: start/middle/end`, `dx/dy` атрибуты, `dominant-baseline`. 8 тестов. | M | `lumen-layout`, `lumen-paint` |
-| A-10 | **Display list diffing** — `DisplayList::diff(&prev, &next) → DiffResult {changed_rects, identical}`: сравнивает команды по Debug hash, `identical=true` → `RedrawRequested` пропускает GPU upload. `diff_count` метрика для bench. 8 тестов. | M | `lumen-paint` |
 
 ### B — Layout rendering
 
@@ -88,6 +85,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-a10-display-list-diffing** ✅ 2026-06-04 — A-10: Display list diffing Phase 0. Функция `diff_display_lists(prev, next) -> DiffResult` сравнивает два display list-а по Debug hash каждой команды (как в hash_display_list). `DiffResult` содержит `identical: bool` и `changed_rects: Rect` для dirty-rect tracking. Алгоритм: быстрая проверка длины, затем поэлементное сравнение хешей Debug-представления. Вспомогательные функции: `get_command_rect()` извлекает rect из command, `union_rects()` объединяет два прямоугольника, `union_all_rects()` собирает bounding rect всех команд. 9 unit-тестов (diff_identical_empty_lists, diff_identical_single_command, diff_different_lengths, diff_different_colors, diff_changed_rects_bounds, diff_multiple_commands_one_changed, diff_empty_to_non_empty, diff_result_identical_constructor, diff_result_changed_constructor). lumen-paint: 506 тестов (было 497 + 9 новых). Clippy чист. Phase 0 завершена. Phase 1 (future): интеграция в shell для RedrawRequested skip, diff_count метрика для bench.
 
 - **p2-a9-svg-text-rendering** ✅ 2026-06-04 — A-9: SVG text rendering Phase 0. `BoxKind::SvgText` variant для `<text>`, `<tspan>`, `<textPath>` элементов. `collect_text_content(doc, node_id)` рекурсивно собирает текст из DOM узлов. `SvgTextAnchor` enum (Start/Middle/End, default Start) и `SvgDominantBaseline` enum (Auto/Baseline/Hanging/Middle/Central/TextBeforeEdge/TextAfterEdge, default Auto) с `#[derive(Default)]`. `parse_text_anchor()` и `parse_dominant_baseline()` парсят SVG атрибуты. Layout: `lay_out_svg_element_position` позиционирует текст по x/y + dx/dy смещениям (Phase 1: minimal bbox с zero width/height). Paint: `emit_svg_text()` эмитит `DrawText` команды с SVG fill color, font settings. 5 новых lumen-layout unit-тестов (svg_text_element_simple, svg_text_with_x_y_attributes, svg_text_anchor_middle, svg_dominant_baseline_hanging, svg_tspan_text_content). 4 новых lumen-paint unit-тестов (svg_text_emits_drawtext_command, svg_text_with_fill_color, svg_text_with_font_size, svg_textpath_collects_content). lumen-layout: 2298 тестов (было 2293), lumen-paint: 497 тестов (было 492). Clippy чист. Phase 0 завершена (parsing + basic emit). Phase 2 (future P4 handoff): text measurement via TextMeasurer, text-anchor horizontal alignment, dominant-baseline vertical alignment.
 
