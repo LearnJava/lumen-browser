@@ -43,6 +43,7 @@ pub mod navigation_api;
 pub mod typed_om_api;
 pub mod trusted_types;
 pub mod sanitizer;
+pub mod screen_orientation;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -454,6 +455,13 @@ impl QuickJsRuntime {
             // operations reject with NotSupportedError (no USB support).
             if let Err(e) = webusb::install_webusb_bindings(&ctx) {
                 eprintln!("WebUSB bindings init failed: {}", e);
+            }
+
+            // Install Screen Orientation API (W3C Screen Orientation §3–4) — after DOM/screen so that
+            // screen.orientation is available. Phase 0: orientation is static 'portrait-primary';
+            // lock/unlock methods exist but actual fullscreen integration is a P3 shell task.
+            if let Err(e) = screen_orientation::install_screen_orientation_bindings(&ctx) {
+                eprintln!("Screen Orientation bindings init failed: {}", e);
             }
 
             // Install Web Bluetooth API (W3C Web Bluetooth §3–4) — after DOM/navigator so that
