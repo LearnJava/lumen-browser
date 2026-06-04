@@ -10,6 +10,7 @@ pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
 pub mod clipboard;
+pub mod contacts;
 pub mod cookie_banner;
 pub mod credentials;
 pub mod device_sensors;
@@ -505,6 +506,13 @@ impl QuickJsRuntime {
             // install_geolocation_bindings when FingerprintProfile enables them.
             if let Err(e) = geolocation::install_geolocation_bindings(&ctx, None) {
                 eprintln!("Geolocation bindings init failed: {}", e);
+            }
+
+            // Install Contact Picker API stub (W3C Contact Picker API) — after DOM/navigator.
+            // Phase 0: navigator.contacts.select() always rejects with NotSupportedError;
+            // navigator.contacts.getProperties() returns Promise<['name', 'email', 'tel']>.
+            if let Err(e) = contacts::init_contacts_manager(&ctx) {
+                eprintln!("Contact Picker API init failed: {}", e);
             }
 
             // Install Layer 1 surface API protection (ADR-007 Layer 1, 9A) — after navigator.
