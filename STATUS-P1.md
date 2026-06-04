@@ -6,12 +6,15 @@
 
 ## In progress
 
-- **B-1: DNS over HTTPS** branch: `p1-b1-doh`
-  Next step: implement `DohResolver` in `lumen-network/src/` with RFC 8484 JSON-wire format, A/AAAA resolution, TTL caching
+-
 
 ---
 
 ## Recent merges
+
+| Дата | Задача | Описание |
+| 2026-06-04 | B-1: DNS over HTTPS | RFC 8484 DoH resolver в `lumen-network/src/doh.rs`. `DohResolver::new(endpoint, transport)` шлёт GET-запросы к DoH сервису с base64url-кодированными DNS запросами (RFC 1035 wire format). Dual-stack: AAAA перед A, kombinuje результаты (IPv6 перед IPv4 per RFC 6724). `CachedDnsResolver` — TTL-aware кеш (default 60s) над любым `DnsResolver` с автоматическим удалением истекших записей. Конфиг `fingerprint.toml`: новое поле `doh_url` (пример: `https://cloudflare-dns.com/dns-query`). `FingerprintProfile::apply_http()` создаёт bootstrap HttpClient → DohResolver → CachedDnsResolver и подключает к основному клиенту. Fallback на system DNS если doh_url не задан. 41 тест в doh::tests (38 существующих + 3 новых для CachedDnsResolver). lumen-network: все 652 теста пройдены. Clippy чист. |
+|
 
 | Дата | Задача | Описание |
 | 2026-06-04 | A-21: Contact Picker API stub | W3C Contact Picker API Phase 0: `navigator.contacts.select(properties, options)` → Promise<rejected NotSupportedError>. `navigator.contacts.getProperties()` → Promise<['name', 'email', 'tel']>. Новый модуль `crates/js/src/contacts.rs`: JS-шим с классом ContactsManager. Методы select/getProperties. Phase 0: нет реального доступа к контактам. 4 unit-теста (contacts_manager_exists, select_returns_promise, get_properties_returns_promise, get_properties_returns_correct_array). lumen-js: 1249 тестов (было 1245 + 4 новых). Clippy чист. |
@@ -76,7 +79,7 @@ Ordered by priority. Сгруппированы по домену.
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| B-1 | **DNS over HTTPS** — `DohResolver` в `lumen-network`: GET `https://cloudflare-dns.com/dns-query?name=X&type=A` (RFC 8484), JSON-wire format, TTL-aware кеш A/AAAA, конфиг `doh_url` в `fingerprint.toml`, fallback → system DNS. 8 тестов. | M | `lumen-network` |
+| ~~B-1~~ | ~~**DNS over HTTPS**~~ — **выполнено** | M | `lumen-network` |
 | B-2 | **HTTP Proxy** — `--proxy http://host:port` CLI флаг, `HttpProxy {host, port, auth}` в `HttpClient`, CONNECT-туннель для HTTPS, `Proxy-Authorization: Basic`, прямой GET для HTTP. Wired в shell `main.rs`. 6 тестов. | M | `lumen-network`, `lumen-shell` |
 | B-3 | **HSTS preload list** — `HstsPreloadList` из embedded JSON (10k+ доменов, chromium формат), `is_preloaded(host) → bool` с eTLD+1 + include_subdomains, HTTP→HTTPS upgrade в `HttpClient::fetch` без редиректа. 6 тестов. | S | `lumen-network` |
 | B-4 | **Background Sync API stub** — `registration.sync.register('tag')`, `SyncManager.getTags()`, `sync` SW-событие на следующей навигации, `_lumen_sw_sync_register/get_tags/clear_tag` биндинги, `SwBackend::pending_syncs` расширение. | S | `lumen-js`, `lumen-storage` |
