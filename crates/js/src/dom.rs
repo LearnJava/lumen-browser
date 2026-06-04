@@ -1428,6 +1428,7 @@ fn install_primitives(
                 height: h as f32,
                 prefers_dark: dark,
                 prefers_reduced_motion: reduced_motion,
+                forced_colors: false,
             };
             mq.matches(&ctx)
         }

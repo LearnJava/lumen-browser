@@ -1812,6 +1812,20 @@ fn emit_text_emphasis_marks(
     }
 }
 
+/// Emits highlight background rects for ::highlight() pseudo-element.
+/// Phase 0: stub that stores highlight name for P4 wiring to CSS.highlights registry.
+/// P4 will: (1) check if highlight name is registered, (2) query background color,
+/// (3) emit FillRect background before DrawText.
+/// CSS: ::highlight(name)
+fn emit_text_with_highlights(
+    _name: &str,
+    _text_rect: Rect,
+    _out: &mut Vec<DisplayCommand>,
+) {
+    // Phase 1: P4 fills in the implementation after ::highlight() CSS wiring complete
+    // For now, this is a no-op stub
+}
+
 /// Emits shadow + DrawText + decorations for every visible frag in `line`.
 fn emit_text_frags(
     line: &[InlineFrag],
