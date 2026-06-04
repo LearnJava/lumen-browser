@@ -12,9 +12,17 @@ _(нет)_
 
 Приоритет сверху вниз. Каждая — отдельная ветка `p3-bug-<id>`, отдельный worktree.
 
-### 1. Новые баги (если появятся)
+### 1. Открытые баги (приоритет сверху вниз)
 
-Следить за `grep "OPEN" BUGS.md`. Текущий статус: OPEN-багов нет (все BUG-001..BUG-052 FIXED).
+| # | Компонент | Описание | Файл |
+|---|---|---|---|
+| **BUG-058** | layout | **КРИТИЧНО — паника при открытии реальных сайтов**: `display:contents` не сглажен перед `lay_out` | `crates/engine/layout/src/box_tree.rs:3805` |
+| **BUG-059** | font | WOFF2 отклоняет шрифты с контурами из 0 точек — 10 шрифтов CNN не загружаются | `crates/engine/font/src/` |
+| **BUG-060** | font | WOFF2 «unexpected end of font data» для 3 шрифтов CNN — вероятно неверный расчёт буфера | `crates/engine/font/src/` |
+| BUG-055 | layout | `<picture>` с AVIF source не делает fallback на `<img src>` | `crates/engine/layout/src/lib.rs:12366` |
+| BUG-054 | network | `stale_pooled_connection_triggers_retry` падает на Windows (WSAECONNRESET) | `crates/network/src/lib.rs:3161` |
+
+Следить за новыми: `grep "OPEN" BUGS.md`.
 
 ### 2. Регрессии тестов (приоритет 0)
 
