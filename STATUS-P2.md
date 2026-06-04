@@ -6,7 +6,9 @@
 
 ## In progress
 
-None — задача завершена.
+**A-1: CSS Properties & Values API (Houdini)** — `CSS.registerProperty({name, syntax, inherits, initialValue})` в JS, `@property` at-rule в css-parser, `StyleSheet.registered_properties`, `compute_style` применяет `initial-value` как fallback при сломанной var(). 8 тестов.
+branch: p2-a1-css-houdini
+next step: lumen-js CSS.registerProperty shim + global registry
 
 ---
 
