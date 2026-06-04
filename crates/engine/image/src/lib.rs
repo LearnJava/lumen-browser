@@ -3,6 +3,7 @@ mod png;
 pub mod webp;
 mod gif;
 pub mod avif;
+pub mod jxl;
 pub mod decode_cache;
 
 pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
@@ -11,6 +12,7 @@ pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
 pub use gif::{decode_gif, decode_gif_animated, AnimatedFrame, AnimatedGif, GifError, GifLoopCount, is_gif};
 pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
+pub use jxl::{JxlError, decode_jxl, is_jxl};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -25,7 +27,7 @@ pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 /// выбирал подходящий fallback вместо пустой коробки.
 #[must_use]
 pub fn supported_mime_types() -> &'static [&'static str] {
-    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif"]
+    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif", "image/jxl"]
 }
 
 /// Декодирует растровое изображение по сигнатуре первых байтов.
@@ -37,6 +39,7 @@ pub fn supported_mime_types() -> &'static [&'static str] {
 /// - [`ImageError::Gif`] — GIF-сигнатура (GIF87a/GIF89a) совпала, но декодер выдал ошибку.
 /// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодер выдал ошибку.
 /// - [`ImageError::Avif`] — AVIF ftyp-бокс обнаружен, но декодирование не удалось.
+/// - [`ImageError::Jxl`] — JPEG XL сигнатура обнаружена, но декодирование не поддерживается.
 pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     if bytes.len() >= PNG_SIGNATURE.len() && bytes[..PNG_SIGNATURE.len()] == PNG_SIGNATURE {
         return decode_png(bytes).map_err(ImageError::Png);
@@ -57,6 +60,9 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
         let (width, height, data) = decode_avif(bytes).map_err(ImageError::Avif)?;
         return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
     }
+    if is_jxl(bytes) {
+        return Err(ImageError::Jxl(decode_jxl(bytes).unwrap_err()));
+    }
     Err(ImageError::UnknownFormat)
 }
 
@@ -73,6 +79,8 @@ pub enum ImageError {
     Gif(GifError),
     /// AVIF ftyp-бокс обнаружен (brand=avif/avis), но декодирование не удалось.
     Avif(AvifError),
+    /// JPEG XL сигнатура распознана, но декодирование не поддерживается (Phase 0).
+    Jxl(JxlError),
 }
 
 impl core::fmt::Display for ImageError {
@@ -84,6 +92,7 @@ impl core::fmt::Display for ImageError {
             Self::Webp(e) => write!(f, "WebP: {e}"),
             Self::Gif(e) => write!(f, "GIF: {e}"),
             Self::Avif(e) => write!(f, "AVIF: {e}"),
+            Self::Jxl(e) => write!(f, "JPEG XL: {e}"),
         }
     }
 }
@@ -108,6 +117,10 @@ impl From<GifError> for ImageError {
 
 impl From<AvifError> for ImageError {
     fn from(e: AvifError) -> Self { Self::Avif(e) }
+}
+
+impl From<JxlError> for ImageError {
+    fn from(e: JxlError) -> Self { Self::Jxl(e) }
 }
 
 /// Идентифицированный цветовой охват ICC профиля.
@@ -805,5 +818,49 @@ mod tests {
         let mut rgba = vec![0u8, 0, 0, 255];
         correct_rgba_pixels(&mut rgba, &profile);
         assert_eq!(rgba, [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn jxl_signature_naked_format_detected() {
+        let bytes = vec![0xFF, 0x0A, 0x00, 0x00];
+        assert!(is_jxl(&bytes));
+    }
+
+    #[test]
+    fn jxl_signature_isobmff_major_brand_detected() {
+        let mut bytes = vec![0x00, 0x00, 0x00, 0x14]; // box size = 20
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(b"jxl "); // major brand
+        bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // minor version
+        assert!(is_jxl(&bytes));
+    }
+
+    #[test]
+    fn jxl_signature_isobmff_compatible_brand_detected() {
+        let mut bytes = vec![0x00, 0x00, 0x00, 0x18]; // box size = 24
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(b"mj2 "); // different major brand
+        bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // minor version
+        bytes.extend_from_slice(b"jxl "); // compatible brand
+        assert!(is_jxl(&bytes));
+    }
+
+    #[test]
+    fn jxl_not_detected_in_non_jxl_data() {
+        let png_sig = vec![0x89, 0x50, 0x4E, 0x47]; // PNG
+        assert!(!is_jxl(&png_sig));
+    }
+
+    #[test]
+    fn jxl_decode_always_fails_phase0() {
+        let bytes = vec![0xFF, 0x0A];
+        let result = decode(&bytes);
+        assert!(matches!(result, Err(ImageError::Jxl(_))));
+    }
+
+    #[test]
+    fn supported_mime_types_includes_jxl() {
+        let types = supported_mime_types();
+        assert!(types.contains(&"image/jxl"), "image/jxl должен быть в поддерживаемых типах");
     }
 }
