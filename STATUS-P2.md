@@ -6,13 +6,20 @@
 
 ## In progress
 
-**D-3 | Image JPEG XL stub**
-- Branch: `p2-d3-jxl`
-- Next step: Phase 0: `is_jxl(bytes)` detector, `JxlImageDecoder` stub, MIME registration, 5 unit-tests
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**D-3 | Image JPEG XL stub** ✅ 2026-06-04 (merged)
+- Phase 0: `is_jxl(bytes)` детектор (naked FF 0A и ISOBMFF с brand jxl)
+- `JxlImageDecoder` stub → `Err(JxlError::NotSupported)` graceful
+- MIME `image/jxl` зарегистрирован в `supported_mime_types()` и `decode()` dispatcher
+- 6 unit-тестов в jxl.rs (naked format, ISOBMFF major/compatible brands, не-JXL, decode always fails)
+- 6 интеграционных тестов в lib.rs (jxl_signature detection, decode dispatch, mime type support)
+- lumen-image: 124 тестов (было 118, +6 jxl tests), Clippy clean
+- Phase 1 (future): jxl_oxide или libjxl интеграция для реального декодирования
 
 **B-10 | CSS Forced Colors media** ✅ 2026-06-04 (merged)
 - Phase 0: @media (forced-colors: active)/(forced-colors: none) parsing
