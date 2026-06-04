@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+B-2: HTTP Proxy  branch: p1-b2-http-proxy
+Next step: Add HttpProxy struct to lumen-network/src/http_client.rs, implement CONNECT-tunneling  lumen-network/src/http_client.rs
 
 ---
 
