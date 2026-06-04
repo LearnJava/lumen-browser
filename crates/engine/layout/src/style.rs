@@ -4949,6 +4949,10 @@ pub fn compute_style(
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
 
+    // CSS Basic UI L4 §5 — appearance: none removes UA styling from form controls.
+    // Applied after CSS declarations so author `appearance: none` takes effect.
+    apply_ua_appearance(doc, node, &mut style);
+
     style
 }
 
@@ -7545,6 +7549,34 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
     style.border_right_color = gray;
     style.border_bottom_color = gray;
     style.border_left_color = gray;
+}
+
+/// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
+/// (border, padding, background) from form controls.
+/// Applies to: <input>, <button>, <select>, <textarea>, <progress>, <meter>.
+fn apply_ua_appearance(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if style.appearance != Appearance::None {
+        return;
+    }
+
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
+    match name.local.as_str() {
+        "input" | "button" | "select" | "textarea" | "progress" | "meter" => {
+            // Remove UA border
+            style.border_top_width = 0.0;
+            style.border_right_width = 0.0;
+            style.border_bottom_width = 0.0;
+            style.border_left_width = 0.0;
+            // Remove UA padding
+            style.padding_top = Length::Px(0.0);
+            style.padding_right = Length::Px(0.0);
+            style.padding_bottom = Length::Px(0.0);
+            style.padding_left = Length::Px(0.0);
+            // Remove UA background (fully transparent)
+            style.background_color = Some(CssColor::Rgba(Color { r: 0, g: 0, b: 0, a: 0 }));
+        }
+        _ => {}
+    }
 }
 
 /// UA stylesheet: `<dialog>` without the `open` attribute → `display: none`.
@@ -21708,6 +21740,84 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.appearance, Appearance::None);
+    }
+
+    #[test]
+    fn appearance_none_removes_input_ua_styling() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { appearance: none; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        // appearance: none should remove borders and padding
+        assert_eq!(style.appearance, Appearance::None);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.border_right_width, 0.0);
+        assert_eq!(style.border_bottom_width, 0.0);
+        assert_eq!(style.border_left_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        assert_eq!(style.padding_right, Length::Px(0.0));
+        assert_eq!(style.padding_bottom, Length::Px(0.0));
+        assert_eq!(style.padding_left, Length::Px(0.0));
+        // Check background is transparent (alpha = 0)
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
+    }
+
+    #[test]
+    fn appearance_none_removes_button_ua_styling() {
+        let doc = lumen_html_parser::parse("<button></button>");
+        let sheet = lumen_css_parser::parse("button { appearance: none; }");
+        let root = ComputedStyle::root();
+        let button = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, button, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
+    }
+
+    #[test]
+    fn appearance_none_removes_select_ua_styling() {
+        let doc = lumen_html_parser::parse("<select></select>");
+        let sheet = lumen_css_parser::parse("select { appearance: none; }");
+        let root = ComputedStyle::root();
+        let select = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, select, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+    }
+
+    #[test]
+    fn appearance_auto_preserves_ua_styling() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse(""); // appearance: auto (default)
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        // appearance: auto should preserve UA styling (border from apply_ua_form_controls)
+        assert_eq!(style.border_top_width, 1.0);
+        assert_eq!(style.border_right_width, 1.0);
+        assert_eq!(style.appearance, Appearance::Auto);
+    }
+
+    #[test]
+    fn appearance_none_removes_textarea_ua_styling() {
+        let doc = lumen_html_parser::parse("<textarea></textarea>");
+        let sheet = lumen_css_parser::parse("textarea { appearance: none; }");
+        let root = ComputedStyle::root();
+        let textarea = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, textarea, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
     }
 
     // --- Display extended values ---

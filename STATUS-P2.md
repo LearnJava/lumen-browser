@@ -8,7 +8,8 @@
 
 B-8 | **CSS Appearance property**  
 branch: `p2-b8-appearance`  
-Next step: Implement apply_ua_appearance(style, tag) in compute_style that removes UA styling when appearance: none
+Next step: Research existing code + implement apply_ua_appearance(style, tag) in compute_style  
+In progress: Phase 0 — parsing appearance/webkit-appearance, ComputedStyle field, apply_declaration
 
 ---
 
