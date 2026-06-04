@@ -9423,6 +9423,33 @@ function _lumen_gc_collect(nids) {
         delete _canvas2d_ctxs[nid];
     }
 }
+
+// B-7: CSS Resize property Phase 1 — apply element width/height changes from grip drag.
+// Called during CursorMoved when resize_active is set.
+// start_x/y are saved at MouseInput Pressed; delta is computed from current cursor position.
+// The binding updates element's inline style: width = computed_width + delta_x; height = computed_height + delta_y.
+function _lumen_apply_resize(nid, delta_x, delta_y) {
+    var elem = _lumen_make_element(nid);
+    if (!elem) return;
+
+    var style = elem.style;
+    if (!style) return;
+
+    // Get current computed dimensions (bounding rect: [x, y, w, h])
+    var rect = _lumen_get_bounding_rect(nid);
+    if (!rect) return;
+
+    var curr_width = rect[2];
+    var curr_height = rect[3];
+
+    // Apply delta to compute new width/height
+    var new_width = Math.max(0, curr_width + delta_x);
+    var new_height = Math.max(0, curr_height + delta_y);
+
+    // Update inline style (will trigger relayout + repaint)
+    style.width = new_width + 'px';
+    style.height = new_height + 'px';
+}
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────

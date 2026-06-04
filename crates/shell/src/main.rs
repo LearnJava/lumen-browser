@@ -421,6 +421,7 @@ fn run_window_mode(
         view_transition: None,
         archive: tabs::archive::TabArchive::new(),
         restore_spinner_start_ms: None,
+        resize_active: None,
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -3693,6 +3694,11 @@ struct Lumen {
     /// `Some(ms)` = spinner overlay is active; `None` = no restoration in progress.
     /// Set at the start of `restore_hibernated_tab` and cleared when restore completes.
     restore_spinner_start_ms: Option<f64>,
+    /// Active element resize: `Some((node_id, start_x, start_y))` when user is dragging
+    /// the resize grip. `None` when no resize is active.
+    /// Set on MouseInput Pressed over a resize grip, cleared on MouseInput Released.
+    /// During CursorMoved, width/height are updated via JS binding.
+    resize_active: Option<(lumen_dom::NodeId, f32, f32)>,
 }
 
 /// State for an in-progress CSS View Transition cross-fade (CSS View Transitions L1).
@@ -3718,6 +3724,30 @@ enum ViewTransitionEvent {
 }
 
 impl Lumen {
+    /// Finds a layout box with a resize grip at position (x, y) in the layout tree.
+    /// Returns the NodeId of that element, or None if no grip is found.
+    /// This is used in B-7: CSS Resize property Phase 1 to detect mouse clicks on grips.
+    fn find_resize_grip_node(
+        &self,
+        b: &lumen_layout::LayoutBox,
+        x: f32,
+        y: f32,
+    ) -> Option<lumen_dom::NodeId> {
+        // Check this box first
+        if lumen_paint::point_on_resize_grip(b, x, y) {
+            return Some(b.node);
+        }
+
+        // Recursively check children
+        for child in &b.children {
+            if let Some(nid) = self.find_resize_grip_node(child, x, y) {
+                return Some(nid);
+            }
+        }
+
+        None
+    }
+
     /// Повторный layout+paint при изменении размера viewport.
     /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     fn relayout(&mut self) {
@@ -4975,10 +5005,37 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         None
                     };
                 }
+                // B-7: Active resize — update element width/height as mouse moves.
+                // Calculate delta and call JS binding to update style.
+                if let Some((node_id, start_x, start_y)) = self.resize_active {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let delta_x = x_css - start_x;
+                    let delta_y = y_css - start_y;
+
+                    // Update the element's width and height via JS binding.
+                    // The binding `_lumen_apply_resize(node_id, delta_x, delta_y)` will
+                    // modify the inline style of the element.
+                    #[cfg(feature = "quickjs")]
+                    {
+                        let nid_u32 = node_id.index() as u32;
+                        self.eval_js(&format!(
+                            "_lumen_apply_resize({}, {}, {});",
+                            nid_u32, delta_x, delta_y
+                        ));
+                    }
+                    self.request_redraw();
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
                 self.hovered_tab_idx = None;
+                self.resize_active = None; // Clear resize when cursor leaves window
                 // Clear hover state when cursor leaves the window.
                 if self.hovered_nid.is_some() {
                     // Dispatch leave events before clearing hovered state.
@@ -5050,6 +5107,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let nid = hov.index() as u32;
                         self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
                         self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
+                    }
+
+                    // B-7: Check if click is on resize grip of any element in layout tree.
+                    // If so, activate resize mode. This must be checked before other UI panels.
+                    if let Some(ref layout_box) = self.layout_box {
+                        if let Some(nid) = self.find_resize_grip_node(layout_box, x_css, y_css) {
+                            self.resize_active = Some((nid, x_css, y_css));
+                            self.request_redraw();
+                            return;
+                        }
                     }
 
                     // Command palette (task #23): modal — captures every click.
@@ -5616,6 +5683,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // не приходит, поэтому делаем вручную).
                     self.update_cursor_icon();
                 }
+            }
+            // B-7 Phase 1: Handle mouse release to clear resize state.
+            // This is separate from the MouseInput Pressed block above.
+            WindowEvent::MouseInput { state: ref state2, button: ref button2, .. } if button2 == &MouseButton::Left && state2 == &ElementState::Released => {
+                // Clear resize_active on mouse release.
+                self.resize_active = None;
+                // Clear :active pseudo-class if set.
+                if self.active_nid.is_some() {
+                    self.active_nid = None;
+                    self.relayout();
+                    self.request_redraw();
+                }
+                self.update_cursor_icon();
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 // Privacy network panel intercepts the wheel while visible:
