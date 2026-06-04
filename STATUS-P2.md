@@ -6,7 +6,9 @@
 
 ## In progress
 
-None — задача завершена.
+**A-10: Display list diffing**
+- branch: p2-a10-display-list-diffing
+- Next step: Implement `DisplayList::diff()` algorithm. See [lumen-paint/src/display_list.rs:1](crates/engine/paint/src/display_list.rs)
 
 ---
 
