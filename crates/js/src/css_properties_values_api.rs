@@ -147,6 +147,7 @@ const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_core::JsRuntime;
 
     #[test]
     fn test_register_property_creates_entry() {
@@ -252,4 +253,5 @@ mod tests {
         assert!(prop.inherits);
         assert_eq!(prop.syntax, "*");
     }
+
 }
