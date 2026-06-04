@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+A-2 | CSS Custom Highlight API  branch: p2-a2-highlight
+Next step: Реализовать Highlight, HighlightRegistry в lumen-js  lumen-js/src/highlight_api.rs:1
 
 ---
 
