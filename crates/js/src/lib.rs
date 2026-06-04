@@ -21,6 +21,7 @@ pub mod media_session;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod offscreen_canvas;
+pub mod shape_detection;
 pub mod shared_worker;
 pub mod speech;
 pub mod surface_api;
@@ -611,6 +612,13 @@ impl QuickJsRuntime {
             // Config options are not used.
             if let Err(e) = sanitizer::install_sanitizer_bindings(&ctx) {
                 eprintln!("Sanitizer bindings init failed: {}", e);
+            }
+
+            // Install Shape Detection API (W3C Shape Detection API §3–4) — pure JS implementation.
+            // Phase 0: FaceDetector, BarcodeDetector, TextDetector all return empty arrays.
+            // No actual detection is performed.
+            if let Err(e) = shape_detection::install_shape_detection_bindings(&ctx) {
+                eprintln!("Shape Detection bindings init failed: {}", e);
             }
 
             Ok(())
