@@ -18,10 +18,12 @@ pub mod box_tree;
 pub mod color_mix;
 pub mod counters;
 pub mod image_gating;
+pub mod mathml;
 pub mod motion_path;
 pub mod page;
 pub mod pagination;
 pub mod property_trees;
+pub mod ruby;
 pub mod selection;
 pub mod selector_query;
 pub mod scroll_timeline;
@@ -50,7 +52,7 @@ pub use box_tree::{
     apply_container_styles,
     collect_background_image_requests, collect_image_requests, layout, layout_measured,
     layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
-    PseudoKind, SvgShapeKind, ViewBox,
+    PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, ViewBox,
 };
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};

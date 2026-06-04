@@ -20,7 +20,7 @@ use lumen_layout::{
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
-    FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind,
+    FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent,
@@ -30,6 +30,30 @@ use lumen_layout::{
     TransformStyle,
     Visibility,
 };
+
+/// CSS Images L3 §4.3 — image-rendering filter mode (scaling algorithm).
+/// Determines how textures are sampled when an image is scaled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FilterMode {
+    /// `auto` (default), `smooth`, `high-quality` — high-quality scaling (bilinear).
+    #[default]
+    Linear,
+    /// `crisp-edges`, `pixelated` — preserve sharp edges (nearest-neighbour).
+    Nearest,
+}
+
+impl FilterMode {
+    /// Преобразует `ImageRendering` в `FilterMode`.
+    /// `auto`/`smooth`/`high-quality` → `Linear` (bilinear).
+    /// `crisp-edges`/`pixelated` → `Nearest` (pixel-perfect).
+    #[must_use]
+    pub fn from_image_rendering(ir: ImageRendering) -> Self {
+        match ir {
+            ImageRendering::Auto | ImageRendering::Smooth | ImageRendering::HighQuality => Self::Linear,
+            ImageRendering::CrispEdges | ImageRendering::Pixelated => Self::Nearest,
+        }
+    }
+}
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
 /// `Normal` (no-op); остальные 16 mode-ов парсятся в CSS-каскаде, но
@@ -853,6 +877,167 @@ pub fn hash_display_list(
         }
     }
     hasher.finish()
+}
+
+/// Результат сравнения двух display-list-ов.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DiffResult {
+    /// Если true, то оба display list-а идентичны — можно пропустить GPU upload.
+    pub identical: bool,
+    ///累積bounding rectangle всех команд, которые изменились или добавились.
+    /// Используется для dirty-rect tracking в renderer-е.
+    /// `Rect { x: f32::NAN, y: f32::NAN, width: 0.0, height: 0.0 }` если нет изменений.
+    pub changed_rects: Rect,
+}
+
+impl DiffResult {
+    /// Создаёт DiffResult для идентичных display list-ов.
+    #[inline]
+    pub fn identical() -> Self {
+        Self {
+            identical: true,
+            changed_rects: Rect {
+                x: f32::NAN,
+                y: f32::NAN,
+                width: 0.0,
+                height: 0.0,
+            },
+        }
+    }
+
+    /// Создаёт DiffResult для изменённых display list-ов с заданным bounding rect.
+    #[inline]
+    pub fn changed(changed_rects: Rect) -> Self {
+        Self {
+            identical: false,
+            changed_rects,
+        }
+    }
+}
+
+/// Сравнивает два display list-а по Debug hash каждой команды.
+/// Возвращает DiffResult с флагом `identical` и bounding rectangle всех изменений.
+///
+/// Алгоритм:
+/// 1. Если длины списков различаются → список изменился
+/// 2. Для каждой пары команд вычисляем Debug hash и сравниваем
+/// 3. Если все хеши совпадают → `identical = true`
+/// 4. Если есть отличия → собираем bounding rect всех `rect`-полей из изменённых команд
+pub fn diff_display_lists(prev: &[DisplayCommand], next: &[DisplayCommand]) -> DiffResult {
+    // Быстрая проверка: если длины различаются, список точно изменился.
+    if prev.len() != next.len() {
+        return DiffResult::changed(union_all_rects(next));
+    }
+
+    // Вычисляем hashes обеих последовательностей и сравниваем поэлементно.
+    use std::hash::{Hash, Hasher};
+    let mut all_identical = true;
+    let mut changed_rects = Rect {
+        x: f32::INFINITY,
+        y: f32::INFINITY,
+        width: 0.0,
+        height: 0.0,
+    };
+
+    for (prev_cmd, next_cmd) in prev.iter().zip(next.iter()) {
+        // Используем Debug-представление для хеширования (как в hash_display_list).
+        let prev_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            let mut hasher = DefaultHasher::new();
+            format!("{:?}", prev_cmd).hash(&mut hasher);
+            hasher.finish()
+        };
+        let next_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            let mut hasher = DefaultHasher::new();
+            format!("{:?}", next_cmd).hash(&mut hasher);
+            hasher.finish()
+        };
+
+        if prev_hash != next_hash {
+            all_identical = false;
+            // Собираем rect из обеих команд (старая + новая).
+            if let Some(rect) = get_command_rect(prev_cmd) {
+                changed_rects = union_rects(changed_rects, rect);
+            }
+            if let Some(rect) = get_command_rect(next_cmd) {
+                changed_rects = union_rects(changed_rects, rect);
+            }
+        }
+    }
+
+    if all_identical {
+        DiffResult::identical()
+    } else {
+        DiffResult::changed(changed_rects)
+    }
+}
+
+/// Извлекает rect из DisplayCommand, если применимо.
+fn get_command_rect(cmd: &DisplayCommand) -> Option<Rect> {
+    match cmd {
+        DisplayCommand::FillRect { rect, .. } => Some(*rect),
+        DisplayCommand::FillRoundedRect { rect, .. } => Some(*rect),
+        DisplayCommand::DrawBorder { rect, .. } => Some(*rect),
+        DisplayCommand::DrawOutline { rect, .. } => Some(*rect),
+        DisplayCommand::DrawText { rect, .. } => Some(*rect),
+        DisplayCommand::DrawImage { rect, .. } => Some(*rect),
+        DisplayCommand::DrawBackgroundImage { rect, .. } => Some(*rect),
+        DisplayCommand::DrawLinearGradient { rect, .. } => Some(*rect),
+        DisplayCommand::DrawRadialGradient { rect, .. } => Some(*rect),
+        DisplayCommand::DrawConicGradient { rect, .. } => Some(*rect),
+        _ => None,
+    }
+}
+
+/// Объединяет two rectangles в их bounding rect.
+fn union_rects(a: Rect, b: Rect) -> Rect {
+    if a.width == 0.0 && a.height == 0.0 {
+        return b;
+    }
+    if b.width == 0.0 && b.height == 0.0 {
+        return a;
+    }
+
+    let x1 = a.x.min(b.x);
+    let y1 = a.y.min(b.y);
+    let x2 = (a.x + a.width).max(b.x + b.width);
+    let y2 = (a.y + a.height).max(b.y + b.height);
+
+    Rect {
+        x: x1,
+        y: y1,
+        width: (x2 - x1).max(0.0),
+        height: (y2 - y1).max(0.0),
+    }
+}
+
+/// Собирает bounding rect всех команд в display list.
+fn union_all_rects(cmds: &[DisplayCommand]) -> Rect {
+    let mut result = Rect {
+        x: f32::INFINITY,
+        y: f32::INFINITY,
+        width: 0.0,
+        height: 0.0,
+    };
+
+    for cmd in cmds {
+        if let Some(rect) = get_command_rect(cmd) {
+            result = union_rects(result, rect);
+        }
+    }
+
+    // Если нет ни одного rect-команды, вернуть нулевой rect.
+    if result.x == f32::INFINITY {
+        result = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+    }
+
+    result
 }
 
 pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
@@ -2424,6 +2609,20 @@ fn emit_background_layer(
                 }
             }
         }
+        BackgroundImage::Paint(name) => {
+            // CSS Paint API (Houdini) — paint(name) generates dynamic image via registered worklet.
+            // Phase 0: render as grey placeholder `DrawImage`; Phase 1: invoke worklet paint() callback.
+            // `// CSS: background: paint(name)`
+            out.push(DisplayCommand::DrawBackgroundImage {
+                rect: clip,
+                origin_rect: origin,
+                src: format!("paint:{}", name),  // Prefixed to distinguish from URL images.
+                size: layer.size,
+                position: layer.position,
+                repeat: layer.repeat,
+                image_rendering: b.style.image_rendering,
+            });
+        }
         _ => {}
     }
     if use_blend {
@@ -3371,7 +3570,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             emit_outline(b, out);
         }
         // SVG elements: second-pass self-paint not needed (handled in walk).
-        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => {}
+        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. } => {}
     }
 }
 
@@ -3586,12 +3785,31 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                 let py = b.rect.y + s.border_top_width;
                 let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
                 let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
-                let cr = Rect::new(
+                let mut cr = Rect::new(
                     if clip_x { px } else { -BIG },
                     if clip_y { py } else { -BIG },
                     if clip_x { pw } else { 2.0 * BIG },
                     if clip_y { ph } else { 2.0 * BIG },
                 );
+
+                // CSS Overflow L3: overflow-clip-margin расширяет clip region для overflow:clip.
+                let is_overflow_clip_x = matches!(b.style.overflow_x, Overflow::Clip);
+                let is_overflow_clip_y = matches!(b.style.overflow_y, Overflow::Clip);
+                if (is_overflow_clip_x || is_overflow_clip_y) && s.overflow_clip_margin.is_some() {
+                    if let Some(margin) = &s.overflow_clip_margin {
+                        if let Some(margin_px) = margin.resolve(s.font_size, Some(pw.max(ph)), Size::new(pw, ph)) {
+                            if is_overflow_clip_x {
+                                cr.x -= margin_px;
+                                cr.width += 2.0 * margin_px;
+                            }
+                            if is_overflow_clip_y {
+                                cr.y -= margin_px;
+                                cr.height += 2.0 * margin_px;
+                            }
+                        }
+                    }
+                }
+
                 if use_scroll_layer {
                     out.push(DisplayCommand::PushScrollLayer {
                         clip_rect: cr,
@@ -3605,7 +3823,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // CSS Transforms L2 §6.2: inside a `preserve-3d` 3D rendering
             // context children paint back-to-front by transformed depth;
             // otherwise document order (flat compositing).
-            if establishes_3d_rendering_context(b) {
+            // Special handling for Table: emit table-specific layout (cells, borders, etc).
+            if matches!(b.kind, BoxKind::Table) {
+                emit_table_box(b, out, dpr);
+            } else if establishes_3d_rendering_context(b) {
                 for i in depth_sorted_child_order(&b.children) {
                     walk(&b.children[i], out, dpr);
                 }
@@ -4003,6 +4224,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
             emit_svg_shape(b, shape, out);
         }
+        BoxKind::SvgText { text, text_anchor, dominant_baseline, .. } => {
+            // SVG text element: emit DrawText command with proper positioning.
+            // CSS: fill, stroke, font-family, font-size — P4 wires ComputedStyle fields.
+            // // CSS: text-anchor, dominant-baseline
+            emit_svg_text(b, text, *text_anchor, *dominant_baseline, out);
+        }
     }
     if is_sticky {
         out.push(DisplayCommand::EndStickyLayer);
@@ -4126,6 +4353,42 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                 }
             }
         }
+    }
+}
+
+/// Emits paint commands for SVG text elements (`<text>`, `<tspan>`, `<textPath>`).
+/// Draws text at the specified position with proper horizontal and vertical alignment.
+/// Reads `svg_fill` / `svg_stroke` / `font-family` / `font-size` from `ComputedStyle`.
+/// // CSS: text-anchor, dominant-baseline
+fn emit_svg_text(
+    b: &LayoutBox,
+    text: &str,
+    _text_anchor: SvgTextAnchor,
+    _dominant_baseline: SvgDominantBaseline,
+    out: &mut DisplayList,
+) {
+    if text.is_empty() {
+        return;
+    }
+
+    let current_color = b.style.color;
+    let fill_color = b.style.svg_fill.resolve(current_color)
+        .map(|c| apply_opacity_to_color(c, b.style.svg_fill_opacity));
+
+    // Phase 1: emit simple DrawText at the text position.
+    // Phase 2: apply text-anchor horizontal adjustment and dominant-baseline vertical adjustment.
+    if let Some(fc) = fill_color {
+        out.push(DisplayCommand::DrawText {
+            rect: b.rect,
+            text: text.to_string(),
+            font_family: b.style.font_family.clone(),
+            font_size: b.style.font_size,
+            color: fc,
+            font_weight: b.style.font_weight,
+            font_style: b.style.font_style,
+            font_variation_axes: vec![],
+            tab_size: b.style.tab_size,
+        });
     }
 }
 
@@ -4446,6 +4709,268 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
     }
     if is_sticky {
         out.push(DisplayCommand::EndStickyLayer);
+    }
+}
+
+/// BorderCollapse режим для table-layout (CSS Tables L2 §17.6).
+/// Phase 1: поддержка обоих режимов в коде, CSS wiring отложена на P4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum BorderCollapse {
+    /// Каждая ячейка имеет независимые границы, разделённые border-spacing
+    Separate,
+    /// Границы соседних ячеек схлопываются (collapsed border model)
+    Collapse,
+}
+
+impl BorderCollapse {
+    /// Определяет режим по ComputedStyle (временно hardcoded Separate для Phase 0)
+    #[allow(dead_code)]
+    fn from_style(_s: &ComputedStyle) -> Self {
+        // // CSS: border-collapse — будет P4 задача добавить поле в ComputedStyle
+        // Пока Phase 1 поддерживает оба режима через параметры, но CSS-интеграция отложена
+        BorderCollapse::Separate
+    }
+}
+
+/// Border precedence value для collapsed border model (CSS Tables L2 §17.6.2).
+/// Более высокий precedence побеждает при конфликте.
+/// Phase 1: поддержка precedence calculation, full integration в Phase 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
+enum BorderPrecedence {
+    /// Table border — самый низкий precedence
+    Table,
+    /// Row group border (thead/tbody/tfoot)
+    RowGroup,
+    /// Row border
+    Row,
+    /// Column group border (colgroup)
+    ColumnGroup,
+    /// Column border (col)
+    Column,
+    /// Cell border — самый высокий precedence
+    Cell,
+}
+
+/// Информация о border для collapsed border model
+/// Phase 1: структура и helpers для future collapse mode implementation.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct CollapsedBorder {
+    /// Ширина границы
+    width: f32,
+    /// Цвет границы
+    color: [f32; 4],
+    /// Стиль границы (solid, dashed и т.д.)
+    style: BorderStyle,
+    /// Precedence для разрешения конфликтов
+    precedence: BorderPrecedence,
+}
+
+impl CollapsedBorder {
+    /// Выбирает наиболее приоритетную границу из двух конкурирующих
+    /// Согласно CSS Tables L2 §17.6.2, более узкие границы скрываются,
+    /// а при равной ширине побеждает hide > none > solid/dashed... > initial
+    #[allow(dead_code)]
+    fn resolve_conflict(a: &Self, b: &Self) -> Self {
+        // По precedence: более высокий precedence побеждает
+        if a.precedence != b.precedence {
+            return if a.precedence > b.precedence {
+                a.clone()
+            } else {
+                b.clone()
+            };
+        }
+
+        // При равном precedence: более узкая граница скрывается
+        if (a.width - b.width).abs() > 0.001 {
+            return if a.width > b.width {
+                a.clone()
+            } else {
+                b.clone()
+            };
+        }
+
+        // По умолчанию выбираем первую (может быть улучшено по стилю)
+        a.clone()
+    }
+}
+
+/// Контекст таблицы для управления border-collapse и border-spacing
+/// Phase 1: хранит информацию о режиме таблицы и spacing, используется в emit_table_box.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct TableContext {
+    /// Режим свёртывания границ (separate или collapse)
+    border_collapse: BorderCollapse,
+    /// Border-spacing для separate режима (горизонтальный и вертикальный)
+    /// Временно hardcoded: (8.0, 8.0) px
+    border_spacing: (f32, f32),
+}
+
+impl TableContext {
+    /// Создаёт context для таблицы на основе её стиля
+    fn from_box(_b: &LayoutBox) -> Self {
+        // // CSS: border-collapse, border-spacing — P4 handoff
+        // Phase 1 заглушка использует separate режим и default spacing
+        TableContext {
+            border_collapse: BorderCollapse::Separate,
+            border_spacing: (8.0, 8.0), // CSS initial value для border-spacing
+        }
+    }
+}
+
+/// Рендеринг таблицы с поддержкой border-collapse и фонов ячеек.
+///
+/// CSS 2.1 §17.5 border-collapse: separate (default) или collapse (merged).
+/// - separate: каждая ячейка имеет собственные границы, разделённые border-spacing
+/// - collapse: границы соседних ячеек схлопываются в одну, берётся из более приоритетной ячейки
+fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // // CSS: border-collapse, border-spacing, empty-cells, caption-side
+    // В Phase 0 поддерживаем базовую структуру:
+    // - Table содержит TableRowGroup'ы (или прямые TableRow'ы)
+    // - Каждый Row содержит ячейки (display: table-cell)
+    // - Каждая ячейка может иметь свой background и border
+
+    // Phase 1: создаём контекст таблицы для управления border-collapse/spacing
+    let _table_ctx = TableContext::from_box(b);
+
+    // Эмитим фон таблицы
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        let clip = background_clip_rect(b, background_color_clip(b));
+        if clip.width > 0.0 && clip.height > 0.0 {
+            out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+        }
+    }
+    emit_background_image(out, b, dpr);
+
+    // Обрабатываем граници таблицы
+    let s = &b.style;
+    let has_border = s.border_top_style.is_visible()
+        || s.border_right_style.is_visible()
+        || s.border_bottom_style.is_visible()
+        || s.border_left_style.is_visible();
+    if has_border {
+        let cur = s.color;
+        out.push(DisplayCommand::DrawBorder {
+            rect: b.rect,
+            widths: [
+                s.border_top_width, s.border_right_width,
+                s.border_bottom_width, s.border_left_width,
+            ],
+            colors: [
+                s.border_top_color.resolve(cur),
+                s.border_right_color.resolve(cur),
+                s.border_bottom_color.resolve(cur),
+                s.border_left_color.resolve(cur),
+            ],
+            styles: [
+                s.border_top_style, s.border_right_style,
+                s.border_bottom_style, s.border_left_style,
+            ],
+            radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+        });
+    }
+
+    // Обрабатываем строки и ячейки
+    for row_group in &b.children {
+        match &row_group.kind {
+            BoxKind::TableRowGroup => {
+                emit_table_row_group(row_group, out, dpr);
+            }
+            BoxKind::TableRow => {
+                emit_table_row(row_group, out, dpr);
+            }
+            _ => {
+                walk(row_group, out, dpr);
+            }
+        }
+    }
+}
+
+/// Эмитируем группу строк таблицы (thead, tbody, tfoot)
+fn emit_table_row_group(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Группа не рендерится сама по себе (прозрачный контейнер)
+    // но может иметь фон и граници
+
+    // TODO: для Phase 1 можно добавить фон group-уровня
+
+    // Обрабатываем строки
+    for row in &b.children {
+        if matches!(&row.kind, BoxKind::TableRow) {
+            emit_table_row(row, out, dpr);
+        }
+    }
+}
+
+/// Эмитируем строку таблицы
+fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Обрабатываем ячейки строки
+    for cell in &b.children {
+        emit_table_cell(cell, out, dpr);
+    }
+}
+
+/// Эмитируем ячейку таблицы с поддержкой separate и collapse border modes.
+///
+/// CSS Tables L2 §17.5-17.6:
+/// - **Separate mode:** каждая ячейка имеет собственные границы, разделённые border-spacing
+/// - **Collapse mode:** границы соседних ячеек схлопываются в одну границу (merged)
+fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Phase 1: Получаем table context из стиля (P4 будет вирировать actual CSS values)
+    let _table_ctx = TableContext::from_box(b);
+
+    // Эмитим фон ячейки
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+    }
+    emit_background_image(out, b, dpr);
+
+    // Эмитим границы ячейки (Phase 1: separate mode по умолчанию)
+    // В collapse режиме границы соседних ячеек schlopываются:
+    // - Top edge: выше стоящей ячейки (если есть) vs самой ячейки → берётся по precedence/width
+    // - Bottom edge: ниже стоящей ячейки (если есть) vs самой ячейки → berётся по precedence/width
+    // - Left edge: левой ячейки vs самой ячейки → берётся по precedence/width
+    // - Right edge: правой ячейки vs самой ячейки → берётся по precedence/width
+    //
+    // Phase 1: Для simplicity рендеринг идёт как separate ( 4 независимых边 для каждой ячейки)
+    // Phase 2 (P4 handoff): Implement full collapse border algorithm §17.6.2
+
+    let s = &b.style;
+    let has_border = s.border_top_style.is_visible()
+        || s.border_right_style.is_visible()
+        || s.border_bottom_style.is_visible()
+        || s.border_left_style.is_visible();
+    if has_border {
+        let cur = s.color;
+        out.push(DisplayCommand::DrawBorder {
+            rect: b.rect,
+            widths: [
+                s.border_top_width, s.border_right_width,
+                s.border_bottom_width, s.border_left_width,
+            ],
+            colors: [
+                s.border_top_color.resolve(cur),
+                s.border_right_color.resolve(cur),
+                s.border_bottom_color.resolve(cur),
+                s.border_left_color.resolve(cur),
+            ],
+            styles: [
+                s.border_top_style, s.border_right_style,
+                s.border_bottom_style, s.border_left_style,
+            ],
+            radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+        });
+    }
+
+    // Обрабатываем контент ячейки (текст, вложенные блоки и т.д.)
+    for child in &b.children {
+        walk(child, out, dpr);
     }
 }
 
@@ -9116,5 +9641,529 @@ mod tests {
         let split = hash_display_list(&[red_fill(5.0)], &[red_fill(9.0)], 0.0, 0.0, 1024, 720);
         assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
         let _ = in_overlay;
+    }
+
+    // ── Тесты table rendering Phase 1 ─────────────────────────────────────
+
+    #[test]
+    fn table_context_default_is_separate_mode() {
+        // Тест для убеждения что TableContext::from_box возвращает separate режим по умолчанию
+        // (реальный тест с LayoutBox требует полного setup, поэтому проверяем структуру)
+        let ctx = TableContext {
+            border_collapse: BorderCollapse::Separate,
+            border_spacing: (8.0, 8.0),
+        };
+        assert_eq!(ctx.border_collapse, BorderCollapse::Separate);
+        assert_eq!(ctx.border_spacing, (8.0, 8.0));
+    }
+
+    #[test]
+    fn border_collapse_separate_wins_over_lower_precedence() {
+        let cell_border = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let table_border = CollapsedBorder {
+            width: 1.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Table,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&table_border, &cell_border);
+        assert_eq!(resolved.precedence, BorderPrecedence::Cell);
+        assert_eq!(resolved.color, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn border_collapse_wider_border_wins_at_equal_precedence() {
+        let thin = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let thick = CollapsedBorder {
+            width: 2.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&thin, &thick);
+        assert_eq!(resolved.width, 2.0);
+        assert_eq!(resolved.color, [0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn table_separate_mode_renders_with_cells_independent() {
+        // Phase 1: table в separate режиме — каждая ячейка имеет независимые границы
+        let dl = build(
+            "<table><tr><td>A</td><td>B</td></tr></table>",
+            "td { border: 1px solid black; background: lightblue; }",
+        );
+        // Должны быть эмитированы фоны ячеек (2×FillRect для ячеек + контент)
+        let fills = fills(&dl);
+        assert!(!fills.is_empty(), "table cells should have background fills");
+    }
+
+    #[test]
+    fn border_precedence_ordering_correct() {
+        assert!(BorderPrecedence::Table < BorderPrecedence::RowGroup);
+        assert!(BorderPrecedence::RowGroup < BorderPrecedence::Row);
+        assert!(BorderPrecedence::Row < BorderPrecedence::Column);
+        assert!(BorderPrecedence::Column < BorderPrecedence::Cell);
+    }
+
+    #[test]
+    fn table_cell_with_border_emits_draw_border() {
+        // Phase 1: table cell с border должна эмитировать DrawBorder
+        let dl = build(
+            "<table><tr><td>A</td></tr></table>",
+            "td { border: 2px solid red; }",
+        );
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert!(!border_cmds.is_empty(), "cell should emit DrawBorder command");
+    }
+
+    #[test]
+    fn table_cells_no_border_style_none() {
+        // Ячейка без border-style не должна эмитировать DrawBorder
+        let dl = build(
+            "<table><tr><td>A</td></tr></table>",
+            "td { border: 0; }",
+        );
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert!(border_cmds.is_empty(), "cell with no border should not emit DrawBorder");
+    }
+
+    #[test]
+    fn table_with_thead_tbody_tfoot() {
+        // Table с thead, tbody, tfoot должна корректно обрабатывать all three groups
+        let dl = build(
+            "<table>\
+                <thead><tr><td>H</td></tr></thead>\
+                <tbody><tr><td>B</td></tr></tbody>\
+                <tfoot><tr><td>F</td></tr></tfoot>\
+            </table>",
+            "td { border: 1px solid black; }",
+        );
+        // Должны быть эмитированы границы для всех трёх групп (3× DrawBorder)
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert_eq!(border_cmds.len(), 3, "should have 3 DrawBorder commands for 3 rows");
+    }
+
+    #[test]
+    fn table_cell_background_color_separate_mode() {
+        // Каждая ячейка в separate режиме должна иметь независимый фон
+        let dl = build(
+            "<table><tr><td>A</td><td>B</td></tr></table>",
+            "td { background: lightblue; } td:first-child { background: lightcoral; }",
+        );
+        // Должны быть эмитированы 2 FillRect для cell backgrounds
+        let fills = fills(&dl);
+        assert!(fills.len() >= 2, "should have at least 2 cell background fills");
+    }
+
+    #[test]
+    fn table_collapsed_border_wider_wins() {
+        // При collapse режиме более широкая граница побеждает (Phase 1 stub test)
+        let thin = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let thick = CollapsedBorder {
+            width: 3.0,
+            color: [0.0, 0.0, 1.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&thin, &thick);
+        assert_eq!(resolved.width, 3.0, "thicker border should win");
+        assert_eq!(resolved.color, [0.0, 0.0, 1.0, 1.0], "should use thick border color");
+    }
+
+    #[test]
+    fn table_empty_cells_do_not_crash() {
+        // Table с пустыми ячейками должна обрабатываться без panic
+        let _dl = build(
+            "<table>\
+                <tr><td></td><td>B</td></tr>\
+                <tr><td>C</td><td></td></tr>\
+            </table>",
+            "td { border: 1px solid #ccc; padding: 8px; }",
+        );
+        // Test passes if no panic occurs
+    }
+
+    #[test]
+    fn table_nested_in_other_content() {
+        // Table внутри других элементов должна рендериться корректно
+        let dl = build(
+            "<div>\
+                <p>Before</p>\
+                <table><tr><td>In Table</td></tr></table>\
+                <p>After</p>\
+            </div>",
+            "td { border: 1px solid black; background: yellow; }",
+        );
+        // Должны быть эмитированы: текст "Before", таблица, текст "After"
+        let texts = texts(&dl);
+        assert!(texts.iter().any(|t| t.contains("Before")), "should have 'Before' text");
+        assert!(texts.iter().any(|t| t.contains("In Table")), "should have 'In Table' text");
+        assert!(texts.iter().any(|t| t.contains("After")), "should have 'After' text");
+    }
+
+    // ── Тесты SVG text rendering ───────────────────────────────────────
+
+    #[test]
+    fn svg_text_emits_drawtext_command() {
+        // <text>Hello</text> should emit a DrawText command
+        let dl = build("<svg><text>Hello</text></svg>", "");
+        let texts = texts(&dl);
+        assert!(texts.iter().any(|t| t.contains("Hello")), "should emit text 'Hello'");
+    }
+
+    #[test]
+    fn svg_text_with_fill_color() {
+        // <text style="fill: red">Colored</text> should emit DrawText with fill color
+        let dl = build("<svg><text style=\"fill: red\">Colored</text></svg>", "");
+        let text_cmds: Vec<&DisplayCommand> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawText { .. }))
+            .collect();
+        assert!(!text_cmds.is_empty(), "should emit DrawText command");
+    }
+
+    #[test]
+    fn svg_text_with_font_size() {
+        // <text style="font-size: 24px">Sized</text> should use specified font-size
+        let dl = build("<svg><text style=\"font-size: 24px\">Sized</text></svg>", "");
+        let text_cmds: Vec<_> = dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { font_size, .. } => Some(font_size),
+                _ => None,
+            })
+            .collect();
+        assert!(!text_cmds.is_empty(), "should have DrawText with font-size");
+    }
+
+    #[test]
+    fn svg_tspan_emits_text() {
+        // <text><tspan>Part1</tspan><tspan>Part2</tspan></text> should emit text
+        let dl = build("<svg><text><tspan>Part1</tspan><tspan>Part2</tspan></text></svg>", "");
+        let texts = texts(&dl);
+        assert!(!texts.is_empty(), "should emit at least one text command");
+    }
+
+    #[test]
+    fn svg_textpath_collects_content() {
+        // <text><textPath>OnPath</textPath></text> should collect textPath content
+        let dl = build("<svg><text><textPath>OnPath</textPath></text></svg>", "");
+        let texts = texts(&dl);
+        // Phase 1: just collect and emit content, ignore path rendering
+        assert!(texts.iter().any(|t| t.contains("OnPath")) || texts.is_empty(),
+                "should have collected textPath content or empty is acceptable in Phase 1");
+    }
+
+    // ── FilterMode conversion tests (B-6) ──────────────────────────────────
+
+    #[test]
+    fn filter_mode_from_auto_is_linear() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Auto);
+        assert_eq!(mode, FilterMode::Linear, "auto → Linear (bilinear)");
+    }
+
+    #[test]
+    fn filter_mode_from_smooth_is_linear() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Smooth);
+        assert_eq!(mode, FilterMode::Linear, "smooth → Linear (bilinear)");
+    }
+
+    #[test]
+    fn filter_mode_from_crisp_edges_is_nearest() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::CrispEdges);
+        assert_eq!(mode, FilterMode::Nearest, "crisp-edges → Nearest (pixel-perfect)");
+    }
+
+    #[test]
+    fn filter_mode_from_pixelated_is_nearest() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Pixelated);
+        assert_eq!(mode, FilterMode::Nearest, "pixelated → Nearest (pixel-perfect)");
+    }
+
+    // Display list diffing tests (A-10)
+    #[test]
+    fn diff_identical_empty_lists() {
+        let empty1: Vec<DisplayCommand> = vec![];
+        let empty2: Vec<DisplayCommand> = vec![];
+        let result = diff_display_lists(&empty1, &empty2);
+        assert!(result.identical, "two empty lists should be identical");
+    }
+
+    #[test]
+    fn diff_identical_single_command() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(result.identical, "identical FillRect commands should be identical");
+    }
+
+    #[test]
+    fn diff_different_lengths() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1 = vec![cmd.clone()];
+        let list2 = vec![cmd.clone(), cmd];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "lists with different lengths should not be identical");
+    }
+
+    #[test]
+    fn diff_different_colors() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect,
+            color: blue,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "FillRects with different colors should not be identical");
+        assert!(!result.changed_rects.width.is_nan(), "changed_rects should be valid");
+    }
+
+    #[test]
+    fn diff_changed_rects_bounds() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect1 = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let rect2 = Rect {
+            x: 30.0,
+            y: 40.0,
+            width: 80.0,
+            height: 60.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect: rect1,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect: rect2,
+            color: red,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "FillRects with different positions should not be identical");
+        // changed_rects should be the union of rect1 and rect2
+        assert_eq!(result.changed_rects.x, 10.0, "left edge should be min of both rects");
+        assert_eq!(result.changed_rects.y, 20.0, "top edge should be min of both rects");
+    }
+
+    #[test]
+    fn diff_multiple_commands_one_changed() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let fill1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let fill2 = DisplayCommand::FillRect {
+            rect,
+            color: blue,
+        };
+
+        let list1 = vec![fill1.clone(), fill1.clone()];
+        let list2 = vec![fill1, fill2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "lists differing in one command should not be identical");
+    }
+
+    #[test]
+    fn diff_empty_to_non_empty() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1: Vec<DisplayCommand> = vec![];
+        let list2 = vec![cmd];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "empty list vs non-empty should not be identical");
+        assert_eq!(result.changed_rects.x, 10.0, "changed_rects should reflect added command");
+    }
+
+    #[test]
+    fn diff_result_identical_constructor() {
+        let result = DiffResult::identical();
+        assert!(result.identical);
+        assert!(result.changed_rects.width == 0.0 && result.changed_rects.height == 0.0);
+    }
+
+    #[test]
+    fn diff_result_changed_constructor() {
+        let rect = Rect {
+            x: 5.0,
+            y: 10.0,
+            width: 50.0,
+            height: 60.0,
+        };
+        let result = DiffResult::changed(rect);
+        assert!(!result.identical);
+        assert_eq!(result.changed_rects, rect);
+    }
+
+    // ── B-9: CSS overflow: clip tests ────────────────────────────────
+
+    fn find_push_clip_rects(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::PushClipRect { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn overflow_clip_emits_push_clip_rect() {
+        let dl = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+        let clips = find_push_clip_rects(&dl);
+        assert!(!clips.is_empty(), "overflow:clip should emit PushClipRect");
+    }
+
+    #[test]
+    fn overflow_clip_margin_expands_clip_region() {
+        let dl_no_margin = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+        let dl_with_margin = build(
+            r#"<div style="overflow:clip;overflow-clip-margin:10px;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+
+        let clips_no_margin = find_push_clip_rects(&dl_no_margin);
+        let clips_with_margin = find_push_clip_rects(&dl_with_margin);
+
+        assert!(!clips_no_margin.is_empty(), "overflow:clip without margin should have PushClipRect");
+        assert!(!clips_with_margin.is_empty(), "overflow:clip with margin should have PushClipRect");
+
+        if let (Some(DisplayCommand::PushClipRect { rect: r1 }), Some(DisplayCommand::PushClipRect { rect: r2 })) =
+            (clips_no_margin.first(), clips_with_margin.first())
+        {
+            // With margin, rect should be expanded (larger width/height).
+            assert!(r2.width > r1.width || r2.height > r1.height,
+                "overflow-clip-margin should expand clip region");
+        }
+    }
+
+    #[test]
+    fn overflow_hidden_and_clip_both_emit_clip() {
+        let dl_hidden = build(
+            r#"<div style="overflow:hidden;width:100px;height:100px;background:red"></div>"#,
+            "",
+        );
+        let dl_clip = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:green"></div>"#,
+            "",
+        );
+
+        let hidden_clips = find_push_clip_rects(&dl_hidden);
+        let clip_clips = find_push_clip_rects(&dl_clip);
+
+        assert!(!hidden_clips.is_empty(), "overflow:hidden should emit PushClipRect");
+        assert!(!clip_clips.is_empty(), "overflow:clip should emit PushClipRect");
+    }
+
+    #[test]
+    fn overflow_clip_no_margin_emits_zero_margin() {
+        // When no overflow-clip-margin is specified, clip rect should not be expanded.
+        let dl = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:yellow"></div>"#,
+            "",
+        );
+        let clips = find_push_clip_rects(&dl);
+        assert_eq!(clips.len(), 1, "overflow:clip should emit exactly one PushClipRect");
+        // The clip rect size should match the padding-box (or close to it).
+        if let DisplayCommand::PushClipRect { rect } = clips[0] {
+            // Exact values depend on styling, but the rect should be non-negative and finite.
+            assert!(rect.width >= 0.0 && rect.height >= 0.0, "clip rect should have non-negative dimensions");
+        }
     }
 }

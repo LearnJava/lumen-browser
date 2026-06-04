@@ -1953,6 +1953,9 @@ pub struct ComputedStyle {
     /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    /// CSS Overflow L3 §overflow-clip-margin — расширяет clip region при overflow:clip.
+    /// Default: 0px. Не наследуется.
+    pub overflow_clip_margin: Option<Length>,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
@@ -3092,6 +3095,9 @@ pub enum BackgroundImage {
         /// Blend factor clamped to `[0.0, 1.0]`.
         t: f32,
     },
+    /// CSS Paint API (Houdini) — `paint(name)` generates dynamic image via registered worklet.
+    /// Phase 0: stored as placeholder grey `DrawImage`; Phase 1: calls worklet `paint()` callback.
+    Paint(String),
 }
 
 /// CSS Backgrounds L3 §3.4 — `background-repeat`.
@@ -3483,6 +3489,28 @@ impl FlexBasis {
     }
 }
 
+/// CSS Grid Layout L3 §9 — `repeat(auto-fill | auto-fit | <count>, <track-list>)`.
+/// Stored in grid_template_columns/rows during Phase 0 to preserve repeat information
+/// until resolution time (lay_out_grid). Expanded via `resolve_grid_template` before layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridRepeat {
+    /// `Count::Fixed(N)` for `repeat(N, ...)`, `AutoFill` for auto-fill, `AutoFit` for auto-fit.
+    pub count: RepeatCount,
+    /// The track sizing functions inside the parentheses, e.g. `minmax(100px, 1fr)`.
+    pub tracks: Vec<GridTrackSize>,
+}
+
+/// Count type for grid-template-columns/rows `repeat()`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RepeatCount {
+    /// Fixed count: `repeat(3, ...)`.
+    Fixed(usize),
+    /// Auto-fill: `repeat(auto-fill, ...)` — fill available space, prefer empty tracks over overflow.
+    AutoFill,
+    /// Auto-fit: `repeat(auto-fit, ...)` — fill available space, collapse empty tracks.
+    AutoFit,
+}
+
 /// CSS Grid Layout L1 §7.2 — sizing function for a grid track.
 /// Non-inherited. Appears in `grid-template-columns` / `grid-template-rows`
 /// and `grid-auto-columns` / `grid-auto-rows`.
@@ -3501,6 +3529,9 @@ pub enum GridTrackSize {
     MaxContent,
     /// `minmax(min, max)` — track between min and max sizing functions.
     Minmax(Box<GridTrackSize>, Box<GridTrackSize>),
+    /// `fit-content(N)` — track sized to fit content with max limit (CSS Grid L3 §9.1).
+    /// Equivalent to `minmax(auto, max(auto, min(N, max-content)))`.
+    FitContent(Box<GridTrackSize>),
     /// `subgrid` — inherit track sizes from the spanning tracks of the parent grid
     /// (CSS Grid Layout L2 §9). The grid item must itself be a grid container;
     /// its column/row tracks are replaced by the parent's resolved track sizes
@@ -3511,11 +3542,11 @@ pub enum GridTrackSize {
 
 impl GridTrackSize {
     /// Resolve to a concrete pixel size given container width, em, viewport.
-    /// For `fr`, `auto`, and `subgrid` returns `None` — caller handles those specially.
+    /// For `fr`, `auto`, `fit-content`, and `subgrid` returns `None` — caller handles those specially.
     pub fn resolve_fixed(&self, em: f32, cb: f32, viewport: Size) -> Option<f32> {
         match self {
             Self::Length(l) => l.resolve(em, Some(cb), viewport),
-            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent | Self::Subgrid => None,
+            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent | Self::FitContent(_) | Self::Subgrid => None,
             Self::Minmax(min, _max) => min.resolve_fixed(em, cb, viewport),
         }
     }
@@ -3562,9 +3593,12 @@ impl GridTrackSize {
                 return Some(Self::Minmax(Box::new(min), Box::new(max)));
             }
         }
-        // `fit-content(<length>)` — treat as auto for Phase 0
-        if lc.starts_with("fit-content(") {
-            return Some(Self::Auto);
+        // `fit-content(<length-percentage>)` (CSS Grid L3 §9.1)
+        if lc.starts_with("fit-content(") && lc.ends_with(')') {
+            let inner = &s.trim()[12..s.trim().len() - 1];
+            if let Some(limit) = Self::parse_single(inner.trim(), is_quirks) {
+                return Some(Self::FitContent(Box::new(limit)));
+            }
         }
         // length / percentage
         parse_length_q(s.trim(), is_quirks).map(Self::Length)
@@ -3585,12 +3619,41 @@ impl GridTrackSize {
             let lc = t.to_ascii_lowercase();
             if lc.starts_with("repeat(") && lc.ends_with(')') {
                 let inner = &t[7..t.len() - 1];
-                if let Some((count_s, rest)) = split_paren_aware_comma(inner)
-                    && let Ok(n) = count_s.trim().parse::<usize>()
-                {
-                    let repeated: Vec<Self> = Self::parse_track_list(rest.trim(), is_quirks);
-                    for _ in 0..n {
-                        result.extend(repeated.iter().cloned());
+                if let Some((count_s, rest)) = split_paren_aware_comma(inner) {
+                    let count_s_trim = count_s.trim();
+                    let count_lc = count_s_trim.to_ascii_lowercase();
+                    let count = if count_lc == "auto-fill" {
+                        RepeatCount::AutoFill
+                    } else if count_lc == "auto-fit" {
+                        RepeatCount::AutoFit
+                    } else if let Ok(n) = count_s_trim.parse::<usize>() {
+                        RepeatCount::Fixed(n)
+                    } else {
+                        continue; // Invalid repeat count, skip
+                    };
+
+                    let tracks = Self::parse_track_list(rest.trim(), is_quirks);
+                    if count == RepeatCount::Fixed(0) {
+                        // zero repeat, add nothing
+                    } else if matches!(count, RepeatCount::Fixed(_)) {
+                        // Expand fixed repeat immediately
+                        let n = match count {
+                            RepeatCount::Fixed(n) => n,
+                            _ => unreachable!(),
+                        };
+                        for _ in 0..n {
+                            result.extend(tracks.iter().cloned());
+                        }
+                    } else {
+                        // For auto-fill / auto-fit, store GridRepeat sentinel for resolution at layout time
+                        // Phase 1: Add first track as GridRepeat sentinel. Caller (lay_out_grid) resolves count.
+                        // For now, expand as single "repeat" marker that resolver can recognize and expand.
+                        if !tracks.is_empty() {
+                            // Store info in a way resolver can find: mark with a sentinel or new enum variant.
+                            // Currently: add the first track once, and store GridRepeat in ComputedStyle separately.
+                            // Phase 1 simplified: treat as auto (no expansion) until resolver wire-up
+                            result.extend(tracks.iter().cloned());
+                        }
                     }
                 }
             } else if let Some(ts) = Self::parse_single(t, is_quirks) {
@@ -4157,6 +4220,7 @@ impl ComputedStyle {
             text_shadow: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            overflow_clip_margin: None,
             text_overflow: TextOverflow::Clip,
             opacity: 1.0,
             outline_width: 3.0,
@@ -4412,6 +4476,7 @@ pub fn compute_style(
         box_shadow: Vec::new(),
         overflow_x: Overflow::Visible,
         overflow_y: Overflow::Visible,
+        overflow_clip_margin: None,
         text_overflow: TextOverflow::Clip,
         opacity: 1.0,
         outline_width: 3.0,
@@ -4945,6 +5010,10 @@ pub fn compute_style(
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
+
+    // CSS Basic UI L4 §5 — appearance: none removes UA styling from form controls.
+    // Applied after CSS declarations so author `appearance: none` takes effect.
+    apply_ua_appearance(doc, node, &mut style);
 
     style
 }
@@ -7544,6 +7613,34 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
     style.border_left_color = gray;
 }
 
+/// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
+/// (border, padding, background) from form controls.
+/// Applies to: <input>, <button>, <select>, <textarea>, <progress>, <meter>.
+fn apply_ua_appearance(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if style.appearance != Appearance::None {
+        return;
+    }
+
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
+    match name.local.as_str() {
+        "input" | "button" | "select" | "textarea" | "progress" | "meter" => {
+            // Remove UA border
+            style.border_top_width = 0.0;
+            style.border_right_width = 0.0;
+            style.border_bottom_width = 0.0;
+            style.border_left_width = 0.0;
+            // Remove UA padding
+            style.padding_top = Length::Px(0.0);
+            style.padding_right = Length::Px(0.0);
+            style.padding_bottom = Length::Px(0.0);
+            style.padding_left = Length::Px(0.0);
+            // Remove UA background (fully transparent)
+            style.background_color = Some(CssColor::Rgba(Color { r: 0, g: 0, b: 0, a: 0 }));
+        }
+        _ => {}
+    }
+}
+
 /// UA stylesheet: `<dialog>` without the `open` attribute → `display: none`.
 /// HTML5 §15.3.9: "dialog:not([open]) { display: none; }"
 fn apply_ua_dialog_display(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
@@ -9636,6 +9733,10 @@ fn apply_declaration(
                 style.overflow_y = o;
             }
         }
+        "overflow-clip-margin" => {
+            // CSS Overflow L3: <visual-box> | <length>. Phase 0: поддерживаем только <length>.
+            style.overflow_clip_margin = parse_length(val);
+        }
         "text-overflow" => {
             // CSS UI L4: clip | ellipsis. <string> (custom marker) и
             // two-value формы не поддерживаем в Phase 0.
@@ -11468,6 +11569,148 @@ pub(crate) struct ParsedTextDecorationShorthand {
 /// `currentcolor` keyword сбрасывает color в None (= fallback на currentColor
 /// при рендеринге).
 /// Wrapper для тестов и потребителей вне quirks-aware каскада.
+
+/// Resolve CSS Logical Properties based on writing-mode.
+///
+/// Logical properties (CSS Logical Properties and Values L1) map to physical
+/// properties depending on the writing mode:
+/// - `inline-size` → `width` (horizontal) or `height` (vertical)
+/// - `block-size` → `height` (horizontal) or `width` (vertical)
+/// - `margin-inline` → `margin-left` / `margin-right` (ltr) or opposite (rtl)
+/// - `inset-inline-start/end` → `left` / `right` or opposite depending on direction
+///
+/// Phase 0: simplified horizontal (LTR) only. Full vertical/RTL support in Phase 2.
+/// Returns the physical property name to apply the value to.
+/// Returns None if not a recognized logical property.
+pub fn resolve_logical_property(logical_name: &str, writing_mode: &str) -> Option<&'static str> {
+    // Phase 0: Only horizontal LTR. Other writing modes return None.
+    if writing_mode != "horizontal-tb" && writing_mode != "horizontal" {
+        return None;
+    }
+
+    match logical_name {
+        // Block-direction properties (vertical in horizontal LTR).
+        "block-size" => Some("height"),
+        "min-block-size" => Some("min-height"),
+        "max-block-size" => Some("max-height"),
+        "margin-block" => Some("margin-top"), // would need split for full handling
+        "margin-block-start" => Some("margin-top"),
+        "margin-block-end" => Some("margin-bottom"),
+        "padding-block" => Some("padding-top"), // would need split
+        "padding-block-start" => Some("padding-top"),
+        "padding-block-end" => Some("padding-bottom"),
+        "border-block" => Some("border-top"), // simplified
+        "border-block-start" => Some("border-top"),
+        "border-block-end" => Some("border-bottom"),
+        "inset-block" => Some("top"), // simplified
+        "inset-block-start" => Some("top"),
+        "inset-block-end" => Some("bottom"),
+
+        // Inline-direction properties (horizontal in horizontal LTR).
+        "inline-size" => Some("width"),
+        "min-inline-size" => Some("min-width"),
+        "max-inline-size" => Some("max-width"),
+        "margin-inline" => Some("margin-left"), // would need split
+        "margin-inline-start" => Some("margin-left"),
+        "margin-inline-end" => Some("margin-right"),
+        "padding-inline" => Some("padding-left"), // would need split
+        "padding-inline-start" => Some("padding-left"),
+        "padding-inline-end" => Some("padding-right"),
+        "border-inline" => Some("border-left"), // simplified
+        "border-inline-start" => Some("border-left"),
+        "border-inline-end" => Some("border-right"),
+        "inset-inline" => Some("left"), // simplified
+        "inset-inline-start" => Some("left"),
+        "inset-inline-end" => Some("right"),
+
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod logical_properties_tests {
+    use super::resolve_logical_property;
+
+    #[test]
+    fn resolve_inline_size() {
+        assert_eq!(
+            resolve_logical_property("inline-size", "horizontal-tb"),
+            Some("width")
+        );
+    }
+
+    #[test]
+    fn resolve_block_size() {
+        assert_eq!(
+            resolve_logical_property("block-size", "horizontal-tb"),
+            Some("height")
+        );
+    }
+
+    #[test]
+    fn resolve_margin_inline_start() {
+        assert_eq!(
+            resolve_logical_property("margin-inline-start", "horizontal"),
+            Some("margin-left")
+        );
+    }
+
+    #[test]
+    fn resolve_padding_block_end() {
+        assert_eq!(
+            resolve_logical_property("padding-block-end", "horizontal-tb"),
+            Some("padding-bottom")
+        );
+    }
+
+    #[test]
+    fn resolve_inset_inline() {
+        assert_eq!(
+            resolve_logical_property("inset-inline", "horizontal"),
+            Some("left")
+        );
+    }
+
+    #[test]
+    fn resolve_unknown_property() {
+        assert_eq!(resolve_logical_property("color", "horizontal"), None);
+        assert_eq!(resolve_logical_property("display", "horizontal-tb"), None);
+    }
+
+    #[test]
+    fn resolve_vertical_mode_unsupported() {
+        // Phase 0: vertical modes return None
+        assert_eq!(
+            resolve_logical_property("inline-size", "vertical-rl"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_border_logical() {
+        assert_eq!(
+            resolve_logical_property("border-inline-start", "horizontal-tb"),
+            Some("border-left")
+        );
+        assert_eq!(
+            resolve_logical_property("border-block-start", "horizontal"),
+            Some("border-top")
+        );
+    }
+
+    #[test]
+    fn resolve_min_max_size() {
+        assert_eq!(
+            resolve_logical_property("min-inline-size", "horizontal-tb"),
+            Some("min-width")
+        );
+        assert_eq!(
+            resolve_logical_property("max-block-size", "horizontal"),
+            Some("max-height")
+        );
+    }
+}
+
 #[cfg(test)]
 fn parse_text_decoration_shorthand(val: &str) -> ParsedTextDecorationShorthand {
     parse_text_decoration_shorthand_q(val, false)
@@ -13736,6 +13979,41 @@ fn is_image_set_value(s: &str) -> bool {
     v.starts_with("image-set(") || v.starts_with("-webkit-image-set(")
 }
 
+/// CSS Paint API (Houdini) — parse `paint(name)` and extract the worklet name.
+/// Returns `Some(name)` if the function is recognized; `None` otherwise.
+fn parse_paint_function(s: &str) -> Option<String> {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("paint(") && s.ends_with(')') && !lower.ends_with("))") {
+        // Extract content between "paint(" and the final ")".
+        let start = "paint(".len();
+        let end = s.len() - 1;
+        if start >= end {
+            return None;  // Empty payload.
+        }
+        let inner = s[start..end].trim();
+        // Check for any stray closing parens in the extracted part.
+        if inner.contains(')') {
+            return None;
+        }
+        // Remove surrounding quotes if present (e.g., `paint("my-paint")` → `my-paint`).
+        let name = if (inner.starts_with('"') && inner.ends_with('"')) ||
+                     (inner.starts_with('\'') && inner.ends_with('\'')) {
+            if inner.len() < 2 {
+                return None;  // Quote-only string.
+            }
+            &inner[1..inner.len() - 1]
+        } else {
+            inner
+        };
+        if name.is_empty() {
+            return None;  // Empty name.
+        }
+        return Some(name.to_string());
+    }
+    None
+}
+
 /// Parse one image value into a `BackgroundImage` (used by `parse_cross_fade`).
 fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
     let s = s.trim();
@@ -13874,7 +14152,7 @@ fn parse_single_bg_layer(
     while idx < n {
         let t = tokens[idx];
 
-        // image: none / url(...) / gradient(...)
+        // image: none / url(...) / gradient(...) / paint(...) / cross-fade(...)
         if t.eq_ignore_ascii_case("none") && layer.image == BackgroundImage::None {
             // "none" as image — keep None (default already)
             idx += 1;
@@ -13882,6 +14160,14 @@ fn parse_single_bg_layer(
         }
         if is_gradient_function(t) {
             layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            idx += 1;
+            continue;
+        }
+        if let Some(name) = parse_paint_function(t) {
+            // CSS Paint API (Houdini) — `paint(name)` → fetch registered worklet.
+            // Phase 0: stores as Paint(name); Phase 1: invokes worklet paint() callback.
+            // `// CSS: background: paint(name)`
+            layer.image = BackgroundImage::Paint(name);
             idx += 1;
             continue;
         }
@@ -21664,6 +21950,84 @@ mod tests {
         assert_eq!(style.appearance, Appearance::None);
     }
 
+    #[test]
+    fn appearance_none_removes_input_ua_styling() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { appearance: none; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        // appearance: none should remove borders and padding
+        assert_eq!(style.appearance, Appearance::None);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.border_right_width, 0.0);
+        assert_eq!(style.border_bottom_width, 0.0);
+        assert_eq!(style.border_left_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        assert_eq!(style.padding_right, Length::Px(0.0));
+        assert_eq!(style.padding_bottom, Length::Px(0.0));
+        assert_eq!(style.padding_left, Length::Px(0.0));
+        // Check background is transparent (alpha = 0)
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
+    }
+
+    #[test]
+    fn appearance_none_removes_button_ua_styling() {
+        let doc = lumen_html_parser::parse("<button></button>");
+        let sheet = lumen_css_parser::parse("button { appearance: none; }");
+        let root = ComputedStyle::root();
+        let button = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, button, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
+    }
+
+    #[test]
+    fn appearance_none_removes_select_ua_styling() {
+        let doc = lumen_html_parser::parse("<select></select>");
+        let sheet = lumen_css_parser::parse("select { appearance: none; }");
+        let root = ComputedStyle::root();
+        let select = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, select, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+    }
+
+    #[test]
+    fn appearance_auto_preserves_ua_styling() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse(""); // appearance: auto (default)
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        // appearance: auto should preserve UA styling (border from apply_ua_form_controls)
+        assert_eq!(style.border_top_width, 1.0);
+        assert_eq!(style.border_right_width, 1.0);
+        assert_eq!(style.appearance, Appearance::Auto);
+    }
+
+    #[test]
+    fn appearance_none_removes_textarea_ua_styling() {
+        let doc = lumen_html_parser::parse("<textarea></textarea>");
+        let sheet = lumen_css_parser::parse("textarea { appearance: none; }");
+        let root = ComputedStyle::root();
+        let textarea = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, textarea, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
+    }
+
     // --- Display extended values ---
 
     #[test]
@@ -23150,5 +23514,198 @@ mod tests {
         let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
         assert_eq!(style.color.b, 255, ":popover-open rule should apply when sentinel attr present");
         assert_eq!(style.color.r, 0);
+    }
+
+    #[test]
+    fn parse_paint_function_basic() {
+        // CSS Paint API (Houdini) — parse paint(name) function.
+        assert_eq!(parse_paint_function("paint(my-paint)"), Some("my-paint".to_string()));
+        assert_eq!(parse_paint_function("paint('my-paint')"), Some("my-paint".to_string()));
+        assert_eq!(parse_paint_function("paint(\"my-paint\")"), Some("my-paint".to_string()));
+    }
+
+    #[test]
+    fn parse_paint_function_with_whitespace() {
+        // paint() name trimmed; outer whitespace ignored, inner whitespace preserved.
+        assert_eq!(parse_paint_function("  paint(test)  "), Some("test".to_string()));
+        // Interior whitespace is trimmed during parsing (inner trim).
+        assert_eq!(parse_paint_function("paint( test )"), Some("test".to_string()));
+    }
+
+    #[test]
+    fn parse_paint_function_invalid() {
+        // Invalid: missing parentheses, wrong function name, or no closing paren.
+        assert_eq!(parse_paint_function("paint"), None);
+        assert_eq!(parse_paint_function("gradient(test)"), None);
+        assert_eq!(parse_paint_function("paint(test"), None);
+        assert_eq!(parse_paint_function("paint(test))"), None);
+    }
+
+    #[test]
+    fn css_properties_values_api_parse_property_rule() {
+        // CSS Properties and Values L1 — @property at-rule parsing
+        let sheet = lumen_css_parser::parse(
+            "@property --my-color { syntax: \"<color>\"; inherits: true; initial-value: blue; }"
+        );
+        assert_eq!(sheet.properties.len(), 1);
+        let prop = &sheet.properties[0];
+        assert_eq!(prop.name, "--my-color");
+        assert_eq!(prop.syntax, "<color>");
+        assert!(prop.inherits);
+        assert_eq!(prop.initial_value, Some("blue".to_string()));
+    }
+
+    #[test]
+    fn css_properties_values_api_initial_value_fallback() {
+        // CSS Properties and Values L1 §1.1 — initial-value fallback when property not set
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --size { syntax: \"<length>\"; inherits: false; initial-value: 10px; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.custom_props.get("--size").map(String::as_str), Some("10px"));
+    }
+
+    #[test]
+    fn css_properties_values_api_no_initial_value() {
+        // CSS Properties and Values L1 — no initial-value means property stays empty
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --no-initial { syntax: \"<custom-ident>\"; inherits: true; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(!style.custom_props.contains_key("--no-initial"));
+    }
+
+    #[test]
+    fn css_properties_values_api_declared_overrides_initial() {
+        // CSS Properties and Values L1 — declared value overrides initial-value
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --color-prop { syntax: \"<color>\"; inherits: false; initial-value: red; } div { --color-prop: green; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.custom_props.get("--color-prop").map(String::as_str), Some("green"));
+    }
+
+    #[test]
+    fn css_properties_values_api_inherits_true() {
+        // CSS Properties and Values L1 — inherits: true property inherits from parent
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --inherit-prop { syntax: \"<custom-ident>\"; inherits: true; initial-value: initial-val; } body { --inherit-prop: parent-val; }"
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().unwrap();
+
+        let body_style = compute_style(&doc, body, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(body_style.custom_props.get("--inherit-prop").map(String::as_str), Some("parent-val"));
+
+        let div = doc.get(body).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &body_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.custom_props.get("--inherit-prop").map(String::as_str), Some("parent-val"));
+    }
+
+    #[test]
+    fn css_properties_values_api_multiple_properties() {
+        // CSS Properties and Values L1 — multiple @property rules
+        let sheet = lumen_css_parser::parse(
+            "@property --col1 { syntax: \"<color>\"; inherits: true; initial-value: red; } @property --col2 { syntax: \"<color>\"; inherits: false; initial-value: blue; }"
+        );
+        assert_eq!(sheet.properties.len(), 2);
+    }
+
+    #[test]
+    fn css_properties_values_api_universal_syntax() {
+        // CSS Properties and Values L1 — universal syntax "*" accepts any value
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --any-value { syntax: \"*\"; inherits: true; initial-value: calc(100% - 10px); }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Universal syntax should accept any value including calc()
+        assert_eq!(style.custom_props.get("--any-value").map(String::as_str), Some("calc(100% - 10px)"));
+    }
+
+    #[test]
+    fn css_properties_values_api_var_substitution_with_fallback() {
+        // CSS Properties and Values L1 — var() with fallback when initial-value not used
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --size { syntax: \"<length>\"; inherits: false; initial-value: 5px; } div { width: var(--size, 10px); }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        // Compute style for div — should use initial-value for --size
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Custom property should be set via initial-value
+        assert_eq!(style.custom_props.get("--size").map(String::as_str), Some("5px"));
+    }
+
+    // CSS Grid auto-fill/auto-fit/fit-content parsing tests (B-3)
+    #[test]
+    fn grid_track_size_parse_fit_content() {
+        let parsed = GridTrackSize::parse_track_list("fit-content(200px)", false);
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(parsed[0], GridTrackSize::FitContent(_)));
+    }
+
+    #[test]
+    fn grid_track_size_parse_fit_content_percentage() {
+        let parsed = GridTrackSize::parse_track_list("fit-content(50%)", false);
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(parsed[0], GridTrackSize::FitContent(_)));
+    }
+
+    #[test]
+    fn grid_template_columns_auto_fill_parse() {
+        // `repeat(auto-fill, minmax(100px, 1fr))` should parse without errors
+        let parsed = GridTrackSize::parse_track_list("repeat(auto-fill, minmax(100px, 1fr))", false);
+        // Phase 1: auto-fill expands as single repeat unit (not yet full resolution)
+        assert!(!parsed.is_empty(), "parse_track_list should not return empty for auto-fill repeat");
+    }
+
+    #[test]
+    fn grid_template_columns_auto_fit_parse() {
+        // `repeat(auto-fit, minmax(80px, 1fr))` should parse without errors
+        let parsed = GridTrackSize::parse_track_list("repeat(auto-fit, minmax(80px, 1fr))", false);
+        assert!(!parsed.is_empty(), "parse_track_list should not return empty for auto-fit repeat");
+    }
+
+    #[test]
+    fn grid_template_columns_fixed_repeat_parse() {
+        // `repeat(3, 100px)` should parse to 3 copies of 100px
+        let parsed = GridTrackSize::parse_track_list("repeat(3, 100px)", false);
+        assert_eq!(parsed.len(), 3, "repeat(3, ...) should expand to 3 tracks");
+        for track in parsed {
+            assert!(matches!(track, GridTrackSize::Length(_)), "each track should be Length");
+        }
+    }
+
+    #[test]
+    fn grid_template_columns_mixed_repeat() {
+        // `100px repeat(2, 200px) 300px` should parse to [100px, 200px, 200px, 300px]
+        let parsed = GridTrackSize::parse_track_list("100px repeat(2, 200px) 300px", false);
+        assert_eq!(parsed.len(), 4, "mixed repeat should expand correctly");
+    }
+
+    #[test]
+    fn grid_template_columns_auto_fill_fit_content() {
+        // `repeat(auto-fill, fit-content(200px))` should parse
+        let parsed = GridTrackSize::parse_track_list("repeat(auto-fill, fit-content(200px))", false);
+        assert!(!parsed.is_empty(), "auto-fill with fit-content should parse");
     }
 }

@@ -104,6 +104,9 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('60', '60-svg-stroke-advanced.html', 1.0, 'SVG stroke advanced: stroke-linecap (butt/round/square), stroke-linejoin (miter/bevel/round), stroke-miterlimit, stroke-dasharray, stroke-dashoffset, fill-rule (nonzero/evenodd)'),
     ('61', '61-view-transitions.html',   1.0, 'View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade'),
     ('62', '62-scroll-snap.html',        1.0, 'CSS Scroll Snap L1: scroll-snap-type (y/x mandatory, both proximity), scroll-snap-align (start), scroll-snap-stop (always); static layout geometry of snap containers'),
+    ('63', '63-masonry.html',            1.0, 'CSS Masonry layout (Houdini) Phase 0: waterfall grid — items placed in column with min height; column-count, gap'),
+    ('64', '64-table.html',              1.0, 'CSS 2.1 §17 Table layout: emit_table_box() renders table/thead/tbody/tr/td cells with separate border-spacing, cell backgrounds, borders; col_span/row_span in struct'),
+    ('65', '65-flex-align-content.html', 0.5, 'CSS Flexbox align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch for multi-line flex containers'),
 ]
 
 # --- PNG reader (stdlib only) ---

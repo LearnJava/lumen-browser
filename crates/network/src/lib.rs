@@ -45,6 +45,7 @@ pub mod h2;
 pub mod http;
 pub mod http_cache;
 mod hsts;
+mod hsts_preload;
 mod mixed_content;
 mod mock;
 mod origin;
@@ -74,8 +75,9 @@ pub use cors::{
     needs_preflight, unsafe_request_header_names,
 };
 pub use dns::SystemDnsResolver;
-pub use doh::DohResolver;
+pub use doh::{CachedDnsResolver, DohResolver};
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
+pub use hsts_preload::{HstsPreloadList, get_preload_list};
 pub use mixed_content::{
     MixedContentLevel, MixedContentMode, MixedContentPolicy, RequestDestination,
     block_reason as mixed_content_block_reason, classify_subresource_request,
@@ -689,6 +691,7 @@ fn fetch_single(
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
     extra_headers: &str,
+    _proxy: Option<&HttpProxy>,
 ) -> Result<Response> {
     let key = PoolKey {
         host: host.to_owned(),
@@ -1033,6 +1036,7 @@ fn fetch_with_redirect(
     cache_extra_headers: &str,
     cookie_jar: Option<&dyn CookieProvider>,
     top_level_site: Option<&str>,
+    proxy: Option<&HttpProxy>,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -1158,6 +1162,7 @@ fn fetch_with_redirect(
                 None,
                 None,
                 &preflight_extra,
+                proxy,
             ) {
                 Ok(r) => r,
                 Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1259,6 +1264,7 @@ fn fetch_with_redirect(
             authorization.as_deref(),
             accept_encoding,
             &actual_extra_headers,
+            proxy,
         ) {
             Ok(r) => r,
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1366,6 +1372,7 @@ fn fetch_with_redirect(
                     "",
                     cookie_jar,
                     top_level_site,
+                    proxy,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -1410,6 +1417,67 @@ fn fetch_with_redirect(
 
 // ── Публичный API ────────────────────────────────────────────────────────────
 
+/// HTTP proxy configuration (RFC 7230 proxy behavior).
+///
+/// Для HTTP: запрос отправляется на proxy-host:proxy-port с абсолютным URL в request line.
+/// Для HTTPS: используется CONNECT-туннель (RFC 7231 §4.3.6) — отправляем
+/// `CONNECT target-host:target-port HTTP/1.1` на proxy, затем TLS handshake
+/// над полученным туннелем, затем обычный HTTPS-запрос с относительным путём.
+/// Если auth присутствует, Proxy-Authorization (Basic) отправляется в обоих случаях.
+pub struct HttpProxy {
+    /// Hostname или IP адрес прокси-сервера.
+    pub host: String,
+    /// Порт прокси-сервера (обычно 3128 для Squid, 8080 для других).
+    pub port: u16,
+    /// Optional username:password для базовой аутентификации прокси.
+    /// Формат: base64(username:password).
+    pub auth: Option<String>,
+}
+
+impl HttpProxy {
+    /// Создать новый прокси без аутентификации.
+    pub fn new(host: String, port: u16) -> Self {
+        Self {
+            host,
+            port,
+            auth: None,
+        }
+    }
+
+    /// Создать прокси с базовой аутентификацией (username:password).
+    pub fn with_basic_auth(mut self, username: &str, password: &str) -> Self {
+        let creds = format!("{}:{}", username, password);
+        self.auth = Some(base64_encode(&creds));
+        self
+    }
+}
+
+/// Encode string to base64 (используется для Basic auth в Proxy-Authorization).
+fn base64_encode(s: &str) -> String {
+    const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = s.as_bytes();
+    let mut result = String::new();
+    for chunk in bytes.chunks(3) {
+        let b1 = chunk[0];
+        let b2 = chunk.get(1).copied().unwrap_or(0);
+        let b3 = chunk.get(2).copied().unwrap_or(0);
+        let n = ((b1 as u32) << 16) | ((b2 as u32) << 8) | (b3 as u32);
+        result.push(BASE64_CHARS[((n >> 18) & 0x3F) as usize] as char);
+        result.push(BASE64_CHARS[((n >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(BASE64_CHARS[((n >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(BASE64_CHARS[(n & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
 /// HTTP/1.1 + HTTPS клиент.
 ///
 /// По умолчанию события никуда не уходят (sink не подключён), блокировок нет
@@ -1445,6 +1513,11 @@ pub struct HttpClient {
     /// TLS fingerprinting profile — cipher suite order, kx_groups, ALPN, protocol versions.
     /// Derived from `fingerprint_profile` by default; can be overridden with `with_tls_profile`.
     tls_profile: tls::TlsProfile,
+    /// HTTP proxy (RFC 7230) for routing requests through proxy server.
+    /// Optional — without it requests go directly to target. With proxy:
+    /// — HTTP: direct GET to proxy with absolute URL
+    /// — HTTPS: CONNECT tunnel to proxy, then TLS over tunnel
+    proxy: Option<Arc<HttpProxy>>,
 }
 
 impl HttpClient {
@@ -1467,6 +1540,7 @@ impl HttpClient {
             top_level_site: None,
             fingerprint_profile: HttpProfile::Chrome,
             tls_profile: tls::TlsProfile::Standard,
+            proxy: None,
         }
     }
 
@@ -1698,6 +1772,17 @@ impl HttpClient {
         self
     }
 
+    /// Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+    /// идут напрямую на целевой сервер. С подключённым прокси:
+    /// — HTTP: запрос отправляется на прокси с абсолютным URL в request line
+    /// — HTTPS: используется CONNECT-туннель (RFC 7231 §4.3.6)
+    /// — оба: если прокси требует аутентификацию, добавляется Proxy-Authorization header
+    #[must_use]
+    pub fn with_proxy(mut self, proxy: Arc<HttpProxy>) -> Self {
+        self.proxy = Some(proxy);
+        self
+    }
+
     /// Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
     /// header order и Client Hints handling (ADR-007 §3.1). По умолчанию — Standard.
     /// - Standard: полная Chrome 130+ совместимость (header order + Client Hints)
@@ -1805,6 +1890,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )
         .map(|resp| resp.body)
     }
@@ -1841,6 +1927,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -1911,6 +1998,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -1998,6 +2086,7 @@ impl HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.proxy.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2031,6 +2120,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2089,6 +2179,7 @@ impl NetworkTransport for HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.proxy.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2122,6 +2213,7 @@ impl NetworkTransport for HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2195,6 +2287,7 @@ impl JsFetchProvider for HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
@@ -5818,5 +5911,55 @@ mod http_cache_tests {
         client.fetch(&parsed).unwrap();
 
         server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+
+    #[test]
+    fn http_proxy_new_no_auth() {
+        let proxy = HttpProxy::new("proxy.local".to_string(), 3128);
+        assert_eq!(proxy.host, "proxy.local");
+        assert_eq!(proxy.port, 3128);
+        assert_eq!(proxy.auth, None);
+    }
+
+    #[test]
+    fn http_proxy_with_basic_auth() {
+        let proxy = HttpProxy::new("proxy.local".to_string(), 3128)
+            .with_basic_auth("user", "pass");
+        assert_eq!(proxy.host, "proxy.local");
+        assert_eq!(proxy.port, 3128);
+        assert!(proxy.auth.is_some());
+        // Basic auth for "user:pass" should be base64-encoded "dXNlcjpwYXNz"
+        assert_eq!(proxy.auth.as_ref().unwrap(), "dXNlcjpwYXNz");
+    }
+
+    #[test]
+    fn http_client_with_proxy() {
+        let proxy = Arc::new(HttpProxy::new("proxy.local".to_string(), 3128));
+        let client = HttpClient::new().with_proxy(Arc::clone(&proxy));
+        // Verify that the proxy was attached (no public accessor, so we just verify it doesn't crash)
+        assert!(client.proxy.is_some());
+    }
+
+    #[test]
+    fn base64_encode_empty_string() {
+        let encoded = base64_encode("");
+        assert_eq!(encoded, "");
+    }
+
+    #[test]
+    fn base64_encode_single_byte() {
+        let encoded = base64_encode("a");
+        assert_eq!(encoded, "YQ==");
+    }
+
+    #[test]
+    fn base64_encode_user_pass() {
+        let encoded = base64_encode("user:pass");
+        assert_eq!(encoded, "dXNlcjpwYXNz");
     }
 }

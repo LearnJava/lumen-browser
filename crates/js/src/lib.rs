@@ -1,18 +1,23 @@
 pub mod audio_bindings;
 pub mod audio_element;
+pub mod background_sync;
 pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
+pub mod paint_worklet;
 pub mod gamepad;
 pub mod highlight_api;
 pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
 pub mod clipboard;
+pub mod contacts;
 pub mod cookie_banner;
+pub mod payment_request;
 pub mod credentials;
 pub mod device_sensors;
 pub mod document_pip;
+pub mod eye_dropper;
 pub mod dom;
 pub mod filesystem_access;
 pub mod geolocation;
@@ -24,6 +29,7 @@ pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod offscreen_canvas;
 pub mod pointer_lock;
+pub mod push_api;
 pub mod shape_detection;
 pub mod shared_worker;
 pub mod speech;
@@ -46,6 +52,7 @@ pub mod typed_om_api;
 pub mod trusted_types;
 pub mod sanitizer;
 pub mod screen_orientation;
+pub mod scroll_snap_events;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -59,6 +66,7 @@ use std::sync::{
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
 pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
+pub use paint_worklet::{install_paint_worklet_api, PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest};
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
@@ -201,6 +209,7 @@ pub struct QuickJsRuntime {
     ///
     /// Shared with the `LumenResolver`'s import_map field. Set via `set_import_map()`
     /// before evaluating modules. Maps bare specifiers like "react" to URLs like "/vendor/react.js".
+    #[allow(dead_code)]
     module_import_map: Arc<Mutex<esm::ImportMap>>,
 }
 
@@ -438,6 +447,13 @@ impl QuickJsRuntime {
                 eprintln!("CSS Typed OM init failed: {}", e);
             }
 
+            // Install CSS Paint Worklet API stub (Houdini) — after DOM/CSS so that CSS object is available.
+            // Phase 0: registerPaint() registers worklet definitions; Phase 1 (future): worker execution.
+            // Enables CSS.paintWorklet.addModule() and registerPaint() calls.
+            if let Err(e) = paint_worklet::install_paint_worklet_api(&ctx) {
+                eprintln!("Paint Worklet API init failed: {}", e);
+            }
+
             // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
             // Promise, DOMException, and navigator are available. Phase 0: all capture
             // requests reject with NotAllowedError; enumerateDevices returns [].
@@ -496,6 +512,20 @@ impl QuickJsRuntime {
                 eprintln!("Geolocation bindings init failed: {}", e);
             }
 
+            // Install Contact Picker API stub (W3C Contact Picker API) — after DOM/navigator.
+            // Phase 0: navigator.contacts.select() always rejects with NotSupportedError;
+            // navigator.contacts.getProperties() returns Promise<['name', 'email', 'tel']>.
+            if let Err(e) = contacts::init_contacts_manager(&ctx) {
+                eprintln!("Contact Picker API init failed: {}", e);
+            }
+
+            // Install Payment Request API stub (W3C Payment Request API) — after DOM/window.
+            // Phase 0: PaymentRequest.show() always rejects with NotSupportedError;
+            // PaymentRequest.canMakePayment() always returns Promise<false>.
+            if let Err(e) = payment_request::init_payment_request(&ctx) {
+                eprintln!("Payment Request API init failed: {}", e);
+            }
+
             // Install Layer 1 surface API protection (ADR-007 Layer 1, 9A) — after navigator.
             if let Err(e) = surface_api::install_surface_api_protection(&ctx) {
                 eprintln!("Surface API protection init failed: {}", e);
@@ -529,6 +559,20 @@ impl QuickJsRuntime {
                 false,
             ) {
                 eprintln!("Notifications bindings init failed: {}", e);
+            }
+
+            // Install Background Sync API stub (W3C Background Sync L2, Phase 0) — after DOM
+            // so Promise is available. Provides registration.sync.register(tag) / getTags().
+            // Phase 0: tags stored in-memory; actual sync-on-next-navigation wiring is P2/P3.
+            if let Err(e) = background_sync::init_background_sync(&ctx) {
+                eprintln!("Background Sync API init failed: {}", e);
+            }
+
+            // Install Push API stub (W3C Push API L1, Phase 0) — after DOM so Promise is
+            // available. Provides registration.pushManager.subscribe() / getSubscription() /
+            // permissionState(). Phase 0: static endpoint, in-memory subscriptions.
+            if let Err(e) = push_api::init_push_api(&ctx) {
+                eprintln!("Push API init failed: {}", e);
             }
 
             // Install cookie-banner auto-dismiss shim (7C.3) — last, after full DOM.
@@ -617,6 +661,15 @@ impl QuickJsRuntime {
                 eprintln!("MediaSession bindings init failed: {}", e);
             }
 
+            // Install CSS Scroll Snap L2 events (W3C CSS Scroll Snap §4) — after DOM
+            // so `Event` is available. Provides SnapChangeEvent and native bindings
+            // _lumen_fire_snap_changing/changed for shell to emit snap events.
+            // Phase 0: event infrastructure complete; shell integration (P2/P3)
+            // calls bindings when snap-points change via layout.
+            if let Err(e) = scroll_snap_events::install_scroll_snap_events_bindings(&ctx) {
+                eprintln!("Scroll Snap events bindings init failed: {}", e);
+            }
+
             // Install Sanitizer API (W3C Sanitizer API §3) — after DOM so `document`,
             // `Element`, and DOM methods are available.
             // Phase 0: Simple removal of <script> tags and event handler attributes.
@@ -637,6 +690,13 @@ impl QuickJsRuntime {
             // requestPermission() always resolves to 'granted'.
             if let Err(e) = device_sensors::install_device_sensors_bindings(&ctx) {
                 eprintln!("Device Sensors bindings init failed: {}", e);
+            }
+
+            // Install Eye Dropper API (W3C Color WG) — pure JS implementation with native binding stub.
+            // Phase 0: EyeDropper.open() returns Promise<{sRGBHex}> with AbortSignal support.
+            // Platform integration (P3) implements _lumen_eye_dropper_open for each OS.
+            if let Err(e) = eye_dropper::install_eye_dropper_bindings(&ctx) {
+                eprintln!("Eye Dropper API init failed: {}", e);
             }
 
             // Install Document Picture-in-Picture API (W3C Document PiP §4) — pure JS implementation.

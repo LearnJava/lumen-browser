@@ -53,15 +53,19 @@ const WEBGL_SHIM: &str = r#"(function() {
   var GL_MAX_TEXTURE_SIZE         = 0x0D33;
   var GL_MAX_VIEWPORT_DIMS        = 0x0D3A;
 
-  function _makeWebGLContext() {
+  function _makeWebGLContext(is_webgl2) {
+    var _vaoIndex = 0;
+    var _vaos = {};
+    var _boundVao = null;
+
     return {
       getParameter: function(pname) {
         if (pname === UNMASKED_VENDOR_WEBGL)       return _vendor;
         if (pname === UNMASKED_RENDERER_WEBGL)     return _renderer;
         if (pname === GL_VENDOR)                   return _vendor;
         if (pname === GL_RENDERER)                 return _renderer;
-        if (pname === GL_VERSION)                  return 'WebGL 1.0';
-        if (pname === GL_SHADING_LANGUAGE_VERSION) return 'WebGL GLSL ES 1.0';
+        if (pname === GL_VERSION)                  return is_webgl2 ? 'WebGL 2.0' : 'WebGL 1.0';
+        if (pname === GL_SHADING_LANGUAGE_VERSION) return is_webgl2 ? 'WebGL GLSL ES 3.0' : 'WebGL GLSL ES 1.0';
         if (pname === GL_MAX_TEXTURE_SIZE)         return 4096;
         if (pname === GL_MAX_VIEWPORT_DIMS)        return [4096, 4096];
         return null;
@@ -78,15 +82,64 @@ const WEBGL_SHIM: &str = r#"(function() {
       getSupportedExtensions: function() {
         return ['WEBGL_debug_renderer_info'];
       },
-      isContextLost: function() { return false; }
+      isContextLost: function() { return false; },
+
+      // VAO methods (WebGL2 only, stubs for WebGL 1 via extension compatibility)
+      createVertexArray: function() {
+        var id = ++_vaoIndex;
+        _vaos[id] = { id: id, attributes: {}, elementBuffer: null };
+        return { _vao_id: id };
+      },
+      bindVertexArray: function(vao) {
+        if (vao === null) {
+          _boundVao = null;
+        } else if (vao && typeof vao === 'object' && '_vao_id' in vao) {
+          _boundVao = vao._vao_id;
+        }
+      },
+      deleteVertexArray: function(vao) {
+        if (vao && typeof vao === 'object' && '_vao_id' in vao) {
+          delete _vaos[vao._vao_id];
+        }
+      },
+
+      // Draw instanced methods (WebGL2 only)
+      drawArraysInstanced: function(mode, first, count, instanceCount) {
+        // No-op stub — no actual rendering
+      },
+      drawElementsInstanced: function(mode, count, type, offset, instanceCount) {
+        // No-op stub — no actual rendering
+      },
+
+      // Integer uniform methods (WebGL2 only)
+      uniform1ui: function(location, x) {
+        // No-op stub
+      },
+      uniform2ui: function(location, x, y) {
+        // No-op stub
+      },
+      uniform3ui: function(location, x, y, z) {
+        // No-op stub
+      },
+      uniform4ui: function(location, x, y, z, w) {
+        // No-op stub
+      },
+
+      // 3D texture method (WebGL2 only)
+      texImage3D: function(target, level, internalformat, width, height, depth, border, format, type, pixels) {
+        // No-op stub — 3D textures not supported in Phase 0
+      }
     };
   }
 
   function _addCanvasStubs(el) {
     el.getContext = function(contextType) {
       var t = (contextType || '').toLowerCase();
-      if (t === 'webgl' || t === 'webgl2' || t === 'experimental-webgl') {
-        return _makeWebGLContext();
+      if (t === 'webgl' || t === 'experimental-webgl') {
+        return _makeWebGLContext(false);
+      }
+      if (t === 'webgl2') {
+        return _makeWebGLContext(true);
       }
       return null;
     };
@@ -330,6 +383,182 @@ typeof div.getContext === 'function'"#,
                 )
                 .unwrap();
             assert!(!has_get_context, "non-canvas elements should not have getContext");
+        });
+    }
+
+    // WebGL2 context tests
+    #[test]
+    fn webgl2_returns_webgl_2_0_version() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let version: String = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+gl.getParameter(0x1F02)"#,
+                )
+                .unwrap();
+            assert_eq!(version, "WebGL 2.0");
+        });
+    }
+
+    #[test]
+    fn webgl2_returns_glsl_3_0_version() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let version: String = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+gl.getParameter(0x8B8C)"#,
+                )
+                .unwrap();
+            assert_eq!(version, "WebGL GLSL ES 3.0");
+        });
+    }
+
+    #[test]
+    fn webgl2_create_vertex_array() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let has_vao: bool = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+var vao = gl.createVertexArray();
+vao !== null && typeof vao === 'object'"#,
+                )
+                .unwrap();
+            assert!(has_vao, "createVertexArray should return a non-null object");
+        });
+    }
+
+    #[test]
+    fn webgl2_bind_vertex_array() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+var vao = gl.createVertexArray();
+gl.bindVertexArray(vao);
+true"#,
+                )
+                .unwrap();
+            assert!(ok, "bindVertexArray should not throw");
+        });
+    }
+
+    #[test]
+    fn webgl2_delete_vertex_array() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+var vao = gl.createVertexArray();
+gl.deleteVertexArray(vao);
+true"#,
+                )
+                .unwrap();
+            assert!(ok, "deleteVertexArray should not throw");
+        });
+    }
+
+    #[test]
+    fn webgl2_draw_arrays_instanced() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+gl.drawArraysInstanced(4, 0, 3, 2);
+true"#,
+                )
+                .unwrap();
+            assert!(ok, "drawArraysInstanced should not throw");
+        });
+    }
+
+    #[test]
+    fn webgl2_draw_elements_instanced() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+gl.drawElementsInstanced(4, 6, 5125, 0, 2);
+true"#,
+                )
+                .unwrap();
+            assert!(ok, "drawElementsInstanced should not throw");
+        });
+    }
+
+    #[test]
+    fn webgl2_uniform_integer_methods() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+var loc = { id: 1 };
+gl.uniform1ui(loc, 1);
+gl.uniform2ui(loc, 1, 2);
+gl.uniform3ui(loc, 1, 2, 3);
+gl.uniform4ui(loc, 1, 2, 3, 4);
+true"#,
+                )
+                .unwrap();
+            assert!(ok, "uniform*ui methods should not throw");
+        });
+    }
+
+    #[test]
+    fn webgl2_tex_image_3d() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            let fp = make_fp("WebKit", "Generic GPU");
+            install_webgl_bindings(&ctx, &fp).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    r#"var canvas = document.createElement('canvas');
+var gl = canvas.getContext('webgl2');
+gl.texImage3D(0x806F, 0, 0x8058, 256, 256, 16, 0, 0x1908, 0x1401, null);
+true"#,
+                )
+                .unwrap();
+            assert!(ok, "texImage3D should not throw");
         });
     }
 }

@@ -252,4 +252,5 @@ mod tests {
         assert!(prop.inherits);
         assert_eq!(prop.syntax, "*");
     }
+
 }

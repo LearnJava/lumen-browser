@@ -109,7 +109,6 @@ if (typeof window !== 'undefined') {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use lumen_core::JsRuntime as _;
     use lumen_dom::Document;
     use std::sync::{Arc, Mutex};

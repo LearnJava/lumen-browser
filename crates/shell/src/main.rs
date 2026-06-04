@@ -1006,6 +1006,18 @@ pub(crate) trait PersistentJs {
     /// Calls `_lumen_deliver_paint_entry(name, start_ms)` in QuickJS.
     #[allow(dead_code)]
     fn deliver_paint_timing(&self, name: &str, start_ms: f64);
+    /// Deliver a LargestContentfulPaint entry to JS PerformanceObservers.
+    ///
+    /// Called when a large content element (>500px²) is rendered.
+    /// `element_id` = NID; `size` = area in pixels; `render_time_ms` = render completion timestamp.
+    #[allow(dead_code)]
+    fn deliver_lcp_entry(&self, element_id: u32, size: u32, start_ms: f64, render_time_ms: f64);
+    /// Deliver a LayoutShift entry to JS PerformanceObservers (CLS metric).
+    ///
+    /// Called when layout shift is detected during reflow (shift >5px).
+    /// `value` = fractional shift distance; `had_input` = whether user input occurred recently.
+    #[allow(dead_code)]
+    fn deliver_layout_shift(&self, value: f64, had_input: bool);
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -1216,6 +1228,18 @@ impl PersistentJs for QuickPersistentJs {
         self.eval_js(&format!(
             "_lumen_deliver_paint_entry({}, {start_ms})",
             js_string_literal(name),
+        ));
+    }
+    fn deliver_lcp_entry(&self, element_id: u32, size: u32, start_ms: f64, render_time_ms: f64) {
+        self.eval_js(&format!(
+            "_lumen_deliver_lcp_entry({element_id}, {size}, {start_ms}, {render_time_ms})"
+        ));
+    }
+    fn deliver_layout_shift(&self, value: f64, had_input: bool) {
+        let had_input_js = if had_input { "true" } else { "false" };
+        self.eval_js(&format!(
+            "_lumen_deliver_layout_shift({}, 0, {had_input_js})",
+            value
         ));
     }
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {

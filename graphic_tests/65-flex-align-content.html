@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>CSS Flexbox align-content</title>
+    <style>
+        body {
+            background: #ff00ff;
+            width: 1024px;
+            height: 720px;
+            margin: 0;
+            padding: 0;
+        }
+        .__f {
+            background: #f5f5f5;
+            width: 1022px;
+            height: 718px;
+            margin: 1px;
+            padding: 0;
+            overflow: hidden;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .flex-container {
+            background: white;
+            width: 48%;
+            height: 150px;
+            border: 1px solid #ddd;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 8px;
+            box-sizing: border-box;
+            position: relative;
+        }
+        .flex-container::before {
+            content: attr(data-label);
+            position: absolute;
+            top: -20px;
+            left: 0;
+            font-size: 12px;
+            color: #666;
+            font-family: Arial, sans-serif;
+        }
+        .item {
+            background: #66b2ff;
+            width: 50px;
+            height: 50px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+        .flex-start { align-content: flex-start; }
+        .flex-end { align-content: flex-end; }
+        .center { align-content: center; }
+        .space-between { align-content: space-between; }
+        .space-around { align-content: space-around; }
+        .space-evenly { align-content: space-evenly; }
+        .stretch { align-content: stretch; }
+    </style>
+</head>
+<body>
+<div class="__f">
+    <!-- flex-start: items on first line, remaining lines at top -->
+    <div class="flex-container flex-start" data-label="flex-start">
+        <div class="item">1</div>
+        <div class="item">2</div>
+        <div class="item">3</div>
+        <div class="item">4</div>
+        <div class="item">5</div>
+        <div class="item">6</div>
+    </div>
+
+    <!-- flex-end: remaining lines at bottom -->
+    <div class="flex-container flex-end" data-label="flex-end">
+        <div class="item">1</div>
+        <div class="item">2</div>
+        <div class="item">3</div>
+        <div class="item">4</div>
+        <div class="item">5</div>
+        <div class="item">6</div>
+    </div>
+
+    <!-- center: lines centered vertically -->
+    <div class="flex-container center" data-label="center">
+        <div class="item">1</div>
+        <div class="item">2</div>
+        <div class="item">3</div>
+        <div class="item">4</div>
+        <div class="item">5</div>
+        <div class="item">6</div>
+    </div>
+
+    <!-- space-between: lines distributed with max gap between -->
+    <div class="flex-container space-between" data-label="space-between">
+        <div class="item">1</div>
+        <div class="item">2</div>
+        <div class="item">3</div>
+        <div class="item">4</div>
+        <div class="item">5</div>
+        <div class="item">6</div>
+    </div>
+
+    <!-- space-around: equal space around each line -->
+    <div class="flex-container space-around" data-label="space-around">
+        <div class="item">1</div>
+        <div class="item">2</div>
+        <div class="item">3</div>
+        <div class="item">4</div>
+        <div class="item">5</div>
+        <div class="item">6</div>
+    </div>
+
+    <!-- space-evenly: equal space between all lines -->
+    <div class="flex-container space-evenly" data-label="space-evenly">
+        <div class="item">1</div>
+        <div class="item">2</div>
+        <div class="item">3</div>
+        <div class="item">4</div>
+        <div class="item">5</div>
+        <div class="item">6</div>
+    </div>
+
+    <!-- stretch: lines grow to fill container -->
+    <div class="flex-container stretch" data-label="stretch">
+        <div class="item">1</div>
+        <div class="item">2</div>
+        <div class="item">3</div>
+        <div class="item">4</div>
+        <div class="item">5</div>
+        <div class="item">6</div>
+    </div>
+</div>
+</body>
+</html>

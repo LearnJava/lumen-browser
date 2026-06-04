@@ -1,13 +1,17 @@
-//! `navigator.credentials` (WebAuthn / passkeys) bridge.
+//! `navigator.credentials` (WebAuthn / passkeys + WebOTP) bridge.
 //!
 //! The JS shim ([`CREDENTIALS_SHIM`]) implements `navigator.credentials.create()`
-//! and `.get()` plus `PublicKeyCredential` and friends. It marshals the request
-//! to the native bindings `_lumen_webauthn_create` / `_lumen_webauthn_get`
-//! (registered in [`crate::dom::install_dom_api`]), which forward to the
-//! process-global [`CredentialProvider`] installed by the shell via
+//! and `.get()` plus `PublicKeyCredential` and `OTPCredential` classes.
+//! WebAuthn operations marshal requests to the native bindings `_lumen_webauthn_create` /
+//! `_lumen_webauthn_get` (registered in [`crate::dom::install_dom_api`]), which forward
+//! to the process-global [`CredentialProvider`] installed by the shell via
 //! [`set_credential_provider`]. With no provider installed (headless tests, dump
-//! modes), both operations reject with `NotAllowedError` — the privacy-preserving
+//! modes), WebAuthn operations reject with `NotAllowedError` — the privacy-preserving
 //! "no authenticator" default.
+//!
+//! WebOTP API (`navigator.credentials.get({otp: {...}})`) is Phase 0: always rejects with
+//! `NotSupportedError` since SMS-based OTP requires platform integration outside the scope
+//! of this browser prototype.
 //!
 //! Marshalling avoids JSON parsing in Rust (no `serde_json` in `lumen-js`): the
 //! request is packed into a single `|`-separated string whose fields are all
@@ -273,6 +277,8 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
   function Credential(){}
   function PublicKeyCredential(){ throw new TypeError('Illegal constructor'); }
   PublicKeyCredential.prototype = Object.create(Credential.prototype);
+  function OTPCredential(){ throw new TypeError('Illegal constructor'); }
+  OTPCredential.prototype = Object.create(Credential.prototype);
   function CredentialsContainer(){}
 
   function makeAttestation(o){
@@ -360,7 +366,9 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
   container.get = function(options){
     return new Promise(function(resolve, reject){
       try {
-        if (!options || !options.publicKey) { reject(mkErr('NotSupportedError', 'publicKey options required')); return; }
+        if (!options) { reject(mkErr('NotSupportedError', 'options required')); return; }
+        if (options.otp) { reject(mkErr('NotSupportedError', 'WebOTP API not supported')); return; }
+        if (!options.publicKey) { reject(mkErr('NotSupportedError', 'publicKey options required')); return; }
         if (typeof _lumen_webauthn_get !== 'function') { reject(mkErr('NotAllowedError', 'no authenticator')); return; }
         var pk = options.publicKey;
         var allow = (pk.allowCredentials || []).map(function(c){ return bufToB64url(c.id); }).join(',');
@@ -394,6 +402,7 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
 
   var g = (typeof globalThis !== 'undefined') ? globalThis : this;
   g.PublicKeyCredential = PublicKeyCredential;
+  g.OTPCredential = OTPCredential;
   g.CredentialsContainer = CredentialsContainer;
   g.Credential = Credential;
   g.AuthenticatorResponse = AuthenticatorResponse;
@@ -432,6 +441,13 @@ mod tests {
         let b = base64url_encode(&[9, 9]);
         assert_eq!(parse_b64_csv(&format!("{a},{b}")), vec![vec![1, 2, 3], vec![9, 9]]);
         assert!(parse_b64_csv("").is_empty());
+    }
+
+    #[test]
+    fn webotp_api_rejection_placeholder() {
+        // WebOTP API rejection is tested in JS integration tests in lumen-shell.
+        // This test documents that the behavior is intentional: navigator.credentials.get({otp: ...})
+        // always rejects with NotSupportedError since SMS-based OTP requires platform integration.
     }
 
     #[test]
