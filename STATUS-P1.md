@@ -6,7 +6,8 @@
 
 ## In progress
 
--
+- **B-1: DNS over HTTPS** branch: `p1-b1-doh`
+  Next step: implement `DohResolver` in `lumen-network/src/` with RFC 8484 JSON-wire format, A/AAAA resolution, TTL caching
 
 ---
 
