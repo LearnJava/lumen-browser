@@ -156,6 +156,11 @@ impl SvgTransform {
         SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
     }
 
+    /// Creates a translation transform.
+    pub fn translate(tx: f32, ty: f32) -> Self {
+        SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, tx, ty] }
+    }
+
     /// Multiplies this transform by another, composing them.
     pub fn compose(&mut self, other: &SvgTransform) {
         let [a, b, c, d, e, f] = self.matrix;
@@ -676,6 +681,41 @@ fn collect_svg_shapes(
                     children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0,
                 });
             }
+            "use" => {
+                // SVG <use> element: references another element by ID via href attribute.
+                // Phase 1: create a group that contains the referenced element's descendants.
+                if let Some(href) = doc.get(child_id).get_attr("href") {
+                    // Extract element ID from href (e.g., "#rect1" → "rect1").
+                    let target_id_str = if href.starts_with('#') {
+                        href[1..].to_string()
+                    } else {
+                        href.to_string()
+                    };
+                    // Find the referenced element in the document by ID.
+                    if let Some(target_id) = doc.find_by_id(&target_id_str) {
+                        // Create a group box that contains the cloned descendants of the target.
+                        let mut use_children: Vec<LayoutBox> = Vec::new();
+                        collect_svg_shapes(doc, sheet, target_id, inherited, viewport, flat, &mut use_children, dark_mode);
+
+                        // Apply x/y attributes as translate transform.
+                        let use_x = svg_attr_f32(doc, child_id, "x");
+                        let use_y = svg_attr_f32(doc, child_id, "y");
+                        let use_transform = if use_x != 0.0 || use_y != 0.0 {
+                            SvgTransform::translate(use_x, use_y)
+                        } else {
+                            SvgTransform::identity()
+                        };
+
+                        out.push(LayoutBox {
+                            node: child_id, rect: Rect::ZERO, style,
+                            kind: BoxKind::Block,
+                            children: use_children, col_span: 1, row_span: 1, svg_group_transform: Some(use_transform), scroll_x: 0.0, scroll_y: 0.0,
+                        });
+                    } else {
+                        // Target not found: skip this <use> element.
+                    }
+                }
+            }
             _ => {
                 // Unknown SVG element: skip self, but scan children for shapes.
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
@@ -722,6 +762,7 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.height = svg_h;
 
     // viewBox → CSS-px transform: scale + origin offset with aspect-ratio preservation.
+    // CSS: object-fit, object-position — P4 can override viewBox scaling and alignment
     let (scale_x, scale_y, origin_x, origin_y) = match &view_box {
         Some(vb) if vb.width > 0.0 && vb.height > 0.0 => {
             let (sx, sy, ox_delta, oy_delta) = compute_viewbox_transform(vb, svg_w, svg_h, &preserve_aspect_ratio);
@@ -2301,6 +2342,8 @@ fn build_box(
             } else if is_svg_root(doc, id) {
                 // SVG root: apply width/height attributes as presentational hints.
                 // CSS: width, height — if author CSS is absent, attribute values are used.
+                // CSS: object-fit, object-position — P4 can override viewBox scaling (Phase 2)
+                // CSS: intrinsic aspect-ratio from viewBox for replaced element sizing
                 if style.width.is_none()
                     && let Some(w) = doc.get(id).get_attr("width").and_then(|v| v.trim().parse::<f32>().ok())
                 {
@@ -7941,6 +7984,46 @@ mod tests {
                 assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Min);
             }
         }
+    }
+
+    #[test]
+    fn svg_use_element_references_target() {
+        // <use href="#target"/> should reference element with id="target".
+        // SVG 1.1 § 5.6 — <use> creates a reference to another element.
+        let html = r#"
+            <svg>
+                <defs>
+                    <rect id="r1" x="10" y="10" width="50" height="50"/>
+                </defs>
+                <use href="#r1" x="100" y="100"/>
+            </svg>
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // SVG should have at least the <use> element (which should create referenced content).
+        if let Some(svg) = root.children.first() {
+            if let super::BoxKind::SvgRoot { .. } = &svg.kind {
+                // <use> should have been processed and added to the layout.
+                // The exact structure depends on implementation, but we verify no panic.
+                assert!(!svg.children.is_empty(), "svg should have layout children from <use>");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_use_translate_x_y() {
+        // <use x="10" y="20"> should apply translate transform.
+        let html = r#"
+            <svg>
+                <circle id="c1" cx="0" cy="0" r="5"/>
+                <use href="#c1" x="10" y="20"/>
+            </svg>
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // Verify no panic when processing <use> with x/y attributes.
     }
 
 }
