@@ -73,6 +73,9 @@ BUG-057 | FIXED 2026-06-03 | paint | wgpu Vulkan crash on first render after pag
 BUG-058 | FIXED 2026-06-04 | layout | display:contents не сглажен перед lay_out: паника «entered unreachable code: display:contents boxes must be flattened before lay_out» при открытии cnn.com | crates/engine/layout/src/box_tree.rs:3805
 BUG-059 | FIXED 2026-06-04 | font | WOFF2-декодер отклоняет шрифты с контурами из 0 точек («woff2: contour with zero points»): все 10 шрифтов CNN (cnn_sans_condensed, cnn_sans_display, helveticaneue, noto_sans_arabic, noto_serif*) не загружаются; пустые глифы (пробел и др.) легальны по спеке и принимаются всеми браузерами — нужно пропускать такой глиф, а не отклонять шрифт целиком | crates/engine/font/src/woff2.rs:260
 BUG-060 | FIXED 2026-06-04 | font | WOFF2-декодер обрывается с «unexpected end of font data» для cnn_sans_condensed-bold.woff2, cnn_sans_condensed-medium.woff2, cnn_sans_display-v1.woff2 — корень: точки контуров читались из glyph_stream вместо nPoints_stream, координаты — из glyph_stream вместо flag_stream; исправлено routing потоков согласно WOFF2 spec §5.3 | crates/engine/font/src/woff2.rs:125
+BUG-061 | FIXED 2026-06-04 | driver | test_32_list_markers падал (ожидал 22 li, получал 26): коммит d70391d9 (C9) добавил 2 новые секции в 32-list-markers.html (custom-marker + content-marker), не обновив тест; ожидания обновлены до 26 li / 24 маркеров | crates/driver/tests/test_32.rs:30
+BUG-062 | OPEN  | network | clippy -p lumen-driver: «very complex type» в doh.rs — Arc<Mutex<HashMap<(String, u16), (Vec<SocketAddr>, u64)>>> → выделить type-alias | crates/network/src/doh.rs:405
+BUG-063 | OPEN  | layout  | clippy -p lumen-driver: два lint-нарушения в layout: (1) clamp-like pattern → scale.clamp(0.1,1.0) в mathml.rs:88; (2) unfulfilled #[expect(dead_code)] в box_tree.rs:5462 — мёртвый код ожидался, но элемент теперь используется | crates/engine/layout/src/mathml.rs:88
 ```
 
 ---
