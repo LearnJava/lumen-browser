@@ -22,6 +22,7 @@
 
 mod address_bar;
 mod animation_scheduler;
+mod click_log;
 mod backend_factory;
 mod bidi;
 mod config;
@@ -196,6 +197,8 @@ fn main() -> ExitCode {
         }
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
+    let (click_log_flag, rest_args) = extract_click_log(&rest_args);
+    click_log::init(click_log_flag);
     let (det_mode, rest_args) = deterministic::extract_deterministic(&rest_args);
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
@@ -869,6 +872,21 @@ fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
     let mut rest = Vec::new();
     for arg in args {
         if arg == "--no-scrollbar" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
+/// Извлечь `--click-log` из аргументов, вернуть (flag, остальные аргументы).
+/// Также активируется переменной окружения `LUMEN_CLICK_LOG=1`.
+fn extract_click_log(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = std::env::var("LUMEN_CLICK_LOG").is_ok_and(|v| v == "1");
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--click-log" {
             found = true;
         } else {
             rest.push(arg.clone());
@@ -6939,6 +6957,35 @@ impl Lumen {
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
+
+        // Debug click log — активируется флагом --click-log или LUMEN_CLICK_LOG=1.
+        let click_log_hit: Option<(u32, String, String, String)> =
+            if click_log::is_enabled() {
+                hit_result.as_ref().and_then(|r| {
+                    self.layout_source.as_ref().map(|src| {
+                        let doc = src.document.lock().unwrap();
+                        let node = doc.get(r.node);
+                        let (tag, id_attr, class_attr) =
+                            if let NodeData::Element { name, attrs } = &node.data {
+                                let id = attrs.iter()
+                                    .find(|a| a.name.local == "id")
+                                    .map(|a| a.value.as_str())
+                                    .unwrap_or("");
+                                let cls = attrs.iter()
+                                    .find(|a| a.name.local == "class")
+                                    .map(|a| a.value.as_str())
+                                    .unwrap_or("");
+                                (name.local.to_string(), id.to_owned(), cls.to_owned())
+                            } else {
+                                ("#text".to_owned(), String::new(), String::new())
+                            };
+                        (r.node.index() as u32, tag, id_attr, class_attr)
+                    })
+                })
+            } else {
+                None
+            };
+
         // Track focused node for TypeText injection and CSS :focus matching.
         let new_focused = hit_result.as_ref().map(|r| r.node);
         let focus_changed = new_focused != self.focused_node;
@@ -6978,6 +7025,45 @@ impl Lumen {
             } else {
                 forms::FormClickAction::Nothing
             };
+
+        // Log form actions (non-link outcomes).
+        if click_log::is_enabled() {
+            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                node_id: *nid, tag, id_attr: id, class_attr: cls,
+            });
+            match &form_action {
+                forms::FormClickAction::Nothing => {} // logged in the Nothing branch below
+                forms::FormClickAction::ToggleCheckbox(_) => {
+                    click_log::log(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleCheckbox"),
+                    });
+                }
+                forms::FormClickAction::ToggleRadio { .. } => {
+                    click_log::log(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleRadio"),
+                    });
+                }
+                forms::FormClickAction::OpenColorPicker(_) => {
+                    click_log::log(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenColorPicker"),
+                    });
+                }
+                forms::FormClickAction::SubmitForm(_) => {
+                    click_log::log(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("SubmitForm"),
+                    });
+                }
+            }
+        }
+
         match form_action {
             forms::FormClickAction::ToggleCheckbox(id) => {
                 if let Some(src) = self.layout_source.as_mut() {
@@ -7064,13 +7150,61 @@ impl Lumen {
                 });
                 if let Some(href) = href {
                     if let Some(frag) = links::fragment_only(&href) {
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkFragment(frag),
+                            });
+                        }
                         // Same-page fragment navigation.
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkNavigate {
+                                    href: &href,
+                                    resolved: &resolved,
+                                },
+                            });
+                        }
                         let target = PageSource::from_arg(Some(&resolved));
                         self.navigate_to(target);
+                    } else {
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkBlocked(&href),
+                            });
+                        }
                     }
+                } else if click_log::is_enabled() {
+                    let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                        node_id: *nid, tag, id_attr: id, class_attr: cls,
+                    });
+                    let outcome = if hit_result.is_none() {
+                        click_log::ClickOutcome::NoHit
+                    } else {
+                        click_log::ClickOutcome::NoLink
+                    };
+                    click_log::log(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome,
+                    });
                 }
             }
         }
