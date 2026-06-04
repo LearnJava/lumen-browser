@@ -6,8 +6,7 @@
 
 ## In progress
 
-A-6 CSS Paint Worklet API stub (Houdini)  branch: p2-paint-worklet-api
-Phase 0: `CSS.paintWorklet.addModule(url)` + worker registration + `paint()` invocation stubs
+(none)
 
 ---
 
@@ -24,7 +23,6 @@ Ordered by priority. Сгруппированы по домену.
 | A-3 | **CSS Typed OM (partial)** — `element.attributeStyleMap {get/set/has/delete/entries/keys/values}`, `element.computedStyleMap()` → read-only map, `CSSStyleValue`, `CSSUnitValue {value, unit}` (px/em/%), `CSSKeywordValue {value}`, `CSSNumericValue.to(unit)`. 12 тестов. | M | `lumen-js` |
 | A-4 | **OffscreenCanvas** — `new OffscreenCanvas(w, h)`, `getContext('2d')` → `lumen_canvas::Context2D`, `transferToImageBitmap()` → `ImageBitmap {width, height, close()}`, `createImageBitmap(source)` из Blob/ImageData/HTMLImageElement, доступен в Workers. 8 тестов. | M | `lumen-js` |
 | A-5 | **WebGL2 context** — `getContext('webgl2')` → `WebGL2RenderingContext`, расширяет `SoftwareWebGl`: VAOs (`createVertexArray/bindVertexArray/deleteVertexArray`), `drawArraysInstanced/drawElementsInstanced`, integer uniforms (`uniform1ui/2ui/3ui/4ui`), `texImage3D` stub. 10 тестов. | M | `lumen-paint`, `lumen-js` |
-| A-7 | **CSS Masonry layout stub** — `layout/src/masonry.rs`: `lay_out_masonry()` — waterfall grid, `column_heights[n_cols]`, каждый item → в колонку с минимальной высотой. `// CSS: masonry-auto-flow, align-tracks, justify-tracks`. Dispatch по `display:masonry`. 8 тестов. | M | `lumen-layout` |
 | A-8 | **Inline SVG layout improvements** — `build_box` для `<svg>`: replaced element с `viewBox` aspect-ratio scaling, `preserveAspectRatio meet/slice`, `intrinsic_ratio`, `<use href="#id">` → deep_clone subtree, `<defs>` container (invisible). `// CSS: object-fit, object-position`. 10 тестов. | M | `lumen-layout`, `lumen-paint` |
 | A-9 | **SVG text rendering** — `<text>/<tspan>/<textPath>` элементы: `BoxKind::SvgText`, измерение через `TextMeasurer`, emit `DrawText` с SVG coordinate transform, `text-anchor: start/middle/end`, `dx/dy` атрибуты, `dominant-baseline`. 8 тестов. | M | `lumen-layout`, `lumen-paint` |
 | A-10 | **Display list diffing** — `DisplayList::diff(&prev, &next) → DiffResult {changed_rects, identical}`: сравнивает команды по Debug hash, `identical=true` → `RedrawRequested` пропускает GPU upload. `diff_count` метрика для bench. 8 тестов. | M | `lumen-paint` |
@@ -89,6 +87,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-masonry-layout** ✅ 2026-06-04 — A-7: CSS Masonry layout stub (Houdini) Phase 0. `layout/src/masonry.rs`: `lay_out_masonry()` реализует waterfall grid алгоритм — каждый item размещается в колонку с минимальной высотой. `column_count` и `gap` поддерживаются (используют существующие CSS свойства). `Display::Masonry` вариант в style.rs, парсинг "masonry" keyword. Dispatch в box_tree.rs перед block-flow layout. `// CSS: masonry-auto-flow, align-tracks, justify-tracks` комментарий. Graphic test 63-masonry.html с 3-колонным waterfall демо + 1000000-final.html запись. Phase 0 завершена; Phase 1 (future): align-tracks/justify-tracks, dense-fill, aspect-ratio-aware sizing. 2280 unit-тестов lumen-layout ✅. Clippy чист (fixed needless_range_loop в flex align-content коде).
 
 - **p2-webgl2-context** ✅ 2026-06-04 — A-5: WebGL2 context Phase 0. VAO API (createVertexArray/bindVertexArray/deleteVertexArray), instanced draws (drawArraysInstanced/drawElementsInstanced), integer uniforms (uniform1ui/2ui/3ui/4ui), texImage3D stub. `lumen-paint/src/webgl.rs`: `SoftwareWebGl` extended with VAO registry and methods; new `Val` enum variants for unsigned integers (UInt, UVec2, UVec3, UVec4). `lumen-js/src/webgl_canvas.rs`: all WebGL2 native functions registered; JS shim extended with VAO methods + instanced draw methods + integer uniform methods + 3D texture method + WebGL2 constants. All 23 JS WebGL tests pass. Phase 0: functional stubs; Phase 1 (future): full GPU wiring for VAOs + instancing + integer compute shaders.
 
