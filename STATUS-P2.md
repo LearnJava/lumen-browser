@@ -6,7 +6,9 @@
 
 ## In progress
 
-None currently. Pick next available from Next section.
+**B-10 | CSS Forced Colors media** — branch: p2-b10-forced-colors
+- Phase 0: @media (forced-colors: active) parsing + MediaContext flag + system color keywords
+- Next step: lumen-layout/src/style.rs:2100 add `forced_colors: bool` to MediaContext struct
 
 ---
 
