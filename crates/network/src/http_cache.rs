@@ -10,8 +10,9 @@
 //! - 304 Not Modified → reuse body, refresh metadata
 //! - Vary not supported (unsafe to cache Vary: * or Vary: Cookie)
 
+use lru::LruCache;
 use std::{
-    collections::HashMap,
+    num::NonZeroUsize,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -128,23 +129,27 @@ impl CacheEntry {
 
 // ── Public cache ──────────────────────────────────────────────────────────────
 
-/// Thread-safe in-memory HTTP response cache (RFC 7234).
+/// Thread-safe in-memory HTTP response cache with LRU eviction (RFC 7234).
 ///
 /// Wire up via `HttpClient::with_http_cache(Arc<HttpCache>)`.
 /// A single shared `HttpCache` should be used for all tabs so the same
 /// stylesheet / script isn't fetched twice.
 ///
-/// Phase 0: in-memory only. Eviction is simple: entries are never evicted
-/// (the browser lifetime is short and memory pressure isn't a concern yet).
+/// Phase 1: in-memory LRU cache with 50 MB capacity limit.
+/// When entries exceed 50 MB, least-recently-used entries are evicted.
+const MAX_CACHE_SIZE_BYTES: usize = 50 * 1024 * 1024; // 50 MB
+
 pub struct HttpCache {
-    entries: Mutex<HashMap<String, CacheEntry>>,
+    entries: Mutex<LruCache<String, CacheEntry>>,
+    current_size_bytes: Mutex<usize>,
 }
 
 impl HttpCache {
-    /// Create an empty cache.
+    /// Create an empty cache with LRU eviction and 50 MB limit.
     pub fn new() -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
+            entries: Mutex::new(LruCache::new(NonZeroUsize::new(10000).unwrap())),
+            current_size_bytes: Mutex::new(0),
         }
     }
 
@@ -155,30 +160,27 @@ impl HttpCache {
     /// - `CacheLookup::Stale(entry)` — entry has a validator; send conditional GET.
     /// - `CacheLookup::Miss` — no entry; send normal GET.
     pub fn lookup(&self, url: &str) -> CacheLookup<'_> {
-        let guard = self.entries.lock().unwrap();
+        let mut entries = self.entries.lock().unwrap();
         let key = cache_key(url);
-        // Use raw pointer to avoid borrow lifetime issues — the lock stays alive
-        // while the returned `CacheLookup` is alive.
-        match guard.get(&key) {
+        // LruCache::get() updates the LRU position (marks as accessed)
+        match entries.get(&key) {
             None => CacheLookup::Miss,
             Some(entry) if entry.is_fresh() => {
-                // Safety: the guard is kept alive via the returned enum variant.
-                // We drop the guard here and re-acquire per access — simpler.
-                // Instead, return owned data for fresh hits.
-                drop(guard);
+                drop(entries);
                 CacheLookup::Miss // handled below
             }
             Some(_) => {
-                drop(guard);
+                drop(entries);
                 CacheLookup::Miss // handled below
             }
         }
     }
 
     /// Get the cache entry for `url` if it exists (fresh or stale).
+    /// Updates LRU position to mark entry as recently accessed.
     pub fn get(&self, url: &str) -> Option<CacheEntrySnapshot> {
-        let guard = self.entries.lock().unwrap();
-        guard.get(&cache_key(url)).map(|e| CacheEntrySnapshot {
+        let mut entries = self.entries.lock().unwrap();
+        entries.get(&cache_key(url)).map(|e| CacheEntrySnapshot {
             body: e.body.clone(),
             headers: e.headers.clone(),
             status: e.status,
@@ -242,8 +244,30 @@ impl HttpCache {
             must_revalidate: cc.no_cache || cc.must_revalidate,
         };
 
-        let mut guard = self.entries.lock().unwrap();
-        guard.insert(cache_key(url), entry);
+        let entry_size = self.calculate_entry_size(&entry);
+        let key = cache_key(url);
+
+        let mut entries = self.entries.lock().unwrap();
+        let mut size = self.current_size_bytes.lock().unwrap();
+
+        // If entry already exists, subtract its old size before adding new one
+        if let Some(old_entry) = entries.peek(&key) {
+            *size = size.saturating_sub(self.calculate_entry_size(old_entry));
+        }
+
+        // Add new entry size
+        *size = size.saturating_add(entry_size);
+
+        // Evict entries until we're under the limit (LRU happens automatically)
+        while *size > MAX_CACHE_SIZE_BYTES {
+            if let Some((_, evicted)) = entries.pop_lru() {
+                *size = size.saturating_sub(self.calculate_entry_size(&evicted));
+            } else {
+                break;
+            }
+        }
+
+        entries.put(key, entry);
     }
 
     /// Update an existing entry after a 304 Not Modified response.
@@ -285,6 +309,22 @@ impl HttpCache {
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.lock().unwrap().is_empty()
+    }
+
+    /// Approximate size of a cache entry in bytes (for LRU eviction accounting).
+    /// Includes body, headers, and all string fields.
+    fn calculate_entry_size(&self, entry: &CacheEntry) -> usize {
+        let mut size = entry.body.len();
+        size += entry.headers.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
+        if let Some(etag) = &entry.etag {
+            size += etag.len();
+        }
+        if let Some(lm) = &entry.last_modified {
+            size += lm.len();
+        }
+        // Account for struct overhead (roughly)
+        size += 64;
+        size
     }
 }
 
@@ -584,5 +624,72 @@ mod tests {
         let unix = parse_http_date_to_unix("Mon, 01 Jan 2024 00:00:00 GMT");
         // 2024-01-01 = 19723 days after epoch
         assert_eq!(unix, Some(19723 * 86400));
+    }
+
+    #[test]
+    fn lru_eviction_respects_50mb_limit() {
+        let cache = HttpCache::new();
+        let headers = vec![("Cache-Control".to_owned(), "max-age=3600".to_owned())];
+
+        // Create 3 entries of ~20 MB each (including overhead)
+        // The first 2 should fit, the 3rd should trigger eviction of the oldest
+        let large_body_20mb = vec![0u8; 20 * 1024 * 1024];
+
+        cache.store("https://example.com/1.bin", 200, large_body_20mb.clone(), &headers);
+        assert_eq!(cache.len(), 1);
+
+        cache.store("https://example.com/2.bin", 200, large_body_20mb.clone(), &headers);
+        assert_eq!(cache.len(), 2);
+
+        // Third entry should trigger eviction of the oldest (first entry)
+        cache.store("https://example.com/3.bin", 200, large_body_20mb.clone(), &headers);
+        assert!(cache.len() <= 2, "LRU should evict old entries when cache exceeds 50MB");
+
+        // The oldest entry (1.bin) should have been evicted
+        assert!(cache.get("https://example.com/1.bin").is_none());
+        assert!(cache.get("https://example.com/2.bin").is_some());
+        assert!(cache.get("https://example.com/3.bin").is_some());
+    }
+
+    #[test]
+    fn lru_eviction_marks_accessed_as_recent() {
+        let cache = HttpCache::new();
+        let headers = vec![("Cache-Control".to_owned(), "max-age=3600".to_owned())];
+
+        let large_body_20mb = vec![0u8; 20 * 1024 * 1024];
+
+        cache.store("https://example.com/1.bin", 200, large_body_20mb.clone(), &headers);
+        cache.store("https://example.com/2.bin", 200, large_body_20mb.clone(), &headers);
+
+        // Access the first entry (marks it as recently used)
+        let _ = cache.get("https://example.com/1.bin");
+
+        // Add a third entry; should evict 2.bin (oldest, not accessed)
+        cache.store("https://example.com/3.bin", 200, large_body_20mb.clone(), &headers);
+
+        assert!(cache.get("https://example.com/1.bin").is_some());
+        assert!(cache.get("https://example.com/2.bin").is_none(), "2.bin should be evicted");
+        assert!(cache.get("https://example.com/3.bin").is_some());
+    }
+
+    #[test]
+    fn lru_eviction_on_update_same_entry() {
+        let cache = HttpCache::new();
+        let headers = vec![("Cache-Control".to_owned(), "max-age=3600".to_owned())];
+
+        let large_body_20mb = vec![0u8; 20 * 1024 * 1024];
+        let small_body = vec![0u8; 100];
+
+        // Store a large entry
+        cache.store("https://example.com/large.bin", 200, large_body_20mb.clone(), &headers);
+        assert_eq!(cache.len(), 1);
+
+        // Update it with a small body (doesn't trigger new eviction)
+        cache.store("https://example.com/large.bin", 200, small_body, &headers);
+        assert_eq!(cache.len(), 1);
+
+        // The entry should still exist and be updated
+        let snap = cache.get("https://example.com/large.bin").unwrap();
+        assert_eq!(snap.body.len(), 100);
     }
 }

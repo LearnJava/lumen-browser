@@ -25,3 +25,6 @@ sha2 = "0.10"
 # Permanent: OS CSPRNG для генерации passkey-ключей и credential ID в
 # VirtualAuthenticator. Delegates directly to OS (как в lumen-js Web Crypto).
 getrandom = "0.2"
+# HTTP Cache (RFC 7234): LRU cache with size-based eviction for HTTP responses.
+# Pure-Rust, no unsafe in logic. Trait-anchor: none (internal HTTP cache impl).
+lru = "0.12"
