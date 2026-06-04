@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+B-3: HSTS preload list  branch: p1-b3-hsts
+Next step: создать структуру HstsPreloadList, загружить embedded JSON, реализовать is_preloaded() с eTLD+1 проверкой
 
 ---
 
