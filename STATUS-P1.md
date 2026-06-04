@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none)
+B-4: Background Sync API stub — `registration.sync.register('tag')`, `SyncManager.getTags()`, `sync` SW-событие на следующей навигации, `_lumen_sw_sync_register/get_tags/clear_tag` биндинги, `SwBackend::pending_syncs` расширение. Размер: S. Крейты: `lumen-js`, `lumen-storage`.
+
+branch: p1-b4-background-sync
 
 ---
 
