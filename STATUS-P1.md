@@ -6,14 +6,14 @@
 
 ## In progress
 
-In progress: D-3 Reader View  branch: p1-reader-view
-Next step: commit and merge  crates/shell/src/reader_view.rs, main.rs
+*(свободен)*
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-04 | D-3: Reader View | F9 toggle: `extract_article(html)` ищет `<article>`/`<main>`/`role="main"`, вырезает `<script>`/`<nav>`/`<aside>`/`<header>`/`<footer>`, извлекает title из `<title>` или первого `<h1>`. `build_reader_html()` → clean HTML (max-width:680px, 1.1rem, line-height:1.6). `toggle_reader_view()` в shell: вход — reload как PageSource::Snapshot, выход — восстановление оригинала. Keybinding F9 (Ctrl+Shift+R занят Read-later). `reader_original_source: Option<PageSource>` в Lumen + PageSnapshot (save/restore/reset). lumen-shell: clippy чист, 16/16 unit-тестов. |
 | 2026-06-04 | C-5: CSS shape-outside polygon + ellipse | CSS Shapes L1 §4–5.2: `parse_shape_polygon_px()` / `parse_shape_ellipse_px()`, `ShapePolygon`/`ShapeEllipse` в `FloatContext`, `polygon_edge_x_at_y()` ray-intersection, `left_edge_at`/`right_edge_at` circle→polygon→ellipse chain, wiring в float placement. // CSS: shape-outside, shape-margin. lumen-layout: 2357 тестов (+8). Clippy чист. |
 | 2026-06-04 | C-4: CSS logical properties resolver | CSS Logical Properties L1 §2–8 Phase 0: `resolve_logical_properties(style, writing_mode)` в `layout/src/style.rs`. Временные поля в ComputedStyle: inline-size, block-size, inset-inline-*, inset-block-*, margin-inline/block-*, padding-inline/block-*, border-inline/block-*-width. `apply_declaration()` парсит logical свойства в temp-поля; `resolve_logical_properties()` маппирует logical→physical после cascade. Phase 0: horizontal-tb (inline-start→left, inline-end→right, block-start→top, block-end→bottom). Vertical writing modes — Phase 1. // CSS: inline-size, block-size, inset-*, margin-*, padding-*, border-*-width. lumen-layout: 2349 тестов. Clippy чист. |
 | 2026-06-04 | C-3: MathML Core layout stub | MathML Core layout Phase 0: New module `crates/engine/layout/src/mathml.rs` with `MathmlBox` struct (main_boxes, denominator_boxes, annotation_boxes, annotation_scale), `MathmlElementKind` enum (Math, Mrow, Mi, Mn, Mo, Mfrac, Msqrt, Msup, Msub). Functions: `lay_out_mathml(mathml)` entry point, `collect_mathml_structure(root)` for DOM scanning, `collect_mfrac_structure()`, `collect_msqrt_structure()`, `collect_msup_structure()`, `collect_msub_structure()`. Layout algorithms: `lay_out_mfrac()` stacks numerator/denominator vertically, `lay_out_msqrt()` returns radicand (Phase 0), `lay_out_msup()` positions exponent at top-right with scaling, `lay_out_msub()` positions subscript at bottom-right with scaling. Helpers: `stack_boxes_horizontal()`, `stack_boxes_vertical()`, `scale_box()`, `position_annotation_at_top_right()`, `position_annotation_at_bottom_right()`. Phase 0: basic stacking and composition; Phase 1: math-style, math-depth CSS properties (P4 wiring). 8 unit-tests (element kinds, box creation, builder chain, denominator/annotation, scale clamping). // CSS: math-style, math-depth. lumen-layout: 2347 tests (was 2339 + 8 new). Clippy clean. |
