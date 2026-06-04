@@ -2667,12 +2667,12 @@ fn build_box(
                               doc, sheet, viewport, dark_mode, counters, registry);
             }
         }
-        // CSS Display L3 §7.2 — flatten display:contents boxes into this context.
-        // Each Contents child is replaced by its own children (already built and
-        // recursively flattened). Runs after pseudo-element injection so ::before/
-        // ::after on the contents element itself are preserved inside the box.
-        flatten_contents(&mut children);
         } // end else (non-item-container)
+        // CSS Display L3 §7.2 — flatten display:contents boxes into this context.
+        // Must run for ALL child-building paths (item-container and non-item-container)
+        // because flex/grid/table children may include display:contents elements whose
+        // Contents boxes must be unpacked before lay_out sees them.
+        flatten_contents(&mut children);
     }
 
     // SVG root: build SVG shape children (separate from HTML box-tree flow).
@@ -7149,6 +7149,39 @@ mod tests {
             b.children.iter().any(find_contents)
         }
         assert!(!find_contents(&root), "nested Contents boxes must be fully flattened");
+    }
+
+    #[test]
+    fn contents_in_flex_container_no_panic() {
+        // BUG-058: display:contents child inside a flex container caused a panic
+        // because flatten_contents was only called in the non-item-container path.
+        let html = r#"<div id="flex"><div id="wrap"><div id="item"></div></div></div>"#;
+        let css = "#flex { display: flex; width: 400px; } #wrap { display: contents; } #item { width: 100px; height: 50px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        // Must not panic.
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_contents(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::Contents) { return true; }
+            b.children.iter().any(find_contents)
+        }
+        assert!(!find_contents(&root), "Contents box must be flattened inside flex container");
+    }
+
+    #[test]
+    fn contents_in_grid_container_no_panic() {
+        // BUG-058: same panic reproducible with display:grid container.
+        let html = r#"<div id="grid"><div id="wrap"><div id="item"></div></div></div>"#;
+        let css = "#grid { display: grid; width: 400px; } #wrap { display: contents; } #item { width: 100px; height: 50px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        // Must not panic.
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_contents(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::Contents) { return true; }
+            b.children.iter().any(find_contents)
+        }
+        assert!(!find_contents(&root), "Contents box must be flattened inside grid container");
     }
 
     // ── CSS 2.1 §10.3.3 — auto horizontal-margin centering ───────────────────

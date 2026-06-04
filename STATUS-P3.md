@@ -6,8 +6,7 @@
 
 ## In progress
 
-BUG-058: display:contents не сглажен в flex/grid/table — паника в lay_out  branch: p3-bug058-contents-flatten
-Next step: fix flatten_contents placement + тесты  crates/engine/layout/src/box_tree.rs:2670
+_(нет)_
 
 ## Next
 
@@ -17,7 +16,6 @@ Next step: fix flatten_contents placement + тесты  crates/engine/layout/src
 
 | # | Компонент | Описание | Файл |
 |---|---|---|---|
-| **BUG-058** | layout | **КРИТИЧНО — паника при открытии реальных сайтов**: `display:contents` не сглажен перед `lay_out` | `crates/engine/layout/src/box_tree.rs:3805` |
 | **BUG-059** | font | WOFF2 отклоняет шрифты с контурами из 0 точек — 10 шрифтов CNN не загружаются | `crates/engine/font/src/` |
 | **BUG-060** | font | WOFF2 «unexpected end of font data» для 3 шрифтов CNN — вероятно неверный расчёт буфера | `crates/engine/font/src/` |
 | BUG-055 | layout | `<picture>` с AVIF source не делает fallback на `<img src>` | `crates/engine/layout/src/lib.rs:12366` |
@@ -69,6 +67,7 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 ## Recent fixes
 
+- **BUG-058 display:contents паника в flex/grid/table** (2026-06-04) — `flatten_contents` (`crates/engine/layout/src/box_tree.rs`) вызывался только в `else (non-item-container)` ветке `build_box`, но не для `is_item_container` (flex/grid/table). `display:contents` дочерний элемент попадал в children flex-контейнера как `BoxKind::Contents` без раскрытия → `lay_out` бил `unreachable!`. Fix: `flatten_contents(&mut children)` перенесён за `if is_item_container / else` блок, теперь работает для обоих путей. 2 регрессионных теста: `contents_in_flex_container_no_panic` + `contents_in_grid_container_no_panic`. layout 2349/2349. Влито `p3-bug058-contents-flatten`.
 - **BUG-057 wgpu Vulkan crash** (2026-06-03) — `Renderer::new_async` и `new_headless_async` теперь используют `wgpu::Backends::DX12` по умолчанию на Windows вместо Vulkan (через `InstanceDescriptor + with_env()`). Vulkan-бэкенд вызывал двойную панику при первом рендере страницы: сначала validation error «Encoder is invalid», затем при раскрутке стека Surface drop расил на ещё живом SurfaceTexture. `WGPU_BACKEND` env-var позволяет переопределить. Влито `p3-bug057-wgpu-dx12`.
 - **8A.6 doc-sync** (2026-05-31) — обновлены `lumen-plan.md` (8A.6 🟡→✅, 8A 🟡→✅, cpu_raster 33→57 страниц), `CLAUDE.md` (раздел «Planned migration» заменён на «8A.6 COMPLETE», убрана многостраничная история), `subsystems/driver.md` (57 страниц, invariants). Влито `p3-8a6-doc-sync`.
 - **8A.6(б-20) расширение PAGES snapshot_cpu 56 → 57** (2026-05-31) — `PAGES` (`crates/driver/tests/snapshot_cpu.rs`) расширен с 56 до 57 страниц: добавлена `54-svg-path-stroke` (SVG `<path>` со stroke-only и fill+stroke — stroke-тесселятор `tessellate_stroke` эмитит треугольники как `DrawSvgPath`, cpu_raster поддерживал с б-4, новый примитив не нужен; 22 КБ — 4 ряда: open stroked/closed stroked/fill+stroke/varying-width). 56 прежних эталонов перегенерировались байт-в-байт идентично → детерминизм. clippy чист (driver `--all-targets --features cpu-render`), `snapshot_cpu` 57-страничный 1/1. **Все graphic_tests/*.html теперь покрыты snapshot_cpu.** Влито `p3-8a6-more-pages-b20`.
