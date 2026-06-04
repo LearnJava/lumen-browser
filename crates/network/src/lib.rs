@@ -691,6 +691,7 @@ fn fetch_single(
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
     extra_headers: &str,
+    _proxy: Option<&HttpProxy>,
 ) -> Result<Response> {
     let key = PoolKey {
         host: host.to_owned(),
@@ -1035,6 +1036,7 @@ fn fetch_with_redirect(
     cache_extra_headers: &str,
     cookie_jar: Option<&dyn CookieProvider>,
     top_level_site: Option<&str>,
+    proxy: Option<&HttpProxy>,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -1160,6 +1162,7 @@ fn fetch_with_redirect(
                 None,
                 None,
                 &preflight_extra,
+                proxy,
             ) {
                 Ok(r) => r,
                 Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1261,6 +1264,7 @@ fn fetch_with_redirect(
             authorization.as_deref(),
             accept_encoding,
             &actual_extra_headers,
+            proxy,
         ) {
             Ok(r) => r,
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1368,6 +1372,7 @@ fn fetch_with_redirect(
                     "",
                     cookie_jar,
                     top_level_site,
+                    proxy,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -1885,6 +1890,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )
         .map(|resp| resp.body)
     }
@@ -1921,6 +1927,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -1991,6 +1998,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -2078,6 +2086,7 @@ impl HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.proxy.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2111,6 +2120,7 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2169,6 +2179,7 @@ impl NetworkTransport for HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.proxy.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2202,6 +2213,7 @@ impl NetworkTransport for HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2275,6 +2287,7 @@ impl JsFetchProvider for HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
