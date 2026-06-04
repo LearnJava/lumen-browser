@@ -40,6 +40,7 @@ mod notification;
 mod omnibox;
 mod panels;
 mod platform;
+mod reader_view;
 pub mod surface;
 mod runtime;
 mod scroll;
@@ -437,6 +438,7 @@ fn run_window_mode(
         archive: tabs::archive::TabArchive::new(),
         restore_spinner_start_ms: None,
         resize_active: None,
+        reader_original_source: None,
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -1735,6 +1737,8 @@ enum KeyCommand {
     TogglePip,
     /// Показать/скрыть панель Read-later (Ctrl+Shift+R, §12.3).
     ToggleReadLater,
+    /// Включить/выключить Reader View (F9, §D-3): clean article layout.
+    ToggleReaderView,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1866,6 +1870,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyR if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleReadLater)
         }
+        // F9 — toggle Reader View (§D-3)
+        KeyCode::F9 if no_mods => Some(KeyCommand::ToggleReaderView),
         // Ctrl+= — zoom in
         KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
         // Ctrl+- — zoom out
@@ -2306,6 +2312,9 @@ struct PageSnapshot {
     /// the JS side so the shell can store it in `NavEntry` when pushState fires.
     /// Initialised to `"null"` (the default initial `history.state`).
     current_history_state_json: String,
+    /// Original page source preserved while Reader View (§D-3) is active.
+    /// `None` = this tab is not in reader mode.
+    reader_original_source: Option<PageSource>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3733,6 +3742,11 @@ struct Lumen {
     /// Set on MouseInput Pressed over a resize grip, cleared on MouseInput Released.
     /// During CursorMoved, width/height are updated via JS binding.
     resize_active: Option<(lumen_dom::NodeId, f32, f32)>,
+    /// Original page source stored when Reader View (§D-3) is active.
+    ///
+    /// `Some` when the current page is showing the clean reader HTML (F9 toggle);
+    /// `None` in normal browsing mode.  Toggling F9 again restores this source.
+    reader_original_source: Option<PageSource>,
 }
 
 /// State for an in-progress CSS View Transition cross-fade (CSS View Transitions L1).
@@ -7259,6 +7273,9 @@ impl Lumen {
                 }
                 self.request_redraw();
             }
+            KeyCommand::ToggleReaderView => {
+                self.toggle_reader_view();
+            }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
                 self.relayout();
@@ -8056,6 +8073,40 @@ impl Lumen {
     ///
     /// Called after every save/delete and when the panel opens.  Shows the 50
     /// most recent items (unread first, then read, then archived).
+    /// Toggle Reader View (§D-3, F9).
+    ///
+    /// When entering reader mode: extracts the article region from the current
+    /// page's HTML source, wraps it in a clean reading template, and re-renders
+    /// it as an in-memory `PageSource::Snapshot` without a network round-trip.
+    /// The original source is stashed in `reader_original_source`.
+    ///
+    /// When exiting: restores the stashed source and reloads.
+    fn toggle_reader_view(&mut self) {
+        if let Some(original) = self.reader_original_source.take() {
+            // Exit reader mode — restore original page.
+            self.source = original;
+            self.reload();
+            return;
+        }
+
+        // Enter reader mode — extract article from current HTML source.
+        let html = match self.layout_source.as_ref().and_then(|ls| ls.html_source.as_deref()) {
+            Some(s) if !s.is_empty() => s.to_owned(),
+            _ => return, // nothing to extract from
+        };
+
+        let Some(article) = reader_view::extract_article(&html) else { return };
+        let reader_html = reader_view::build_reader_html(&article);
+
+        let base_url = self.source.url_str()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "about:reader".to_owned());
+
+        self.reader_original_source = Some(self.source.clone());
+        self.source = PageSource::Snapshot { html: reader_html, base_url };
+        self.reload();
+    }
+
     fn refresh_read_later(&mut self) {
         let mut entries = self
             .read_later_store
@@ -9118,6 +9169,7 @@ impl Lumen {
                 &mut self.current_history_state_json,
                 String::from("null"),
             ),
+            reader_original_source: self.reader_original_source.take(),
         }
     }
 
@@ -9167,6 +9219,7 @@ impl Lumen {
         self.zoom_factor = snap.zoom_factor;
         self.display_url = snap.display_url;
         self.current_history_state_json = snap.current_history_state_json;
+        self.reader_original_source = snap.reader_original_source;
     }
 
     /// Reset all per-page fields to blank-tab defaults.
@@ -9220,6 +9273,7 @@ impl Lumen {
         self.zoom_factor = zoom::ZOOM_DEFAULT;
         self.display_url = None;
         self.current_history_state_json = String::from("null");
+        self.reader_original_source = None;
         // Cancel in-flight scroll animations.
         self.scroll_anim = None;
         self.momentum_anim = None;
