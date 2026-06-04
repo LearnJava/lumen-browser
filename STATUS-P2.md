@@ -6,9 +6,7 @@
 
 ## In progress
 
-**A-1: CSS Properties & Values API (Houdini)**  
-Branch: `p2-a1-css-properties-values`  
-Next step: Implement `@property` parsing in `lumen-css-parser`, add `PropertyRule` struct, extend `StyleSheet` (lumen-css-parser/src/parser.rs)
+(none)
 
 ---
 
