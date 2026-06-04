@@ -4479,12 +4479,12 @@ fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     // - Каждая ячейка может иметь свой background и border
 
     // Эмитим фон таблицы
-    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt()) {
-        if bg.a > 0 {
-            let clip = background_clip_rect(b, background_color_clip(b));
-            if clip.width > 0.0 && clip.height > 0.0 {
-                out.push(DisplayCommand::FillRect { rect: clip, color: bg });
-            }
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        let clip = background_clip_rect(b, background_color_clip(b));
+        if clip.width > 0.0 && clip.height > 0.0 {
+            out.push(DisplayCommand::FillRect { rect: clip, color: bg });
         }
     }
     emit_background_image(out, b, dpr);
@@ -4559,10 +4559,10 @@ fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 /// Эмитируем ячейку таблицы
 fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     // Эмитим фон ячейки
-    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt()) {
-        if bg.a > 0 {
-            out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
-        }
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
     }
     emit_background_image(out, b, dpr);
 
