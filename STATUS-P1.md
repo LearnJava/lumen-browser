@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none — ready for next task)
+**C-1: CSS Table layout** branch: `p1-c1-table-layout`  
+Next step: Create `crates/engine/layout/src/table.rs` with `TableContext` and `lay_out_table()` stubs
 
 ---
 
