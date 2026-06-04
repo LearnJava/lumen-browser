@@ -431,6 +431,9 @@ fn run_window_mode(
             &network_log,
         )),
         privacy: panels::privacy_panel::PrivacyPanel::new(network_log),
+        settings_store: lumen_storage::BrowserSettings::open_in_memory()
+            .expect("settings in-memory"),
+        settings_panel: panels::settings_panel::SettingsPanel::new(),
         fallbacks_preloaded: false,
         zoom_factor: zoom::ZOOM_DEFAULT,
         display_url: None,
@@ -1723,6 +1726,8 @@ enum KeyCommand {
     ToggleBookmarks,
     /// Показать/скрыть панель истории браузера (Ctrl+H, task D-5).
     ToggleHistory,
+    /// Открыть/закрыть страницу настроек браузера (Ctrl+,, task D-7).
+    ToggleSettings,
     /// Показать/скрыть командную палитру (Ctrl+K, §7E.2, task #23).
     ToggleCommandPalette,
     /// Войти/выйти из focus mode + Pomodoro (Ctrl+Shift+F, task #25, V4).
@@ -1846,6 +1851,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         }
         // Ctrl+H — toggle browser history panel (task D-5)
         KeyCode::KeyH if ctrl_only => Some(KeyCommand::ToggleHistory),
+        // Ctrl+, — open browser settings (task D-7)
+        KeyCode::Comma if ctrl_only => Some(KeyCommand::ToggleSettings),
         // Ctrl+Shift+F — toggle focus mode + Pomodoro timer (task #25, V4)
         KeyCode::KeyF if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleFocusMode)
@@ -3712,6 +3719,18 @@ struct Lumen {
     ///
     /// [`network_panel`]: Lumen::network_panel
     privacy: panels::privacy_panel::PrivacyPanel,
+    /// Persistent browser settings store (task D-7).
+    ///
+    /// Backed by SQLite (in-memory for the session). Stores homepage, search
+    /// engine ID, shields, fingerprint mode, DoH, font size, theme, and
+    /// download path. Read on panel open; written when panel closes.
+    settings_store: lumen_storage::BrowserSettings,
+    /// Settings page overlay state (task D-7, `about:settings`).
+    ///
+    /// `Ctrl+,` (or navigating to `about:settings`) toggles a centred
+    /// 640×480 overlay with four tabbed sections: General, Privacy,
+    /// Appearance, Downloads.
+    settings_panel: panels::settings_panel::SettingsPanel,
     /// Whether the curated system-font fallback chain has been preloaded into
     /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
     ///
@@ -5590,6 +5609,71 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // Settings panel (task D-7): centred overlay.
+                    if self.settings_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
+                        let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
+                        use panels::settings_panel::SettingsHit;
+                        let hit = panels::settings_panel::hit_test(
+                            &self.settings_panel,
+                            x_css,
+                            y_css,
+                            sp_x,
+                            sp_y,
+                        );
+                        match hit {
+                            SettingsHit::Close => {
+                                let draft = self.settings_panel.apply_draft();
+                                let _ = self.settings_store.apply_snapshot(&draft);
+                                self.settings_panel.visible = false;
+                            }
+                            SettingsHit::TabSelect(sec) => {
+                                self.settings_panel.section = sec;
+                                self.settings_panel.scroll_y = 0.0;
+                            }
+                            SettingsHit::ToggleShields => {
+                                self.settings_panel.draft.shields_enabled =
+                                    !self.settings_panel.draft.shields_enabled;
+                            }
+                            SettingsHit::ToggleDoh => {
+                                self.settings_panel.draft.doh_enabled =
+                                    !self.settings_panel.draft.doh_enabled;
+                            }
+                            SettingsHit::SetFingerprintMode(mode) => {
+                                self.settings_panel.draft.fingerprint_mode = mode;
+                            }
+                            SettingsHit::SetTheme(theme) => {
+                                self.settings_panel.draft.theme = theme;
+                            }
+                            SettingsHit::FontSizeDecrease => {
+                                self.settings_panel.draft.font_size =
+                                    (self.settings_panel.draft.font_size - 2.0).max(8.0);
+                            }
+                            SettingsHit::FontSizeIncrease => {
+                                self.settings_panel.draft.font_size =
+                                    (self.settings_panel.draft.font_size + 2.0).min(36.0);
+                            }
+                            SettingsHit::FocusHomepage => {
+                                self.settings_panel.focused_input =
+                                    Some(panels::settings_panel::SettingInput::Homepage);
+                            }
+                            SettingsHit::FocusDownloadPath => {
+                                self.settings_panel.focused_input =
+                                    Some(panels::settings_panel::SettingInput::DownloadPath);
+                            }
+                            SettingsHit::Inside => { /* swallow */ }
+                            SettingsHit::Outside => {
+                                let draft = self.settings_panel.apply_draft();
+                                let _ = self.settings_store.apply_snapshot(&draft);
+                                self.settings_panel.visible = false;
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
                     // History panel (task D-5): centred floating overlay.
                     if self.history_panel.visible {
                         let (px, py) = self.history_panel_anchor();
@@ -6454,6 +6538,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut bm_cmds);
                 }
 
+                // Settings panel (task D-7): centred overlay, Ctrl+, or about:settings.
+                if self.settings_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
+                    let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
+                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y);
+                }
+
                 // History panel (task D-5): centred floating overlay.
                 if self.history_panel.visible {
                     let win_w = self.viewport_width_css();
@@ -7054,6 +7147,11 @@ impl Lumen {
             return;
         }
 
+        // Settings panel text inputs + Esc. Modified keys fall through for global shortcuts.
+        if self.settings_panel.visible && self.handle_settings_key(code, key_event) {
+            return;
+        }
+
         // Vim keybinding mode: intercept navigation keys in Normal state.
         // In Insert state, PassThrough falls through to the keybinding table.
         if let Some(ref mut vm) = self.vim_mode {
@@ -7323,6 +7421,18 @@ impl Lumen {
                 self.history_panel.toggle();
                 if self.history_panel.visible {
                     self.refresh_history();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleSettings => {
+                let snap = self.settings_store.snapshot();
+                if self.settings_panel.visible {
+                    // Flush draft to store on close.
+                    let draft = self.settings_panel.apply_draft();
+                    let _ = self.settings_store.apply_snapshot(&draft);
+                    self.settings_panel.visible = false;
+                } else {
+                    self.settings_panel.open(snap);
                 }
                 self.request_redraw();
             }
@@ -7710,6 +7820,14 @@ impl Lumen {
     /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
     /// → record in search_history → plain navigate.
     fn handle_omnibox_commit(&mut self, value: String) {
+        // `about:settings` — open the browser settings overlay (task D-7).
+        if value.trim() == "about:settings" {
+            let snap = self.settings_store.snapshot();
+            self.settings_panel.open(snap);
+            self.request_redraw();
+            return;
+        }
+
         // `sidebar:<url>` — load the URL into the right-docked sidebar panel (7D.3).
         if let Some(sidebar_url) = value.strip_prefix("sidebar:") {
             let sidebar_url = sidebar_url.trim().to_owned();
@@ -7973,6 +8091,45 @@ impl Lumen {
                             self.history_panel.append_search(ch);
                         }
                         self.refresh_history();
+                        self.request_redraw();
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /// Handle keyboard input when the settings panel is visible.
+    ///
+    /// Printable chars go to the focused text input. Escape closes panel (flushing
+    /// draft). Returns `true` if the key was consumed.
+    fn handle_settings_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                let draft = self.settings_panel.apply_draft();
+                let _ = self.settings_store.apply_snapshot(&draft);
+                self.settings_panel.visible = false;
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.settings_panel.focused_input.is_some() => {
+                self.settings_panel.backspace();
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.settings_panel.focused_input.is_some() {
+                    if let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.settings_panel.append_char(ch);
+                        }
                         self.request_redraw();
                         return true;
                     }

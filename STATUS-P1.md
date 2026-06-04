@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+D-7: Settings page  branch: p1-d7-settings
+Next step: BrowserSettings in lumen-storage/src/browser_settings.rs, then settings_panel.rs
 
 ---
 
