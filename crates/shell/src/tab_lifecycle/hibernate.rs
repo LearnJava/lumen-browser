@@ -70,6 +70,7 @@ pub(crate) fn restore_js_context(
     sw_backend: &Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> (Arc<Mutex<Document>>, Option<Box<dyn PersistentJs>>) {
     let base = resource_base_from_url(url);
 
@@ -79,7 +80,7 @@ pub(crate) fn restore_js_context(
     let sw = crate::sw_store_for_base(&base, sw_backend);
     let (fetch_provider, ws_provider, sse_provider) = match &base {
         ResourceBase::Url(_) => {
-            let client = base.http_client_for_subresource(event_sink);
+            let client = base.http_client_for_subresource(event_sink, cookie_jar);
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
