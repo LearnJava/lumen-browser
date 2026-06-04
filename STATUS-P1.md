@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none — ready for next task)
+**C-2: CSS Ruby layout stub**  branch: `p1-http-proxy`
+Next step: Create module `layout/src/ruby.rs` with `RubyBox` struct at `layout/src/ruby.rs:1`
 
 ---
 
