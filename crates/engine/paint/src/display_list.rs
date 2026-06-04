@@ -3619,7 +3619,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // CSS Transforms L2 §6.2: inside a `preserve-3d` 3D rendering
             // context children paint back-to-front by transformed depth;
             // otherwise document order (flat compositing).
-            if establishes_3d_rendering_context(b) {
+            // Special handling for Table: emit table-specific layout (cells, borders, etc).
+            if matches!(b.kind, BoxKind::Table) {
+                emit_table_box(b, out, dpr);
+            } else if establishes_3d_rendering_context(b) {
                 for i in depth_sorted_child_order(&b.children) {
                     walk(&b.children[i], out, dpr);
                 }
@@ -4460,6 +4463,140 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
     }
     if is_sticky {
         out.push(DisplayCommand::EndStickyLayer);
+    }
+}
+
+/// Рендеринг таблицы с поддержкой border-collapse и фонов ячеек.
+///
+/// CSS 2.1 §17.5 border-collapse: separate (default) или collapse (merged).
+/// - separate: каждая ячейка имеет собственные границы, разделённые border-spacing
+/// - collapse: границы соседних ячеек схлопываются в одну, берётся из более приоритетной ячейки
+fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // // CSS: border-collapse, border-spacing, empty-cells, caption-side
+    // В Phase 0 поддерживаем базовую структуру:
+    // - Table содержит TableRowGroup'ы (или прямые TableRow'ы)
+    // - Каждый Row содержит ячейки (display: table-cell)
+    // - Каждая ячейка может иметь свой background и border
+
+    // Эмитим фон таблицы
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt()) {
+        if bg.a > 0 {
+            let clip = background_clip_rect(b, background_color_clip(b));
+            if clip.width > 0.0 && clip.height > 0.0 {
+                out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+            }
+        }
+    }
+    emit_background_image(out, b, dpr);
+
+    // Обрабатываем граници таблицы
+    let s = &b.style;
+    let has_border = s.border_top_style.is_visible()
+        || s.border_right_style.is_visible()
+        || s.border_bottom_style.is_visible()
+        || s.border_left_style.is_visible();
+    if has_border {
+        let cur = s.color;
+        out.push(DisplayCommand::DrawBorder {
+            rect: b.rect,
+            widths: [
+                s.border_top_width, s.border_right_width,
+                s.border_bottom_width, s.border_left_width,
+            ],
+            colors: [
+                s.border_top_color.resolve(cur),
+                s.border_right_color.resolve(cur),
+                s.border_bottom_color.resolve(cur),
+                s.border_left_color.resolve(cur),
+            ],
+            styles: [
+                s.border_top_style, s.border_right_style,
+                s.border_bottom_style, s.border_left_style,
+            ],
+            radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+        });
+    }
+
+    // Обрабатываем строки и ячейки
+    for row_group in &b.children {
+        match &row_group.kind {
+            BoxKind::TableRowGroup => {
+                emit_table_row_group(row_group, out, dpr);
+            }
+            BoxKind::TableRow => {
+                emit_table_row(row_group, out, dpr);
+            }
+            _ => {
+                walk(row_group, out, dpr);
+            }
+        }
+    }
+}
+
+/// Эмитируем группу строк таблицы (thead, tbody, tfoot)
+fn emit_table_row_group(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Группа не рендерится сама по себе (прозрачный контейнер)
+    // но может иметь фон и граници
+
+    // TODO: для Phase 1 можно добавить фон group-уровня
+
+    // Обрабатываем строки
+    for row in &b.children {
+        if matches!(&row.kind, BoxKind::TableRow) {
+            emit_table_row(row, out, dpr);
+        }
+    }
+}
+
+/// Эмитируем строку таблицы
+fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Обрабатываем ячейки строки
+    for cell in &b.children {
+        emit_table_cell(cell, out, dpr);
+    }
+}
+
+/// Эмитируем ячейку таблицы
+fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Эмитим фон ячейки
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt()) {
+        if bg.a > 0 {
+            out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+        }
+    }
+    emit_background_image(out, b, dpr);
+
+    // Эмитим границы ячейки
+    let s = &b.style;
+    let has_border = s.border_top_style.is_visible()
+        || s.border_right_style.is_visible()
+        || s.border_bottom_style.is_visible()
+        || s.border_left_style.is_visible();
+    if has_border {
+        let cur = s.color;
+        out.push(DisplayCommand::DrawBorder {
+            rect: b.rect,
+            widths: [
+                s.border_top_width, s.border_right_width,
+                s.border_bottom_width, s.border_left_width,
+            ],
+            colors: [
+                s.border_top_color.resolve(cur),
+                s.border_right_color.resolve(cur),
+                s.border_bottom_color.resolve(cur),
+                s.border_left_color.resolve(cur),
+            ],
+            styles: [
+                s.border_top_style, s.border_right_style,
+                s.border_bottom_style, s.border_left_style,
+            ],
+            radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+        });
+    }
+
+    // Обрабатываем контент ячейки
+    for child in &b.children {
+        walk(child, out, dpr);
     }
 }
 
