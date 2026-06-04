@@ -4485,6 +4485,9 @@ fn lay_out_flex(
     } else {
         (0..n_lines).collect()
     };
+    // Track line cross-sizes for align-content.
+    let mut line_cross_sizes: Vec<f32> = Vec::with_capacity(n_lines);
+
 
     for li in &ordered_line_idxs {
         let line_keys = &lines[*li]; // keys into item_idxs
@@ -4594,6 +4597,7 @@ fn lay_out_flex(
         } else {
             line_keys.iter().map(|&k| children[item_idxs[k]].rect.height).fold(0.0_f32, f32::max)
         };
+        line_cross_sizes.push(line_cross);
 
         if !is_column {
             for &k in line_keys {
@@ -4630,11 +4634,79 @@ fn lay_out_flex(
     }
 
     // Remove trailing gap from cross_cursor.
-    let total_cross = if n_lines > 1 {
+    let mut total_cross = if n_lines > 1 {
         cross_cursor - cross_gap
     } else {
         cross_cursor
     };
+
+    // Apply align-content to distribute remaining space between flex lines (row wrap only).
+    if !is_column && n_lines > 1 && is_wrap {
+        let line_gap_total = cross_gap * (n_lines.saturating_sub(1)) as f32;
+        let used_cross: f32 = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
+        let free_cross = (content_width - used_cross).max(0.0);
+
+        if free_cross > 0.0 {
+            let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
+
+            match s.align_content {
+                AlignValue::End => {
+                    for i in 0..n_lines {
+                        line_offsets[i] = free_cross;
+                    }
+                }
+                AlignValue::Center => {
+                    for i in 0..n_lines {
+                        line_offsets[i] = free_cross / 2.0;
+                    }
+                }
+                AlignValue::SpaceBetween => {
+                    if n_lines > 1 {
+                        let gap_per = free_cross / (n_lines - 1) as f32;
+                        for i in 1..n_lines {
+                            line_offsets[i] = gap_per * i as f32;
+                        }
+                    }
+                }
+                AlignValue::SpaceAround => {
+                    let per = free_cross / n_lines as f32;
+                    for i in 0..n_lines {
+                        line_offsets[i] = per / 2.0 + (per * i as f32);
+                    }
+                }
+                AlignValue::SpaceEvenly => {
+                    let per = free_cross / (n_lines + 1) as f32;
+                    for i in 0..n_lines {
+                        line_offsets[i] = per * (i as f32 + 1.0);
+                    }
+                }
+                AlignValue::Stretch => {
+                    let total_size: f32 = line_cross_sizes.iter().sum();
+                    if total_size > 0.0 {
+                        for i in 0..n_lines {
+                            line_cross_sizes[i] += free_cross * (line_cross_sizes[i] / total_size);
+                        }
+                    }
+                }
+                _ => {
+                }
+            }
+
+            for li in 0..n_lines {
+                let line_keys = &lines[li];
+                let offset = line_offsets[li];
+
+                if !is_column && offset > 0.0 {
+                    for &k in line_keys {
+                        let i = item_idxs[k];
+                        children[i].rect.y += offset;
+                    }
+                }
+            }
+
+            total_cross = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
+        }
+    }
 
     if is_column {
         // Column: return main-axis height (main_cursor from last line).
