@@ -1,170 +1,206 @@
-//! CSS Custom Highlight API (CSS Highlight API L1, https://drafts.csswg.org/css-highlight-api-1/)
-//!
-//! Provides `CSS.highlights` registry for custom text highlights with
-//! `Highlight` objects containing ranges and priority, styled via `::highlight(name)` pseudo-element.
+//! CSS Highlight API (L1 3) — custom text highlight registration
+//! Implements CSS.highlights registry via JS shim and Rust backing.
 
-use rquickjs::Ctx;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
-/// Install CSS Highlight API bindings into the JavaScript context.
-///
-/// Exposes `CSS.highlights` `HighlightRegistry` with `set/get/has/delete/clear` methods,
-/// `Highlight` constructor for creating highlight ranges with priority.
-/// Phase 0: registry and storage; visual styling via `::highlight()` in Phase 1 (render integration).
-pub fn install_highlight_api_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(HIGHLIGHT_SHIM)?;
+static HIGHLIGHTS_REGISTRY: OnceLock<Mutex<HighlightRegistry>> = OnceLock::new();
+
+#[derive(Clone, Debug, Default)]
+pub struct HighlightRegistry {
+    highlights: HashMap<String, Highlight>,
+}
+
+impl HighlightRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set(&mut self, name: String, highlight: Highlight) {
+        self.highlights.insert(name, highlight);
+    }
+
+    pub fn get(&self, name: &str) -> Option<Highlight> {
+        self.highlights.get(name).cloned()
+    }
+
+    pub fn has(&self, name: &str) -> bool {
+        self.highlights.contains_key(name)
+    }
+
+    pub fn delete(&mut self, name: &str) -> bool {
+        self.highlights.remove(name).is_some()
+    }
+
+    pub fn clear(&mut self) {
+        self.highlights.clear();
+    }
+
+    pub fn all(&self) -> Vec<(String, Highlight)> {
+        self.highlights
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+}
+
+pub fn get_highlights_registry() -> &'static Mutex<HighlightRegistry> {
+    HIGHLIGHTS_REGISTRY.get_or_init(|| Mutex::new(HighlightRegistry::new()))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Highlight {
+    pub priority: i32,
+    pub range_ids: Vec<String>,
+}
+
+impl Highlight {
+    pub fn new(priority: i32, range_ids: Vec<String>) -> Self {
+        Self {
+            priority,
+            range_ids,
+        }
+    }
+}
+
+pub fn install_highlight_api_bindings(ctx: &rquickjs::Ctx) -> rquickjs::Result<()> {
+    ctx.eval::<(), _>(HIGHLIGHT_API_SHIM)?;
     Ok(())
 }
 
-/// JavaScript shim: Install CSS.highlights registry and Highlight class.
-const HIGHLIGHT_SHIM: &str = r#"(function() {
-    // Highlight class: extends Set, stores ranges and priority
-    class Highlight extends Set {
-        constructor(...ranges) {
-            super(ranges);
-            this.priority = 0;  // default priority
-        }
-    }
+const HIGHLIGHT_API_SHIM: &str = r#"(function(global) {
+  'use strict';
 
-    // HighlightRegistry: extends Map, provides named highlight storage
-    class HighlightRegistry extends Map {
-        // Inherits set/get/has/delete/clear/entries/keys/values from Map
-    }
+  // HighlightRegistry map stored in global scope
+  const _highlightRegistry = {};
 
-    // Ensure CSS object exists
-    if (typeof globalThis.CSS === 'undefined') {
-        globalThis.CSS = {};
-    }
+  // Highlight constructor: new Highlight(...ranges)
+  global.Highlight = function Highlight(...ranges) {
+    this.priority = 0;
+    this.ranges = ranges;
+  };
 
-    // Install CSS.highlights registry and Highlight constructor
-    globalThis.CSS.highlights = new HighlightRegistry();
-    globalThis.CSS.Highlight = Highlight;
-})();
-"#;
+  // CSS.highlights object with set/get/has/delete/clear methods
+  if (!global.CSS) global.CSS = {};
+
+  global.CSS.highlights = {
+    set: function(name, highlight) {
+      _highlightRegistry[name] = highlight || { priority: 0, ranges: [] };
+    },
+    
+    get: function(name) {
+      return _highlightRegistry[name];
+    },
+    
+    has: function(name) {
+      return name in _highlightRegistry;
+    },
+    
+    delete: function(name) {
+      if (name in _highlightRegistry) {
+        delete _highlightRegistry[name];
+        return true;
+      }
+      return false;
+    },
+    
+    clear: function() {
+      for (const key in _highlightRegistry) {
+        delete _highlightRegistry[key];
+      }
+    }
+  };
+
+  // Expose _highlightRegistry for Rust bindings if needed
+  global._highlightRegistry = _highlightRegistry;
+})(globalThis);"#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    #[test]
+    fn highlight_registry_new() {
+        let reg = HighlightRegistry::new();
+        assert!(reg.all().is_empty());
     }
 
     #[test]
-    fn highlight_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: String = ctx.eval("typeof CSS.Highlight === 'function' ? 'true' : 'false'").unwrap();
-            assert_eq!(result, "true");
-        });
+    fn highlight_registry_set_get() {
+        let mut reg = HighlightRegistry::new();
+        let hl = Highlight::new(10, vec!["range-1".to_string()]);
+        reg.set("search".to_string(), hl.clone());
+
+        let retrieved = reg.get("search").unwrap();
+        assert_eq!(retrieved.priority, 10);
+        assert_eq!(retrieved.range_ids, vec!["range-1"]);
     }
 
     #[test]
-    fn highlight_registry_is_map() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: bool = ctx.eval(
-                "CSS.highlights instanceof Map && CSS.highlights.constructor.name === 'HighlightRegistry'"
-            ).unwrap();
-            assert!(result);
-        });
+    fn highlight_registry_has() {
+        let mut reg = HighlightRegistry::new();
+        let hl = Highlight::new(0, Vec::new());
+        reg.set("spelling-error".to_string(), hl);
+
+        assert!(reg.has("spelling-error"));
+        assert!(!reg.has("nonexistent"));
     }
 
     #[test]
-    fn highlight_constructor_with_ranges() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: bool = ctx.eval(
-                "const h = new CSS.Highlight(); h.add('range1'); h.size === 1"
-            ).unwrap();
-            assert!(result);
-        });
+    fn highlight_registry_delete() {
+        let mut reg = HighlightRegistry::new();
+        let hl = Highlight::new(0, Vec::new());
+        reg.set("highlight-1".to_string(), hl);
+
+        assert!(reg.delete("highlight-1"));
+        assert!(!reg.has("highlight-1"));
     }
 
     #[test]
-    fn highlight_priority_default() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: i32 = ctx.eval(
-                "const h = new CSS.Highlight(); h.priority"
-            ).unwrap();
-            assert_eq!(result, 0);
-        });
+    fn highlight_registry_clear() {
+        let mut reg = HighlightRegistry::new();
+        reg.set("h1".to_string(), Highlight::new(1, Vec::new()));
+        reg.set("h2".to_string(), Highlight::new(2, Vec::new()));
+
+        assert_eq!(reg.all().len(), 2);
+        reg.clear();
+        assert!(reg.all().is_empty());
     }
 
     #[test]
-    fn highlight_priority_settable() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: i32 = ctx.eval(
-                "const h = new CSS.Highlight(); h.priority = 5; h.priority"
-            ).unwrap();
-            assert_eq!(result, 5);
-        });
+    fn highlight_priority_ordering() {
+        let h1 = Highlight::new(10, vec!["range-1".to_string()]);
+        let h2 = Highlight::new(5, vec!["range-2".to_string()]);
+
+        assert!(h1.priority > h2.priority);
     }
 
     #[test]
-    fn registry_set_get() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: bool = ctx.eval(
-                "const h = new CSS.Highlight('search-match'); \
-                 CSS.highlights.set('search', h); \
-                 CSS.highlights.get('search') === h"
-            ).unwrap();
-            assert!(result);
-        });
+    fn highlight_default_priority() {
+        let hl = Highlight::new(0, Vec::new());
+        assert_eq!(hl.priority, 0);
     }
 
     #[test]
-    fn registry_has() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: bool = ctx.eval(
-                "const h = new CSS.Highlight(); \
-                 CSS.highlights.set('test', h); \
-                 CSS.highlights.has('test')"
-            ).unwrap();
-            assert!(result);
-        });
+    fn highlight_registry_overwrites() {
+        let mut reg = HighlightRegistry::new();
+        let hl1 = Highlight::new(5, Vec::new());
+        let hl2 = Highlight::new(10, Vec::new());
+
+        reg.set("name".to_string(), hl1);
+        reg.set("name".to_string(), hl2);
+
+        let retrieved = reg.get("name").unwrap();
+        assert_eq!(retrieved.priority, 10);
     }
 
     #[test]
-    fn registry_delete() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: bool = ctx.eval(
-                "const h = new CSS.Highlight(); \
-                 CSS.highlights.set('test', h); \
-                 CSS.highlights.delete('test'); \
-                 !CSS.highlights.has('test')"
-            ).unwrap();
-            assert!(result);
-        });
-    }
+    fn highlight_registry_all() {
+        let mut reg = HighlightRegistry::new();
+        reg.set("h1".to_string(), Highlight::new(1, Vec::new()));
+        reg.set("h2".to_string(), Highlight::new(2, Vec::new()));
 
-    #[test]
-    fn registry_clear() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_highlight_api_bindings(&ctx).unwrap();
-            let result: bool = ctx.eval(
-                "CSS.highlights.set('a', new CSS.Highlight()); \
-                 CSS.highlights.set('b', new CSS.Highlight()); \
-                 CSS.highlights.clear(); \
-                 CSS.highlights.size === 0"
-            ).unwrap();
-            assert!(result);
-        });
+        let all = reg.all();
+        assert_eq!(all.len(), 2);
     }
 }

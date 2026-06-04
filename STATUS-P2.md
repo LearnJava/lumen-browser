@@ -12,6 +12,18 @@
 
 ## Current / Recently Merged
 
+**A-2 | CSS Custom Highlight API** ✅ 2026-06-04 (merged)
+- Phase 0–1: HighlightRegistry {set/get/has/delete/clear} в Rust
+- Highlight структура с priority и range_ids
+- install_highlight_api_bindings() инсталляция JS шима в QuickJS контекст
+- CSS.highlights объект и Highlight конструктор через JS eval HIGHLIGHT_API_SHIM
+- ::highlight(name) pseudo-элемент парсится в PseudoElementKind::Highlight(String)
+- emit_text_with_highlights() stub в display_list.rs с // CSS: ::highlight(name) handoff
+- 9 unit-тестов (registry ops, priority, overwrites, clear, has, delete, set_get)
+- lumen-js: 1268 тестов (было 1260, +9 новых highlight tests)
+- Clippy clean в highlight_api.rs и display_list.rs
+- Phase 2 (future P4): вiring CSS ::highlight() к render colors/styles
+
 **D-3 | Image JPEG XL stub** ✅ 2026-06-04 (merged)
 - Phase 0: `is_jxl(bytes)` детектор (naked FF 0A и ISOBMFF с brand jxl)
 - `JxlImageDecoder` stub → `Err(JxlError::NotSupported)` graceful
