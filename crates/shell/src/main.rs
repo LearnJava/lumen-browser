@@ -6820,7 +6820,7 @@ impl Lumen {
             0.0
         };
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = y_css + self.scroll_y;
+        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
@@ -6852,7 +6852,10 @@ impl Lumen {
         } else {
             0.0
         };
-        ((x_css - panel_x_offset) + self.scroll_x, y_css + self.scroll_y)
+        (
+            (x_css - panel_x_offset) + self.scroll_x,
+            (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y,
+        )
     }
 
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
@@ -6922,6 +6925,8 @@ impl Lumen {
         // Single hit test shared by form dispatch and link navigation.
         // When the vertical/tree tabs panel is visible, page content is shifted
         // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
+        // Page content is also shifted down by TAB_BAR_HEIGHT via PushTransform,
+        // so we subtract that offset from y to get layout coordinates.
         let panel_x_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
         } else if self.tree_tabs.visible {
@@ -6930,7 +6935,7 @@ impl Lumen {
             0.0
         };
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = y_css + self.scroll_y;
+        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
@@ -8994,8 +8999,9 @@ impl Lumen {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).
+            // Page content is shifted down by TAB_BAR_HEIGHT via PushTransform.
             let page_x = x_css + self.scroll_x;
-            let page_y = y_css + self.scroll_y;
+            let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
             match hit_test(Point::new(page_x, page_y), lb) {
                 Some(result) => css_cursor_to_winit(result.cursor),
                 None => CursorIcon::Default,
