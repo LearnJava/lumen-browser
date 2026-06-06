@@ -6,12 +6,20 @@
 
 ## In progress
 
-**A-9 | SVG text rendering** — branch: p2-a9-svg-text-impl
-Next step: implement text-anchor + dominant-baseline in emit_svg_text, add 3 tests  crates/engine/paint/src/display_list.rs:4429
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**A-9 | SVG text rendering** ✅ 2026-06-06 (merged)
+- `emit_svg_text()` реализует text-anchor (start/middle/end): горизонтальный сдвиг x (approx font_size×0.5×chars)
+- dominant-baseline: auto/baseline→0; middle/central→−fs×0.35; hanging/text-before-edge→+fs×0.2; text-after-edge→−fs×0.8
+- Layout fix: `lay_out_svg_shape_position` использует `transform_point()` для текста (не `apply_transform_to_bbox` — возвращала ZERO для нулевых rect)
+- dx/dy уже инкорпорированы в layout, теперь корректно попадают в b.rect
+- 8 тестов: svg_text_emits_drawtext_command + fill_color + font_size + tspan + textpath (5) + anchor_middle + dx_dy_offset + dominant_baseline (3 новых)
+- Сопутственно исправлены pre-existing Clippy: dead_code stub, 2× collapsible_if (let chains), 3× len()>0 → !is_empty()
+- lumen-paint: 530 тестов ✅, lumen-layout: 2357+36+33 тестов ✅, Clippy чист
 
 **A-3 | CSS Typed OM (partial)** ✅ 2026-06-04 (merged)
 - Phase 0: CSSStyleValue class hierarchy — base + CSSUnitValue + CSSKeywordValue + CSSNumericValue
@@ -116,8 +124,8 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-2~~ | ~~**CSS Custom Highlight API**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
 | ~~A-3~~ | ~~**CSS Typed OM (partial)**~~ — **выполнено** | M | `lumen-js` |
 | ~~A-4~~ | ~~**OffscreenCanvas**~~ — **выполнено** | M | `lumen-js` |
-| A-5 | **WebGL2 context** — `getContext('webgl2')` → `WebGL2RenderingContext`, расширяет `SoftwareWebGl`: VAOs (`createVertexArray/bindVertexArray/deleteVertexArray`), `drawArraysInstanced/drawElementsInstanced`, integer uniforms (`uniform1ui/2ui/3ui/4ui`), `texImage3D` stub. 10 тестов. | M | `lumen-paint`, `lumen-js` |
-| A-9 | **SVG text rendering** — `<text>/<tspan>/<textPath>` элементы: `BoxKind::SvgText`, измерение через `TextMeasurer`, emit `DrawText` с SVG coordinate transform, `text-anchor: start/middle/end`, `dx/dy` атрибуты, `dominant-baseline`. 8 тестов. | M | `lumen-layout`, `lumen-paint` |
+| ~~A-5~~ | ~~**WebGL2 context**~~ — **выполнено** | M | `lumen-paint`, `lumen-js` |
+| ~~A-9~~ | ~~**SVG text rendering**~~ — **выполнено** | M | `lumen-layout`, `lumen-paint` |
 
 ### B — Layout rendering
 
@@ -181,6 +189,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-a9-svg-text-impl** ✅ 2026-06-06 — A-9: SVG text rendering Phase 1. `emit_svg_text()` реализует text-anchor (start/middle/end): горизонтальный сдвиг x (approx font_size×0.5×chars); dominant-baseline: auto/baseline→0, middle/central→−fs×0.35, hanging/text-before-edge→+fs×0.2, text-after-edge→−fs×0.8. Layout fix: `lay_out_svg_shape_position` теперь использует `transform_point()` для текста (раньше `apply_transform_to_bbox` возвращала ZERO для нулевых rect, игнорируя dx/dy). rect.width=approx_text_width, rect.height=font_size. 3 новых теста: svg_text_anchor_middle_shifts_x_left, svg_text_dx_dy_offset_applied, svg_text_dominant_baseline_middle_shifts_y. Итого 8 SVG text тестов. Сопутственно: #[allow(dead_code)] для highlight stub, 2× collapsible_if (let chains), 3× len()>0 → !is_empty(). lumen-paint: 530 тестов ✅, lumen-layout: 2357 тестов ✅. Clippy чист.
 
 - **p2-a4-offscreen-phase1** ✅ 2026-06-06 — A-4: OffscreenCanvas Phase 1. `createImageBitmap(source)` реализован для ImageData (через `_lumen_offscreen_canvas_from_image_data(w,h,hex)`) и OffscreenCanvas (через transfer). Blob/HTMLImageElement → graceful TypeError. `Context2D::from_pixels(w,h,pixels)` добавлен в lumen-canvas для инициализации canvas из RGBA8 буфера. OffscreenCanvas доступен в Workers: `install_offscreen_canvas_bindings` вызывается в `run_worker_thread`, каждый worker получает свой thread-local canvas registry. 7 новых тестов (native_from_image_data, js_create_image_bitmap, js_offscreen_canvas_available_in_fresh_context). lumen-js: 1286 тестов ✅, lumen-canvas: 20 тестов ✅.
 
