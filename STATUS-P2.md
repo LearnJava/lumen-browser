@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**B-2 | CSS Flex align-content**  branch: p2-b2-flex-align-content
+Next step: make commit → merge to main
 
 ---
 
