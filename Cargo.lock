@@ -1901,6 +1901,7 @@ dependencies = [
  "lru",
  "lumen-core",
  "p256",
+ "rusqlite",
  "rustls",
  "sha2",
  "webpki-roots 0.26.11",
