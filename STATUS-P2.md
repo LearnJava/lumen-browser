@@ -6,8 +6,7 @@
 
 ## In progress
 
-**A-4 | OffscreenCanvas Phase 1** — branch: p2-a4-offscreen-phase1
-Next step: createImageBitmap(source) + OffscreenCanvas in Workers — crates/js/src/offscreen_canvas.rs + worker.rs
+(none)
 
 ---
 
@@ -115,7 +114,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~A-1~~ | ~~**CSS Properties & Values API (Houdini)**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-layout` |
 | ~~A-2~~ | ~~**CSS Custom Highlight API**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
 | ~~A-3~~ | ~~**CSS Typed OM (partial)**~~ — **выполнено** | M | `lumen-js` |
-| A-4 | **OffscreenCanvas** — `new OffscreenCanvas(w, h)`, `getContext('2d')` → `lumen_canvas::Context2D`, `transferToImageBitmap()` → `ImageBitmap {width, height, close()}`, `createImageBitmap(source)` из Blob/ImageData/HTMLImageElement, доступен в Workers. 8 тестов. | M | `lumen-js` |
+| ~~A-4~~ | ~~**OffscreenCanvas**~~ — **выполнено** | M | `lumen-js` |
 | A-5 | **WebGL2 context** — `getContext('webgl2')` → `WebGL2RenderingContext`, расширяет `SoftwareWebGl`: VAOs (`createVertexArray/bindVertexArray/deleteVertexArray`), `drawArraysInstanced/drawElementsInstanced`, integer uniforms (`uniform1ui/2ui/3ui/4ui`), `texImage3D` stub. 10 тестов. | M | `lumen-paint`, `lumen-js` |
 | A-9 | **SVG text rendering** — `<text>/<tspan>/<textPath>` элементы: `BoxKind::SvgText`, измерение через `TextMeasurer`, emit `DrawText` с SVG coordinate transform, `text-anchor: start/middle/end`, `dx/dy` атрибуты, `dominant-baseline`. 8 тестов. | M | `lumen-layout`, `lumen-paint` |
 
@@ -181,6 +180,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-a4-offscreen-phase1** ✅ 2026-06-06 — A-4: OffscreenCanvas Phase 1. `createImageBitmap(source)` реализован для ImageData (через `_lumen_offscreen_canvas_from_image_data(w,h,hex)`) и OffscreenCanvas (через transfer). Blob/HTMLImageElement → graceful TypeError. `Context2D::from_pixels(w,h,pixels)` добавлен в lumen-canvas для инициализации canvas из RGBA8 буфера. OffscreenCanvas доступен в Workers: `install_offscreen_canvas_bindings` вызывается в `run_worker_thread`, каждый worker получает свой thread-local canvas registry. 7 новых тестов (native_from_image_data, js_create_image_bitmap, js_offscreen_canvas_available_in_fresh_context). lumen-js: 1286 тестов ✅, lumen-canvas: 20 тестов ✅.
 
 - **p2-b2-flex-align-content** ✅ 2026-06-06 — B-2: CSS Flex align-content для многострочного flexbox. Исправлен баг: `lay_out_flex` использовал `content_width` вместо высоты контейнера для cross axis при align-content. Новый параметр `explicit_cross: Option<f32>` в `lay_out_flex`; caller вычисляет из `s.height`. Поддержаны все 7 вариантов: flex-start/flex-end/center/space-between/space-around/space-evenly/stretch. 6 тестов заменены с sanity на проверку y-позиций flex items в контейнере 200×300px с 3 items (90×50px, 2 линии). lumen-layout: 2357 тестов ✅. Clippy чист.
 
