@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none)
+**C-2: HTTP Cache disk persistence** — DiskHttpCache поверх SQLite, HttpCacheBackend trait, lumen_cache_dir(). 8 тестов. branch: `p2-c2-disk-cache`
+
+Next step: реализовать DiskHttpCache в `crates/network/src/http_cache.rs`
 
 ---
 
