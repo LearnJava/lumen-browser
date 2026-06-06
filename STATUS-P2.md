@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**A-9 | SVG text rendering** — branch: p2-a9-svg-text-impl
+Next step: implement text-anchor + dominant-baseline in emit_svg_text, add 3 tests  crates/engine/paint/src/display_list.rs:4429
 
 ---
 
