@@ -28,3 +28,6 @@ getrandom = "0.2"
 # HTTP Cache (RFC 7234): LRU cache with size-based eviction for HTTP responses.
 # Pure-Rust, no unsafe in logic. Trait-anchor: none (internal HTTP cache impl).
 lru = "0.12"
+# Persistent HTTP cache backend (C-2). Bundled SQLite — same rationale as lumen-storage.
+# Trait-anchor: DiskHttpCache (HttpCacheBackend impl). No graduation — disk I/O needs OS SQLite.
+rusqlite = { workspace = true }

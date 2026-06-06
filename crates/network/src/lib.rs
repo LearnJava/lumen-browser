@@ -60,7 +60,7 @@ pub use auth::StaticCredentialProvider;
 pub use webauthn::VirtualAuthenticator;
 pub use brotli::BrotliContentDecoder;
 pub use filter::{EasyListFilter, HostsFilter, CompositeFilter};
-pub use http_cache::HttpCache;
+pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
 pub use tls::{
@@ -1598,7 +1598,7 @@ pub struct HttpClient {
     mixed_content: Option<MixedContentPolicy>,
     cors_cache: Option<Arc<cors::PreflightCache>>,
     /// RFC 7234 response cache. Optional — without it every request goes to the network.
-    http_cache: Option<Arc<http_cache::HttpCache>>,
+    http_cache: Option<Arc<dyn http_cache::HttpCacheBackend>>,
     /// RFC 6265 cookie jar. Injects `Cookie:` headers and persists `Set-Cookie:` responses.
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     /// Registrable domain of the top-level page, used for Total Cookie Protection partitioning.
@@ -1863,7 +1863,7 @@ impl HttpClient {
     /// POST/PUT и запросы с явным `cors_ctx` кэш пропускают; `Vary` не
     /// поддерживается (unsafe Vary не помечается).
     #[must_use]
-    pub fn with_http_cache(mut self, cache: Arc<http_cache::HttpCache>) -> Self {
+    pub fn with_http_cache(mut self, cache: Arc<dyn http_cache::HttpCacheBackend>) -> Self {
         self.http_cache = Some(cache);
         self
     }
@@ -5893,7 +5893,8 @@ mod http_cache_tests {
         // If the cache is used, the server never gets a request → test passes.
         // If cache is bypassed, the server closes after 1 response and the
         // second request would also go there (we only start 1 server accept).
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = "http://127.0.0.1:0/resource"; // port 0 → unused, never connected
         // Pre-populate cache with a fresh entry (max-age=3600).
         cache.store(
@@ -5923,7 +5924,8 @@ mod http_cache_tests {
                 .to_vec()
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let mem_cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> = Arc::clone(&mem_cache) as _;
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
 
@@ -5932,7 +5934,7 @@ mod http_cache_tests {
         // First fetch — goes to network.
         let body1 = client.fetch(&parsed).unwrap();
         assert_eq!(body1, b"body");
-        assert_eq!(cache.len(), 1, "should have stored the response");
+        assert_eq!(mem_cache.len(), 1, "should have stored the response");
 
         // Second fetch — served from cache (server thread has exited).
         let body2 = client.fetch(&parsed).unwrap();
@@ -5953,7 +5955,8 @@ mod http_cache_tests {
                 .to_vec(),
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
@@ -5980,7 +5983,8 @@ mod http_cache_tests {
                 .to_vec(),
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
@@ -6004,13 +6008,14 @@ mod http_cache_tests {
                 .to_vec()
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let mem_cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> = Arc::clone(&mem_cache) as _;
         let url = format!("http://127.0.0.1:{port}/secret");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
 
         client.fetch(&parsed).unwrap();
-        assert_eq!(cache.len(), 0, "no-store must not be cached");
+        assert_eq!(mem_cache.len(), 0, "no-store must not be cached");
 
         // Second fetch also goes to network (not cached).
         client.fetch(&parsed).unwrap();
