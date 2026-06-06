@@ -3488,9 +3488,25 @@ fn lay_out(
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
+                // For row flex, align-content needs the explicit container height (cross axis).
+                let flex_explicit_cross = if !matches!(
+                    s.flex_direction,
+                    FlexDirection::Column | FlexDirection::ColumnReverse
+                ) {
+                    s.height.as_ref()
+                        .and_then(|h| h.resolve(em, available_height, viewport))
+                        .map(|h| match s.box_sizing {
+                            BoxSizing::ContentBox => h,
+                            BoxSizing::BorderBox => (h - padding_top - padding_bottom
+                                - s.border_top_width - s.border_bottom_width)
+                                .max(0.0),
+                        })
+                } else {
+                    None
+                };
                 let content_height = lay_out_flex(
-                    &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
-                    children_pcb, hp,
+                    &mut b.children, &s, content_x, content_y, content_width,
+                    flex_explicit_cross, measurer, viewport, children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -4702,15 +4718,16 @@ fn lay_out_abs_children(
     }
 }
 
-/// CSS Flexbox L1 §9 — single-line flex layout (Phase 0).
+/// CSS Flexbox L1 §9 — multi-line flex layout.
 ///
 /// Алгоритм:
 /// 1. Для каждого flex-item вычисляем hypothetical main size из flex-basis.
 /// 2. Распределяем free space через flex-grow / flex-shrink.
 /// 3. Раскладываем items с учётом justify-content и align-items.
+/// 4. При flex-wrap: apply align-content across flex lines.
 ///
-/// Ограничения Phase 0: `nowrap` only (multi-line — задача 4B.5);
-/// column-direction: cross-axis = container width (auto stretch).
+/// `explicit_cross` — явная высота контейнера (content box) для row flex;
+/// используется в align-content для вычисления свободного пространства по cross axis.
 ///
 /// Возвращает `content_height` (вертикальный размер контентной зоны контейнера).
 #[allow(clippy::too_many_arguments)]
@@ -4720,6 +4737,7 @@ fn lay_out_flex(
     content_x: f32,
     content_y: f32,
     content_width: f32,
+    explicit_cross: Option<f32>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -5004,10 +5022,11 @@ fn lay_out_flex(
     };
 
     // Apply align-content to distribute remaining space between flex lines (row wrap only).
+    // Uses explicit_cross (container height) to compute free cross-axis space.
     if !is_column && n_lines > 1 && is_wrap {
         let line_gap_total = cross_gap * (n_lines.saturating_sub(1)) as f32;
         let used_cross: f32 = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
-        let free_cross = (content_width - used_cross).max(0.0);
+        let free_cross = explicit_cross.map_or(0.0, |h| (h - used_cross).max(0.0));
 
         if free_cross > 0.0 {
             let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
@@ -8276,114 +8295,94 @@ mod tests {
     }
 
     // ── Flex align-content (multi-line flex wrap) ───────────────────────────
+    //
+    // Setup: 200px wide × 300px tall flex container with 3 × 90px wide items.
+    // Lines: [a, b] on line 1, [c] on line 2. Each line cross-size = 50px.
+    // used_cross = 100px; free_cross = 200px.
 
     #[test]
     fn flex_align_content_flex_start() {
-        // Multi-line flex with align-content: flex-start — lines at top
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: flex-start;
-            }
-        "#;
+        // flex-start: lines packed at cross-start → line1 y=0, line2 y=50.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:flex-start} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
-        // Basic sanity: align-content parses without error
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 50.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_flex_end() {
-        // Multi-line flex with align-content: flex-end — lines at bottom
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: flex-end;
-            }
-        "#;
+        // flex-end: offset=200 → line1 y=200, line2 y=250.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:flex-end} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 200.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 250.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_center() {
-        // Multi-line flex with align-content: center — lines centered vertically
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: center;
-            }
-        "#;
+        // center: offset=100 → line1 y=100, line2 y=150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:center} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 100.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_space_between() {
-        // Multi-line flex with align-content: space-between — max gap between lines
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: space-between;
-            }
-        "#;
+        // space-between (n=2): line1 offset=0, line2 offset=200 → y=0 and y=250.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-between} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 250.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_space_around() {
-        // Multi-line flex with align-content: space-around — equal space around each line
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: space-around;
-            }
-        "#;
+        // space-around (n=2): per=100; line1 offset=50, line2 offset=150 → y=50 and y=200.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-around} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 50.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 200.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_space_evenly() {
-        // Multi-line flex with align-content: space-evenly — equal space between all lines
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: space-evenly;
-            }
-        "#;
+        // space-evenly (n=2): per=200/3≈66.67; line1 offset=per, line2 offset=2*per.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-evenly} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        let per = 200.0_f32 / 3.0;
+        assert!((a.rect.y - per).abs() < 0.5, "a.y expected ≈{per:.2}, got {}", a.rect.y);
+        assert!((c.rect.y - (50.0 + 2.0 * per)).abs() < 0.5, "c.y expected ≈{:.2}, got {}", 50.0 + 2.0 * per, c.rect.y);
     }
 
     #[test]
