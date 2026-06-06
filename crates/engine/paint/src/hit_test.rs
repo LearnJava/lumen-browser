@@ -195,10 +195,8 @@ fn find_inline_source(b: &LayoutBox, point: Point) -> NodeId {
         }
     }
     // Fallback: return source_node of the last frag on the line (closest to right edge).
-    if let Some(last) = line.last() {
-        if last.source_node.index() != 0 {
-            return last.source_node;
-        }
+    if let Some(last) = line.last() && last.source_node.index() != 0 {
+        return last.source_node;
     }
     b.node
 }

@@ -1817,6 +1817,7 @@ fn emit_text_emphasis_marks(
 /// P4 will: (1) check if highlight name is registered, (2) query background color,
 /// (3) emit FillRect background before DrawText.
 /// CSS: ::highlight(name)
+#[allow(dead_code)]
 fn emit_text_with_highlights(
     _name: &str,
     _text_rect: Rect,
@@ -3861,18 +3862,17 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                 // CSS Overflow L3: overflow-clip-margin расширяет clip region для overflow:clip.
                 let is_overflow_clip_x = matches!(b.style.overflow_x, Overflow::Clip);
                 let is_overflow_clip_y = matches!(b.style.overflow_y, Overflow::Clip);
-                if (is_overflow_clip_x || is_overflow_clip_y) && s.overflow_clip_margin.is_some() {
-                    if let Some(margin) = &s.overflow_clip_margin {
-                        if let Some(margin_px) = margin.resolve(s.font_size, Some(pw.max(ph)), Size::new(pw, ph)) {
-                            if is_overflow_clip_x {
-                                cr.x -= margin_px;
-                                cr.width += 2.0 * margin_px;
-                            }
-                            if is_overflow_clip_y {
-                                cr.y -= margin_px;
-                                cr.height += 2.0 * margin_px;
-                            }
-                        }
+                if (is_overflow_clip_x || is_overflow_clip_y)
+                    && let Some(margin) = &s.overflow_clip_margin
+                    && let Some(margin_px) = margin.resolve(s.font_size, Some(pw.max(ph)), Size::new(pw, ph))
+                {
+                    if is_overflow_clip_x {
+                        cr.x -= margin_px;
+                        cr.width += 2.0 * margin_px;
+                    }
+                    if is_overflow_clip_y {
+                        cr.y -= margin_px;
+                        cr.height += 2.0 * margin_px;
                     }
                 }
 
@@ -4429,8 +4429,8 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
 fn emit_svg_text(
     b: &LayoutBox,
     text: &str,
-    _text_anchor: SvgTextAnchor,
-    _dominant_baseline: SvgDominantBaseline,
+    text_anchor: SvgTextAnchor,
+    dominant_baseline: SvgDominantBaseline,
     out: &mut DisplayList,
 ) {
     if text.is_empty() {
@@ -4441,14 +4441,41 @@ fn emit_svg_text(
     let fill_color = b.style.svg_fill.resolve(current_color)
         .map(|c| apply_opacity_to_color(c, b.style.svg_fill_opacity));
 
-    // Phase 1: emit simple DrawText at the text position.
-    // Phase 2: apply text-anchor horizontal adjustment and dominant-baseline vertical adjustment.
+    let font_size = b.style.font_size;
+    // Phase 1: approximate text width as 0.5 × font-size × char count (typical monospace ratio).
+    // Phase 2: replace with real TextMeasurer from lumen-font when available in paint.
+    let approx_text_width = font_size * 0.5 * text.chars().count() as f32;
+
+    // Apply text-anchor: adjust x so start/middle/end of text aligns at the SVG `x` position.
+    let anchor_offset_x = match text_anchor {
+        SvgTextAnchor::Start => 0.0,
+        SvgTextAnchor::Middle => -approx_text_width * 0.5,
+        SvgTextAnchor::End => -approx_text_width,
+    };
+
+    // Apply dominant-baseline: adjust y so the specified baseline aligns at the SVG `y` position.
+    // SVG y is the text baseline by default (auto/baseline). Adjustments are approximate.
+    let baseline_offset_y = match dominant_baseline {
+        SvgDominantBaseline::Auto | SvgDominantBaseline::Baseline => 0.0,
+        // middle/central: shift up by ~half em so middle of em-box is at y
+        SvgDominantBaseline::Middle | SvgDominantBaseline::Central => -font_size * 0.35,
+        // hanging/text-before-edge: shift down so top of cap is at y
+        SvgDominantBaseline::Hanging | SvgDominantBaseline::TextBeforeEdge => font_size * 0.2,
+        // text-after-edge: shift up so descender bottom is at y
+        SvgDominantBaseline::TextAfterEdge => -font_size * 0.8,
+    };
+
     if let Some(fc) = fill_color {
+        let mut rect = b.rect;
+        rect.x += anchor_offset_x;
+        rect.y += baseline_offset_y;
+        rect.width = approx_text_width;
+        rect.height = font_size;
         out.push(DisplayCommand::DrawText {
-            rect: b.rect,
+            rect,
             text: text.to_string(),
             font_family: b.style.font_family.clone(),
-            font_size: b.style.font_size,
+            font_size,
             color: fc,
             font_weight: b.style.font_weight,
             font_style: b.style.font_style,
@@ -9939,6 +9966,59 @@ mod tests {
                 "should have collected textPath content or empty is acceptable in Phase 1");
     }
 
+    #[test]
+    fn svg_text_anchor_middle_shifts_x_left() {
+        // text-anchor="middle": DrawText rect.x should be shifted left by ~half text width
+        // compared to text-anchor="start" at the same SVG x position.
+        let dl_start = build(r#"<svg width="200" height="100"><text x="100" y="50" text-anchor="start">AB</text></svg>"#, "");
+        let dl_middle = build(r#"<svg width="200" height="100"><text x="100" y="50" text-anchor="middle">AB</text></svg>"#, "");
+        let x_start = dl_start.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some(rect.x),
+            _ => None,
+        });
+        let x_middle = dl_middle.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some(rect.x),
+            _ => None,
+        });
+        let (xs, xm) = (x_start.expect("start DrawText"), x_middle.expect("middle DrawText"));
+        assert!(xm < xs, "text-anchor=middle should shift x left vs start: middle={xm}, start={xs}");
+    }
+
+    #[test]
+    fn svg_text_dx_dy_offset_applied() {
+        // dx="10" dy="5" should shift the DrawText rect by those amounts vs no offset
+        let dl_no_offset = build(r#"<svg width="200" height="100"><text x="50" y="50">Hi</text></svg>"#, "");
+        let dl_with_offset = build(r#"<svg width="200" height="100"><text x="50" y="50" dx="10" dy="5">Hi</text></svg>"#, "");
+        let pos_no = dl_no_offset.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some((rect.x, rect.y)),
+            _ => None,
+        });
+        let pos_off = dl_with_offset.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some((rect.x, rect.y)),
+            _ => None,
+        });
+        let ((x0, y0), (x1, y1)) = (pos_no.expect("no-offset DrawText"), pos_off.expect("offset DrawText"));
+        assert!((x1 - x0 - 10.0).abs() < 1.0, "dx=10 should shift x by ~10: Δx={}", x1 - x0);
+        assert!((y1 - y0 - 5.0).abs() < 1.0, "dy=5 should shift y by ~5: Δy={}", y1 - y0);
+    }
+
+    #[test]
+    fn svg_text_dominant_baseline_middle_shifts_y() {
+        // dominant-baseline="middle" should shift DrawText rect.y up compared to auto
+        let dl_auto = build(r#"<svg width="200" height="100"><text x="50" y="50" dominant-baseline="auto">T</text></svg>"#, "");
+        let dl_middle = build(r#"<svg width="200" height="100"><text x="50" y="50" dominant-baseline="middle">T</text></svg>"#, "");
+        let y_auto = dl_auto.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some(rect.y),
+            _ => None,
+        });
+        let y_middle = dl_middle.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some(rect.y),
+            _ => None,
+        });
+        let (ya, ym) = (y_auto.expect("auto DrawText"), y_middle.expect("middle DrawText"));
+        assert!(ym < ya, "dominant-baseline=middle should shift y up vs auto: middle={ym}, auto={ya}");
+    }
+
     // ── FilterMode conversion tests (B-6) ──────────────────────────────────
 
     #[test]
@@ -10251,7 +10331,7 @@ mod tests {
         );
         // Should not have any FillRoundedRect (or very few if from other sources)
         // This is a phase 0 check; exact count depends on implementation
-        assert!(dl.len() > 0, "display list should not be empty");
+        assert!(!dl.is_empty(), "display list should not be empty");
     }
 
     #[test]
@@ -10261,7 +10341,7 @@ mod tests {
             "",
         );
         // resize should only apply when overflow != visible
-        assert!(dl.len() > 0, "display list should not be empty");
+        assert!(!dl.is_empty(), "display list should not be empty");
     }
 
     #[test]
@@ -10270,7 +10350,7 @@ mod tests {
             r#"<div style="resize:horizontal;overflow:auto;width:100px;height:100px;background:cyan"></div>"#,
             "",
         );
-        assert!(dl.len() > 0, "resize:horizontal should render display list");
+        assert!(!dl.is_empty(), "resize:horizontal should render display list");
     }
 
     #[test]
@@ -10279,7 +10359,7 @@ mod tests {
             r#"<div style="resize:vertical;overflow:scroll;width:100px;height:100px;background:magenta"></div>"#,
             "",
         );
-        assert!(dl.len() > 0, "resize:vertical should render display list");
+        assert!(!dl.is_empty(), "resize:vertical should render display list");
     }
 
     #[test]

@@ -889,11 +889,11 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
         // Apply viewBox scaling to user unit coordinates.
         let text_x = ox + (x + dx) * sx;
         let text_y = oy + (y + dy) * sy;
-        // Phase 1: use a minimal bounding box at the text position.
+        // Apply only the translation of the composed transform to the text origin point.
+        // Cannot use apply_transform_to_bbox: it returns ZERO for zero-size bboxes.
         // Phase 2: measure text width and compute proper bbox based on text-anchor and dominant-baseline.
-        let bbox = Rect::new(text_x, text_y, 0.0, 0.0);
-        // Apply composed transform.
-        b.rect = apply_transform_to_bbox(&bbox, &composed);
+        let (tx, ty) = composed.transform_point(text_x, text_y);
+        b.rect = Rect::new(tx, ty, 0.0, 0.0);
     } else if matches!(b.kind, BoxKind::Block) {
         // <g> group: position its children with composed transform, then compute union bbox.
         lay_out_svg_children_positions(&mut b.children, ox, oy, sx, sy, &composed);
