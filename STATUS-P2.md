@@ -6,9 +6,7 @@
 
 ## In progress
 
-**C-2: HTTP Cache disk persistence** — DiskHttpCache поверх SQLite, HttpCacheBackend trait, lumen_cache_dir(). 8 тестов. branch: `p2-c2-disk-cache`
-
-Next step: реализовать DiskHttpCache в `crates/network/src/http_cache.rs`
+(none)
 
 ---
 
@@ -140,7 +138,7 @@ Ordered by priority. Сгруппированы по домену.
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~C-1~~ | ~~**HTTP Cache RFC 7234**~~ — **выполнено** | L | `lumen-network` |
-| C-2 | **HTTP Cache disk persistence** *(Фаза 1)* — `DiskHttpCache` поверх SQLite (`cache_entries(url, etag, last_modified, status, headers_json, body_blob, expires_at)`), `HttpCache` trait с Memory + Disk реализациями, `cache_dir = ~/.config/lumen/cache/`. 8 тестов. | M | `lumen-network`, `lumen-storage` |
+| ~~C-2~~ | ~~**HTTP Cache disk persistence**~~ — **выполнено** | M | `lumen-network` |
 | C-3 | **WebSocket permessage-deflate** *(Фаза 1)* — `Sec-WebSocket-Extensions: permessage-deflate` в handshake, parse server response, `flate2::Decompress` для входящих кадров, `flate2::Compress` для исходящих (`WebSocket.compress` opt-in). 6 тестов. | M | `lumen-network` |
 | C-4 | **Fetch SRI integrity check** *(Фаза 1)* — `fetch(url, {integrity: 'sha256-BASE64'})` → после получения ответа SHA-256/384/512 тела (dep `sha2` уже есть) → сравнение с base64-decoded ожидаемым → reject TypeError при несовпадении. `parse_integrity_metadata()`. 6 тестов. | S | `lumen-js`, `lumen-network` |
 | C-5 | **Multi-tab IndexedDB per-origin SQLite** *(Фаза 2)* — `IdbStore::for_origin(origin_key)`: `origin_key = sha256_hex(eTLD+1)[:16]`, отдельный файл `~/.config/lumen/idb/{key}.db` на origin, `IdbStore::open_or_create(path)`, shell выбирает store по URL в `parse_and_layout`. 8 тестов. | M | `lumen-storage`, `lumen-shell` |
@@ -182,6 +180,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-c2-disk-cache** ✅ 2026-06-06 — C-2: HTTP Cache disk persistence Phase 1. `HttpCacheBackend` trait (get/store/revalidate/len) — общий интерфейс для Memory и Disk бэкендов. `DiskHttpCache` поверх SQLite: таблица `cache_entries(url PK, etag, last_modified, status, headers_json, body_blob, expires_at)`, хранит expires как Unix timestamp, без внешних deps (ручной JSON-парсер для headers). `lumen_cache_dir()`: %APPDATA%\lumen\cache (Win) / ~/.cache/lumen (Unix). `HttpClient::with_http_cache()` принимает `Arc<dyn HttpCacheBackend>`. 10 новых тестов: disk_cache_new_creates_db, store_and_get_fresh, no_store_not_persisted, stale_entry_not_fresh, revalidate_updates_etag, survives_reopen, fragment_stripped, lumen_cache_dir_is_some, header_serialization_roundtrip/empty. lumen-network: 677 тестов ✅. Clippy чист.
 
 - **p2-b3-grid-auto** ✅ 2026-06-04 — B-3: CSS Grid auto-fill/auto-fit/fit-content Phase 1. GridTrackSize::FitContent(Box<GridTrackSize>) variant для fit-content(<limit>) (CSS Grid L3 §9.1); GridRepeat struct + RepeatCount enum для store repeat(auto-fill|auto-fit) metadata. parse_track_list() детектит 'auto-fill' и 'auto-fit' keywords (case-insensitive), expands fixed repeats, preserves auto-fill/auto-fit для resolver на Phase 2. resolve_auto_fill_fit_count(avail_w, tracks, gap) → usize вычисляет track count = floor((avail_w + gap) / (track_min_width + gap)), min 1, из доступной ширины и min-width треков (из minmax/fit-content/length). 14 unit-тестов (parse fit-content px/%, auto-fill/auto-fit, fixed/mixed repeat, resolve count basic/with-gap/zero-width/large-gap/multiple-tracks/small-container/empty-tracks). lumen-layout: 2311 тестов. Clippy чист. Phase 1 завершена (parsing + resolve_auto_fill_fit_count). Phase 2 (future): integrate GridRepeat into lay_out_grid() resolver, expand at layout. Phase 3 (future): auto-fit collapse empty tracks.
 
