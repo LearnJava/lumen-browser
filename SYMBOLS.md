@@ -25,7 +25,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/bench/src/util.rs:9` **fn** `get_rss_bytes` — Returns the current process RSS (resident set size) in bytes
 `crates/bench/src/util.rs:48` **fn** `extract_style_blocks` — Concatenates all `<style>` text blocks from the document
 
-## lumen-canvas  (32 symbols)
+## lumen-canvas  (33 symbols)
 
 `crates/engine/canvas/src/color.rs:3` **struct** `CanvasColor` — RGBA color used by the Canvas 2D API
 `crates/engine/canvas/src/color.rs:11` **fn** `rgba`
@@ -41,20 +41,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/lib.rs:57` **fn** `new` — Create a new context with a transparent black buffer
 `crates/engine/canvas/src/lib.rs:78` **fn** `set_noise_generator` — Set the optional noise generator for fingerprint randomization
 `crates/engine/canvas/src/lib.rs:86` **fn** `get_image_data` — Get a copy of pixel data with optional noise applied (for `getImageData()`)
-`crates/engine/canvas/src/lib.rs:94` **fn** `width`
-`crates/engine/canvas/src/lib.rs:95` **fn** `height`
-`crates/engine/canvas/src/lib.rs:98` **fn** `pixels` — Raw RGBA8 pixel data
-`crates/engine/canvas/src/lib.rs:101` **fn** `resize` — Resize the canvas (clears the buffer)
-`crates/engine/canvas/src/lib.rs:113` **fn** `clear_rect` — `clearRect(x, y, w, h)` — erase region to transparent black
-`crates/engine/canvas/src/lib.rs:128` **fn** `fill_rect` — `fillRect(x, y, w, h)` — fill region with current `fillStyle`
-`crates/engine/canvas/src/lib.rs:134` **fn** `stroke_rect` — `strokeRect(x, y, w, h)` — stroke the outline of a rectangle
-`crates/engine/canvas/src/lib.rs:148` **fn** `begin_path` — `beginPath()` — discard current path
-`crates/engine/canvas/src/lib.rs:154` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path
-`crates/engine/canvas/src/lib.rs:163` **fn** `line_to` — `lineTo(x, y)` — add a line segment
-`crates/engine/canvas/src/lib.rs:174` **fn** `close_path` — `closePath()` — add a line back to the sub-path start
-`crates/engine/canvas/src/lib.rs:184` **fn** `arc` — `arc(cx, cy, r, start_angle, end_angle[, anticlockwise])` — add an arc
-`crates/engine/canvas/src/lib.rs:204` **fn** `fill` — `fill()` — fill the current path with `fillStyle`
-`crates/engine/canvas/src/lib.rs:211` **fn** `stroke` — `stroke()` — stroke the current path with `strokeStyle`
+`crates/engine/canvas/src/lib.rs:98` **fn** `from_pixels` — Create a context pre-filled with the given RGBA8 pixel buffer
+`crates/engine/canvas/src/lib.rs:107` **fn** `width`
+`crates/engine/canvas/src/lib.rs:108` **fn** `height`
+`crates/engine/canvas/src/lib.rs:111` **fn** `pixels` — Raw RGBA8 pixel data
+`crates/engine/canvas/src/lib.rs:114` **fn** `resize` — Resize the canvas (clears the buffer)
+`crates/engine/canvas/src/lib.rs:126` **fn** `clear_rect` — `clearRect(x, y, w, h)` — erase region to transparent black
+`crates/engine/canvas/src/lib.rs:141` **fn** `fill_rect` — `fillRect(x, y, w, h)` — fill region with current `fillStyle`
+`crates/engine/canvas/src/lib.rs:147` **fn** `stroke_rect` — `strokeRect(x, y, w, h)` — stroke the outline of a rectangle
+`crates/engine/canvas/src/lib.rs:161` **fn** `begin_path` — `beginPath()` — discard current path
+`crates/engine/canvas/src/lib.rs:167` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path
+`crates/engine/canvas/src/lib.rs:176` **fn** `line_to` — `lineTo(x, y)` — add a line segment
+`crates/engine/canvas/src/lib.rs:187` **fn** `close_path` — `closePath()` — add a line back to the sub-path start
+`crates/engine/canvas/src/lib.rs:197` **fn** `arc` — `arc(cx, cy, r, start_angle, end_angle[, anticlockwise])` — add an arc
+`crates/engine/canvas/src/lib.rs:217` **fn** `fill` — `fill()` — fill the current path with `fillStyle`
+`crates/engine/canvas/src/lib.rs:224` **fn** `stroke` — `stroke()` — stroke the current path with `strokeStyle`
 `crates/engine/canvas/src/path.rs:3` **enum** `PathSegment` — A single segment in a 2D path
 `crates/engine/canvas/src/path.rs:11` **type** `PathCommand` — Alias kept for API symmetry with the HTML spec (`PathCommand` = verb)
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
@@ -1066,15 +1067,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/webrtc_stub.rs:27` **fn** `install_webrtc_bindings` — Install the WebRTC mDNS-only stub into the JS context
 `crates/js/src/webtransport.rs:5` **fn** `install_webtransport_bindings`
 `crates/js/src/webusb.rs:5` **fn** `install_webusb_bindings`
-`crates/js/src/worker.rs:22` **enum** `WorkerInMsg` — Message sent from the main JS thread to a worker thread
-`crates/js/src/worker.rs:32` **struct** `WorkerHandle` — Live handle to a spawned worker thread
-`crates/js/src/worker.rs:44` **type** `WorkerRegistry` — All live Worker instances for the current page, keyed by worker ID
-`crates/js/src/worker.rs:50` **type** `WorkerMessageQueue` — Outbound message queue: messages posted by worker threads to the main thread
-`crates/js/src/worker.rs:58` **fn** `spawn_worker` — Spawn a new worker thread that evaluates `script` and waits for messages
-`crates/js/src/worker.rs:89` **fn** `post_to_worker` — Send a JSON-serialized message to a live worker thread
-`crates/js/src/worker.rs:99` **fn** `terminate_worker` — Terminate a worker and remove it from the registry
-`crates/js/src/worker.rs:108` **fn** `drain_messages` — Drain all pending messages sent from worker threads to the main thread
-`crates/js/src/worker.rs:117` **fn** `install_worker_bindings` — Install native bindings (`_lumen_create_worker`, `_lumen_worker_post`,
+`crates/js/src/worker.rs:23` **enum** `WorkerInMsg` — Message sent from the main JS thread to a worker thread
+`crates/js/src/worker.rs:33` **struct** `WorkerHandle` — Live handle to a spawned worker thread
+`crates/js/src/worker.rs:45` **type** `WorkerRegistry` — All live Worker instances for the current page, keyed by worker ID
+`crates/js/src/worker.rs:51` **type** `WorkerMessageQueue` — Outbound message queue: messages posted by worker threads to the main thread
+`crates/js/src/worker.rs:59` **fn** `spawn_worker` — Spawn a new worker thread that evaluates `script` and waits for messages
+`crates/js/src/worker.rs:90` **fn** `post_to_worker` — Send a JSON-serialized message to a live worker thread
+`crates/js/src/worker.rs:100` **fn** `terminate_worker` — Terminate a worker and remove it from the registry
+`crates/js/src/worker.rs:109` **fn** `drain_messages` — Drain all pending messages sent from worker threads to the main thread
+`crates/js/src/worker.rs:118` **fn** `install_worker_bindings` — Install native bindings (`_lumen_create_worker`, `_lumen_worker_post`,
 
 ## lumen-knowledge  (54 symbols)
 
@@ -3174,4 +3175,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3109 symbols in 20 crates*
+*Total: 3110 symbols in 20 crates*

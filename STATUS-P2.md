@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**A-4 | OffscreenCanvas Phase 1** — branch: p2-a4-offscreen-phase1
+Next step: createImageBitmap(source) + OffscreenCanvas in Workers — crates/js/src/offscreen_canvas.rs + worker.rs
 
 ---
 
