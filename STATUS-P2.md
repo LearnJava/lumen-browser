@@ -6,8 +6,7 @@
 
 ## In progress
 
-**B-2 | CSS Flex align-content**  branch: p2-b2-flex-align-content
-Next step: make commit → merge to main
+(none)
 
 ---
 
@@ -124,7 +123,7 @@ Ordered by priority. Сгруппированы по домену.
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~B-1~~ | ~~**Table layout rendering**~~ — **выполнено** | M | `lumen-paint` |
-| B-2 | **CSS Flex align-content** — многострочный flexbox (`flex-wrap: wrap`): `align_flex_lines()` в `flex.rs`, распределяет пространство между flex lines: flex-start/end/center/space-between/around/evenly/stretch. `// CSS: align-content (flex)`. 6 тестов. | S | `lumen-layout` |
+| ~~B-2~~ | ~~**CSS Flex align-content**~~ — **выполнено** | S | `lumen-layout` |
 | ~~B-3~~ | ~~**CSS Grid: auto-fill/auto-fit tracks**~~ — **выполнено** | M | `lumen-layout` |
 | ~~B-4~~ | ~~**CSS Grid: dense packing**~~ — **выполнено** | S | `lumen-layout` |
 | ~~B-5~~ | ~~**CSS Multi-column: column-rule rendering**~~ — **выполнено** | S | `lumen-paint` |
@@ -181,6 +180,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-b2-flex-align-content** ✅ 2026-06-06 — B-2: CSS Flex align-content для многострочного flexbox. Исправлен баг: `lay_out_flex` использовал `content_width` вместо высоты контейнера для cross axis при align-content. Новый параметр `explicit_cross: Option<f32>` в `lay_out_flex`; caller вычисляет из `s.height`. Поддержаны все 7 вариантов: flex-start/flex-end/center/space-between/space-around/space-evenly/stretch. 6 тестов заменены с sanity на проверку y-позиций flex items в контейнере 200×300px с 3 items (90×50px, 2 линии). lumen-layout: 2357 тестов ✅. Clippy чист.
 
 - **p2-c2-disk-cache** ✅ 2026-06-06 — C-2: HTTP Cache disk persistence Phase 1. `HttpCacheBackend` trait (get/store/revalidate/len) — общий интерфейс для Memory и Disk бэкендов. `DiskHttpCache` поверх SQLite: таблица `cache_entries(url PK, etag, last_modified, status, headers_json, body_blob, expires_at)`, хранит expires как Unix timestamp, без внешних deps (ручной JSON-парсер для headers). `lumen_cache_dir()`: %APPDATA%\lumen\cache (Win) / ~/.cache/lumen (Unix). `HttpClient::with_http_cache()` принимает `Arc<dyn HttpCacheBackend>`. 10 новых тестов: disk_cache_new_creates_db, store_and_get_fresh, no_store_not_persisted, stale_entry_not_fresh, revalidate_updates_etag, survives_reopen, fragment_stripped, lumen_cache_dir_is_some, header_serialization_roundtrip/empty. lumen-network: 677 тестов ✅. Clippy чист.
 
