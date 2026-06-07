@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**F-1 | CSS text-align-last rendering**  branch: p2-f1-text-align-last
+Next step: modify `align_lines` in `box_tree.rs` to handle last-line alignment via `text_align_last`  `crates/engine/layout/src/box_tree.rs:6478`
 
 ---
 

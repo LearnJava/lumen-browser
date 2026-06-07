@@ -22,8 +22,8 @@ use crate::style::{
     BackgroundImage, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
-    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextOverflow, TextWrapMode,
-    TextWrapStyle,
+    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextAlignLast, TextOverflow,
+    TextWrapMode, TextWrapStyle,
     VerticalAlign, WordBreak,
 };
 use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
@@ -3463,7 +3463,7 @@ fn lay_out(
             } else {
                 raw_lines
             };
-            align_lines(lines, content_width, s.text_align, s.direction);
+            align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp — multi-line truncation.
@@ -6475,22 +6475,43 @@ fn wrap_inline_run(
 /// Сдвигает фрагменты каждой строки по text-align + direction.
 /// `Start`/`End` разрешаются в Left/Right по direction (CSS Text L3 §7.1).
 /// Для RTL фрагменты зеркалируются относительно content_width.
+/// Последняя строка выравнивается по `text_align_last` (CSS Text L3 §7.2):
+/// `Auto` на justify-блоке → Start; иначе → как text_align.
 fn align_lines(
     lines: &mut [Vec<InlineFrag>],
     content_width: f32,
     text_align: TextAlign,
+    text_align_last: TextAlignLast,
     direction: Direction,
 ) {
     let is_rtl = direction == Direction::Rtl;
-    // Resolve Start/End to physical Left/Right.
-    let physical = match text_align {
-        TextAlign::Start => if is_rtl { TextAlign::Right } else { TextAlign::Left },
-        TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
-        other => other,
-    };
-    for line in lines.iter_mut() {
-        let Some(last) = line.last() else { continue };
-        let line_width = last.x + last.width;
+    let total = lines.len();
+    for (idx, line) in lines.iter_mut().enumerate() {
+        let is_last = idx + 1 == total;
+        // CSS Text L3 §7.2: last line uses text-align-last.
+        // Auto → same as text-align (justify not yet in TextAlign, so no special case).
+        // TextAlignLast::Justify → Start (word-spacing justification not yet implemented).
+        let effective = if is_last {
+            match text_align_last {
+                TextAlignLast::Auto    => text_align,
+                TextAlignLast::Left    => TextAlign::Left,
+                TextAlignLast::Right   => TextAlign::Right,
+                TextAlignLast::Center  => TextAlign::Center,
+                TextAlignLast::Start   => TextAlign::Start,
+                TextAlignLast::End     => TextAlign::End,
+                TextAlignLast::Justify => TextAlign::Start,
+            }
+        } else {
+            text_align
+        };
+        // Resolve Start/End to physical Left/Right.
+        let physical = match effective {
+            TextAlign::Start => if is_rtl { TextAlign::Right } else { TextAlign::Left },
+            TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
+            other => other,
+        };
+        let Some(last_frag) = line.last() else { continue };
+        let line_width = last_frag.x + last_frag.width;
         if is_rtl {
             // Mirror positions within the line block, then align the block.
             // `right_gap` = space to the right of the mirrored line block.
@@ -8869,6 +8890,81 @@ mod tests {
 
         // Verify layout was created without panics
         assert!(!root.children.is_empty(), "grid should be laid out");
+    }
+
+    // --- text-align-last layout ---
+
+    /// Helper: create a minimal InlineFrag at (x, width) for alignment tests.
+    fn make_frag(x: f32, width: f32) -> super::InlineFrag {
+        use crate::style::ComputedStyle;
+        use lumen_dom::NodeId;
+        super::InlineFrag {
+            x,
+            width,
+            y_offset: 0.0,
+            text: String::new(),
+            style: ComputedStyle::root(),
+            padding_left: 0.0,
+            padding_right: 0.0,
+            is_element_box: false,
+            img_src: None,
+            is_first_line: false,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        }
+    }
+
+    #[test]
+    fn text_align_last_center_shifts_last_line() {
+        // Non-last line: left (offset=0). Last line: center → (300-80)/2=110.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::Center, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 110.0).abs() < 0.5, "last line centered, got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_right_shifts_last_line() {
+        // Non-last line: left (offset=0). Last line: right → 300-80=220.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::Right, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line right, got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_auto_inherits_text_align() {
+        // Auto: last line uses same alignment as text_align (Right here).
+        // Both lines → right offset = 300-100=200 for first, 300-80=220 for last.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Right, TextAlignLast::Auto, Direction::Ltr);
+        assert!((lines[0][0].x - 200.0).abs() < 0.5, "non-last right-aligned, got {}", lines[0][0].x);
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line right (auto), got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_end_resolves_to_right_ltr() {
+        // End in LTR = Right → last line offset = 300-80=220; non-last Left = 0.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::End, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line end→right, got {}", lines[1][0].x);
     }
 
 }
