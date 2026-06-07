@@ -1964,6 +1964,7 @@ dependencies = [
  "lumen-html-parser",
  "psl",
  "rusqlite",
+ "sha2",
 ]
 
 [[package]]
