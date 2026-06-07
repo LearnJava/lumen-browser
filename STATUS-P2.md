@@ -12,6 +12,13 @@
 
 ## Current / Recently Merged
 
+**D-4 | Image HEIC/HEIF stub** ✅ 2026-06-07 (merged)
+- `is_heic(bytes)` — ISOBMFF ftyp detection: major и compatible brands heic/heix/hevc/mif1
+- `HeicError` + `decode_heic()` stub → `Err(HeicError)` graceful
+- `ImageError::Heic` вариант + `From<HeicError>` + Display
+- MIME `image/heic` и `image/heif` добавлены в `supported_mime_types()`
+- 7 unit-тестов в heic.rs + 6 интеграционных в lib.rs (131 тест ✅), Clippy чист
+
 **C-5 | Multi-tab IndexedDB per-origin SQLite** ✅ 2026-06-07 (merged)
 - `origin_key(etld_plus_one)` → SHA-256[:16] — безопасный файловый ключ
 - `IdbStore::open_or_create(path)` — выделенный SQLite-файл на origin
@@ -181,7 +188,7 @@ Ordered by priority. Сгруппированы по домену.
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| D-4 | **Image HEIC/HEIF stub** *(Фаза 1)* — `is_heic(bytes)` (ISOBMFF ftyp: heic/heix/hevc/mif1), `HeicImageDecoder` → `Err(HeicError::NotSupported)`, MIME `image/heic`/`image/heif`. 4 теста. | XS | `lumen-image` |
+| ~~D-4~~ | ~~**Image HEIC/HEIF stub**~~ — **выполнено** | XS | `lumen-image` |
 | D-5 | **DOM node count limit** *(Фаза 1)* — `Document::node_count()`, `MAX_DOM_NODES = 50_000` const, `Document::try_create_element()` → `Err(NodeLimitExceeded)` при превышении, `console.warn("DOM tree exceeds 40000 nodes")` на 40k порог, `_lumen_dom_node_count()` binding. 6 тестов. | S | `lumen-dom`, `lumen-js` |
 | ~~D-3~~ | ~~**Image JPEG XL stub**~~ — **выполнено** | XS | `lumen-image` |
 | D-1 | **Tile-based rendering** *(Фаза 2)* — `TileGrid {tile_size: 256, tiles: HashMap<(i32,i32), TileDirty>}` в `lumen-paint`, `cull_display_list(dl, tile_x, tile_y, w, h)` — AABB тест каждой команды, `Renderer::render_tile()`. Shell: dirty-rect tracking из diff. 8 тестов. | L | `lumen-paint`, `lumen-shell` |
