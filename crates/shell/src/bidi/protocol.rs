@@ -25,14 +25,19 @@
 //!   `{navigation, url}`; эмитит `browsingContext.load`, если подписан.
 //! - `browsingContext.activate` — ACK (валидирует контекст).
 //! - `browsingContext.getTree` — дерево всех контекстов (вложенность по parent).
+//! - `network.getResponseBody` — возвращает буферизованное тело ответа (base64);
+//!   тело добавляется через [`BidiState::record_response_body`].
+//!
+//! `network.responseBodyReceived` — событие, эмитируемое при вызове
+//! [`BidiState::record_response_body`] при наличии подписки.
 //!
 //! Live-wiring к реальному движку (фактическая навигация в `lumen-driver`,
-//! `domContentLoaded`/response-body/cookie-события) — handoff P3, см. 8H.3.
+//! `domContentLoaded`/cookie-события) — handoff P3, см. 8H.3.
 //! Этот слой — чистая state-машина протокола: одно соединение = одно [`BidiState`].
 //!
 //! Всё остальное → ошибка `unknown command`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
 
@@ -48,7 +53,8 @@ struct BidiContext {
 
 /// Состояние одного BiDi-соединения.
 ///
-/// Хранит сессию, набор browsing context'ов и активные подписки на события.
+/// Хранит сессию, набор browsing context'ов, активные подписки на события
+/// и буферизованные тела сетевых ответов.
 /// Не разделяется между соединениями — каждое соединение изолировано.
 #[derive(Default)]
 pub struct BidiState {
@@ -60,6 +66,11 @@ pub struct BidiState {
     subscriptions: BTreeSet<String>,
     /// Монотонный счётчик для детерминированной генерации id-ов.
     counter: u64,
+    /// Буфер тел ответов: requestId → тело (последнее полученное).
+    ///
+    /// Заполняется через [`BidiState::record_response_body`] из сетевого слоя.
+    /// Опрашивается командой `network.getResponseBody`.
+    response_bodies: HashMap<u64, Vec<u8>>,
 }
 
 impl BidiState {
@@ -96,6 +107,26 @@ impl BidiState {
     /// Найти контекст по id (`None`, если такого нет).
     fn find(&self, id: &str) -> Option<&BidiContext> {
         self.contexts.iter().find(|c| c.id == id)
+    }
+
+    /// Буферизовать тело сетевого ответа и эмитировать `network.responseBodyReceived`.
+    ///
+    /// Вызывается из сетевого слоя при получении тела ответа. Возвращает BiDi-фреймы
+    /// для отправки клиенту (пустой вектор, если подписки нет).
+    /// Повторный вызов с тем же `request_id` перезаписывает предыдущее тело.
+    // Вызывается из network-слоя при 8H.3 live-wiring; пока stub-слой не подключён,
+    // сигнал dead_code ложный.
+    #[allow(dead_code)]
+    pub fn record_response_body(&mut self, request_id: u64, body: Vec<u8>) -> Vec<String> {
+        self.response_bodies.insert(request_id, body.clone());
+        if self.is_subscribed("network.responseBodyReceived") {
+            vec![make_event(
+                "network.responseBodyReceived",
+                network_response_body_event_params(request_id, &body),
+            )]
+        } else {
+            vec![]
+        }
     }
 }
 
@@ -161,6 +192,7 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "script.callFunction" => script_call_function(id, &params, state),
         "script.addPreloadScript" => script_add_preload(id, &params, state),
         "script.removePreloadScript" => script_remove_preload(id, &params, state),
+        "network.getResponseBody" => network_get_response_body(id, &params, state),
         other => DispatchResult::single(make_error(
             Some(id),
             "unknown command",
@@ -539,6 +571,69 @@ fn script_add_preload(id: i64, _params: &JsonValue, state: &mut BidiState) -> Di
 /// Phase 1 stub: ACK без реального удаления.
 fn script_remove_preload(id: i64, _params: &JsonValue, _state: &mut BidiState) -> DispatchResult {
     DispatchResult::single(make_success(id, empty_obj()))
+}
+
+// ──────────────────────────────────────────
+// network.* handlers (BiDi §12)
+// ──────────────────────────────────────────
+
+/// `network.getResponseBody` — вернуть буферизованное тело ответа (BiDi §12.6.4).
+///
+/// Ожидает `params.request.requestId` (число). Возвращает тело в base64.
+/// Ошибка `no such request`, если тело не буферизовано (запрос неизвестен).
+fn network_get_response_body(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+    let request_id = params
+        .get("request")
+        .and_then(|r| r.get("requestId"))
+        .and_then(|v| v.as_number())
+        .map(|n| n as u64);
+
+    let Some(request_id) = request_id else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "missing request.requestId",
+        ));
+    };
+
+    let Some(body) = state.response_bodies.get(&request_id) else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such request",
+            &format!("no buffered body for requestId: {request_id}"),
+        ));
+    };
+
+    let encoded = lumen_core::hash::base64_encode(body);
+    let mut body_obj = BTreeMap::new();
+    body_obj.insert("type".into(), JsonValue::String("base64".into()));
+    body_obj.insert("value".into(), JsonValue::String(encoded));
+
+    let mut result = BTreeMap::new();
+    result.insert("body".into(), JsonValue::Object(body_obj));
+
+    DispatchResult::single(make_success(id, JsonValue::Object(result)))
+}
+
+/// Параметры события `network.responseBodyReceived` (BiDi §12.5.3, упрощённые).
+///
+/// Содержит `request.requestId` и тело в base64 — минимальный набор для stub-слоя.
+// Вызывается только из record_response_body, которая помечена #[allow(dead_code)].
+#[allow(dead_code)]
+fn network_response_body_event_params(request_id: u64, body: &[u8]) -> JsonValue {
+    let mut req = BTreeMap::new();
+    req.insert("requestId".into(), JsonValue::Number(request_id as f64));
+
+    let encoded = lumen_core::hash::base64_encode(body);
+    let mut body_obj = BTreeMap::new();
+    body_obj.insert("type".into(), JsonValue::String("base64".into()));
+    body_obj.insert("value".into(), JsonValue::String(encoded));
+
+    let mut params = BTreeMap::new();
+    params.insert("request".into(), JsonValue::Object(req));
+    params.insert("body".into(), JsonValue::Object(body_obj));
+
+    JsonValue::Object(params)
 }
 
 #[cfg(test)]
@@ -976,5 +1071,91 @@ mod tests {
             &mut state,
         );
         assert!(result.frames[0].contains("success"), "got: {}", result.frames[0]);
+    }
+
+    // --- network.* tests ---
+
+    #[test]
+    fn get_response_body_returns_base64() {
+        let mut state = BidiState::new();
+        state.record_response_body(42, b"hello".to_vec());
+        let r = dispatch(
+            r#"{"id":1,"method":"network.getResponseBody","params":{"request":{"requestId":42}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        let body = v.get("result").unwrap().get("body").unwrap();
+        assert_eq!(body.get("type").and_then(|x| x.as_str()), Some("base64"));
+        // "hello" in base64 is "aGVsbG8="
+        assert_eq!(body.get("value").and_then(|x| x.as_str()), Some("aGVsbG8="));
+    }
+
+    #[test]
+    fn get_response_body_missing_request_id_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":2,"method":"network.getResponseBody","params":{"request":{}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("invalid argument"));
+    }
+
+    #[test]
+    fn get_response_body_unknown_request_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":3,"method":"network.getResponseBody","params":{"request":{"requestId":999}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such request"));
+    }
+
+    #[test]
+    fn record_response_body_emits_event_when_subscribed() {
+        let mut state = BidiState::new();
+        dispatch(
+            r#"{"id":1,"method":"session.subscribe","params":{"events":["network.responseBodyReceived"]}}"#,
+            &mut state,
+        );
+        let frames = state.record_response_body(7, b"data".to_vec());
+        assert_eq!(frames.len(), 1);
+        let ev = parse(&frames[0]);
+        assert_eq!(ev.get("type").and_then(|x| x.as_str()), Some("event"));
+        assert_eq!(ev.get("method").and_then(|x| x.as_str()), Some("network.responseBodyReceived"));
+        let params = ev.get("params").unwrap();
+        assert_eq!(params.get("request").unwrap().get("requestId").and_then(|x| x.as_number()), Some(7.0));
+    }
+
+    #[test]
+    fn record_response_body_no_event_when_not_subscribed() {
+        let mut state = BidiState::new();
+        let frames = state.record_response_body(5, b"body".to_vec());
+        assert!(frames.is_empty());
+        // Body is still buffered — can be retrieved via command.
+        let r = dispatch(
+            r#"{"id":1,"method":"network.getResponseBody","params":{"request":{"requestId":5}}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn second_record_overwrites_first() {
+        let mut state = BidiState::new();
+        state.record_response_body(10, b"first".to_vec());
+        state.record_response_body(10, b"second".to_vec());
+        let r = dispatch(
+            r#"{"id":1,"method":"network.getResponseBody","params":{"request":{"requestId":10}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        let val = v.get("result").unwrap().get("body").unwrap().get("value").and_then(|x| x.as_str()).unwrap();
+        // "second" in base64 is "c2Vjb25k"
+        assert_eq!(val, "c2Vjb25k");
     }
 }
