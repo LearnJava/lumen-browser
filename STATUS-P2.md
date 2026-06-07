@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+F-3: CSS font-stretch axis matching  branch: p2-f3-font-stretch
+Next step: добавить wdth_axis в OwnedFontMetrics + resolve_font_stretch в MultiFontMeasurer  paint/src/lib.rs:132
 
 ---
 
