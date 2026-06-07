@@ -6,13 +6,21 @@
 
 ## In progress
 
-**D-5 | DOM node count limit**  branch: p2-d5-dom-node-limit — READY TO MERGE
-Реализовано: MAX_DOM_NODES=50_000, WARN_DOM_NODES=40_000, NodeLimitExceeded, node_count(), try_create_element(), _lumen_dom_node_count() binding, QuotaExceededError throw при limit, исправлен баг u32::MAX→-1 в JS шиме.
-213 тестов lumen-dom ✅, 1296 тестов lumen-js ✅ (7 pre-existing PiP fail), Clippy чист.
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**D-5 | DOM node count limit** ✅ 2026-06-07 (merged)
+- `MAX_DOM_NODES = 50_000`, `WARN_DOM_NODES = 40_000` константы в lumen-dom
+- `NodeLimitExceeded` struct + Display
+- `Document::node_count()` — длина арены
+- `Document::try_create_element()` → `Err(NodeLimitExceeded)` при достижении лимита
+- `_lumen_dom_node_count()` JS binding
+- `document.createElement` бросает `QuotaExceededError` при limit, `console.warn` на 40k
+- Исправлен баг: QuickJS конвертирует u32::MAX→-1; шим обновлён `nid < 0`
+- 5 тестов в lumen-dom (213 ✅), 4 теста в lumen-js (1296 ✅), Clippy чист
 
 **D-4 | Image HEIC/HEIF stub** ✅ 2026-06-07 (merged)
 - `is_heic(bytes)` — ISOBMFF ftyp detection: major и compatible brands heic/heix/hevc/mif1
@@ -184,14 +192,14 @@ Ordered by priority. Сгруппированы по домену.
 | ~~C-2~~ | ~~**HTTP Cache disk persistence**~~ — **выполнено** | M | `lumen-network` |
 | ~~C-3~~ | ~~**WebSocket permessage-deflate**~~ — **выполнено** | M | `lumen-network` |
 | ~~C-4~~ | ~~**Fetch SRI integrity check**~~ — **выполнено** | S | `lumen-js` |
-| C-5 | **Multi-tab IndexedDB per-origin SQLite** *(Фаза 2)* — `IdbStore::for_origin(origin_key)`: `origin_key = sha256_hex(eTLD+1)[:16]`, отдельный файл `~/.config/lumen/idb/{key}.db` на origin, `IdbStore::open_or_create(path)`, shell выбирает store по URL в `parse_and_layout`. 8 тестов. | M | `lumen-storage`, `lumen-shell` |
+| ~~C-5~~ | ~~**Multi-tab IndexedDB per-origin SQLite**~~ — **выполнено** | M | `lumen-storage`, `lumen-shell` |
 
 ### D — Производительность
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~D-4~~ | ~~**Image HEIC/HEIF stub**~~ — **выполнено** | XS | `lumen-image` |
-| D-5 | **DOM node count limit** *(Фаза 1)* — `Document::node_count()`, `MAX_DOM_NODES = 50_000` const, `Document::try_create_element()` → `Err(NodeLimitExceeded)` при превышении, `console.warn("DOM tree exceeds 40000 nodes")` на 40k порог, `_lumen_dom_node_count()` binding. 6 тестов. | S | `lumen-dom`, `lumen-js` |
+| ~~D-5~~ | ~~**DOM node count limit**~~ — **выполнено** | S | `lumen-dom`, `lumen-js` |
 | ~~D-3~~ | ~~**Image JPEG XL stub**~~ — **выполнено** | XS | `lumen-image` |
 | D-1 | **Tile-based rendering** *(Фаза 2)* — `TileGrid {tile_size: 256, tiles: HashMap<(i32,i32), TileDirty>}` в `lumen-paint`, `cull_display_list(dl, tile_x, tile_y, w, h)` — AABB тест каждой команды, `Renderer::render_tile()`. Shell: dirty-rect tracking из diff. 8 тестов. | L | `lumen-paint`, `lumen-shell` |
 | D-2 | **CSS animation GPU layer** *(Фаза 2)* — `will-change: transform/opacity/filter` → `Renderer::promote_layer(node_id)` создаёт `LayerCache` entry; `AnimationScheduler::tick()` обновляет только transform matrix без relayout. `// CSS: will-change`. 6 тестов. | M | `lumen-paint`, `lumen-shell` |
