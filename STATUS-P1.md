@@ -6,8 +6,7 @@
 
 ## In progress
 
-F-3: Web Codecs API stub  branch: p1-f3-web-codecs
-Next step: реализовать JS шим + тесты  crates/js/src/web_codecs.rs
+_(нет)_
 
 ---
 
@@ -19,7 +18,7 @@ Next step: реализовать JS шим + тесты  crates/js/src/web_code
 |---|--------|--------|--------|
 | ~~F-1~~ | ~~**Content Security Policy Level 3 Phase 0**~~ — **выполнено** | M | `lumen-network`, `lumen-js` |
 | ~~F-2~~ | ~~**Permissions Policy (Feature Policy)**~~ — **выполнено** | S | `lumen-network`, `lumen-js` |
-| F-3 | **Web Codecs API stub** — `VideoDecoder`/`VideoEncoder`/`AudioDecoder`/`AudioEncoder` Phase 0 stubs (W3C Web Codecs). 4 теста. | S | `lumen-js` |
+| ~~F-3~~ | ~~**Web Codecs API stub**~~ — **выполнено** | S | `lumen-js` |
 | F-4 | **User-Agent Client Hints** — `navigator.userAgentData` с `brands`/`mobile`/`platform`/`getHighEntropyValues()` → Promise. Phase 0: статический Chrome профиль. 4 теста. | XS | `lumen-js` |
 | F-5 | **MediaCapabilities API** — `navigator.mediaCapabilities.decodingInfo(config)` → Promise, `encodingInfo()`. Phase 0: supported=true, smooth=true, powerEfficient=false. 4 теста. | XS | `lumen-js` |
 
@@ -38,6 +37,7 @@ Next step: реализовать JS шим + тесты  crates/js/src/web_code
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | F-3: Web Codecs API stub | W3C Web Codecs Phase 0: `VideoDecoder`/`VideoEncoder`/`AudioDecoder`/`AudioEncoder` стабы. Конструктор {output,error}, state machine (unconfigured→configured→closed), `configure()`/`decode|encode()`/`flush()`→Promise/`reset()`/`close()`. `isConfigSupported()` → Promise<{supported:false, config}>. Phase 0: decode/encode — no-op, flush() — сразу resolved. Вспомогательные типы: `EncodedVideoChunk`, `EncodedAudioChunk`, `VideoFrame`, `AudioData` (конструкторы + copyTo/clone/close). Новый модуль `crates/js/src/web_codecs.rs`. lumen-js: clippy чист, 12 unit-тестов (+12 vs 1358). |
 | 2026-06-08 | F-2: Permissions Policy (Feature Policy) Phase 0 | W3C Permissions Policy §8 + legacy Feature-Policy. lumen-network: `PermissionsPolicy {features}`, `PermissionsAllowlist` (All/None/Origins). `parse_permissions_policy_header()` / `parse_feature_policy_header()`. `allows_feature(name, origin)`. 6 unit-тестов. lumen-js: `document.featurePolicy` / `document.permissionsPolicy` singleton (FeaturePolicy: allowsFeature/features/allowedFeatures/getAllowlistForFeature). `_lumen_set_permissions_policy(headerValue)` — hook для shell Phase 1. 6 unit-тестов. lumen-network: clippy чист, 703 тестов. lumen-js: clippy чист, 1358 тестов. |
 | 2026-06-08 | F-1: Content Security Policy Level 3 Phase 0 | W3C CSP3 §2–7 Phase 0: `CspPolicy {directives, report_uri, report_to, upgrade_insecure_requests, block_all_mixed_content, report_only}`. `CspDirective` enum (18 директив: DefaultSrc/ScriptSrc/StyleSrc/ImgSrc/ConnectSrc/MediaSrc/ObjectSrc/FrameSrc/WorkerSrc/ManifestSrc/PrefetchSrc/BaseUri/FormAction/FrameAncestors/NavigateTo/Sandbox + Elem/Attr гранулярные). `CspSource` enum (None/SelfOrigin/UnsafeInline/UnsafeEval/StrictDynamic/UnsafeHashes/Nonce/Hash/Scheme/Url). `parse_csp_header()` / `parse_csp_report_only_header()`. `effective_sources()` с fallback на default-src. JS: `SecurityPolicyViolationEvent` extends Event (11 свойств: documentURI/referrer/blockedURI/violatedDirective/effectiveDirective/originalPolicy/disposition/statusCode/sample/sourceFile/lineNumber). `window._lumen_dispatch_csp_violation(directive, blockedUri, policy, disposition)` — hook для shell Phase 1. Новые модули: `crates/network/src/csp.rs` + `crates/js/src/csp.rs`. lumen-network: clippy чист, 12 unit-тестов (+12 vs 685). lumen-js: clippy чист, 6 unit-тестов (+6 vs 1347). |
 | 2026-06-08 | E-5: Compute Pressure API stub | W3C Compute Pressure L1 Phase 0: `new PressureObserver(callback)`, `.observe('cpu')` → Promise, `.unobserve('cpu')`, `.disconnect()`. `PressureRecord {source, state:'nominal', time}` класс с `toJSON()`. `PressureObserver.knownSources()` → `['cpu']`. Phase 0: callback никогда не вызывается, реального CPU-семплинга нет. Новый модуль `crates/js/src/compute_pressure.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1342). |
