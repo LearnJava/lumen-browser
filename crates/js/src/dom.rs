@@ -2509,13 +2509,171 @@ function BeforeUnloadEvent(type, init) {
 BeforeUnloadEvent.prototype = Object.create(Event.prototype);
 BeforeUnloadEvent.prototype.constructor = BeforeUnloadEvent;
 
-// DragEvent — drag-and-drop events
+// ── HTML5 Drag and Drop API (HTML LS §9.10) ───────────────────────────────────
+// DataTransferItem — single item in the drag data store.
+function DataTransferItem(kind, type, data) {
+    this.kind = kind;   // 'string' or 'file'
+    this.type = String(type || '').toLowerCase();
+    this._data = data;  // string value or null for file kind
+}
+DataTransferItem.prototype.getAsString = function(callback) {
+    if (this.kind !== 'string' || typeof callback !== 'function') return;
+    var d = this._data;
+    try { callback(d != null ? String(d) : ''); } catch(e) {}
+};
+DataTransferItem.prototype.getAsFile = function() {
+    return null; // Phase 0: no native file access
+};
+
+// DataTransferItemList — ordered list of DataTransferItems.
+function DataTransferItemList(owner) {
+    this._items = [];
+    this._owner = owner; // back-ref to DataTransfer for type sync
+}
+DataTransferItemList.prototype.add = function(dataOrFile, type) {
+    if (typeof dataOrFile === 'string') {
+        var t = String(type || 'text/plain').toLowerCase();
+        // Spec: only one item per unique type (string kind)
+        for (var i = 0; i < this._items.length; i++) {
+            if (this._items[i].kind === 'string' && this._items[i].type === t) return null;
+        }
+        var item = new DataTransferItem('string', t, dataOrFile);
+        this._items.push(item);
+        this._owner._sync_from_items();
+        return item;
+    }
+    // file kind (Phase 0: no actual File support)
+    return null;
+};
+DataTransferItemList.prototype.remove = function(index) {
+    if (index >= 0 && index < this._items.length) {
+        this._items.splice(index, 1);
+        this._owner._sync_from_items();
+    }
+};
+DataTransferItemList.prototype.clear = function() {
+    this._items = [];
+    this._owner._sync_from_items();
+};
+Object.defineProperty(DataTransferItemList.prototype, 'length', {
+    get: function() { return this._items.length; }
+});
+// Indexed access via Proxy-like approach using numeric properties
+DataTransferItemList.prototype._rebuild_indices = function() {
+    // Clear old numeric properties beyond new length
+    var old_n = typeof this._prev_len === 'number' ? this._prev_len : 0;
+    var n = this._items.length;
+    for (var i = n; i < old_n; i++) delete this[i];
+    for (var j = 0; j < n; j++) this[j] = this._items[j];
+    this._prev_len = n;
+};
+DataTransferItemList.prototype[Symbol.iterator] = function() {
+    var items = this._items.slice();
+    var idx = 0;
+    return {
+        next: function() {
+            if (idx < items.length) return { value: items[idx++], done: false };
+            return { value: undefined, done: true };
+        }
+    };
+};
+
+// DataTransfer — the drag data store (HTML LS §9.10.1).
+function DataTransfer() {
+    this._data = {};         // format → string
+    this._types = [];        // read-only types list
+    this.effectAllowed = 'uninitialized';
+    this.dropEffect = 'none';
+    this.items = new DataTransferItemList(this);
+    this.files = Object.freeze([]); // FileList stub
+}
+DataTransfer.prototype._sync_from_items = function() {
+    // Rebuild _data and _types from items list; also refresh indexed access on the list
+    this._data = {};
+    this._types = [];
+    var list = this.items._items;
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].kind === 'string') {
+            this._data[list[i].type] = list[i]._data;
+            this._types.push(list[i].type);
+        }
+    }
+    this.items._rebuild_indices();
+};
+Object.defineProperty(DataTransfer.prototype, 'types', {
+    get: function() { return Object.freeze(this._types.slice()); }
+});
+DataTransfer.prototype.setData = function(format, data) {
+    var fmt = String(format || '').toLowerCase();
+    // Normalise 'text' → 'text/plain', 'url' → 'text/uri-list' per spec
+    if (fmt === 'text') fmt = 'text/plain';
+    if (fmt === 'url') fmt = 'text/uri-list';
+    // Remove existing item with same type, then add new one
+    var list = this.items._items;
+    for (var i = list.length - 1; i >= 0; i--) {
+        if (list[i].kind === 'string' && list[i].type === fmt) list.splice(i, 1);
+    }
+    list.push(new DataTransferItem('string', fmt, String(data != null ? data : '')));
+    this._sync_from_items();
+};
+DataTransfer.prototype.getData = function(format) {
+    var fmt = String(format || '').toLowerCase();
+    if (fmt === 'text') fmt = 'text/plain';
+    if (fmt === 'url') fmt = 'text/uri-list';
+    return Object.prototype.hasOwnProperty.call(this._data, fmt) ? this._data[fmt] : '';
+};
+DataTransfer.prototype.clearData = function(format) {
+    if (arguments.length === 0 || format === undefined || format === null) {
+        // Remove all string-kind items
+        var list = this.items._items;
+        for (var i = list.length - 1; i >= 0; i--) {
+            if (list[i].kind === 'string') list.splice(i, 1);
+        }
+    } else {
+        var fmt = String(format).toLowerCase();
+        if (fmt === 'text') fmt = 'text/plain';
+        if (fmt === 'url') fmt = 'text/uri-list';
+        var list2 = this.items._items;
+        for (var i = list2.length - 1; i >= 0; i--) {
+            if (list2[i].kind === 'string' && list2[i].type === fmt) list2.splice(i, 1);
+        }
+    }
+    this._sync_from_items();
+};
+DataTransfer.prototype.setDragImage = function(_image, _x, _y) {
+    // Phase 0: no-op (custom drag image not supported)
+};
+
+// DragEvent — drag-and-drop events (HTML LS §9.10.5)
 function DragEvent(type, init) {
     MouseEvent.call(this, type, init);
-    this.dataTransfer = (init && init.dataTransfer != null) ? init.dataTransfer : null;
+    // If no DataTransfer provided, create a fresh one for new drag operations
+    this.dataTransfer = (init && init.dataTransfer != null)
+        ? init.dataTransfer
+        : new DataTransfer();
 }
 DragEvent.prototype = Object.create(MouseEvent.prototype);
 DragEvent.prototype.constructor = DragEvent;
+
+// _lumen_dispatch_drag_event — called by Rust shell (Phase 1) to fire a drag event
+// on a specific element. data_json is a JSON string of { format: value } pairs.
+function _lumen_dispatch_drag_event(nid, type, x, y, data_json) {
+    var dt = new DataTransfer();
+    if (data_json) {
+        try {
+            var d = JSON.parse(data_json);
+            var keys = Object.keys(d);
+            for (var i = 0; i < keys.length; i++) dt.setData(keys[i], d[keys[i]]);
+        } catch(e) {}
+    }
+    var evt = new DragEvent(type, {
+        bubbles: true, cancelable: true, isTrusted: true,
+        clientX: x || 0, clientY: y || 0,
+        dataTransfer: dt
+    });
+    _lumen_dispatch_rich(nid, evt);
+    return !evt.defaultPrevented;
+}
 
 // ClipboardEvent — copy / cut / paste
 function ClipboardEvent(type, init) {
@@ -3277,6 +3435,22 @@ function _lumen_make_element(nid) {
         onfullscreenerror:  null,
         onpointerlockchange: null,
         onpointerlockerror: null,
+        // HTML LS §9.10 — drag-and-drop IDL attributes
+        get draggable() {
+            var v = _lumen_get_attr(nid, 'draggable');
+            if (v === undefined || v === null) return false;
+            return String(v).toLowerCase() !== 'false';
+        },
+        set draggable(v) {
+            _lumen_set_attr(nid, 'draggable', v ? 'true' : 'false');
+        },
+        ondragstart:  null,
+        ondrag:       null,
+        ondragend:    null,
+        ondragenter:  null,
+        ondragover:   null,
+        ondragleave:  null,
+        ondrop:       null,
         appendChild:     function(c) {
             if (!c || c.__nid__ === undefined) return c;
             if (c.__isDocumentFragment__) {
@@ -7268,6 +7442,9 @@ window.ErrorEvent            = ErrorEvent;
 window.SubmitEvent           = SubmitEvent;
 window.PageTransitionEvent   = PageTransitionEvent;
 window.BeforeUnloadEvent     = BeforeUnloadEvent;
+window.DataTransfer          = DataTransfer;
+window.DataTransferItem      = DataTransferItem;
+window.DataTransferItemList  = DataTransferItemList;
 window.DragEvent             = DragEvent;
 window.ClipboardEvent        = ClipboardEvent;
 window.CompositionEvent      = CompositionEvent;
@@ -19218,5 +19395,111 @@ mod tests {
         assert_eq!(v, lumen_core::JsValue::String(
             "chrome-extension://lumen-extension/icons/icon.png".into()
         ));
+    }
+
+    // ── HTML5 Drag and Drop API (HTML LS §9.10) ───────────────────────────────
+
+    #[test]
+    fn data_transfer_set_get_data() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text/plain', 'hello drag');
+            dt.getData('text/plain')
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("hello drag".into()));
+    }
+
+    #[test]
+    fn data_transfer_normalises_text_format() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text', 'world');
+            dt.getData('text/plain')
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("world".into()));
+    }
+
+    #[test]
+    fn data_transfer_types_reflect_set_data() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text/plain', 'a');
+            dt.setData('text/html', '<b>a</b>');
+            dt.types.length === 2 && dt.types.indexOf('text/plain') >= 0
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn data_transfer_clear_data_single_format() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text/plain', 'a');
+            dt.setData('text/html', '<b>a</b>');
+            dt.clearData('text/plain');
+            dt.types.length === 1 && dt.types[0] === 'text/html'
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn data_transfer_item_list_add_and_iterate() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.items.add('foo', 'text/plain');
+            dt.items.length === 1 && dt.items[0].kind === 'string'
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn data_transfer_item_get_as_string() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text/plain', 'payload');
+            var got = null;
+            dt.items[0].getAsString(function(s) { got = s; });
+            got
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("payload".into()));
+    }
+
+    #[test]
+    fn drag_event_has_fresh_data_transfer() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var e = new DragEvent('dragstart', { bubbles: true });
+            e.dataTransfer instanceof DataTransfer
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn draggable_attribute_getter_setter() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var el = document.createElement('div');
+            document.body.appendChild(el);
+            el.draggable = true;
+            el.draggable === true && el.getAttribute('draggable') === 'true'
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn data_transfer_classes_exported_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            typeof window.DataTransfer === 'function' &&
+            typeof window.DataTransferItem === 'function' &&
+            typeof window.DataTransferItemList === 'function'
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
     }
 }
