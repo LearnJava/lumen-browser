@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**E-3 | about:blank and about:srcdoc**  branch: p2-e3-about-blank
+Next step: tests + merge  crates/shell/src/main.rs:960, crates/engine/layout/src/box_tree.rs:1296
 
 ---
 

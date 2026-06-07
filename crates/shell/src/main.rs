@@ -962,6 +962,9 @@ enum PageSource {
     Empty,
     File(PathBuf),
     Url(String),
+    /// `about:blank` — пустой документ без сетевого запроса (HTML spec §7.5).
+    /// `url_str()` возвращает "about:blank" для адресной строки и истории.
+    AboutBlank,
     /// Страница восстанавливается из bfcache: HTML уже есть в памяти,
     /// сетевой запрос не нужен. `base_url` — оригинальный URL страницы
     /// (для разрешения относительных ссылок внутри HTML).
@@ -1425,6 +1428,7 @@ impl PageSource {
             Some(s) if s.starts_with("http://") || s.starts_with("https://") => {
                 PageSource::Url(s.to_owned())
             }
+            Some("about:blank") => PageSource::AboutBlank,
             Some(s) => PageSource::File(PathBuf::from(s)),
             None => PageSource::Empty,
         }
@@ -1435,6 +1439,7 @@ impl PageSource {
             PageSource::Empty => "(пустая вкладка)".to_owned(),
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
+            PageSource::AboutBlank => "about:blank".to_owned(),
             PageSource::Snapshot { base_url, .. } => format!("[bfcache] {base_url}"),
         }
     }
@@ -1445,7 +1450,7 @@ impl PageSource {
         let url_s = match self {
             PageSource::Url(u) => u.as_str(),
             PageSource::Snapshot { base_url, .. } => base_url.as_str(),
-            _ => return None,
+                _ => return None,
         };
         lumen_core::url::Url::parse(url_s).ok().map(|u| {
             let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
@@ -1458,6 +1463,7 @@ impl PageSource {
         match self {
             PageSource::Url(u) => Some(u.as_str()),
             PageSource::Snapshot { base_url, .. } => Some(base_url.as_str()),
+            PageSource::AboutBlank => Some("about:blank"),
             _ => None,
         }
     }
@@ -1470,7 +1476,7 @@ impl PageSource {
             PageSource::File(p) => ResourceBase::File(p.clone()),
             PageSource::Url(u) => ResourceBase::Url(u.clone()),
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-            PageSource::Empty => return href.to_owned(),
+            PageSource::Empty | PageSource::AboutBlank => return href.to_owned(),
         };
         base.resolve_str(href)
     }
@@ -1485,6 +1491,11 @@ impl PageSource {
     ) -> Result<RawPage, Box<dyn Error>> {
         match self {
             PageSource::Empty => Err("источник пуст — нечего загружать".into()),
+            PageSource::AboutBlank => Ok(RawPage {
+                bytes: b"<!DOCTYPE html><html><head></head><body></body></html>".to_vec(),
+                base: ResourceBase::Url("about:blank".to_owned()),
+                content_type: Some("text/html"),
+            }),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
                 Ok(RawPage {
@@ -1539,7 +1550,7 @@ impl PageSource {
         hp: &dyn HyphenationProvider,
         cookie_banner_dismiss: bool,
     ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-        if matches!(self, PageSource::Empty) {
+        if matches!(self, PageSource::Empty | PageSource::AboutBlank) {
             return Ok((LoadedPage::empty(), None, None));
         }
         let raw = self.load_bytes(sink.clone(), None)?;
@@ -4359,7 +4370,7 @@ impl Lumen {
     ///
     /// При ошибке — `LoadError`.
     fn start_streaming_load(&self) {
-        if matches!(self.source, PageSource::Empty) {
+        if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
         let source = self.source.clone();
@@ -9312,7 +9323,7 @@ impl Lumen {
     /// Silent — ошибки записи не ломают выход. Не сохраняет Empty-страницу.
     fn save_session_on_close(&self) {
         let url = match &self.source {
-            PageSource::Empty => return,
+            PageSource::Empty | PageSource::AboutBlank => return,
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
@@ -9492,7 +9503,7 @@ impl Lumen {
             PageSource::Url(u) => u.clone(),
             PageSource::File(p) => format!("file://{}", p.display()),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
-            PageSource::Empty => String::new(),
+            PageSource::Empty | PageSource::AboutBlank => String::new(),
         };
         let title = snap.title.clone().unwrap_or_default();
         let scroll_x = snap.scroll_x;
@@ -10083,7 +10094,7 @@ fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
 /// (нечего восстанавливать). `File` → путь, `Snapshot` → `base_url`.
 fn source_url_string(src: &PageSource) -> Option<String> {
     match src {
-        PageSource::Empty => None,
+        PageSource::Empty | PageSource::AboutBlank => None,
         PageSource::File(p) => Some(p.display().to_string()),
         PageSource::Url(u) => Some(u.clone()),
         PageSource::Snapshot { base_url, .. } => Some(base_url.clone()),
@@ -10824,6 +10835,24 @@ mod tests {
             PageSource::File(PathBuf::from("a.html")).describe(),
             "a.html",
         );
+    }
+
+    #[test]
+    fn page_source_about_blank_from_arg() {
+        assert!(matches!(
+            PageSource::from_arg(Some("about:blank")),
+            PageSource::AboutBlank
+        ));
+    }
+
+    #[test]
+    fn page_source_about_blank_url_str() {
+        assert_eq!(PageSource::AboutBlank.url_str(), Some("about:blank"));
+    }
+
+    #[test]
+    fn page_source_about_blank_describe() {
+        assert_eq!(PageSource::AboutBlank.describe(), "about:blank");
     }
 
     #[test]
