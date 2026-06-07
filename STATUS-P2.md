@@ -6,12 +6,21 @@
 
 ## In progress
 
-**E-1 | Print dialog UI**  branch: p2-e1-print-dialog
-Next step: create `panels/print_panel.rs`  crates/shell/src/panels/print_panel.rs
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**E-1 | Print dialog UI** ✅ 2026-06-07 (merged)
+- `panels/print_panel.rs` — центрированный модал 560×400 px: PaperSize (A4/Letter/Legal), Orientation (Portrait/Landscape), MarginPreset (Normal/Narrow/Wide), ColorMode (Color/Grayscale), PrintField
+- `PrintPanel` — состояние: visible, paper, orientation, margins, page_range, color_mode, output_path, editing_field; toggle/close/push_char/pop_char/margin_px
+- `PrintHit` enum + `hit_test()` — кнопки Print/Cancel, pills, текстовые поля, close
+- `build_panel()` — pill-rows, text-fields с focus-border, backdrop dim, кнопки Print/Cancel
+- `KeyCommand::TogglePrint` + `Ctrl+P` кейбиндинг; `handle_print_key()` — Escape/Backspace/chars
+- `do_print_to_pdf_with_opts(margin_tb, margin_lr)` — настраиваемые поля страницы
+- Попутно: исправлены pre-existing clippy::collapsible_if в `reader_view.rs` (2 места)
+- 12 тестов + 1016 тестов lumen-shell ✅, Clippy чист
 
 **E-2 | Accessibility settings panel** ✅ 2026-06-07 (merged)
 - `lumen_storage::A11yPrefs` — SQLite-store: font_size_multiplier (0.8/1/1.25/1.5/2.0), reduced_motion, forced_colors, cursor_size (Normal/Large/ExtraLarge). 6 тестов.
