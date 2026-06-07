@@ -151,6 +151,13 @@ pub trait RenderBackend: Send {
     /// Вызывается из poll-loop shell-а. Дефолт — no-op.
     fn on_layer_memory_pressure(&mut self, _level: MemoryPressureLevel) {}
 
+    /// Реагирует на события memory-pressure — вытесняет glyph atlas.
+    ///
+    /// Medium: эвиктирует ~50% LRU глифов.  High: полная очистка.
+    /// Вызывается из poll-loop shell-а вместе с `on_layer_memory_pressure`.
+    /// Дефолт — no-op (бэкенды без GlyphAtlas игнорируют).
+    fn on_atlas_memory_pressure(&mut self, _level: MemoryPressureLevel) {}
+
     /// Promote a node to its own GPU layer for `will-change: transform/opacity/filter`.
     ///
     /// Default: no-op (backends that don't support GPU layers ignore this call).
@@ -294,5 +301,14 @@ mod tests {
         b.on_layer_memory_pressure(MemoryPressureLevel::Low);
         b.on_layer_memory_pressure(MemoryPressureLevel::Medium);
         b.on_layer_memory_pressure(MemoryPressureLevel::High);
+    }
+
+    #[test]
+    fn null_backend_on_atlas_memory_pressure_noop() {
+        let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        // Default impl is a no-op — must not panic for any pressure level.
+        b.on_atlas_memory_pressure(MemoryPressureLevel::Low);
+        b.on_atlas_memory_pressure(MemoryPressureLevel::Medium);
+        b.on_atlas_memory_pressure(MemoryPressureLevel::High);
     }
 }

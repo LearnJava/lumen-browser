@@ -208,4 +208,45 @@ mod tests {
         // Just verify it compiles and returns a valid source on this platform.
         // NullMemoryPressureSource always returns Low.
     }
+
+    #[test]
+    fn no_broadcast_for_low_pressure() {
+        // Low pressure must not trigger broadcast — direct cache evictions should
+        // not fire either, as the shell guards on Some(level) from tick().
+        let mut tick = expired_tick();
+        let mut reg = CacheRegistry::new();
+        let result = tick.tick(&mut reg);
+        // NullMemoryPressureSource always returns Low, so tick must return None.
+        assert!(result.is_none(), "Low pressure must not trigger eviction");
+    }
+
+    #[test]
+    fn registry_broadcast_evicts_multiple_caches() {
+        use lumen_core::EvictableCache;
+
+        struct TrackingCache {
+            calls: usize,
+        }
+        impl EvictableCache for TrackingCache {
+            fn on_memory_pressure(&mut self, _level: MemoryPressureLevel) {
+                self.calls += 1;
+            }
+            fn used_bytes(&self) -> usize { 0 }
+            fn budget_bytes(&self) -> usize { usize::MAX }
+            fn clear(&mut self) {}
+            fn cache_name(&self) -> &'static str { "tracking" }
+        }
+
+        let mut tick = MemoryPollTick {
+            source: Box::new(AlwaysMediumSource),
+            last_poll: Instant::now() - POLL_INTERVAL - Duration::from_secs(1),
+            last_level: MemoryPressureLevel::Low,
+        };
+        let mut reg = CacheRegistry::new();
+        // Two separate caches both registered — both must receive the broadcast.
+        reg.register(Box::new(TrackingCache { calls: 0 }));
+        reg.register(Box::new(TrackingCache { calls: 0 }));
+        let result = tick.tick(&mut reg);
+        assert_eq!(result, Some(MemoryPressureLevel::Medium));
+    }
 }
