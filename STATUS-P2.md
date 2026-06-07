@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**D-1 | Tile-based rendering**  branch: p2-d1-tile-rendering
+Next step: создать tile_grid.rs + cull_display_list + render_tile  paint/src/tile_grid.rs:1
 
 ---
 

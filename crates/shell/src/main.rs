@@ -316,6 +316,7 @@ fn run_window_mode(
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
     let mut app = Lumen {
         display_list: Vec::new(),
+        tile_grid: lumen_paint::TileGrid::default_size(),
         title: None,
         pending_images: Vec::new(),
         source,
@@ -3380,6 +3381,10 @@ fn window_title(page_title: Option<&str>) -> String {
 
 struct Lumen {
     display_list: DisplayList,
+    /// Tile-based dirty-rect tracker. Updated on every display-list change via
+    /// [`lumen_paint::TileGrid::update_from_diff`]. Dirty tiles are re-rendered
+    /// on the next frame; clean tiles reuse the previous output (Phase 2).
+    tile_grid: lumen_paint::TileGrid,
     title: Option<String>,
     /// Декодированные `<img>` ресурсы. До создания Renderer-а — хранятся
     /// в Vec и заливаются в GPU в `resumed`; после — register_image идёт
@@ -3978,6 +3983,7 @@ impl Lumen {
         lumen_layout::clear_interactive_state();
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
+        self.tile_grid.update_from_diff(&self.display_list, &new_dl);
         self.display_list = new_dl;
         // Sync transitions: compare prev styles with new layout before replacing.
         let now_s = self.epoch.elapsed().as_secs_f32();
@@ -4223,6 +4229,8 @@ impl Lumen {
                 self.js_ctx = new_js_ctx;
                 self.content_height = content_height_of(&page.display_list);
                 self.content_width = content_width_of(&page.display_list);
+                // On full page load, mark all tiles dirty — content has changed completely.
+                self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
                 self.display_list = page.display_list;
                 self.animation_scheduler.clear();
                 self.transition_scheduler = TransitionScheduler::new();
@@ -4458,6 +4466,8 @@ impl Lumen {
         self.js_ctx = new_js_ctx;
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
+        // Full page load: force all tiles dirty.
+        self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
         self.display_list = page.display_list;
         self.animation_scheduler.clear();
         self.transition_scheduler = TransitionScheduler::new();
@@ -4958,7 +4968,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 if changed {
                     // Rebuild display list with the updated scroll offsets.
-                    self.display_list = paint_ordered(lb);
+                    let new_dl = paint_ordered(lb);
+                    self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+                    self.display_list = new_dl;
                     // Sync JS cache so scrollTop/scrollLeft reads are accurate.
                     let states = collect_scroll_containers(lb)
                         .iter()
