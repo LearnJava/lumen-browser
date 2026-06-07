@@ -49,6 +49,8 @@ struct BidiContext {
     url: String,
     /// Родительский контекст (`Some` для вложенных, `None` для top-level).
     parent: Option<String>,
+    /// Per-context User-Agent override; `None` означает использование сессионного переопределения.
+    ua_override: Option<String>,
 }
 
 /// Состояние одного BiDi-соединения.
@@ -71,6 +73,24 @@ pub struct BidiState {
     /// Заполняется через [`BidiState::record_response_body`] из сетевого слоя.
     /// Опрашивается командой `network.getResponseBody`.
     response_bodies: HashMap<u64, Vec<u8>>,
+    /// Локаль по умолчанию для пользовательских контекстов (IETF BCP 47).
+    ///
+    /// Устанавливается командой `session.setDefaultUserContextLocale`.
+    /// `None` означает системную локаль браузера.
+    default_locale: Option<String>,
+    /// IANA-идентификатор переопределения часового пояса.
+    ///
+    /// Устанавливается командой `browser.setTimezoneOverride`.
+    /// `None` означает системный часовой пояс.
+    timezone_override: Option<String>,
+    /// Сетевой статус «offline»: `true` — все сетевые запросы имитируют отказ.
+    ///
+    /// Устанавливается командой `network.setOfflineStatus`.
+    offline: bool,
+    /// Сессионный User-Agent override; per-context переопределения имеют приоритет.
+    ///
+    /// Устанавливается командой `emulation.setUserAgentOverride` без `contexts`.
+    session_ua_override: Option<String>,
 }
 
 impl BidiState {
@@ -107,6 +127,42 @@ impl BidiState {
     /// Найти контекст по id (`None`, если такого нет).
     fn find(&self, id: &str) -> Option<&BidiContext> {
         self.contexts.iter().find(|c| c.id == id)
+    }
+
+    /// Текущая локаль по умолчанию для пользовательских контекстов (IETF BCP 47).
+    ///
+    /// `None`, если не задана командой `session.setDefaultUserContextLocale`.
+    // Shell-слой читает это поле при передаче контексту JS-движка; пока не подключён → ложный dead_code.
+    #[allow(dead_code)]
+    pub fn locale(&self) -> Option<&str> {
+        self.default_locale.as_deref()
+    }
+
+    /// Текущее переопределение часового пояса (IANA id).
+    ///
+    /// `None`, если не задано командой `browser.setTimezoneOverride`.
+    // Shell-слой передаёт это значение JS-движку при инициализации; пока не подключён → ложный dead_code.
+    #[allow(dead_code)]
+    pub fn timezone(&self) -> Option<&str> {
+        self.timezone_override.as_deref()
+    }
+
+    /// Симулируется ли состояние «offline» для сети.
+    // Shell-слой блокирует сетевые запросы при offline=true; пока не подключён → ложный dead_code.
+    #[allow(dead_code)]
+    pub fn is_offline(&self) -> bool {
+        self.offline
+    }
+
+    /// Эффективный User-Agent для контекста: per-context → сессионный → `None`.
+    // Shell-слой подставляет UA в HTTP-заголовки при наличии переопределения.
+    #[allow(dead_code)]
+    pub fn user_agent_for(&self, context_id: &str) -> Option<&str> {
+        self.contexts
+            .iter()
+            .find(|c| c.id == context_id)
+            .and_then(|c| c.ua_override.as_deref())
+            .or(self.session_ua_override.as_deref())
     }
 
     /// Буферизовать тело сетевого ответа и эмитировать `network.responseBodyReceived`.
@@ -193,6 +249,10 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "script.addPreloadScript" => script_add_preload(id, &params, state),
         "script.removePreloadScript" => script_remove_preload(id, &params, state),
         "network.getResponseBody" => network_get_response_body(id, &params, state),
+        "network.setOfflineStatus" => network_set_offline(id, &params, state),
+        "session.setDefaultUserContextLocale" => session_set_locale(id, &params, state),
+        "browser.setTimezoneOverride" => browser_set_timezone(id, &params, state),
+        "emulation.setUserAgentOverride" => emulation_set_ua_override(id, &params, state),
         other => DispatchResult::single(make_error(
             Some(id),
             "unknown command",
@@ -239,6 +299,7 @@ fn session_new(id: i64, _params: &JsonValue, state: &mut BidiState) -> DispatchR
         id: context_id,
         url: "about:blank".into(),
         parent: None,
+        ua_override: None,
     });
 
     let mut result = BTreeMap::new();
@@ -301,6 +362,7 @@ fn bc_create(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResu
         id: context_id.clone(),
         url: "about:blank".into(),
         parent,
+        ua_override: None,
     });
 
     let mut result = BTreeMap::new();
@@ -634,6 +696,81 @@ fn network_response_body_event_params(request_id: u64, body: &[u8]) -> JsonValue
     params.insert("body".into(), JsonValue::Object(body_obj));
 
     JsonValue::Object(params)
+}
+
+/// `session.setDefaultUserContextLocale` — установить локаль по умолчанию для контекстов.
+///
+/// Параметр `locale` — IETF BCP 47 тег (напр., `"en-US"`, `"ru"`).
+/// Хранится в [`BidiState::default_locale`] и читается через [`BidiState::locale()`].
+fn session_set_locale(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    state.default_locale = params.get("locale").and_then(|v| v.as_str()).map(str::to_owned);
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `browser.setTimezoneOverride` — установить переопределение часового пояса.
+///
+/// Параметр `timezoneId` — IANA-идентификатор (напр., `"America/New_York"`, `"Europe/Moscow"`).
+/// Хранится в [`BidiState::timezone_override`] и читается через [`BidiState::timezone()`].
+fn browser_set_timezone(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    state.timezone_override =
+        params.get("timezoneId").and_then(|v| v.as_str()).map(str::to_owned);
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `network.setOfflineStatus` — переключить симуляцию offline-режима сети.
+///
+/// Параметры: `{"status": {"offline": true}}` или `{"offline": true}` (упрощённая форма).
+/// После установки `true` все сетевые запросы должны имитировать ошибку подключения.
+/// Читается через [`BidiState::is_offline()`].
+fn network_set_offline(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    // Поддерживаем обе формы: {"status":{"offline":true}} и {"offline":true}.
+    let offline = params
+        .get("status")
+        .and_then(|s| s.get("offline"))
+        .and_then(JsonValue::as_bool)
+        .or_else(|| params.get("offline").and_then(JsonValue::as_bool))
+        .unwrap_or(false);
+    state.offline = offline;
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `emulation.setUserAgentOverride` — переопределить User-Agent на уровне сессии или контекста.
+///
+/// Параметр `userAgent` — строка UA. Необязательный параметр `contexts` — массив context id:
+/// если задан, переопределение применяется к указанным контекстам; иначе — ко всей сессии.
+/// Per-context переопределение имеет приоритет над сессионным при чтении
+/// через [`BidiState::user_agent_for()`].
+fn emulation_set_ua_override(
+    id: i64,
+    params: &JsonValue,
+    state: &mut BidiState,
+) -> DispatchResult {
+    let ua = params.get("userAgent").and_then(|v| v.as_str()).map(str::to_owned);
+    let ctx_ids: Vec<String> = params
+        .get("contexts")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default();
+
+    if ctx_ids.is_empty() {
+        state.session_ua_override = ua;
+    } else {
+        for ctx_id in &ctx_ids {
+            if state.contexts.iter().all(|c| c.id != *ctx_id) {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "no such frame",
+                    &format!("no such context: {ctx_id}"),
+                ));
+            }
+        }
+        for ctx_id in &ctx_ids {
+            if let Some(ctx) = state.contexts.iter_mut().find(|c| c.id == *ctx_id) {
+                ctx.ua_override = ua.clone();
+            }
+        }
+    }
+    DispatchResult::single(make_success(id, empty_obj()))
 }
 
 #[cfg(test)]
@@ -1157,5 +1294,89 @@ mod tests {
         let val = v.get("result").unwrap().get("body").unwrap().get("value").and_then(|x| x.as_str()).unwrap();
         // "second" in base64 is "c2Vjb25k"
         assert_eq!(val, "c2Vjb25k");
+    }
+
+    // --- G-2: locale / timezone / offline / UA override tests ---
+
+    #[test]
+    fn set_locale_stores_and_returns_success() {
+        let mut state = BidiState::new();
+        assert!(state.locale().is_none());
+        let r = dispatch(
+            r#"{"id":1,"method":"session.setDefaultUserContextLocale","params":{"locale":"ru-RU"}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.locale(), Some("ru-RU"));
+        // Overwrite with a new locale.
+        dispatch(
+            r#"{"id":2,"method":"session.setDefaultUserContextLocale","params":{"locale":"en-US"}}"#,
+            &mut state,
+        );
+        assert_eq!(state.locale(), Some("en-US"));
+    }
+
+    #[test]
+    fn set_timezone_stores_and_returns_success() {
+        let mut state = BidiState::new();
+        assert!(state.timezone().is_none());
+        let r = dispatch(
+            r#"{"id":1,"method":"browser.setTimezoneOverride","params":{"timezoneId":"Europe/Moscow"}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.timezone(), Some("Europe/Moscow"));
+    }
+
+    #[test]
+    fn network_offline_status_toggled() {
+        let mut state = BidiState::new();
+        assert!(!state.is_offline());
+        // Включить offline через {"status":{"offline":true}}.
+        let r = dispatch(
+            r#"{"id":1,"method":"network.setOfflineStatus","params":{"status":{"offline":true}}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&r.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+        assert!(state.is_offline());
+        // Отключить через упрощённую форму {"offline":false}.
+        dispatch(
+            r#"{"id":2,"method":"network.setOfflineStatus","params":{"offline":false}}"#,
+            &mut state,
+        );
+        assert!(!state.is_offline());
+    }
+
+    #[test]
+    fn ua_override_session_and_per_context() {
+        let mut state = BidiState::new();
+        let cid = new_session_ctx(&mut state);
+
+        // До установки — нет UA для контекста.
+        assert!(state.user_agent_for(&cid).is_none());
+
+        // Сессионный UA.
+        dispatch(
+            r#"{"id":1,"method":"emulation.setUserAgentOverride","params":{"userAgent":"Lumen/Test"}}"#,
+            &mut state,
+        );
+        assert_eq!(state.user_agent_for(&cid), Some("Lumen/Test"));
+
+        // Per-context UA переопределяет сессионный.
+        let cmd = format!(
+            r#"{{"id":2,"method":"emulation.setUserAgentOverride","params":{{"userAgent":"CtxUA","contexts":["{cid}"]}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert_eq!(parse(&r.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.user_agent_for(&cid), Some("CtxUA"));
+
+        // Несуществующий контекст — ошибка.
+        let bad = dispatch(
+            r#"{"id":3,"method":"emulation.setUserAgentOverride","params":{"userAgent":"X","contexts":["bad-id"]}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&bad.frames[0]).get("error").and_then(|x| x.as_str()), Some("no such frame"));
     }
 }
