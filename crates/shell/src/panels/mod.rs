@@ -5,6 +5,7 @@ pub mod a11y_panel;
 pub mod bookmark_panel;
 pub mod command_palette;
 pub mod settings_panel;
+pub mod shortcuts_panel;
 pub mod history_panel;
 pub mod focus_panel;
 pub mod permission_panel;

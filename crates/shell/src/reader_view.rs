@@ -289,15 +289,15 @@ fn strip_tag_and_contents(html: &str, tag: &str) -> String {
 fn extract_title(full_html: &str, body_html: &str) -> String {
     // Try <title> in full document.
     let lower_full = full_html.to_ascii_lowercase();
-    if let Some(start) = lower_full.find("<title") {
-        if let Some(gt) = lower_full[start..].find('>') {
-            let content_start = start + gt + 1;
-            if let Some(end) = lower_full[content_start..].find("</title") {
-                let raw = &full_html[content_start..content_start + end];
-                let text = strip_all_tags(raw).trim().to_owned();
-                if !text.is_empty() {
-                    return text;
-                }
+    if let Some(start) = lower_full.find("<title")
+        && let Some(gt) = lower_full[start..].find('>')
+    {
+        let content_start = start + gt + 1;
+        if let Some(end) = lower_full[content_start..].find("</title") {
+            let raw = &full_html[content_start..content_start + end];
+            let text = strip_all_tags(raw).trim().to_owned();
+            if !text.is_empty() {
+                return text;
             }
         }
     }
@@ -306,16 +306,16 @@ fn extract_title(full_html: &str, body_html: &str) -> String {
     for heading in &["h1", "h2"] {
         let lower_body = body_html.to_ascii_lowercase();
         let open = format!("<{}", heading);
-        if let Some(start) = lower_body.find(open.as_str()) {
-            if let Some(gt) = lower_body[start..].find('>') {
-                let content_start = start + gt + 1;
-                let close = format!("</{}>", heading);
-                if let Some(end) = lower_body[content_start..].find(close.as_str()) {
-                    let raw = &body_html[content_start..content_start + end];
-                    let text = strip_all_tags(raw).trim().to_owned();
-                    if !text.is_empty() {
-                        return text;
-                    }
+        if let Some(start) = lower_body.find(open.as_str())
+            && let Some(gt) = lower_body[start..].find('>')
+        {
+            let content_start = start + gt + 1;
+            let close = format!("</{}>", heading);
+            if let Some(end) = lower_body[content_start..].find(close.as_str()) {
+                let raw = &body_html[content_start..content_start + end];
+                let text = strip_all_tags(raw).trim().to_owned();
+                if !text.is_empty() {
+                    return text;
                 }
             }
         }
