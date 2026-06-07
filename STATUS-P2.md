@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**D-2 | CSS animation GPU layer** branch: p2-d2-gpu-layer
+Next step: commit + clippy + tests  layer_cache.rs:promote_layer, shell/main.rs:promote_will_change_layers
 
 ---
 

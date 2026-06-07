@@ -2733,6 +2733,30 @@ fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) 
     }
 }
 
+/// Traverse the layout tree and promote nodes with `will-change: transform/opacity/filter`
+/// to their own GPU layers via `RenderBackend::promote_layer`.
+///
+/// Called after every relayout so the promoted-layer set stays current.
+/// Nodes removed from the DOM are cleaned up automatically by `sync_promoted_layers`
+/// (called by each backend's `promote_layer` impl via `LayerCache`).
+fn promote_will_change_layers(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
+    promote_will_change_rec(lb, renderer);
+}
+
+fn promote_will_change_rec(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
+    let needs_layer = lb.style.will_change.iter().any(|p| {
+        matches!(p.as_str(), "transform" | "opacity" | "filter")
+    });
+    if needs_layer {
+        let w = lb.rect.width.max(1.0) as u32;
+        let h = lb.rect.height.max(1.0) as u32;
+        renderer.promote_layer(lb.node.index() as u32, w, h);
+    }
+    for child in &lb.children {
+        promote_will_change_rec(child, renderer);
+    }
+}
+
 /// Find the first `<video>` element in the layout tree (depth-first, document
 /// order) and return its `(src, poster)` URLs.  Used by the picture-in-picture
 /// window (task #21) to pick a video to embed.  Returns `None` when the page
@@ -3996,6 +4020,12 @@ impl Lumen {
         }
         self.prev_styles = new_styles;
         self.layout_box = Some(lb);
+        // Promote nodes with will-change: transform/opacity/filter to GPU layers so
+        // animation ticks can update only the layer matrix, bypassing relayout.
+        // CSS: will-change — P4 wires ComputedStyle.will_change to promote_layer calls here.
+        if let (Some(lb_ref), Some(r)) = (self.layout_box.as_ref(), self.renderer.as_mut()) {
+            promote_will_change_layers(lb_ref, r.as_mut());
+        }
         self.update_snap_containers();
         self.animation_scheduler.clear();
         // Do NOT reset transition_scheduler here: active transitions must survive

@@ -60,6 +60,9 @@ pub struct LayerCache {
     used_bytes: u32,
     /// Logical timestamp (incremented per operation for LRU).
     current_tick: u64,
+    /// NodeId (u32) → LayerKey for nodes promoted via `will-change: transform/opacity/filter`.
+    /// Populated by `promote_layer`; cleaned up by `demote_layer` / `sync_promoted_layers`.
+    promoted_nodes: HashMap<u32, LayerKey>,
 }
 
 const DEFAULT_BUDGET: u32 = 256 * 1024 * 1024; // 256 MB
@@ -72,6 +75,7 @@ impl LayerCache {
             budget_bytes: DEFAULT_BUDGET,
             used_bytes: 0,
             current_tick: 0,
+            promoted_nodes: HashMap::new(),
         }
     }
 
@@ -82,6 +86,7 @@ impl LayerCache {
             budget_bytes,
             used_bytes: 0,
             current_tick: 0,
+            promoted_nodes: HashMap::new(),
         }
     }
 
@@ -160,10 +165,11 @@ impl LayerCache {
         (removed, freed_bytes)
     }
 
-    /// Clear all cached entries (full eviction).
+    /// Clear all cached entries (full eviction), including promoted layer registrations.
     pub fn clear(&mut self) {
         self.cache.clear();
         self.used_bytes = 0;
+        self.promoted_nodes.clear();
     }
 
     /// Get the number of cached layers.
@@ -179,6 +185,51 @@ impl LayerCache {
     /// Check if a specific layer is in cache.
     pub fn contains(&self, key: LayerKey) -> bool {
         self.cache.contains_key(&key)
+    }
+
+    /// Promote a node to its own GPU layer (for `will-change: transform/opacity/filter`).
+    ///
+    /// Inserts a `LayerCache` entry keyed by `node_id` (used as stacking context ID) at
+    /// the given pixel size. Returns the `LayerKey` for the promoted layer.
+    /// Idempotent: if already promoted with the same size, updates the access timestamp.
+    /// // CSS: will-change — P4 wires ComputedStyle.will_change values to call this.
+    pub fn promote_layer(&mut self, node_id: u32, width: u32, height: u32) -> LayerKey {
+        let key = LayerKey::new(node_id, width.max(1), height.max(1));
+        self.insert(key, width.max(1) * height.max(1) * 4);
+        self.promoted_nodes.insert(node_id, key);
+        key
+    }
+
+    /// Returns `true` if the given node has a promoted GPU layer.
+    pub fn is_layer_promoted(&self, node_id: u32) -> bool {
+        self.promoted_nodes.contains_key(&node_id)
+    }
+
+    /// Remove the promoted GPU layer for a node, freeing its cache entry.
+    pub fn demote_layer(&mut self, node_id: u32) {
+        if let Some(key) = self.promoted_nodes.remove(&node_id) {
+            self.remove_keys(&[key]);
+        }
+    }
+
+    /// Remove promoted layers for nodes NOT in `current_nodes`.
+    ///
+    /// Call after each relayout to clean up nodes removed from the DOM.
+    pub fn sync_promoted_layers(&mut self, current_nodes: &[u32]) {
+        let stale: Vec<u32> = self
+            .promoted_nodes
+            .keys()
+            .filter(|id| !current_nodes.contains(id))
+            .copied()
+            .collect();
+        for id in stale {
+            self.demote_layer(id);
+        }
+    }
+
+    /// Number of nodes currently promoted to their own GPU layer.
+    pub fn promoted_count(&self) -> usize {
+        self.promoted_nodes.len()
     }
 
     /// React to an OS memory pressure event by evicting GPU layer textures.
@@ -413,5 +464,61 @@ mod tests {
         cache.on_memory_pressure(lumen_core::MemoryPressureLevel::High);
         assert_eq!(cache.len(), 0, "High должен очистить все GPU-слои");
         assert_eq!(cache.used_bytes(), 0);
+    }
+
+    // ─── Promoted layers ──────────────────────────────────────────────────────
+
+    #[test]
+    fn promote_layer_inserts_cache_entry() {
+        let mut cache = LayerCache::new();
+        cache.promote_layer(42, 256, 256);
+        assert!(cache.contains(LayerKey::new(42, 256, 256)));
+        assert!(cache.used_bytes() > 0);
+    }
+
+    #[test]
+    fn is_layer_promoted_true_after_promote() {
+        let mut cache = LayerCache::new();
+        assert!(!cache.is_layer_promoted(7));
+        cache.promote_layer(7, 128, 128);
+        assert!(cache.is_layer_promoted(7));
+    }
+
+    #[test]
+    fn is_layer_promoted_false_for_unknown_node() {
+        let cache = LayerCache::new();
+        assert!(!cache.is_layer_promoted(99));
+    }
+
+    #[test]
+    fn demote_layer_removes_from_cache() {
+        let mut cache = LayerCache::new();
+        cache.promote_layer(5, 64, 64);
+        assert!(cache.is_layer_promoted(5));
+        let before = cache.used_bytes();
+        cache.demote_layer(5);
+        assert!(!cache.is_layer_promoted(5));
+        assert!(cache.used_bytes() < before, "demote должен освободить GPU-память");
+    }
+
+    #[test]
+    fn promote_layer_deduplicates_node() {
+        let mut cache = LayerCache::new();
+        cache.promote_layer(10, 256, 256);
+        cache.promote_layer(10, 256, 256); // повторно — не дублирует запись
+        assert_eq!(cache.promoted_count(), 1);
+    }
+
+    #[test]
+    fn sync_promoted_layers_removes_stale_nodes() {
+        let mut cache = LayerCache::new();
+        cache.promote_layer(1, 100, 100);
+        cache.promote_layer(2, 100, 100);
+        cache.promote_layer(3, 100, 100);
+        // Только узлы 1 и 3 остались в дереве — узел 2 удалён.
+        cache.sync_promoted_layers(&[1, 3]);
+        assert!(cache.is_layer_promoted(1));
+        assert!(!cache.is_layer_promoted(2), "стоявший узел должен быть demoted");
+        assert!(cache.is_layer_promoted(3));
     }
 }

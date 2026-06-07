@@ -151,6 +151,24 @@ pub trait RenderBackend: Send {
     /// Вызывается из poll-loop shell-а. Дефолт — no-op.
     fn on_layer_memory_pressure(&mut self, _level: MemoryPressureLevel) {}
 
+    /// Promote a node to its own GPU layer for `will-change: transform/opacity/filter`.
+    ///
+    /// Default: no-op (backends that don't support GPU layers ignore this call).
+    /// // CSS: will-change — P4 wires ComputedStyle.will_change to call this after relayout.
+    fn promote_layer(&mut self, _node_id: u32, _width: u32, _height: u32) {}
+
+    /// Returns `true` if the given node has a promoted GPU layer.
+    ///
+    /// Default: `false` (backends without GPU layer support always return false).
+    fn is_layer_promoted(&self, _node_id: u32) -> bool {
+        false
+    }
+
+    /// Remove the promoted GPU layer for a node.
+    ///
+    /// Default: no-op.
+    fn demote_layer(&mut self, _node_id: u32) {}
+
     /// Возвращает сырые RGBA-пиксели после последнего [`render`][RenderBackend::render].
     ///
     /// Только headless-бэкенды реализуют это; windowed-бэкенды возвращают `None`.
