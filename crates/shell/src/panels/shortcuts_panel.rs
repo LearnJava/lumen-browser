@@ -7,7 +7,9 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
-use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
+use lumen_paint::{CornerRadii, DisplayCommand};
+
+type DisplayList = Vec<DisplayCommand>;
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -228,59 +230,44 @@ impl ShortcutsPanel {
 
     /// Render the panel into `dl`, anchored at `(ox, oy)` in screen space.
     pub fn build_panel(&self, dl: &mut DisplayList, ox: f32, oy: f32) {
-        // Outer border + background.
-        dl.push(DisplayCommand::FillRect {
-            rect: Rect { x: ox - 1.0, y: oy - 1.0, width: PANEL_W + 2.0, height: PANEL_H + 2.0 },
+        // Outer border.
+        dl.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(ox - 1.0, oy - 1.0, PANEL_W + 2.0, PANEL_H + 2.0),
+            radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0,
+                                 bl: 6.0, bl_y: 6.0, br: 6.0, br_y: 6.0 },
             color: PANEL_BORDER,
-            radius: CornerRadii::uniform(6.0),
         });
+        // Panel background.
         dl.push(DisplayCommand::FillRect {
-            rect: Rect { x: ox, y: oy, width: PANEL_W, height: PANEL_H },
+            rect: Rect::new(ox, oy, PANEL_W, PANEL_H),
             color: PANEL_BG,
-            radius: CornerRadii::uniform(5.0),
         });
 
         // Header bar.
-        dl.push(DisplayCommand::FillRect {
-            rect: Rect { x: ox, y: oy, width: PANEL_W, height: HEADER_H },
+        dl.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(ox, oy, PANEL_W, HEADER_H),
+            radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0,
+                                 bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
             color: HEADER_BG,
-            radius: CornerRadii { top_left: 5.0, top_right: 5.0, bottom_left: 0.0, bottom_right: 0.0 },
         });
-        dl.push(DisplayCommand::DrawText {
-            rect: Rect { x: ox + PAD_H, y: oy + 8.0, width: PANEL_W - PAD_H * 2.0, height: 20.0 },
-            text: "Горячие клавиши".to_string(),
-            color: HEADER_TEXT,
-            font_size: 13.0,
-            font_weight: FontWeight::Bold,
-            font_style: FontStyle::Normal,
-            clip: None,
-        });
-        // × close button.
-        dl.push(DisplayCommand::DrawText {
-            rect: Rect { x: ox + PANEL_W - CLOSE_W, y: oy + 8.0, width: CLOSE_W, height: 20.0 },
-            text: "×".to_string(),
-            color: CLOSE_COL,
-            font_size: 16.0,
-            font_weight: FontWeight::Bold,
-            font_style: FontStyle::Normal,
-            clip: None,
-        });
+        dl.push(txt("Горячие клавиши", ox + PAD_H, oy + 10.0,
+                    PANEL_W - PAD_H * 2.0 - CLOSE_W, 13.0, FontWeight::BOLD, HEADER_TEXT));
+        dl.push(txt("×", ox + PANEL_W - CLOSE_W + 6.0, oy + 9.0,
+                    20.0, 15.0, FontWeight::BOLD, CLOSE_COL));
 
         // Clip content area.
-        let content_rect = Rect { x: ox, y: oy + HEADER_H, width: PANEL_W, height: CONTENT_H };
-        dl.push(DisplayCommand::PushClipRect { rect: content_rect });
+        dl.push(DisplayCommand::PushClipRect {
+            rect: Rect::new(ox, oy + HEADER_H, PANEL_W, CONTENT_H),
+        });
 
-        let visible_rows_start = (self.scroll_y / ROW_H) as usize;
-        let visible_rows_end =
-            ((self.scroll_y + CONTENT_H) / ROW_H).ceil() as usize + 1;
+        let visible_start = (self.scroll_y / ROW_H) as usize;
+        let visible_end = ((self.scroll_y + CONTENT_H) / ROW_H).ceil() as usize + 1;
 
         for (i, row) in self.rows.iter().enumerate() {
-            let row_top = oy + HEADER_H + i as f32 * ROW_H - self.scroll_y;
-            // Skip rows entirely outside the visible area.
-            if i < visible_rows_start || i > visible_rows_end {
+            if i < visible_start || i > visible_end {
                 continue;
             }
-            let row_rect = Rect { x: ox, y: row_top, width: PANEL_W, height: ROW_H };
+            let row_top = oy + HEADER_H + i as f32 * ROW_H - self.scroll_y;
             let bg = if self.rebinding == Some(i) {
                 ROW_REBIND
             } else if i % 2 == 0 {
@@ -288,51 +275,51 @@ impl ShortcutsPanel {
             } else {
                 ROW_ODD
             };
-            dl.push(DisplayCommand::FillRect { rect: row_rect, color: bg, radius: CornerRadii::uniform(0.0) });
-
-            // Separator line at bottom of row.
             dl.push(DisplayCommand::FillRect {
-                rect: Rect { x: ox, y: row_top + ROW_H - 1.0, width: PANEL_W, height: 1.0 },
+                rect: Rect::new(ox, row_top, PANEL_W, ROW_H),
+                color: bg,
+            });
+            // Separator at bottom of row.
+            dl.push(DisplayCommand::FillRect {
+                rect: Rect::new(ox, row_top + ROW_H - 1.0, PANEL_W, 1.0),
                 color: SEPARATOR,
-                radius: CornerRadii::uniform(0.0),
             });
-
-            // Action label (left side).
-            dl.push(DisplayCommand::DrawText {
-                rect: Rect { x: ox + PAD_H, y: row_top + 9.0, width: PANEL_W * 0.58, height: 18.0 },
-                text: row.label.to_string(),
-                color: LABEL_COL,
-                font_size: 12.0,
-                font_weight: FontWeight::Normal,
-                font_style: FontStyle::Normal,
-                clip: None,
-            });
-
-            // Binding badge (right side) or "Нажмите клавишу…" in rebind mode.
+            // Action label (left).
+            dl.push(txt(row.label, ox + PAD_H, row_top + 10.0,
+                        PANEL_W * 0.58, 12.0, FontWeight::NORMAL, LABEL_COL));
+            // Key badge (right) or rebind hint.
             let (badge_text, badge_col) = if self.rebinding == Some(i) {
-                ("Нажмите клавишу…".to_string(), REBIND_TEXT)
+                ("Нажмите клавишу\u{2026}".to_owned(), REBIND_TEXT)
             } else {
-                let label = row.binding_label();
-                (label, KEY_COL)
+                (row.binding_label(), KEY_COL)
             };
             let badge_x = ox + PANEL_W - PAD_H - 120.0;
-            dl.push(DisplayCommand::FillRect {
-                rect: Rect { x: badge_x - 4.0, y: row_top + 7.0, width: 128.0, height: 22.0 },
+            dl.push(DisplayCommand::FillRoundedRect {
+                rect: Rect::new(badge_x - 4.0, row_top + 7.0, 128.0, 22.0),
+                radii: CornerRadii { tl: 3.0, tl_y: 3.0, tr: 3.0, tr_y: 3.0,
+                                     bl: 3.0, bl_y: 3.0, br: 3.0, br_y: 3.0 },
                 color: KEY_BADGE_BG,
-                radius: CornerRadii::uniform(3.0),
             });
-            dl.push(DisplayCommand::DrawText {
-                rect: Rect { x: badge_x, y: row_top + 9.0, width: 120.0, height: 18.0 },
-                text: badge_text,
-                color: badge_col,
-                font_size: 11.0,
-                font_weight: FontWeight::Normal,
-                font_style: FontStyle::Normal,
-                clip: None,
-            });
+            dl.push(txt(badge_text, badge_x, row_top + 10.0,
+                        120.0, 11.0, FontWeight::NORMAL, badge_col));
         }
 
         dl.push(DisplayCommand::PopClip);
+    }
+}
+
+fn txt(text: impl Into<String>, x: f32, y: f32, w: f32, font_size: f32,
+       weight: FontWeight, color: Color) -> DisplayCommand {
+    DisplayCommand::DrawText {
+        rect: Rect::new(x, y, w, font_size * 1.4),
+        text: text.into(),
+        font_size,
+        color,
+        font_family: Vec::new(),
+        font_weight: weight,
+        font_style: FontStyle::Normal,
+        font_variation_axes: Vec::new(),
+        tab_size: 0.0,
     }
 }
 

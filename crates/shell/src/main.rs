@@ -5936,8 +5936,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         use panels::shortcuts_panel::ShortcutsHit;
                         let lx = x_css - kp_x;
                         let ly = y_css - kp_y;
-                        if lx >= 0.0 && lx < panels::shortcuts_panel::PANEL_W
-                            && ly >= 0.0 && ly < panels::shortcuts_panel::PANEL_H
+                        if (0.0..panels::shortcuts_panel::PANEL_W).contains(&lx)
+                            && (0.0..panels::shortcuts_panel::PANEL_H).contains(&ly)
                         {
                             match self.shortcuts_panel.hit_test(lx, ly) {
                                 ShortcutsHit::Close => {
@@ -6239,6 +6239,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
                     };
                     self.history_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // Keyboard shortcuts panel intercepts the wheel while visible (§D-4).
+                if self.shortcuts_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.shortcuts_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
                     self.request_redraw();
                     return;
                 }
