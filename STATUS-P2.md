@@ -6,12 +6,20 @@
 
 ## In progress
 
-C-5 | Multi-tab IndexedDB per-origin SQLite  branch: p2-c5-idb-per-origin
-Next step: origin_key() + IdbStore::open_or_create() + IdbStore::for_origin()  crates/storage/src/indexed_db.rs
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**C-5 | Multi-tab IndexedDB per-origin SQLite** ✅ 2026-06-07 (merged)
+- `origin_key(etld_plus_one)` → SHA-256[:16] — безопасный файловый ключ
+- `IdbStore::open_or_create(path)` — выделенный SQLite-файл на origin
+- `IdbStore::for_origin(etld_plus_one, idb_dir)` — открывает/создаёт `{key}.db`
+- shell: `idb_backend` → `idb_dir: Option<PathBuf>`; `lumen_idb_dir()` — платформенный путь
+- `idb_store_for_url()` вычисляет eTLD+1 через PslProvider и открывает SQLite
+- `hibernate.rs`: `restore_js_context` принимает `idb_dir` вместо StorageBackend
+- 15 тестов indexed_db (8 новых), 527 тестов lumen-storage ✅, Clippy чист
 
 **C-4 | Fetch SRI integrity check** ✅ 2026-06-07 (merged)
 - `sri.rs`: `parse_integrity_metadata()`, `check_sri()` — sha256/384/512 + неизвестные алгоритмы пропускаются
