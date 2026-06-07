@@ -6,12 +6,20 @@
 
 ## In progress
 
-**F-2 | CSS hyphens soft hyphen rendering** — branch: p2-f2-hyphens
-Next step: tests написаны (4 шт.), commit готов — задача завершена.
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**F-2 | CSS hyphens soft hyphen rendering** ✅ 2026-06-07 (merged)
+- Реализация (strip_soft_hyphens + try_hyp_break) уже была добавлена P4 (hyphens-engine)
+- F-2 добавляет 4 новых теста поведения U+00AD (CSS Text L3 §6):
+  1. `shy_invisible_when_word_fits_on_line` — SHY стрипается, дефис не добавляется когда слово помещается
+  2. `shy_rightmost_fitting_break_selected` — при нескольких SHY выбирается самая правая позиция
+  3. `shy_auto_mode_respects_shy_positions` — `hyphens: auto` тоже использует SHY без словаря
+  4. `shy_manual_no_hyphen_when_no_shy_in_word` — без SHY в слове перенос без дефиса (manual ≠ auto)
+- Итого: 7 SHY-тестов (3 strip + 2 pre-existing wrap + 4 новых), 2378 ✅ lumen-layout, Clippy чист
 
 **F-1 | CSS text-align-last rendering** ✅ 2026-06-07 (merged)
 - `align_lines()` расширен параметром `text_align_last: TextAlignLast`
