@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**G-4 | Web Notifications API stub**  branch: p2-g4-web-notifications
+Next step: add ServiceWorkerRegistration.showNotification() + getNotifications() to NOTIFICATIONS_SHIM  crates/js/src/notifications_bindings.rs
 
 ---
 
