@@ -5677,25 +5677,75 @@ TextEncoder.prototype.encode = function(str) {
     return new Uint8Array(bytes);
 };
 
-function TextDecoder(label) {
+function TextDecoder(label, options) {
     this.encoding = (label || 'utf-8').toLowerCase();
+    this.fatal = !!(options && options.fatal);
+    this.ignoreBOM = !!(options && options.ignoreBOM);
+    this._pending = null;
 }
-TextDecoder.prototype.decode = function(buf) {
-    var bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf instanceof ArrayBuffer ? buf : new ArrayBuffer(0));
+// Encoding Standard §9.1 — UTF-8 decode with optional stream mode.
+// When options.stream is true, incomplete multi-byte sequences at the end of
+// the chunk are saved in this._pending and prepended to the next decode() call.
+TextDecoder.prototype.decode = function(buf, options) {
+    var stream = !!(options && options.stream);
+    var input;
+    if (buf === undefined || buf === null) {
+        input = new Uint8Array(0);
+    } else {
+        input = buf instanceof Uint8Array ? buf : new Uint8Array(buf instanceof ArrayBuffer ? buf : new ArrayBuffer(0));
+    }
+    // Prepend any bytes carried over from the previous streaming chunk.
+    var bytes;
+    if (this._pending && this._pending.length > 0) {
+        var combined = new Uint8Array(this._pending.length + input.length);
+        combined.set(this._pending);
+        combined.set(input, this._pending.length);
+        bytes = combined;
+    } else {
+        bytes = input;
+    }
+    this._pending = null;
     var str = '', i = 0;
     while (i < bytes.length) {
-        var b = bytes[i++];
+        var b = bytes[i];
+        var seqLen;
         if (b < 0x80) {
-            str += String.fromCharCode(b);
+            seqLen = 1;
         } else if ((b & 0xE0) === 0xC0) {
-            str += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i++] & 0x3F));
+            seqLen = 2;
         } else if ((b & 0xF0) === 0xE0) {
-            str += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F));
+            seqLen = 3;
+        } else if ((b & 0xF8) === 0xF0) {
+            seqLen = 4;
         } else {
-            var hi = ((b & 0x07) << 18) | ((bytes[i++] & 0x3F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F);
+            // Stray continuation byte — emit replacement character.
+            str += '�';
+            i++;
+            continue;
+        }
+        if (i + seqLen > bytes.length) {
+            // Incomplete sequence at end of chunk.
+            if (stream) {
+                this._pending = bytes.slice(i);
+            } else if (this.fatal) {
+                throw new TypeError('TextDecoder: incomplete multi-byte sequence');
+            } else {
+                str += '�';
+            }
+            break;
+        }
+        if (seqLen === 1) {
+            str += String.fromCharCode(b);
+        } else if (seqLen === 2) {
+            str += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i + 1] & 0x3F));
+        } else if (seqLen === 3) {
+            str += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F));
+        } else {
+            var hi = ((b & 0x07) << 18) | ((bytes[i + 1] & 0x3F) << 12) | ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F);
             hi -= 0x10000;
             str += String.fromCharCode(0xD800 + (hi >> 10), 0xDC00 + (hi & 0x3FF));
         }
+        i += seqLen;
     }
     return str;
 };
@@ -16309,6 +16359,89 @@ mod tests {
              reader.read().then(function(r) { out.push(r.value); }); \
              _lumen_drain_microtasks(); \
              out.length === 1 && out[0] === 'Hello'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_mode_ascii() {
+        // {stream: true} with complete ASCII works like normal decode.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             var s = dec.decode(new Uint8Array([72,101,108,108,111]), {stream: true}); \
+             s === 'Hello'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_mode_buffers_partial_utf8() {
+        // Euro sign € = 0xE2 0x82 0xAC (3-byte UTF-8).
+        // Sending only the first byte with stream:true must return '' and buffer it.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             var partial = dec.decode(new Uint8Array([0xE2]), {stream: true}); \
+             partial === ''"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_mode_reassembles_split_multibyte() {
+        // Continuation of previous: second chunk provides the rest of €.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             dec.decode(new Uint8Array([0xE2]), {stream: true}); \
+             var result = dec.decode(new Uint8Array([0x82, 0xAC])); \
+             result === '€'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_mode_final_flush_clears_buffer() {
+        // After streaming, final decode() with no args flushes (returns empty or replacement).
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             dec.decode(new Uint8Array([72]), {stream: true}); \
+             var flushed = dec.decode(); \
+             typeof flushed === 'string'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_no_arg_returns_empty_string() {
+        // decode() with no arguments (empty flush) always returns a string.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             dec.decode() === '' && dec.decode(null) === ''"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_decoder_stream_splits_multibyte() {
+        // TextDecoderStream uses {stream:true} internally — writing bytes of €
+        // in two chunks must produce the character exactly once.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var out = []; \
+             var tds = new TextDecoderStream(); \
+             var writer = tds.writable.getWriter(); \
+             var reader = tds.readable.getReader(); \
+             writer.write(new Uint8Array([0xE2])); \
+             reader.read().then(function(r) { if (!r.done) out.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             writer.write(new Uint8Array([0x82, 0xAC])); \
+             reader.read().then(function(r) { if (!r.done) out.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             out.join('') === '€'"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
