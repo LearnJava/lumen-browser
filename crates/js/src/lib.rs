@@ -54,6 +54,7 @@ pub mod sanitizer;
 pub mod screen_orientation;
 pub mod scroll_snap_events;
 pub mod sri;
+pub mod media_stream_recording;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -705,6 +706,13 @@ impl QuickJsRuntime {
             // Shell integration (P3) registers the window via _lumen_pip_request_window.
             if let Err(e) = document_pip::install_document_pip_api(&ctx) {
                 eprintln!("Document Picture-in-Picture API init failed: {}", e);
+            }
+
+            // Install MediaRecorder API stub (W3C MediaStream Recording L2) — pure JS implementation.
+            // Phase 0: MediaRecorder state machine (inactive/recording/paused), mimeType reflection,
+            // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
+            if let Err(e) = media_stream_recording::init_media_stream_recording(&ctx) {
+                eprintln!("MediaRecorder API init failed: {}", e);
             }
 
             Ok(())
