@@ -57,6 +57,7 @@ pub mod sri;
 pub mod media_stream_recording;
 pub mod serial;
 pub mod compute_pressure;
+pub mod csp;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -504,6 +505,13 @@ impl QuickJsRuntime {
             // Phase 0: PressureObserver registers callback but never fires; knownSources()=['cpu'].
             if let Err(e) = compute_pressure::install_compute_pressure_bindings(&ctx) {
                 eprintln!("Compute Pressure API init failed: {}", e);
+            }
+
+            // Install CSP violation event class (W3C CSP Level 3 §7.8) — after DOM/document.
+            // Phase 0: SecurityPolicyViolationEvent class + _lumen_dispatch_csp_violation helper.
+            // Phase 1: shell calls _lumen_fire_csp_violation for actual enforcement.
+            if let Err(e) = csp::install_csp_bindings(&ctx) {
+                eprintln!("CSP bindings init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.

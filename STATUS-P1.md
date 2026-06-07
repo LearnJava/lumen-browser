@@ -6,11 +6,22 @@
 
 ## In progress
 
-_(нет)_
+F-1: Content Security Policy Level 3 Phase 0  branch: p1-f1-csp
+Next step: создать `crates/network/src/csp.rs` с парсером CSP-заголовков
 
 ---
 
 ## Next
+
+### F — Security & Media APIs
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| F-1 | **Content Security Policy Level 3 Phase 0** — Парсинг `Content-Security-Policy` заголовков в lumen-network: `CspPolicy {directives}`, все L3-директивы. JS: `SecurityPolicyViolationEvent` класс + `_lumen_fire_csp_violation` binding. Phase 0: инфраструктура без enforcement. 8 тестов. | M | `lumen-network`, `lumen-js` |
+| F-2 | **Permissions Policy (Feature Policy)** — Парсинг `Permissions-Policy` заголовка. `document.featurePolicy.allowsFeature(name)` → bool. Phase 0: всегда allow, запись policy. 4 теста. | S | `lumen-network`, `lumen-js` |
+| F-3 | **Web Codecs API stub** — `VideoDecoder`/`VideoEncoder`/`AudioDecoder`/`AudioEncoder` Phase 0 stubs (W3C Web Codecs). 4 теста. | S | `lumen-js` |
+| F-4 | **User-Agent Client Hints** — `navigator.userAgentData` с `brands`/`mobile`/`platform`/`getHighEntropyValues()` → Promise. Phase 0: статический Chrome профиль. 4 теста. | XS | `lumen-js` |
+| F-5 | **MediaCapabilities API** — `navigator.mediaCapabilities.decodingInfo(config)` → Promise, `encodingInfo()`. Phase 0: supported=true, smooth=true, powerEfficient=false. 4 теста. | XS | `lumen-js` |
 
 ### E — Phase 2 Web APIs (продолжение)
 
