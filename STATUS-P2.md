@@ -6,12 +6,19 @@
 
 ## In progress
 
-**E-5 | CSS Gap Decorations L1 stub** branch: p2-e5-gap-decorations
-Next step: cargo check + clippy + tests → finish  `crates/engine/paint/src/gap_decorations.rs`
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**E-5 | CSS Gap Decorations L1 stub** ✅ 2026-06-07 (merged)
+- `GapDecorationContext {rule_width, rule_style, rule_color}` — параметры рендера gap rules
+- `GapSegment {rect, horizontal}` — один пробел между ячейками flex/grid/multicol
+- `emit_gap_rules(_boxes, gaps, ctx)` → `Vec<DisplayCommand>`: вертикальные правила для column gaps (right-side DrawBorder), горизонтальные для row gaps (bottom-side DrawBorder); центрированы в gap rect; rule_width зажат до размера gap
+- Экспортировано из `lumen_paint::` (emit_gap_rules, GapDecorationContext, GapSegment)
+- `// CSS: gap-rule-width, gap-rule-style, gap-rule-color` handoff → STATUS-P4.md "Needs wiring"
+- 6 тестов ✅ (551 total lumen-paint), Clippy чист
 
 **E-4 | CSS font-palette rendering** ✅ 2026-06-07 (merged)
 - `FontPaletteValuesRule` (name/font_family/base_palette/override_colors) в css-parser, экспортируется из lib.rs
