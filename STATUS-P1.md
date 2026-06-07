@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+E-3: MediaRecorder API stub  branch: p1-e3-mediarecorder
+Next step: clippy + tests → commit  crates/js/src/media_stream_recording.rs:1
 
 ---
 
