@@ -442,6 +442,11 @@ fn run_window_mode(
         settings_store: lumen_storage::BrowserSettings::open_in_memory()
             .expect("settings in-memory"),
         settings_panel: panels::settings_panel::SettingsPanel::new(),
+        shortcuts_panel: {
+            let ks = lumen_storage::KeyboardShortcuts::open_in_memory()
+                .expect("shortcuts in-memory");
+            panels::shortcuts_panel::ShortcutsPanel::new(&ks.all())
+        },
         fallbacks_preloaded: false,
         zoom_factor: zoom::ZOOM_DEFAULT,
         display_url: None,
@@ -1795,6 +1800,8 @@ enum KeyCommand {
     ToggleReaderView,
     /// Открыть просмотр исходного кода текущей страницы (Ctrl+U, §D-2).
     ViewSource,
+    /// Открыть/закрыть панель горячих клавиш (Ctrl+Shift+/, §D-4).
+    ToggleShortcuts,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1934,6 +1941,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::F9 if no_mods => Some(KeyCommand::ToggleReaderView),
         // Ctrl+U — view page source (§D-2)
         KeyCode::KeyU if ctrl_only => Some(KeyCommand::ViewSource),
+        // Ctrl+Shift+/ — toggle keyboard shortcuts panel (§D-4)
+        KeyCode::Slash if ctrl_and_shift => Some(KeyCommand::ToggleShortcuts),
         // Ctrl+= — zoom in
         KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
         // Ctrl+- — zoom out
@@ -3883,6 +3892,10 @@ struct Lumen {
     /// 640×480 overlay with four tabbed sections: General, Privacy,
     /// Appearance, Downloads.
     settings_panel: panels::settings_panel::SettingsPanel,
+    /// Keyboard shortcuts panel (Ctrl+Shift+/, §D-4).
+    ///
+    /// Shows all `KeyCommand` bindings with rebind-on-click support.
+    shortcuts_panel: panels::shortcuts_panel::ShortcutsPanel,
     /// Whether the curated system-font fallback chain has been preloaded into
     /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
     ///
@@ -5859,6 +5872,34 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // Keyboard shortcuts panel (§D-4): centred overlay.
+                    if self.shortcuts_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
+                        let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
+                        use panels::shortcuts_panel::ShortcutsHit;
+                        let lx = x_css - kp_x;
+                        let ly = y_css - kp_y;
+                        if lx >= 0.0 && lx < panels::shortcuts_panel::PANEL_W
+                            && ly >= 0.0 && ly < panels::shortcuts_panel::PANEL_H
+                        {
+                            match self.shortcuts_panel.hit_test(lx, ly) {
+                                ShortcutsHit::Close => {
+                                    self.shortcuts_panel.close();
+                                }
+                                ShortcutsHit::StartRebind(idx) => {
+                                    self.shortcuts_panel.rebinding = Some(idx);
+                                }
+                                ShortcutsHit::Consumed => {}
+                            }
+                        } else {
+                            self.shortcuts_panel.close();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
                     // History panel (task D-5): centred floating overlay.
                     if self.history_panel.visible {
                         let (px, py) = self.history_panel_anchor();
@@ -6732,6 +6773,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y);
                 }
 
+                // Keyboard shortcuts panel (§D-4): centred floating overlay.
+                if self.shortcuts_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
+                    let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
+                    self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y);
+                }
+
                 // History panel (task D-5): centred floating overlay.
                 if self.history_panel.visible {
                     let win_w = self.viewport_width_css();
@@ -7479,6 +7529,11 @@ impl Lumen {
             return;
         }
 
+        // Keyboard shortcuts panel — capture any keypress when rebinding (§D-4).
+        if self.shortcuts_panel.visible && self.handle_shortcuts_key(code, key_event) {
+            return;
+        }
+
         // Vim keybinding mode: intercept navigation keys in Normal state.
         // In Insert state, PassThrough falls through to the keybinding table.
         if let Some(ref mut vm) = self.vim_mode {
@@ -7820,6 +7875,10 @@ impl Lumen {
             }
             KeyCommand::ViewSource => {
                 self.show_view_source();
+            }
+            KeyCommand::ToggleShortcuts => {
+                self.shortcuts_panel.toggle();
+                self.request_redraw();
             }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
@@ -8475,6 +8534,49 @@ impl Lumen {
                 false
             }
         }
+    }
+
+    /// Обрабатывает клавишный ввод для панели горячих клавиш (§D-4).
+    ///
+    /// Когда активен rebind mode (`rebinding.is_some()`): захватывает
+    /// следующую клавишу и передаёт в `accept_rebind`. Esc отменяет rebind.
+    /// Возвращает `true`, если событие поглощено.
+    fn handle_shortcuts_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if key_event.repeat {
+            return false;
+        }
+        if self.shortcuts_panel.rebinding.is_some() {
+            if code == KeyCode::Escape {
+                self.shortcuts_panel.cancel_rebind();
+                self.request_redraw();
+                return true;
+            }
+            let modifier = {
+                let m = self.modifiers;
+                let ctrl = m.control_key();
+                let shift = m.shift_key();
+                let alt = m.alt_key();
+                match (ctrl, shift, alt) {
+                    (true, true, false) => "ctrl+shift",
+                    (true, false, true) => "ctrl+alt",
+                    (true, false, false) => "ctrl",
+                    (false, true, false) => "shift",
+                    (false, false, true) => "alt",
+                    _ => "",
+                }
+            };
+            let key = format!("{:?}", code);
+            let key = key.trim_start_matches("Key").trim_start_matches("Digit").to_string();
+            self.shortcuts_panel.accept_rebind(modifier, &key);
+            self.request_redraw();
+            return true;
+        }
+        if code == KeyCode::Escape {
+            self.shortcuts_panel.close();
+            self.request_redraw();
+            return true;
+        }
+        false
     }
 
     /// Обрабатывает клавишный ввод пока hint-режим активен.

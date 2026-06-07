@@ -14,6 +14,7 @@
 
 pub mod autofill;
 pub mod browser_settings;
+pub mod keyboard_shortcuts;
 pub mod omnibox_aliases;
 pub mod bfcache;
 pub mod bookmarks;
@@ -54,6 +55,7 @@ pub mod workspaces;
 
 pub use autofill::{Autofill, AutofillEntry};
 pub use browser_settings::{BrowserSettings, BrowserSettingsSnapshot};
+pub use keyboard_shortcuts::{KeyboardShortcutEntry, KeyboardShortcuts};
 pub use bfcache::{BfCache, BfCacheEntry};
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use broadcast_channels::{BroadcastChannels, ChannelRegistration};
