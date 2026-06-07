@@ -7118,6 +7118,208 @@ mod tests {
         assert_eq!(line2_text, "hyphen", "soft-hyphen should be stripped: {line2_text}");
     }
 
+    // ── F-2: CSS hyphens — soft hyphen (U+00AD) rendering ───────────────────
+
+    #[test]
+    fn shy_invisible_when_word_fits_on_line() {
+        // hyphens: manual, wide container — word with SHY fits; SHY must be stripped,
+        // no visible hyphen in the rendered fragment (CSS Text L3 §6).
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // "hy\u{AD}phen" → strip → "hyphen" = 6 chars × 10px = 60px; max_width=200 → fits.
+        let seg = InlineSegment {
+            text: "hy\u{00AD}phen".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 200.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 1, "single word must stay on one line");
+        let text = &lines[0][0].text;
+        assert_eq!(text, "hyphen", "SHY must be stripped when word fits: got {text}");
+        assert!(!text.contains('\u{00AD}'), "U+00AD must not appear in output");
+        assert!(!text.contains('-'), "no hyphen added when no line break occurs: {text}");
+    }
+
+    #[test]
+    fn shy_rightmost_fitting_break_selected() {
+        // hyphens: manual, word with two SHY positions — the rightmost that fits is used.
+        // CSS Text L3 §6 requires the typographically preferred (rightmost) break.
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Segment "xx su\u{AD}per\u{AD}man", max_width=90:
+        //   "xx"=20px occupies line;
+        //   "superman"=80px needs wrap (20+10+80=110 > 90);
+        //   avail = 90−20−10(gap) = 60;
+        //   SHY positions in "superman": [2]="su", [5]="super";
+        //   rightmost: "super"=50, 50+10(hyphen)=60 ≤ 60 → break → "super-" / "man".
+        let seg = InlineSegment {
+            text: "xx su\u{00AD}per\u{00AD}man".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 90.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
+        let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(line1_text.contains("super-"), "rightmost SHY break → 'super-', got: {line1_text}");
+        assert!(!line1_text.contains("su-"), "must NOT use leftmost SHY: {line1_text}");
+        assert_eq!(lines[1].len(), 1);
+        assert_eq!(lines[1][0].text, "man");
+    }
+
+    #[test]
+    fn shy_auto_mode_respects_shy_positions() {
+        // hyphens: auto with NullHyphenationProvider (no dict) falls back to SHY positions,
+        // identical to manual mode behaviour for words with explicit U+00AD.
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Same geometry as shy_rightmost_fitting_break_selected but with Hyphens::Auto.
+        let seg = InlineSegment {
+            text: "xx su\u{00AD}per\u{00AD}man".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 90.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Auto, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "auto mode: expected 2 lines, got {}", lines.len());
+        let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(
+            line1_text.contains("super-"),
+            "auto mode must honour SHY positions: {line1_text}",
+        );
+        assert_eq!(lines[1][0].text, "man");
+    }
+
+    #[test]
+    fn shy_manual_no_hyphen_when_no_shy_in_word() {
+        // hyphens: manual without U+00AD — word must wrap to the next line as-is,
+        // without any hyphen appended (no auto-hyphenation in manual mode).
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // "aa longword": "aa"=20px, "longword"=80px; max_width=50;
+        //   20+10+80=110 > 50 → needs_wrap; no SHY → try_hyp_break returns None
+        //   → normal wrap: "longword" moves to next line intact, no hyphen.
+        let seg = InlineSegment {
+            text: "aa longword".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 50.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "expected 2 lines");
+        assert_eq!(lines[0].len(), 1);
+        assert_eq!(lines[0][0].text, "aa");
+        assert_eq!(lines[1].len(), 1);
+        let word = &lines[1][0].text;
+        assert_eq!(word, "longword", "no hyphen without SHY: {word}");
+        assert!(!word.contains('-'), "manual mode must not add hyphens without SHY: {word}");
+    }
+
     // ── char_break_offset ────────────────────────────────────────────────────
 
     #[test]
