@@ -4781,9 +4781,11 @@ pub fn compute_style(
         style.vertical_align = va;
     }
     apply_ua_hr_style(doc, node, &mut style);
-    // UA stylesheet: form controls — display, intrinsic dimensions, border.
-    // HTML5 §15.5. Author CSS поверх перекроет.
-    apply_ua_form_controls(doc, node, &mut style);
+    // UA stylesheet: form controls — display, intrinsic dimensions, border,
+    // background, and foreground color. HTML5 §15.5. Author CSS поверх перекроет.
+    // CSS: color-scheme — P4 wires ComputedStyle.color_scheme here for full
+    // system-color keyword support; for now dark_mode drives UA theming directly.
+    apply_ua_form_controls(doc, node, &mut style, dark_mode);
     // UA stylesheet: <dialog> without `open` → display:none. HTML5 §15.3.9.
     apply_ua_dialog_display(doc, node, &mut style);
 
@@ -7707,6 +7709,39 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
 
 /// UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»).
 ///
+/// Returns UA colors `(border, background, foreground)` for form controls.
+///
+/// Approximates CSS Color 4 system-color keywords (`ButtonFace`, `Field`,
+/// `ButtonText`, `FieldText`) without a full system-color implementation.
+/// Used by `apply_ua_form_controls` to theme controls for light/dark mode.
+///
+/// - Light: border #767676 / bg white (inputs) or #efefef (button) / fg black
+/// - Dark:  border #616161 / bg #1e1e1e (inputs) or #3a3a3c (button) / fg white
+///
+/// `// CSS: color-scheme` — P4 wires this to `ComputedStyle.color_scheme`
+/// for full system-color keyword support.
+pub fn ua_form_element_colors(tag: &str, dark_mode: bool) -> (CssColor, CssColor, Color) {
+    if dark_mode {
+        let border = CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 });
+        let fg = Color { r: 255, g: 255, b: 255, a: 255 };
+        let bg = if tag == "button" {
+            CssColor::Rgba(Color { r: 58, g: 58, b: 60, a: 255 })
+        } else {
+            CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 })
+        };
+        (border, bg, fg)
+    } else {
+        let border = CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 });
+        let fg = Color { r: 0, g: 0, b: 0, a: 255 };
+        let bg = if tag == "button" {
+            CssColor::Rgba(Color { r: 239, g: 239, b: 239, a: 255 })
+        } else {
+            CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 })
+        };
+        (border, bg, fg)
+    }
+}
+
 /// Применяется ДО CSS-каскада — любой author-rule перекрывает.
 /// - `<input type=hidden>` → `display: none`
 /// - `<input type=checkbox|radio>` → 13×13 px
@@ -7714,10 +7749,13 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
 /// - `<button>` → height 21 px
 /// - `<textarea>` → 200×48 px
 /// - `<select>` → height 21 px
-/// - Все кроме hidden → border: 1px solid #767676
-fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+/// - `<progress>` → 300×16 px
+/// - `<meter>` → 300×16 px
+/// - Все кроме hidden → border, background, color по `ua_form_element_colors`
+fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyle, dark_mode: bool) {
     let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
-    match name.local.as_str() {
+    let tag = name.local.as_str();
+    match tag {
         "input" => {
             let ty = doc
                 .get(node)
@@ -7749,9 +7787,13 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
         "select" => {
             style.height = Some(Length::Px(21.0));
         }
+        "progress" | "meter" => {
+            style.width = Some(Length::Px(300.0));
+            style.height = Some(Length::Px(16.0));
+        }
         _ => return,
     }
-    let gray = CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 });
+    let (border, bg, fg) = ua_form_element_colors(tag, dark_mode);
     style.border_top_width = 1.0;
     style.border_right_width = 1.0;
     style.border_bottom_width = 1.0;
@@ -7760,10 +7802,12 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
     style.border_right_style = BorderStyle::Solid;
     style.border_bottom_style = BorderStyle::Solid;
     style.border_left_style = BorderStyle::Solid;
-    style.border_top_color = gray;
-    style.border_right_color = gray;
-    style.border_bottom_color = gray;
-    style.border_left_color = gray;
+    style.border_top_color = border;
+    style.border_right_color = border;
+    style.border_bottom_color = border;
+    style.border_left_color = border;
+    style.background_color = Some(bg);
+    style.color = fg;
 }
 
 /// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
@@ -22590,6 +22634,48 @@ mod tests {
         let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.width, Some(Length::Px(300.0)));
         assert_eq!(style.height, Some(Length::Px(40.0)));
+    }
+
+    // CSS color-scheme UA form element colors — F-4
+
+    #[test]
+    fn ua_form_colors_light_mode_input() {
+        // Light mode: input gets white background and dark border.
+        let (border, bg, fg) = ua_form_element_colors("input", false);
+        assert_eq!(border, CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 }));
+        assert_eq!(bg, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }));
+        assert_eq!(fg, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn ua_form_colors_dark_mode_input() {
+        // Dark mode: input gets dark background, lighter border, white text.
+        let (border, bg, fg) = ua_form_element_colors("input", true);
+        assert_eq!(border, CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 }));
+        assert_eq!(bg, CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 }));
+        assert_eq!(fg, Color { r: 255, g: 255, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn ua_form_colors_dark_mode_button_distinct_bg() {
+        // Dark mode: button has a lighter background than text inputs.
+        let (_, input_bg, _) = ua_form_element_colors("input", true);
+        let (_, btn_bg, _) = ua_form_element_colors("button", true);
+        assert_ne!(input_bg, btn_bg, "button bg should differ from input bg in dark mode");
+        assert_eq!(btn_bg, CssColor::Rgba(Color { r: 58, g: 58, b: 60, a: 255 }));
+    }
+
+    #[test]
+    fn ua_form_colors_applied_to_computed_style_dark() {
+        // When dark_mode=true, compute_style applies dark UA colors to <input>.
+        let doc = lumen_html_parser::parse("<input type=\"text\">");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), true);
+        assert_eq!(style.background_color, Some(CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 })));
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 });
+        assert_eq!(style.border_top_color, CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 }));
     }
 
     // CSS Shapes L1 — shape-outside
