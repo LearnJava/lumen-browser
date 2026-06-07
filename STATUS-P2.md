@@ -12,6 +12,15 @@
 
 ## Current / Recently Merged
 
+**E-4 | CSS font-palette rendering** ✅ 2026-06-07 (merged)
+- `FontPaletteValuesRule` (name/font_family/base_palette/override_colors) в css-parser, экспортируется из lib.rs
+- `parse_font_palette_values_body()` — парсит prelude dashed-ident + block с font-family/base-palette/override-colors дескрипторами
+- `parse_override_colors()` — comma-separated `<idx> <color>` пары
+- `layout::font_palette::resolve_font_palette_overrides()` → `ResolvedFontPalette {base_palette, overrides}` или None для normal/light/dark
+- `PaletteColorOverride {index, color}` — resolved CPAL override; family-матчинг case-insensitive
+- `// CSS: font-palette` handoff для P4: добавить `font_palette: String` в ComputedStyle, передавать в resolver при эмите DrawText
+- 6 тестов css-parser (276 total) ✅, 7 тестов layout ✅, Clippy чист в обоих крейтах
+
 **E-1 | Print dialog UI** ✅ 2026-06-07 (merged)
 - `panels/print_panel.rs` — центрированный модал 560×400 px: PaperSize (A4/Letter/Legal), Orientation (Portrait/Landscape), MarginPreset (Normal/Narrow/Wide), ColorMode (Color/Grayscale), PrintField
 - `PrintPanel` — состояние: visible, paper, orientation, margins, page_range, color_mode, output_path, editing_field; toggle/close/push_char/pop_char/margin_px
