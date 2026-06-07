@@ -6,8 +6,7 @@
 
 ## In progress
 
-F-5: MediaCapabilities API  branch: p1-f5-media-capabilities
-Next step: clippy + tests → merge  crates/js/src/media_capabilities.rs
+_(нет)_
 
 ---
 
@@ -21,7 +20,7 @@ Next step: clippy + tests → merge  crates/js/src/media_capabilities.rs
 | ~~F-2~~ | ~~**Permissions Policy (Feature Policy)**~~ — **выполнено** | S | `lumen-network`, `lumen-js` |
 | ~~F-3~~ | ~~**Web Codecs API stub**~~ — **выполнено** | S | `lumen-js` |
 | ~~F-4~~ | ~~**User-Agent Client Hints**~~ — **выполнено** | XS | `lumen-js` |
-| F-5 | **MediaCapabilities API** — `navigator.mediaCapabilities.decodingInfo(config)` → Promise, `encodingInfo()`. Phase 0: supported=true, smooth=true, powerEfficient=false. 4 теста. | XS | `lumen-js` |
+| ~~F-5~~ | ~~**MediaCapabilities API**~~ — **выполнено** | XS | `lumen-js` |
 
 ### E — Phase 2 Web APIs (продолжение)
 
@@ -38,6 +37,7 @@ Next step: clippy + tests → merge  crates/js/src/media_capabilities.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | F-5: MediaCapabilities API | W3C Media Capabilities §5 Phase 0: `navigator.mediaCapabilities` singleton. `decodingInfo(config)` и `encodingInfo(config)` → Promise<{supported:true, smooth:true, powerEfficient:false}>. Валидация аргументов: config должен быть объектом с полем type (string). `MediaCapabilitiesInfo` и `MediaCapabilities` экспортированы на window. Новый модуль `crates/js/src/media_capabilities.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1378). |
 | 2026-06-08 | F-4: User-Agent Client Hints | W3C UA-CH §4–6 Phase 0: `navigator.userAgentData` — `NavigatorUAData` с геттерами `brands`/`mobile`/`platform` (низкоэнтропийные). `getHighEntropyValues(hints)` → Promise<UADataValues>: статический Chrome 114/Windows 10 x64 профиль (brands×3, fullVersionList×3, platformVersion:"10.0.0", architecture:"x86", bitness:"64", model:"", uaFullVersion, wow64). `toJSON()` возвращает низкоэнтропийные поля. `NavigatorUAData` экспортирован на globalThis. Новый модуль `crates/js/src/ua_client_hints.rs`. lumen-js: clippy чист, 4 unit-теста (+4 vs 1374). |
 | 2026-06-08 | F-3: Web Codecs API stub | W3C Web Codecs Phase 0: `VideoDecoder`/`VideoEncoder`/`AudioDecoder`/`AudioEncoder` стабы. Конструктор {output,error}, state machine (unconfigured→configured→closed), `configure()`/`decode|encode()`/`flush()`→Promise/`reset()`/`close()`. `isConfigSupported()` → Promise<{supported:false, config}>. Phase 0: decode/encode — no-op, flush() — сразу resolved. Вспомогательные типы: `EncodedVideoChunk`, `EncodedAudioChunk`, `VideoFrame`, `AudioData` (конструкторы + copyTo/clone/close). Новый модуль `crates/js/src/web_codecs.rs`. lumen-js: clippy чист, 12 unit-тестов (+12 vs 1358). |
 | 2026-06-08 | F-2: Permissions Policy (Feature Policy) Phase 0 | W3C Permissions Policy §8 + legacy Feature-Policy. lumen-network: `PermissionsPolicy {features}`, `PermissionsAllowlist` (All/None/Origins). `parse_permissions_policy_header()` / `parse_feature_policy_header()`. `allows_feature(name, origin)`. 6 unit-тестов. lumen-js: `document.featurePolicy` / `document.permissionsPolicy` singleton (FeaturePolicy: allowsFeature/features/allowedFeatures/getAllowlistForFeature). `_lumen_set_permissions_policy(headerValue)` — hook для shell Phase 1. 6 unit-тестов. lumen-network: clippy чист, 703 тестов. lumen-js: clippy чист, 1358 тестов. |
