@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**E-4 | CSS font-palette rendering** — branch: p2-e4-font-palette
+Next step: add FontPaletteValuesRule to css-parser, ResolvedFontPalette to layout, font_palette to DrawText — css-parser/src/parser.rs, layout/src/style.rs, paint/src/display_list.rs
 
 ---
 
