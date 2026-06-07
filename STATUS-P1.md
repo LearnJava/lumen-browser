@@ -6,14 +6,14 @@
 
 ## In progress
 
-D-4: Keyboard shortcuts settings panel  branch: p1-d4-shortcuts-panel
-Next step: создать panels/shortcuts_panel.rs + lumen-storage::KeyboardShortcuts  crates/shell/src/panels/
+*(свободен)*
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-07 | D-4: Keyboard shortcuts settings panel | Ctrl+Shift+/ overlay 360×500px: `lumen_storage::KeyboardShortcuts` SQLite (command/modifier/key), 10 unit-тестов. `panels/shortcuts_panel.rs`: 30 команд со стандартными байндингами, click→rebind mode (accept_rebind/cancel_rebind), scroll wheel, hit-test. `KeyCommand::ToggleShortcuts` + `handle_shortcuts_key`. Загрузка overrides при старте. 12 unit-тестов. lumen-storage: 543 тестов, lumen-shell: 1011 тестов. |
 | 2026-06-07 | D-8: Encoding API streaming | WHATWG Encoding §9.1 streaming: TextDecoder._pending буфер уже был в коде; добавлено 6 unit-тестов: stream_mode_ascii, stream_mode_buffers_partial_utf8, stream_mode_reassembles_split_multibyte, stream_mode_final_flush_clears_buffer, no_arg_returns_empty_string, decoder_stream_splits_multibyte. TextDecoderStream (использует {stream:true} внутри) корректно сплитит 3-байтовый символ между двумя write()-чанками. lumen-js: clippy чист, 1302 тестов (+6 vs 1296). |
 | 2026-06-07 | D-2: Page source viewer | Ctrl+U / `view-source:<url>`: новый модуль `crates/shell/src/source_view.rs` с `build_view_source_html(url, raw)` и state-machine tokeniser `highlight_html`. 4 CSS-класса: vs-tag (#569cd6), vs-attr (#d7ba7d), vs-str (#ce9178), vs-cmt (#608b4e). Тёмный фон #1e1e1e (VS Code dark). `KeyCommand::ViewSource` + `keybinding_for(Ctrl+U)`. `show_view_source()` — из layout_source.html_source. `show_view_source_for_url(url)` — через load_bytes. `handle_omnibox_commit`: перехват `view-source:` до других обработчиков. lumen-shell: clippy чист, 12 новых тестов. |
 | 2026-06-04 | D-7: Settings page | Ctrl+, / `about:settings`: `panels/settings_panel.rs` центрированный overlay 640×480px с 4 секциями (Общие/Конфиденц./Вид/Загрузки). Тогглы shields/DoH, пиллы fingerprint/theme, кнопки ±2px font-size, текстовые поля homepage/download_path с keyboard focus. `lumen_storage::BrowserSettings` SQLite с snapshot/apply_snapshot. 10 тестов storage + 10 тестов panel. lumen-shell + lumen-storage: clippy чист. |
@@ -125,7 +125,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~D-7~~ | ~~**Settings page**~~ — **выполнено** | M | **1** | `lumen-shell`, `lumen-storage` |
 | ~~D-2~~ | ~~**Page source viewer**~~ — **выполнено** | S | **1** | `lumen-shell` |
 | ~~D-8~~ | ~~**Encoding API streaming**~~ — **выполнено** | XS | **1** | `lumen-js` |
-| D-4 | **Keyboard shortcuts settings panel** — `panels/shortcuts_panel.rs` (360×500px), список всех `KeyCommand` + бинд, клик → rebind mode (ожидание нажатия), `lumen-storage::KeyboardShortcuts` SQLite `(command, modifier, key)`, загрузка при старте. 12 тестов. | M | 2 | `lumen-shell`, `lumen-storage` |
+| ~~D-4~~ | ~~**Keyboard shortcuts settings panel**~~ — **выполнено** | M | 2 | `lumen-shell`, `lumen-storage` |
 | D-1 | **Certificate viewer panel** — `Ctrl+Shift+C`: `panels/cert_panel.rs`, из `TlsHandshakeInfo`: subject CN/O, issuer, not-before/after, SHA-256 fingerprint, SAN list, TLS version. Per-tab `cert_info: Option<TlsHandshakeInfo>` в `PageSnapshot`. 10 тестов. | S | 2 | `lumen-shell` |
 | D-6 | **Extension system stub** — `shell/src/extensions/`: `ExtensionManifest {name, version, permissions, content_scripts}`, `ExtensionRegistry`, загрузка из `~/.config/lumen/extensions/<id>/manifest.json`, инъекция `content_scripts` как `extra_scripts`, `chrome.runtime.sendMessage()` stub. 10 тестов. | M | 2 | `lumen-shell` |
 
