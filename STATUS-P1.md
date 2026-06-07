@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+D-4: Keyboard shortcuts settings panel  branch: p1-d4-shortcuts-panel
+Next step: создать panels/shortcuts_panel.rs + lumen-storage::KeyboardShortcuts  crates/shell/src/panels/
 
 ---
 
@@ -109,8 +110,8 @@ Ordered by priority. Сгруппированы по домену.
 | ~~C-1~~ | ~~**CSS Table layout**~~ — **выполнено** | L | `lumen-layout` |
 | ~~C-2~~ | ~~**CSS Ruby layout stub**~~ — **выполнено** | M | `lumen-layout` |
 | ~~C-3~~ | ~~**MathML Core layout stub**~~ — **выполнено** | M | `lumen-layout` |
-| C-4 | **CSS logical properties resolver** — `resolve_logical_properties(style, writing_mode)` в `style.rs`: `inline-size`→`width/height`, `block-size`, `inset-inline-*`, `margin-inline/block`, `padding-inline/block`, `border-inline/block`. `// CSS: inline-size, block-size, inset-*`. 10 тестов. | M | `lumen-layout` |
-| C-5 | **CSS shape-outside: polygon + ellipse** — расширение `FloatContext`: `ShapePolygon {points}` + `ShapeEllipse {cx,cy,rx,ry}`, `parse_shape_polygon_px()`/`parse_shape_ellipse_px()`, ray-intersection в `left_edge_at/right_edge_at`. `// CSS: shape-outside, shape-margin`. 8 тестов. | M | `lumen-layout` |
+| ~~C-4~~ | ~~**CSS logical properties resolver**~~ — **выполнено** | M | `lumen-layout` |
+| ~~C-5~~ | ~~**CSS shape-outside: polygon + ellipse**~~ — **выполнено** | M | `lumen-layout` |
 
 ### D — Shell / UI
 
@@ -123,7 +124,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~D-5~~ | ~~**Browser history panel**~~ — **выполнено** | M | **1** | `lumen-shell` |
 | ~~D-7~~ | ~~**Settings page**~~ — **выполнено** | M | **1** | `lumen-shell`, `lumen-storage` |
 | ~~D-2~~ | ~~**Page source viewer**~~ — **выполнено** | S | **1** | `lumen-shell` |
-| D-8 | **Encoding API streaming** — `TextDecoder {stream: true}`: `decode(chunk, {stream: true})` не сбрасывает частичный многобайтовый символ, финальный `decode()` flush. `TextDecoderStream` использует streaming decode. 6 тестов. | XS | **1** | `lumen-js` |
+| ~~D-8~~ | ~~**Encoding API streaming**~~ — **выполнено** | XS | **1** | `lumen-js` |
 | D-4 | **Keyboard shortcuts settings panel** — `panels/shortcuts_panel.rs` (360×500px), список всех `KeyCommand` + бинд, клик → rebind mode (ожидание нажатия), `lumen-storage::KeyboardShortcuts` SQLite `(command, modifier, key)`, загрузка при старте. 12 тестов. | M | 2 | `lumen-shell`, `lumen-storage` |
 | D-1 | **Certificate viewer panel** — `Ctrl+Shift+C`: `panels/cert_panel.rs`, из `TlsHandshakeInfo`: subject CN/O, issuer, not-before/after, SHA-256 fingerprint, SAN list, TLS version. Per-tab `cert_info: Option<TlsHandshakeInfo>` в `PageSnapshot`. 10 тестов. | S | 2 | `lumen-shell` |
 | D-6 | **Extension system stub** — `shell/src/extensions/`: `ExtensionManifest {name, version, permissions, content_scripts}`, `ExtensionRegistry`, загрузка из `~/.config/lumen/extensions/<id>/manifest.json`, инъекция `content_scripts` как `extra_scripts`, `chrome.runtime.sendMessage()` stub. 10 тестов. | M | 2 | `lumen-shell` |
