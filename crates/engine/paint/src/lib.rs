@@ -21,6 +21,7 @@ pub mod glsl;
 pub mod compositor;
 pub mod display_list;
 pub mod fallback;
+pub mod gap_decorations;
 pub mod fingerprint;
 pub mod hit_test;
 pub mod layer_cache;
@@ -62,6 +63,7 @@ pub use display_list::{
     select_image_set_url, split_at_page_breaks, serialize_display_list, BlendMode, CornerRadii,
     DisplayCommand, DisplayList,
 };
+pub use gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
 pub use tile_grid::{TileDirty, TileGrid, DEFAULT_TILE_SIZE};
 pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};

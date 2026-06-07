@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**E-5 | CSS Gap Decorations L1 stub** branch: p2-e5-gap-decorations
+Next step: cargo check + clippy + tests → finish  `crates/engine/paint/src/gap_decorations.rs`
 
 ---
 

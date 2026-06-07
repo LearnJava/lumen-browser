@@ -55,6 +55,14 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
+### `gap-rule-width`, `gap-rule-style`, `gap-rule-color` (P2 feature p2-e5-gap-decorations, 2026-06-07)
+- **Status:** Paint-side emit logic ready. `lumen-paint::emit_gap_rules(boxes, gaps, ctx)` in `gap_decorations.rs` takes a `GapDecorationContext {rule_width, rule_style, rule_color}` and a slice of `GapSegment {rect, horizontal}` and returns `Vec<DisplayCommand::DrawBorder>`. Rules are centered in each gap rectangle; column gaps get vertical rules (right-side DrawBorder), row gaps get horizontal rules (bottom-side DrawBorder). Clamped to gap size if rule_width > gap. 6 unit tests pass.
+- **P4 task:**
+  1. Add `gap_rule_width: f32`, `gap_rule_style: BorderStyle`, `gap_rule_color: CssColor` fields to `ComputedStyle` in `lumen-layout/src/style.rs` (near `column_rule_*` fields, non-inherited, default width=0/style=None/color=currentColor).
+  2. Wire `apply_declaration()` for `gap-rule-width`, `gap-rule-style`, `gap-rule-color` shorthand/longhands.
+  3. In `lumen-paint/src/display_list.rs` `walk()`, after emitting grid/flex children, build `GapSegment` list from child box positions and call `emit_gap_rules()` with `GapDecorationContext` from style.
+- **Entry points:** `lumen-paint/src/gap_decorations.rs` — `emit_gap_rules`, `GapDecorationContext`, `GapSegment`; re-exported from `lumen_paint::`.
+
 ### `grid-template-columns/rows: subgrid` (P1 feature p1-css-subgrid, 2026-06-03)
 - **Status:** Full layout algorithm ready in `lumen-layout/src/subgrid.rs` + `box_tree.rs`.
   - `GridTrackSize::Subgrid` variant added to the enum (`style.rs:3490`).
