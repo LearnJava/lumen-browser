@@ -58,6 +58,7 @@ pub mod media_stream_recording;
 pub mod serial;
 pub mod compute_pressure;
 pub mod csp;
+pub mod permissions_policy;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -512,6 +513,13 @@ impl QuickJsRuntime {
             // Phase 1: shell calls _lumen_fire_csp_violation for actual enforcement.
             if let Err(e) = csp::install_csp_bindings(&ctx) {
                 eprintln!("CSP bindings init failed: {}", e);
+            }
+
+            // Install Permissions Policy bindings (W3C Permissions Policy §8) — after DOM/document.
+            // Phase 0: document.featurePolicy + _lumen_set_permissions_policy(headerValue) hook.
+            // Phase 1: shell calls _lumen_set_permissions_policy after HTTP response headers.
+            if let Err(e) = permissions_policy::install_permissions_policy_bindings(&ctx) {
+                eprintln!("Permissions Policy bindings init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.

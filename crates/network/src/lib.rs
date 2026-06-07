@@ -37,6 +37,7 @@ use lumen_core::url::Url;
 mod auth;
 mod brotli;
 pub mod csp;
+pub mod permissions_policy;
 mod cors;
 mod dns;
 mod doh;
@@ -95,6 +96,10 @@ pub use sandbox::{SandboxFlags, parse_sandbox_value};
 pub use csp::{
     CspDirective, CspPolicy, CspSource, HashAlgorithm,
     parse_csp_header, parse_csp_report_only_header,
+};
+pub use permissions_policy::{
+    PermissionsAllowlist, PermissionsPolicy,
+    parse_permissions_policy_header, parse_feature_policy_header,
 };
 
 use pool::PoolKey;
