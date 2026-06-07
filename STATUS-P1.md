@@ -6,14 +6,14 @@
 
 ## In progress
 
-D-8: Encoding API streaming  branch: p1-d8-encoding-stream
-Next step: 6 тестов добавлены, clippy + тесты, merge  crates/js/src/dom.rs:5680
+*(свободен)*
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-07 | D-8: Encoding API streaming | WHATWG Encoding §9.1 streaming: TextDecoder._pending буфер уже был в коде; добавлено 6 unit-тестов: stream_mode_ascii, stream_mode_buffers_partial_utf8, stream_mode_reassembles_split_multibyte, stream_mode_final_flush_clears_buffer, no_arg_returns_empty_string, decoder_stream_splits_multibyte. TextDecoderStream (использует {stream:true} внутри) корректно сплитит 3-байтовый символ между двумя write()-чанками. lumen-js: clippy чист, 1302 тестов (+6 vs 1296). |
 | 2026-06-07 | D-2: Page source viewer | Ctrl+U / `view-source:<url>`: новый модуль `crates/shell/src/source_view.rs` с `build_view_source_html(url, raw)` и state-machine tokeniser `highlight_html`. 4 CSS-класса: vs-tag (#569cd6), vs-attr (#d7ba7d), vs-str (#ce9178), vs-cmt (#608b4e). Тёмный фон #1e1e1e (VS Code dark). `KeyCommand::ViewSource` + `keybinding_for(Ctrl+U)`. `show_view_source()` — из layout_source.html_source. `show_view_source_for_url(url)` — через load_bytes. `handle_omnibox_commit`: перехват `view-source:` до других обработчиков. lumen-shell: clippy чист, 12 новых тестов. |
 | 2026-06-04 | D-7: Settings page | Ctrl+, / `about:settings`: `panels/settings_panel.rs` центрированный overlay 640×480px с 4 секциями (Общие/Конфиденц./Вид/Загрузки). Тогглы shields/DoH, пиллы fingerprint/theme, кнопки ±2px font-size, текстовые поля homepage/download_path с keyboard focus. `lumen_storage::BrowserSettings` SQLite с snapshot/apply_snapshot. 10 тестов storage + 10 тестов panel. lumen-shell + lumen-storage: clippy чист. |
 | 2026-06-04 | D-5: Browser history panel | Ctrl+H floating overlay: `panels/history_panel.rs` с HistoryPanel, HistoryItem, HistoryRow. Группировка по датам (Today/Yesterday/YYYY-MM-DD). Поиск через HistoryFts::search или History::recent(50). Удаление записи (×), "Очистить всё" (History::clear + HistoryFts::clear). Ctrl+H → KeyCommand::ToggleHistory, Esc=закрыть, ↑/↓=скролл, wheel scroll. history_store: History::open_in_memory() в Lumen, record_visit при каждой навигации. Центрированный оверлей 480×500px. 15 unit-тестов. lumen-shell: cargo check OK, 15/15 тестов. |
