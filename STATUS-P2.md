@@ -6,12 +6,19 @@
 
 ## In progress
 
-**G-3 | Memory pressure shell integration**  branch: p2-g3-memory-pressure
-Next step: add atlas_on_memory_pressure to Renderer + RenderBackend + WgpuBackend + shell  crates/engine/paint/src/backend.rs:152
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**G-3 | Memory pressure shell integration** ✅ 2026-06-08 (merged)
+- `Renderer::atlas_on_memory_pressure(level)` — делегирует в `GlyphAtlas::on_memory_pressure`
+- `RenderBackend::on_atlas_memory_pressure(level)` — новый метод трейта (default no-op)
+- `WgpuBackend::on_atlas_memory_pressure` — переопределяет трейт, вызывает renderer
+- shell `about_to_wait`: `renderer.on_atlas_memory_pressure(level)` рядом с `on_layer_memory_pressure`
+- 3 теста: `null_backend_on_atlas_memory_pressure_noop`, `no_broadcast_for_low_pressure`, `registry_broadcast_evicts_multiple_caches`
+- lumen-paint: 556 тестов ✅, lumen-shell: 1066 тестов ✅, Clippy чист
 
 **G-2 | BiDi additional gaps (8H.3)** ✅ 2026-06-08 (merged)
 - `BidiState`: +`default_locale`, +`timezone_override`, +`offline`, +`session_ua_override`
@@ -288,8 +295,8 @@ Ordered by priority. Сгруппированы по домену.
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~G-1~~ | ~~**CSS Grid auto-fill/auto-fit Phase 2**~~ — **выполнено** | M | `lumen-layout` |
-| G-2 | **BiDi дополнительные gaps (8H.3)** — `bidi/protocol.rs`: locale/timezone intercept (`session.setDefaultUserContextLocale`, `browser.setTimezoneOverride`), offline intercept, per-context UA override. 4 теста. | S | `lumen-shell` |
-| G-3 | **Memory pressure shell integration** — `shell/src/main.rs`: `CacheRegistry` (GlyphAtlas + ImageDecodeCache + LayerCache) + `Win32MemoryPressureSource` poll loop, `broadcast_pressure()` каждые 5с в `about_to_wait`. 3 теста. | XS | `lumen-shell` |
+| ~~G-2~~ | ~~**BiDi дополнительные gaps (8H.3)**~~ — **выполнено** | S | `lumen-shell` |
+| ~~G-3~~ | ~~**Memory pressure shell integration**~~ — **выполнено** | XS | `lumen-shell` |
 | G-4 | **Web Notifications API stub** — `lumen-js/src/notifications.rs`: `Notification(title, {body, icon})` класс, `permission` (default 'granted'), `requestPermission()→Promise<'granted'>`, `showNotification()`, `getNotifications()→Promise<[]>`. 5 тестов. | S | `lumen-js` |
 | G-5 | **CSS Grid Table border-collapse Phase 2** — `layout/src/table.rs` и `box_tree.rs`: border-spacing layout (col_widths + row_heights учитывают border-spacing), collapsed border merging (применить `CollapsedBorder::resolve_conflict`). 4 теста. | S | `lumen-layout` |
 
