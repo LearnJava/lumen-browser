@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+F-3: Web Codecs API stub  branch: p1-f3-web-codecs
+Next step: реализовать JS шим + тесты  crates/js/src/web_codecs.rs
 
 ---
 
