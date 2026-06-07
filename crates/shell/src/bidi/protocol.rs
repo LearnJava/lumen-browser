@@ -495,14 +495,14 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &BidiState) -> DispatchRe
         .and_then(|t| t.get("context"))
         .and_then(|v| v.as_str());
 
-    if let Some(ctx_id) = ctx_id {
-        if state.find(ctx_id).is_none() {
-            return DispatchResult::single(make_error(
-                Some(id),
-                "no such frame",
-                &format!("unknown browsing context: {ctx_id}"),
-            ));
-        }
+    if let Some(ctx_id) = ctx_id
+        && state.find(ctx_id).is_none()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("unknown browsing context: {ctx_id}"),
+        ));
     }
 
     // Phase 1: return undefined stub.

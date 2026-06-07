@@ -1,6 +1,7 @@
 //! Shell panel modules: additional UI surfaces rendered alongside the main
 //! page viewport (split view, vertical tabs, sidebar panels, etc.).
 
+pub mod a11y_panel;
 pub mod bookmark_panel;
 pub mod command_palette;
 pub mod settings_panel;

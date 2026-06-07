@@ -396,29 +396,24 @@ pub fn build_tab_tooltip(
     let bg = Color { r: 38, g: 38, b: 42, a: 235 };
     let text_color = Color { r: 255, g: 255, b: 255, a: 255 };
 
-    let mut cmds = DisplayList::with_capacity(2);
-
-    // Background rounded rect.
-    cmds.push(DisplayCommand::FillRoundedRect {
-        rect: Rect::new(x, y, TT_W, TT_H),
-        radii: CornerRadii { tl: RADIUS, tl_y: RADIUS, tr: RADIUS, tr_y: RADIUS, br: RADIUS, br_y: RADIUS, bl: RADIUS, bl_y: RADIUS },
-        color: bg,
-    });
-
-    // Text.
-    cmds.push(DisplayCommand::DrawText {
-        rect: Rect::new(x + PAD, y + TT_H / 2.0 - FONT_SZ * 0.4, TT_W - 2.0 * PAD, FONT_SZ * 1.2),
-        text: msg.to_string(),
-        font_size: FONT_SZ,
-        color: text_color,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        tab_size: 0.0,
-    });
-
-    Some(cmds)
+    Some(vec![
+        DisplayCommand::FillRoundedRect {
+            rect: Rect::new(x, y, TT_W, TT_H),
+            radii: CornerRadii { tl: RADIUS, tl_y: RADIUS, tr: RADIUS, tr_y: RADIUS, br: RADIUS, br_y: RADIUS, bl: RADIUS, bl_y: RADIUS },
+            color: bg,
+        },
+        DisplayCommand::DrawText {
+            rect: Rect::new(x + PAD, y + TT_H / 2.0 - FONT_SZ * 0.4, TT_W - 2.0 * PAD, FONT_SZ * 1.2),
+            text: msg.to_string(),
+            font_size: FONT_SZ,
+            color: text_color,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            tab_size: 0.0,
+        },
+    ])
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

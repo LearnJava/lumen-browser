@@ -1,3 +1,6 @@
+// backend-vello is a planned feature (ADR-010 Phase 3); the cfg guards are
+// forward-looking and intentionally reference a not-yet-declared feature name.
+#![allow(unexpected_cfgs)]
 //! Фабрика GPU-бэкендов: читает `LUMEN_BACKEND` env var и создаёт
 //! нужный [`RenderBackend`].
 //!

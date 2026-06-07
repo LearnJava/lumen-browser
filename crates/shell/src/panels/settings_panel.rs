@@ -156,6 +156,7 @@ impl SettingsPanel {
     }
 
     /// Toggle visibility. When opening, loads `snap` as the draft.
+    #[allow(dead_code)]
     pub fn toggle(&mut self, snap: BrowserSettingsSnapshot) {
         if self.visible {
             self.visible = false;
@@ -188,6 +189,7 @@ impl SettingsPanel {
     }
 
     /// Scroll the content area by `dy` CSS px (positive = down).
+    #[allow(dead_code)]
     pub fn scroll_by(&mut self, dy: f32) {
         self.scroll_y = (self.scroll_y + dy).max(0.0);
     }
@@ -271,7 +273,7 @@ pub fn hit_test(
 fn ht_general(lx: f32, ly: f32) -> SettingsHit {
     let _ = lx;
     // Row 0 (y 0..ROW_H): label row; row 1 (ROW_H..2*ROW_H): homepage input.
-    if ly >= ROW_H && ly < ROW_H * 2.0 {
+    if (ROW_H..ROW_H * 2.0).contains(&ly) {
         return SettingsHit::FocusHomepage;
     }
     SettingsHit::Inside
@@ -338,7 +340,7 @@ fn ht_appearance(lx: f32, ly: f32) -> SettingsHit {
 
 fn ht_downloads(ly: f32) -> SettingsHit {
     // Row 0 (y 0..ROW_H): label; row 1 (ROW_H..2*ROW_H): path input.
-    if ly >= ROW_H && ly < ROW_H * 2.0 {
+    if (ROW_H..ROW_H * 2.0).contains(&ly) {
         return SettingsHit::FocusDownloadPath;
     }
     SettingsHit::Inside
@@ -431,7 +433,7 @@ pub fn build_panel(panel: &SettingsPanel, list: &mut DisplayList, px: f32, py: f
 
 // ── Per-section renderers ────────────────────────────────────────────────────
 
-fn row_bg(i: usize) -> Color { if i % 2 == 0 { ROW_EVEN } else { ROW_ODD } }
+fn row_bg(i: usize) -> Color { if i.is_multiple_of(2) { ROW_EVEN } else { ROW_ODD } }
 
 fn push_row(list: &mut DisplayList, x: f32, y: f32, i: usize) {
     list.push(DisplayCommand::FillRect {
