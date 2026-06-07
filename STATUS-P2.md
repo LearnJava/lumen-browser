@@ -6,12 +6,19 @@
 
 ## In progress
 
-**C-3 | WebSocket permessage-deflate**  branch: p2-c3-ws-permessage-deflate
-Next step: add flate2 dep + create websocket/deflate.rs + update frame RSV1 + upgrade negotiation  crates/network/src/websocket/
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**C-3 | WebSocket permessage-deflate** ✅ 2026-06-07 (merged)
+- `websocket/deflate.rs`: compress_message()/decompress_message() raw DEFLATE (no_context_takeover)
+- `Frame.rsv1` бит — read/write_frame обновлены; 2 теста roundtrip RSV1
+- `upgrade.rs`: expect_101() возвращает Result<bool> (deflate negotiated); perform_with_deflate() отправляет Sec-WebSocket-Extensions
+- `WebSocket.deflate_enabled`/`.compress` поля; `connect_deflate(compress)` метод
+- `JsWebSocketProvider` использует connect_deflate(compress=false) — всегда предлагает permessage-deflate
+- 9 новых тестов, 685 тестов ✅, Clippy чист
 
 **A-9 | SVG text rendering** ✅ 2026-06-06 (merged)
 - `emit_svg_text()` реализует text-anchor (start/middle/end): горизонтальный сдвиг x (approx font_size×0.5×chars)
