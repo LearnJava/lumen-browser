@@ -6,12 +6,22 @@
 
 ## In progress
 
-**G-2 | BiDi additional gaps (8H.3)**  branch: p2-g2-bidi-gaps
-Next step: добавить поля в BidiState/BidiContext, 4 команды, 4 теста  `crates/shell/src/bidi/protocol.rs`
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**G-2 | BiDi additional gaps (8H.3)** ✅ 2026-06-08 (merged)
+- `BidiState`: +`default_locale`, +`timezone_override`, +`offline`, +`session_ua_override`
+- `BidiContext`: +`ua_override` — per-context UA с приоритетом над сессионным
+- `session.setDefaultUserContextLocale` — IETF BCP 47 локаль для user contexts
+- `browser.setTimezoneOverride` — IANA timezone override (напр. `Europe/Moscow`)
+- `network.setOfflineStatus` — симуляция offline; обе формы: `{status:{offline:true}}` и `{offline:true}`
+- `emulation.setUserAgentOverride` — UA на уровне сессии или per-context (`contexts` array)
+- Accessors: `locale()`, `timezone()`, `is_offline()`, `user_agent_for(ctx_id)`
+- 4 новых теста: set_locale, set_timezone, offline_toggle, ua_override_session_and_per_context
+- Итого lumen-shell: 1064 тестов ✅, Clippy чист
 
 **G-1 | CSS Grid auto-fill/auto-fit Phase 2** ✅ 2026-06-08 (merged)
 - `grid_template_col_auto_repeat: Option<GridRepeat>` и `grid_template_row_auto_repeat: Option<GridRepeat>` в `ComputedStyle`
