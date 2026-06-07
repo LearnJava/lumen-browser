@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**G-2 | BiDi additional gaps (8H.3)**  branch: p2-g2-bidi-gaps
+Next step: добавить поля в BidiState/BidiContext, 4 команды, 4 теста  `crates/shell/src/bidi/protocol.rs`
 
 ---
 
