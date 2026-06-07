@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**C-3 | WebSocket permessage-deflate**  branch: p2-c3-ws-permessage-deflate
+Next step: add flate2 dep + create websocket/deflate.rs + update frame RSV1 + upgrade negotiation  crates/network/src/websocket/
 
 ---
 

@@ -2569,12 +2569,15 @@ impl JsWebSocketProvider for HttpClient {
     fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
-        let ws = websocket::WebSocket::connect(
+        // Always offer permessage-deflate (RFC 7692) — browsers do this by default.
+        // compress=false: outgoing frames are uncompressed until JS sets WebSocket.compress.
+        let ws = websocket::WebSocket::connect_deflate(
             &parsed,
             self.resolver.as_ref(),
             self.hsts.as_deref(),
             Arc::new(NoopEventSink),
             lumen_core::event::TabId(0),
+            false,
         )?;
         let impl_ = JsWebSocketSessionImpl::new(ws);
         // Push the Open event immediately — handshake already completed.
