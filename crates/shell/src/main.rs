@@ -5191,6 +5191,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.image_cache.on_memory_pressure(level);
             if let Some(renderer) = &mut self.renderer {
                 renderer.on_layer_memory_pressure(level);
+                renderer.on_atlas_memory_pressure(level);
             }
         }
 

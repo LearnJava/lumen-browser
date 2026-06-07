@@ -3441,6 +3441,13 @@ impl Renderer {
         }
     }
 
+    /// Forwards a memory-pressure signal to the glyph atlas so it can evict
+    /// cached entries (ADR-008 §10H).  Medium: evict ~50% LRU glyphs.
+    /// High: clear entirely.  Wire into the shell's `MemoryPressureSource` poll loop.
+    pub fn atlas_on_memory_pressure(&mut self, level: lumen_core::ext::MemoryPressureLevel) {
+        self.atlas.on_memory_pressure(level);
+    }
+
     /// Получить мutable ссылку для прямого управления кэшем (advanced usage).
     pub fn layer_cache_mut(&mut self) -> &mut crate::layer_cache::LayerCache {
         &mut self.layer_cache
