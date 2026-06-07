@@ -7153,6 +7153,12 @@ var performance = {
             _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'measure'; });
         }
     },
+    // W3C Resource Timing L2 §4.4 — clears all 'resource' entries from the buffer.
+    clearResourceTimings: function() {
+        _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'resource'; });
+    },
+    // W3C Resource Timing L2 §4.4 — sets max buffer size; Phase 0: no-op (unbounded).
+    setResourceTimingBufferSize: function(_maxSize) {},
 };
 
 function _perf_entries_by_name(name, type) {
@@ -7261,6 +7267,39 @@ function _lumen_deliver_layout_shift(value, session_id, had_input) {
         value: value,
         hadRecentInput: !!had_input,
         sources: [],
+    };
+    _perf_entries.push(entry);
+    _perf_observer_notify([entry]);
+}
+
+// Called by network layer when a resource fetch completes.
+// W3C Resource Timing L2 §4: creates a PerformanceResourceTiming entry with
+// all sub-timings set to start_ms (Phase 0 — no per-phase breakdown available).
+// initiator = 'script'|'link'|'img'|'fetch'|'xmlhttprequest'|'other'.
+function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms) {
+    var s = Number(start_ms);
+    var d = Number(duration_ms);
+    var entry = {
+        entryType: 'resource',
+        name: String(url),
+        startTime: s,
+        duration: d,
+        initiatorType: String(initiator),
+        fetchStart: s,
+        domainLookupStart: s,
+        domainLookupEnd: s,
+        connectStart: s,
+        connectEnd: s,
+        secureConnectionStart: s,
+        requestStart: s,
+        responseStart: s,
+        responseEnd: s + d,
+        transferSize: 0,
+        encodedBodySize: 0,
+        decodedBodySize: 0,
+        responseStatus: 0,
+        renderBlockingStatus: 'non-blocking',
+        contentType: '',
     };
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
@@ -19151,6 +19190,99 @@ mod tests {
             po.disconnect();
             _lumen_deliver_layout_shift(0.2, 0, false);
             count === 1
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Resource Timing L2 tests (E-2) ─────────────────────────────────────────
+
+    #[test]
+    fn resource_timing_record_exists_in_entries() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://example.com/app.js', 'script', 1000, 50);
+            var entries = performance.getEntriesByType('resource');
+            entries.length === 1 && entries[0].name === 'https://example.com/app.js'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_entry_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://cdn.example.com/style.css', 'link', 500, 80);
+            var e = performance.getEntriesByType('resource')[0];
+            e.entryType === 'resource' &&
+            e.initiatorType === 'link' &&
+            e.fetchStart === 500 &&
+            e.responseEnd === 580 &&
+            e.duration === 80
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_phase0_sub_timings_equal_fetch_start() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://example.com/img.png', 'img', 200, 30);
+            var e = performance.getEntriesByType('resource')[0];
+            e.domainLookupStart === 200 &&
+            e.domainLookupEnd === 200 &&
+            e.connectStart === 200 &&
+            e.requestStart === 200 &&
+            e.responseStart === 200
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_clear_resource_timings() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://example.com/a.js', 'script', 100, 10);
+            _lumen_record_resource_timing('https://example.com/b.js', 'script', 200, 20);
+            performance.clearResourceTimings();
+            performance.getEntriesByType('resource').length === 0
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_observer_notified() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
+            po.observe({entryTypes: ['resource']});
+            _lumen_record_resource_timing('https://example.com/fetch.json', 'fetch', 300, 15);
+            got.length === 1 && got[0].initiatorType === 'fetch' && got[0].duration === 15
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_multiple_entries() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://example.com/1.js', 'script', 100, 10);
+            _lumen_record_resource_timing('https://example.com/2.js', 'script', 200, 20);
+            _lumen_record_resource_timing('https://example.com/3.css', 'link', 300, 5);
+            var all = performance.getEntriesByType('resource');
+            all.length === 3 && all[2].name === 'https://example.com/3.css' && all[2].initiatorType === 'link'
             "#
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
