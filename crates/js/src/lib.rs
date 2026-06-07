@@ -56,6 +56,7 @@ pub mod scroll_snap_events;
 pub mod sri;
 pub mod media_stream_recording;
 pub mod serial;
+pub mod compute_pressure;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -497,6 +498,12 @@ impl QuickJsRuntime {
             // rejects NotSupportedError; getPorts() returns [].
             if let Err(e) = serial::install_serial_bindings(&ctx) {
                 eprintln!("WebSerial bindings init failed: {}", e);
+            }
+
+            // Install Compute Pressure API (W3C Compute Pressure L1) — after DOM/navigator.
+            // Phase 0: PressureObserver registers callback but never fires; knownSources()=['cpu'].
+            if let Err(e) = compute_pressure::install_compute_pressure_bindings(&ctx) {
+                eprintln!("Compute Pressure API init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.

@@ -6,8 +6,7 @@
 
 ## In progress
 
-E-4: WebSerial API stub  branch: p1-e4-webserial
-Next step: создать crates/js/src/serial.rs, добавить в lib.rs
+_(нет)_
 
 ---
 
@@ -20,14 +19,16 @@ Next step: создать crates/js/src/serial.rs, добавить в lib.rs
 | ~~E-1~~ | ~~**HTML5 Drag and Drop API**~~ — **выполнено** | M | `lumen-js` |
 | ~~E-2~~ | ~~**Performance Resource Timing Level 2**~~ — **выполнено** | M | `lumen-js`, `lumen-network` |
 | ~~E-3~~ | ~~**MediaRecorder API stub**~~ — **выполнено** | S | `lumen-js` |
-| E-4 | **WebSerial API stub** — W3C Serial API L1 Phase 0: `navigator.serial.requestPort({filters?})` → reject NotSupportedError, `navigator.serial.getPorts()` → Promise<[]>. `SerialPort` stub (open/close/read/write → reject). 4 теста. | XS | `lumen-js` |
-| E-5 | **Compute Pressure API stub** — W3C Compute Pressure L1 Phase 0: `new PressureObserver(callback)`, `.observe('cpu')/.unobserve('cpu')/.disconnect()`. `PressureRecord {source, state:'nominal', time}` класс. `PressureObserver.knownSources() → ['cpu']`. 5 тестов. | XS | `lumen-js` |
+| ~~E-4~~ | ~~**WebSerial API stub**~~ — **выполнено** | XS | `lumen-js` |
+| ~~E-5~~ | ~~**Compute Pressure API stub**~~ — **выполнено** | XS | `lumen-js` |
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | E-5: Compute Pressure API stub | W3C Compute Pressure L1 Phase 0: `new PressureObserver(callback)`, `.observe('cpu')` → Promise, `.unobserve('cpu')`, `.disconnect()`. `PressureRecord {source, state:'nominal', time}` класс с `toJSON()`. `PressureObserver.knownSources()` → `['cpu']`. Phase 0: callback никогда не вызывается, реального CPU-семплинга нет. Новый модуль `crates/js/src/compute_pressure.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1342). |
+| 2026-06-08 | E-4: WebSerial API stub | W3C Serial API L1 Phase 0: `navigator.serial.requestPort({filters?})` → reject NotSupportedError, `navigator.serial.getPorts()` → Promise<[]>. `SerialPort` stub (open/close/getInfo → reject/stub). Новый модуль `crates/js/src/serial.rs`. lumen-js: clippy чист, 4 unit-тестов. |
 | 2026-06-08 | E-3: MediaRecorder API stub | W3C MediaStream Recording L2 Phase 0: `new MediaRecorder(stream, opts?)`, state machine inactive/recording/paused, `mimeType` отражает opts. `start(timeslice?)`/`stop()`/`pause()`/`resume()`/`requestData()` с DOMException при неверном состоянии. `ondataavailable` (пустой Blob при stop/requestData), `onstop`/`onerror`/`onstart`/`onpause`/`onresume`. `addEventListener`/`removeEventListener`. `BlobEvent {data, timecode}`. `MediaRecorder.isTypeSupported() → false`. Новый модуль `crates/js/src/media_stream_recording.rs`. lumen-js: clippy чист, 8 unit-тестов (+8 vs 1332). |
 | 2026-06-08 | E-2: Performance Resource Timing Level 2 | W3C Resource Timing L2 §4 Phase 0: `_lumen_record_resource_timing(url, initiator, start_ms, duration_ms)` создаёт PerformanceResourceTiming запись в `_perf_entries`. Все sub-timings (fetchStart/domainLookupStart/connectStart/requestStart/responseStart) = start_ms (Phase 0 — нет per-phase данных от сети). `responseEnd` = start_ms + duration_ms. `performance.clearResourceTimings()` / `setResourceTimingBufferSize()` (Phase 0: no-op) добавлены. `performance.getEntriesByType('resource')` возвращает записи через существующий `_perf_entries`. PerformanceObserver уведомляется при новых resource-записях. Бонус: fix pre-existing `collapsible_if` clippy в lumen-paint. 6 unit-тестов. lumen-js: clippy чист, 1332 тестов (+6 vs 1326). |
 | 2026-06-08 | E-1: HTML5 Drag and Drop API | HTML LS §9.10 Phase 0: `DataTransfer` (setData/getData/clearData/types/items/files/effectAllowed/dropEffect/setDragImage no-op). `DataTransferItem` (kind/type/getAsString/getAsFile→null). `DataTransferItemList` (add/remove/clear/length, indexed access через _rebuild_indices, Symbol.iterator). `DragEvent` обновлён: auto-creates DataTransfer. `_lumen_dispatch_drag_event(nid, type, x, y, data_json)` — биндинг для Rust shell Phase 1. Элемент: draggable getter/setter + inline handlers ondragstart/drag/dragend/dragenter/dragover/dragleave/drop. Нормализация 'text'→'text/plain', 'url'→'text/uri-list'. Экспорт window.DataTransfer/DataTransferItem/DataTransferItemList. BUG-070 зафиксирован (document_pip pre-existing). 9 тестов. lumen-js: clippy чист, 1326 тестов (+9 vs 1317). |
