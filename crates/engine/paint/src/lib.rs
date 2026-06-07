@@ -135,6 +135,9 @@ struct OwnedFontMetrics {
     /// advance_width по glyph_id (индекс = glyph_id; из hmtx).
     advance_widths: Vec<u16>,
     units_per_em: u16,
+    /// `wdth` variation axis `(min, max)`, or `None` for non-variable fonts.
+    /// Used by [`MultiFontMeasurer::resolve_font_stretch`] (CSS Fonts L4 §5.2).
+    wdth_axis: Option<(f32, f32)>,
 }
 
 impl OwnedFontMetrics {
@@ -150,10 +153,15 @@ impl OwnedFontMetrics {
         let num_glyphs = maxp.num_glyphs;
         let advance_widths: Vec<u16> =
             (0..num_glyphs).map(|id| hmtx.advance_width(id).unwrap_or(0)).collect();
+        let wdth_axis = font
+            .fvar()
+            .ok()
+            .and_then(|fvar| fvar.axis(b"wdth").map(|a| (a.min, a.max)));
         Ok(Self {
             cmap_data,
             advance_widths,
             units_per_em: head.units_per_em,
+            wdth_axis,
         })
     }
 
@@ -209,6 +217,39 @@ impl MultiFontMeasurer {
     /// Количество зарегистрированных семей (для тестов).
     pub fn family_count(&self) -> usize {
         self.faces.len()
+    }
+
+    /// Resolves `font-stretch` percentage for the first matching family
+    /// with a `wdth` variation axis (CSS Fonts L4 §5.2).
+    ///
+    /// Returns `stretch_pct` clamped to `[axis.min, axis.max]` of the first
+    /// registered family that has a `wdth` axis. Returns `None` when no
+    /// registered family has a `wdth` axis — caller should use the CSS default.
+    ///
+    /// `stretch_pct`: CSS percentage value (e.g. 100.0 = normal, 50.0 =
+    /// ultra-condensed). The `wdth` axis uses the same scale per OpenType spec.
+    ///
+    /// // CSS: font-stretch
+    pub fn resolve_font_stretch(&self, families: &[String], stretch_pct: f32) -> Option<f32> {
+        for family in families {
+            if let Some(metrics) = self.faces.get(&family.to_ascii_lowercase()) {
+                if let Some((min, max)) = metrics.wdth_axis {
+                    return Some(stretch_pct.clamp(min, max));
+                }
+            }
+        }
+        None
+    }
+
+    /// Insert a family entry with an explicit `wdth` axis range for testing.
+    #[cfg(test)]
+    fn insert_test_wdth_family(&mut self, family: &str, wdth_min: f32, wdth_max: f32) {
+        self.faces.insert(family.to_ascii_lowercase(), OwnedFontMetrics {
+            cmap_data: vec![],
+            advance_widths: vec![],
+            units_per_em: 1000,
+            wdth_axis: Some((wdth_min, wdth_max)),
+        });
     }
 }
 
@@ -314,5 +355,50 @@ mod multi_font_tests {
         let w2 = m.char_width_with_families('X', 16.0, &["MYFONT".to_string()]);
         let w3 = m.char_width_with_families('X', 16.0, &["MyFont".to_string()]);
         assert!(w1 > 0.0 && w1 == w2 && w2 == w3, "lookup должен быть case-insensitive");
+    }
+
+    // ── resolve_font_stretch (CSS Fonts L4 §5.2) ────────────────────────────
+
+    #[test]
+    fn resolve_font_stretch_no_families_returns_none() {
+        let font = inter_font();
+        let m = MultiFontMeasurer::new(&font).unwrap();
+        assert_eq!(m.resolve_font_stretch(&[], 100.0), None);
+        assert_eq!(m.resolve_font_stretch(&["any".to_string()], 100.0), None);
+    }
+
+    #[test]
+    fn resolve_font_stretch_non_variable_font_returns_none() {
+        // Inter — не variable font, нет fvar/wdth → None
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family("inter", INTER.to_vec());
+        assert_eq!(m.resolve_font_stretch(&["inter".to_string()], 100.0), None);
+    }
+
+    #[test]
+    fn resolve_font_stretch_clamps_below_axis_min() {
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        // wdth ось: [75%, 150%] — ultra-condensed (50%) < min → clamp to 75%
+        m.insert_test_wdth_family("varifont", 75.0, 150.0);
+        assert_eq!(
+            m.resolve_font_stretch(&["varifont".to_string()], 50.0),
+            Some(75.0),
+            "значение ниже min должно зажиматься к min"
+        );
+    }
+
+    #[test]
+    fn resolve_font_stretch_clamps_above_axis_max() {
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        // wdth ось: [75%, 150%] — ultra-expanded (200%) > max → clamp to 150%
+        m.insert_test_wdth_family("varifont", 75.0, 150.0);
+        assert_eq!(
+            m.resolve_font_stretch(&["varifont".to_string()], 200.0),
+            Some(150.0),
+            "значение выше max должно зажиматься к max"
+        );
     }
 }
