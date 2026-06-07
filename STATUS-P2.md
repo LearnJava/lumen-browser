@@ -6,12 +6,18 @@
 
 ## In progress
 
-**G-4 | Web Notifications API stub**  branch: p2-g4-web-notifications
-Next step: add ServiceWorkerRegistration.showNotification() + getNotifications() to NOTIFICATIONS_SHIM  crates/js/src/notifications_bindings.rs
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**G-4 | Web Notifications API stub** ✅ 2026-06-08 (merged)
+- `ServiceWorkerRegistration.prototype.showNotification(title, opts)` — делегирует в `new Notification()`, тем самым проходит permission check и OS queue; возвращает `Promise<undefined>`
+- `ServiceWorkerRegistration.prototype.getNotifications(filter?)` — Phase 0: возвращает `Promise<[]>`
+- Основная `Notification` реализация (constructor, `permission`, `requestPermission`, `close`, `addEventListener`, `drain_notifications`) уже была в `notifications_bindings.rs`
+- 5 новых тестов: `sw_show_notification_returns_promise`, `sw_show_notification_queues_to_os`, `sw_show_notification_silent_when_denied`, `sw_get_notifications_returns_empty_array`, `sw_get_notifications_with_filter_returns_empty_array`
+- Итого: 26 тестов notifications_bindings ✅, 1369 тестов lumen-js ✅, Clippy чист
 
 **G-3 | Memory pressure shell integration** ✅ 2026-06-08 (merged)
 - `Renderer::atlas_on_memory_pressure(level)` — делегирует в `GlyphAtlas::on_memory_pressure`
@@ -298,7 +304,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~G-1~~ | ~~**CSS Grid auto-fill/auto-fit Phase 2**~~ — **выполнено** | M | `lumen-layout` |
 | ~~G-2~~ | ~~**BiDi дополнительные gaps (8H.3)**~~ — **выполнено** | S | `lumen-shell` |
 | ~~G-3~~ | ~~**Memory pressure shell integration**~~ — **выполнено** | XS | `lumen-shell` |
-| G-4 | **Web Notifications API stub** — `lumen-js/src/notifications.rs`: `Notification(title, {body, icon})` класс, `permission` (default 'granted'), `requestPermission()→Promise<'granted'>`, `showNotification()`, `getNotifications()→Promise<[]>`. 5 тестов. | S | `lumen-js` |
+| ~~G-4~~ | ~~**Web Notifications API stub**~~ — **выполнено** | S | `lumen-js` |
 | G-5 | **CSS Grid Table border-collapse Phase 2** — `layout/src/table.rs` и `box_tree.rs`: border-spacing layout (col_widths + row_heights учитывают border-spacing), collapsed border merging (применить `CollapsedBorder::resolve_conflict`). 4 теста. | S | `lumen-layout` |
 
 ### A — Рендеринг / GPU
