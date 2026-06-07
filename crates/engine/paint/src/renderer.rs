@@ -3472,6 +3472,30 @@ impl Renderer {
         self.texture_pool.release(pooled);
     }
 
+    /// Promote a node to its own GPU layer for `will-change: transform/opacity/filter`.
+    ///
+    /// Creates a `LayerCache` entry for the node so that subsequent animation ticks
+    /// can update only the layer's transform matrix without triggering a full relayout.
+    /// // CSS: will-change — P4 wires ComputedStyle.will_change to call this after relayout.
+    pub fn promote_layer(
+        &mut self,
+        node_id: u32,
+        width: u32,
+        height: u32,
+    ) -> crate::layer_cache::LayerKey {
+        self.layer_cache.promote_layer(node_id, width, height)
+    }
+
+    /// Returns `true` if the given node has a promoted GPU layer.
+    pub fn is_layer_promoted(&self, node_id: u32) -> bool {
+        self.layer_cache.is_layer_promoted(node_id)
+    }
+
+    /// Remove the promoted GPU layer for a node, freeing its cache entry.
+    pub fn demote_layer(&mut self, node_id: u32) {
+        self.layer_cache.demote_layer(node_id);
+    }
+
     /// Очистить весь layer cache (полная эвикция) и очистить texture pool.
     pub fn clear_layer_cache(&mut self) {
         self.layer_cache.clear();
