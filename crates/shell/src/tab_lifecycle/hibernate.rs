@@ -93,6 +93,8 @@ pub(crate) fn restore_js_context(
         ResourceBase::File(_) => (None, None, None),
     };
 
+    let ext_registry = crate::extensions::ExtensionRegistry::load();
+    let ext_scripts = ext_registry.content_scripts_for_url(url);
     let (doc_arc, _nav, js_ctx) = crate::run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
@@ -105,6 +107,7 @@ pub(crate) fn restore_js_context(
         sw,
         cookie_banner_dismiss,
         deterministic,
+        &ext_scripts,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during

@@ -47,6 +47,7 @@ pub mod surface;
 mod runtime;
 mod scroll;
 mod scroll_anim;
+mod extensions;
 mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
@@ -2538,6 +2539,9 @@ fn parse_and_layout(
         ResourceBase::Url(u) => u.as_str().to_owned(),
         ResourceBase::File(p) => format!("file://{}", p.display()),
     };
+    // Extension content scripts: collect JS sources that match the page URL.
+    let ext_registry = extensions::ExtensionRegistry::load();
+    let ext_scripts = ext_registry.content_scripts_for_url(&page_url);
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
@@ -2550,6 +2554,7 @@ fn parse_and_layout(
         sw_backend,
         cookie_banner_dismiss,
         deterministic,
+        &ext_scripts,
     );
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
@@ -3329,6 +3334,7 @@ fn run_scripts_with_dom(
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    extra_scripts: &[String],
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
     let mut module_scripts: Vec<String> = Vec::new();
@@ -3336,7 +3342,7 @@ fn run_scripts_with_dom(
 
     let doc_arc = Arc::new(Mutex::new(doc));
 
-    if scripts.is_empty() && module_scripts.is_empty() {
+    if scripts.is_empty() && module_scripts.is_empty() && extra_scripts.is_empty() {
         return (doc_arc, None, None);
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
@@ -3383,6 +3389,19 @@ fn run_scripts_with_dom(
                             );
                         }
                         Err(e) => eprintln!("module error: {e}"),
+                    }
+                }
+                // Extension content scripts run last (after all page scripts).
+                for src in extra_scripts {
+                    match rt.eval(src) {
+                        Ok(_) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "extension: engine=quickjs, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("extension script error: {e}"),
                     }
                 }
                 let nav_req = rt.take_navigate_request().map(|r| match r {

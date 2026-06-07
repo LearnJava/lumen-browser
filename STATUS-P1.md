@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+D-6: Extension system stub  branch: p1-d6-extensions
+Next step: create crates/shell/src/extensions/mod.rs  crates/shell/src/main.rs
 
 ---
 

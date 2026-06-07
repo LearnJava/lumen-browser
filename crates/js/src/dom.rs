@@ -2092,6 +2092,13 @@ fn install_primitives(
     // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL
     crate::trusted_types::install_trusted_types_bindings(ctx)?;
 
+    // D-6: Extension system — chrome.runtime.sendMessage() native binding.
+    // Phase 0: no-op; the message is logged to stderr for debugging.
+    // Phase 1: shell wires a real IPC channel between content scripts and extension background.
+    reg!("_lumen_chrome_runtime_send_message", |msg: String| {
+        let _ = msg;
+    });
+
     // CSS Typed OM API: element.attributeStyleMap / computedStyleMap()
     {
         let d = Arc::clone(&doc);
@@ -9665,6 +9672,38 @@ function _lumen_apply_resize(nid, delta_x, delta_y) {
     style.width = new_width + 'px';
     style.height = new_height + 'px';
 }
+
+// D-6: Extension system stub — chrome.runtime API Phase 0.
+// Provides enough surface so existing extension content-scripts don't throw on import.
+// Phase 0: sendMessage is fire-and-forget (message goes to native no-op binding).
+// Phase 1: shell wires up a real message bus between content scripts and extension background.
+(function() {
+    var _rt = {
+        id: 'lumen-extension',
+        sendMessage: function(msg, callback) {
+            _lumen_chrome_runtime_send_message(JSON.stringify(msg));
+            if (typeof callback === 'function') { callback(undefined); }
+        },
+        onMessage: {
+            _listeners: [],
+            addListener: function(fn) { this._listeners.push(fn); },
+            removeListener: function(fn) {
+                this._listeners = this._listeners.filter(function(l) { return l !== fn; });
+            },
+            hasListener: function(fn) { return this._listeners.indexOf(fn) !== -1; }
+        },
+        getURL: function(path) { return 'chrome-extension://lumen-extension/' + path; },
+        getManifest: function() { return { name: '', version: '0', manifest_version: 3 }; }
+    };
+    if (typeof globalThis !== 'undefined') {
+        globalThis.chrome = { runtime: _rt };
+        globalThis.browser = { runtime: _rt };
+    }
+    if (typeof window !== 'undefined') {
+        window.chrome = { runtime: _rt };
+        window.browser = { runtime: _rt };
+    }
+})();
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -19125,5 +19164,59 @@ mod tests {
             "#,
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::String("QuotaExceededError".into()));
+    }
+
+    // ── D-6: chrome.runtime stub tests ───────────────────────────────────────
+
+    #[test]
+    fn chrome_runtime_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn chrome_runtime_send_message_is_function() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof chrome.runtime.sendMessage").unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn chrome_runtime_send_message_does_not_throw() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var ok = false;
+            try { chrome.runtime.sendMessage({type: 'test'}); ok = true; } catch(e) {}
+            ok
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn chrome_runtime_on_message_add_listener() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var called = false;
+            chrome.runtime.onMessage.addListener(function(msg) { called = true; });
+            chrome.runtime.onMessage._listeners.length === 1
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn browser_runtime_alias_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof browser !== 'undefined' && typeof browser.runtime !== 'undefined'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn chrome_runtime_get_url() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("chrome.runtime.getURL('icons/icon.png')").unwrap();
+        assert_eq!(v, lumen_core::JsValue::String(
+            "chrome-extension://lumen-extension/icons/icon.png".into()
+        ));
     }
 }
