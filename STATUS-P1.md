@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+E-4: WebSerial API stub  branch: p1-e4-webserial
+Next step: создать crates/js/src/serial.rs, добавить в lib.rs
 
 ---
 
