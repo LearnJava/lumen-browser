@@ -6,7 +6,22 @@
 
 ## In progress
 
-*(свободен)*
+E-1: HTML5 Drag and Drop API  branch: p1-drag-drop
+Next step: DataTransfer + DataTransferItem + DataTransferItemList JS classes + DragEvent wiring  crates/js/src/dom.rs
+
+---
+
+## Next
+
+### E — Phase 2 Web APIs (продолжение)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| E-1 | **HTML5 Drag and Drop API** — HTML LS §9.10: `DataTransfer` (setData/getData/clearData/types/items/files/effectAllowed/dropEffect), `DataTransferItem` (kind/type/getAsString/getAsFile), `DataTransferItemList` (add/remove/clear/length). Подключение к существующему `DragEvent`. `draggable` атрибут. Нативный биндинг `_lumen_dispatch_drag_event` для shell-интеграции Phase 1. 9 тестов. | M | `lumen-js` |
+| E-2 | **Performance Resource Timing Level 2** — W3C Resource Timing §4: `PerformanceResourceTiming` entry (fetchStart/domainLookupStart/connectStart/requestStart/responseStart/responseEnd/duration=0 Phase 0). `performance.getEntriesByType('resource')` возвращает эти записи. `_lumen_record_resource_timing(url, initiator, start_ms, duration_ms)` нативный биндинг. 6 тестов. | M | `lumen-js`, `lumen-network` |
+| E-3 | **MediaRecorder API stub** — W3C MediaStream Recording L2 Phase 0: `new MediaRecorder(stream, opts?)`, `.start(timeslice?)/.stop()/.pause()/.resume()`, `.state` (inactive/recording/paused), `.mimeType`, `ondataavailable` (fires с пустым Blob при stop), `onstop/onerror/onstart/onpause/onresume`. `BlobEvent` класс. `MediaRecorder.isTypeSupported() → false`. 7 тестов. | S | `lumen-js` |
+| E-4 | **WebSerial API stub** — W3C Serial API L1 Phase 0: `navigator.serial.requestPort({filters?})` → reject NotSupportedError, `navigator.serial.getPorts()` → Promise<[]>. `SerialPort` stub (open/close/read/write → reject). 4 теста. | XS | `lumen-js` |
+| E-5 | **Compute Pressure API stub** — W3C Compute Pressure L1 Phase 0: `new PressureObserver(callback)`, `.observe('cpu')/.unobserve('cpu')/.disconnect()`. `PressureRecord {source, state:'nominal', time}` класс. `PressureObserver.knownSources() → ['cpu']`. 5 тестов. | XS | `lumen-js` |
 
 ---
 
