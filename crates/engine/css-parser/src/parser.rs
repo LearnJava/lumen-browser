@@ -661,6 +661,28 @@ pub struct Stylesheet {
     /// Условие хранится как сырая строка (типизация query — отложена,
     /// нужна полная media-query-like grammar для container features).
     pub container_rules: Vec<ContainerRule>,
+    /// CSS Fonts L4 §13 — `@font-palette-values --name { ... }`. Phase 0:
+    /// parse+store. Matching against `font-palette` property and CPAL index
+    /// resolution happen in layout (`resolve_font_palette_for_family`).
+    pub font_palette_values: Vec<FontPaletteValuesRule>,
+}
+
+/// `@font-palette-values --name { font-family: ...; base-palette: N; override-colors: ... }`
+/// CSS Fonts L4 §13. Defines a named custom color palette for a COLR color font.
+/// Matched against an element's `font-palette` property value to resolve which
+/// palette overrides apply at render time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FontPaletteValuesRule {
+    /// Dashed-ident name, e.g. `--my-palette`. Used to match `font-palette` property values.
+    pub name: String,
+    /// `font-family` descriptor — the font family this palette applies to (without quotes).
+    pub font_family: Option<String>,
+    /// `base-palette` descriptor — 0-based index of the built-in CPAL palette to start from.
+    /// None means start from palette index 0 (the default palette).
+    pub base_palette: Option<u16>,
+    /// `override-colors` descriptor — raw `"<index> <color>"` pairs as strings.
+    /// Stored raw for layout-side parsing via `parse_color`. Each entry is `(index, color_str)`.
+    pub override_colors: Vec<(u16, String)>,
 }
 
 /// `@container <name>? <condition> { rules }` — CSS Containment L3 §3.
@@ -1075,6 +1097,7 @@ enum AtRuleOutcome {
     Media(MediaRule),
     Import(ImportRule),
     FontFace(FontFaceRule),
+    FontPaletteValues(FontPaletteValuesRule),
     LayerNames(Vec<String>),
     LayerBlock {
         name: Option<String>,
@@ -1235,6 +1258,30 @@ pub fn parse_supports_condition(s: &str) -> SupportsCondition {
     if pos < bytes.len() {
         // Если что-то осталось — это синтаксическая ошибка; возвращаем
         // частично разобранное (lenient).
+    }
+    result
+}
+
+/// Парсит значение `override-colors` из `@font-palette-values`.
+/// Формат: comma-separated `<u16-index> <color-string>` пары.
+/// CSS Fonts L4 §13.3. Хранит color как raw string — resolve через
+/// `parse_color` выполняется в layout при использовании palette.
+fn parse_override_colors(s: &str) -> Vec<(u16, String)> {
+    let mut result = Vec::new();
+    for pair in s.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let mut parts = pair.splitn(2, char::is_whitespace);
+        if let (Some(idx_str), Some(color_str)) = (parts.next(), parts.next())
+            && let Ok(idx) = idx_str.trim().parse::<u16>()
+        {
+            let color = color_str.trim().to_string();
+            if !color.is_empty() {
+                result.push((idx, color));
+            }
+        }
     }
     result
 }
@@ -1637,6 +1684,7 @@ impl<'a> Parser<'a> {
         let mut media_rules = Vec::new();
         let mut imports = Vec::new();
         let mut font_faces = Vec::new();
+        let mut font_palette_values: Vec<FontPaletteValuesRule> = Vec::new();
         let mut layer_order: Vec<String> = Vec::new();
         let mut layers: Vec<LayerRule> = Vec::new();
         let mut supports_rules: Vec<SupportsRule> = Vec::new();
@@ -1656,6 +1704,7 @@ impl<'a> Parser<'a> {
                     AtRuleOutcome::Media(m) => media_rules.push(m),
                     AtRuleOutcome::Import(i) => imports.push(i),
                     AtRuleOutcome::FontFace(f) => font_faces.push(f),
+                    AtRuleOutcome::FontPaletteValues(fp) => font_palette_values.push(fp),
                     AtRuleOutcome::LayerNames(names) => {
                         for n in names {
                             if !layer_order.iter().any(|e| e == &n) {
@@ -1730,6 +1779,7 @@ impl<'a> Parser<'a> {
             media_rules,
             imports,
             font_faces,
+            font_palette_values,
             layer_order,
             layers,
             supports_rules,
@@ -1763,6 +1813,11 @@ impl<'a> Parser<'a> {
             return self
                 .parse_font_face_body()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::FontFace);
+        }
+        if name.eq_ignore_ascii_case("font-palette-values") {
+            return self
+                .parse_font_palette_values_body()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::FontPaletteValues);
         }
         if name.eq_ignore_ascii_case("layer") {
             return self.parse_layer_at_rule();
@@ -1941,6 +1996,55 @@ impl<'a> Parser<'a> {
             variant,
             feature_settings,
             variation_settings,
+        })
+    }
+
+    /// Парсит `@font-palette-values --name { font-family: …; base-palette: N; override-colors: … }`.
+    /// CSS Fonts L4 §13. Prelude — dashed-ident (e.g. `--cool`). Block contains
+    /// descriptors: `font-family`, `base-palette` (u16 index), `override-colors`
+    /// (comma-separated `<index> <color>` pairs). Returns `None` if the
+    /// name is missing or no `{` follows.
+    fn parse_font_palette_values_body(&mut self) -> Option<FontPaletteValuesRule> {
+        self.skip_ws_and_comments();
+        // Prelude: dashed-ident starting with '--'
+        let name = self.parse_ident()?;
+        if !name.starts_with("--") {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '{'
+        let declarations = self.parse_declaration_block();
+
+        let mut font_family: Option<String> = None;
+        let mut base_palette: Option<u16> = None;
+        let mut override_colors: Vec<(u16, String)> = Vec::new();
+
+        for d in &declarations {
+            match d.property.to_ascii_lowercase().as_str() {
+                "font-family" => {
+                    let v = d.value.trim();
+                    font_family =
+                        Some(strip_css_string(v).map_or_else(|| v.to_string(), str::to_string));
+                }
+                "base-palette" => {
+                    base_palette = d.value.trim().parse::<u16>().ok();
+                }
+                "override-colors" => {
+                    override_colors = parse_override_colors(d.value.trim());
+                }
+                _ => {}
+            }
+        }
+        Some(FontPaletteValuesRule {
+            name,
+            font_family,
+            base_palette,
+            override_colors,
         })
     }
 
@@ -6749,5 +6853,60 @@ mod tests {
             }
             _ => panic!("Expected Highlight pseudo-element, got {:?}", sel.head.parts[1]),
         }
+    }
+
+    // ── @font-palette-values tests ──────────────────────────────────────────
+
+    #[test]
+    fn font_palette_values_basic() {
+        let s = parse(r#"@font-palette-values --warm { font-family: "Bungee Spore"; base-palette: 0; }"#);
+        assert_eq!(s.font_palette_values.len(), 1);
+        let fp = &s.font_palette_values[0];
+        assert_eq!(fp.name, "--warm");
+        assert_eq!(fp.font_family.as_deref(), Some("Bungee Spore"));
+        assert_eq!(fp.base_palette, Some(0));
+        assert!(fp.override_colors.is_empty());
+    }
+
+    #[test]
+    fn font_palette_values_override_colors() {
+        let s = parse("@font-palette-values --cool { override-colors: 0 #ff0000, 1 #00ff00; }");
+        let fp = &s.font_palette_values[0];
+        assert_eq!(fp.override_colors.len(), 2);
+        assert_eq!(fp.override_colors[0], (0, "#ff0000".to_string()));
+        assert_eq!(fp.override_colors[1], (1, "#00ff00".to_string()));
+    }
+
+    #[test]
+    fn font_palette_values_multiple_rules() {
+        let s = parse(
+            "@font-palette-values --a { base-palette: 1; } @font-palette-values --b { base-palette: 2; }",
+        );
+        assert_eq!(s.font_palette_values.len(), 2);
+        assert_eq!(s.font_palette_values[0].name, "--a");
+        assert_eq!(s.font_palette_values[1].name, "--b");
+    }
+
+    #[test]
+    fn font_palette_values_no_double_dash_ignored() {
+        // Prelude without '--' is invalid per CSS Fonts L4 §13 — treated as unknown.
+        let s = parse("@font-palette-values myname { base-palette: 0; }");
+        assert!(s.font_palette_values.is_empty());
+    }
+
+    #[test]
+    fn font_palette_values_base_palette_none_when_absent() {
+        let s = parse("@font-palette-values --x { font-family: F; }");
+        assert_eq!(s.font_palette_values[0].base_palette, None);
+    }
+
+    #[test]
+    fn font_palette_values_coexists_with_other_rules() {
+        let s = parse(
+            r#"div { color: red; } @font-palette-values --p { base-palette: 3; } p { margin: 0; }"#,
+        );
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.font_palette_values.len(), 1);
+        assert_eq!(s.font_palette_values[0].base_palette, Some(3));
     }
 }
