@@ -6,12 +6,18 @@
 
 ## In progress
 
-**F-1 | CSS text-align-last rendering**  branch: p2-f1-text-align-last
-Next step: modify `align_lines` in `box_tree.rs` to handle last-line alignment via `text_align_last`  `crates/engine/layout/src/box_tree.rs:6478`
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**F-1 | CSS text-align-last rendering** ✅ 2026-06-07 (merged)
+- `align_lines()` расширен параметром `text_align_last: TextAlignLast`
+- Последняя строка блока выравнивается по `text-align-last`: Left/Right/Center/Start/End
+- `Auto` → то же что `text-align`; `Justify` → Start (word-spacing justification не реализован)
+- Start/End разрешаются в физические Left/Right с учётом direction (LTR/RTL)
+- 4 новых теста: center/right/auto/end (итого 2374 ✅ lumen-layout), Clippy чист
 
 **E-5 | CSS Gap Decorations L1 stub** ✅ 2026-06-07 (merged)
 - `GapDecorationContext {rule_width, rule_style, rule_color}` — параметры рендера gap rules
