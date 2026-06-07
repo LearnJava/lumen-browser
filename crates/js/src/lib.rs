@@ -55,6 +55,7 @@ pub mod screen_orientation;
 pub mod scroll_snap_events;
 pub mod sri;
 pub mod media_stream_recording;
+pub mod serial;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -489,6 +490,13 @@ impl QuickJsRuntime {
             // operations reject with NotSupportedError (no BLE support).
             if let Err(e) = bluetooth::install_bluetooth_bindings(&ctx) {
                 eprintln!("Bluetooth bindings init failed: {}", e);
+            }
+
+            // Install WebSerial API (W3C Serial API L1) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: requestPort()
+            // rejects NotSupportedError; getPorts() returns [].
+            if let Err(e) = serial::install_serial_bindings(&ctx) {
+                eprintln!("WebSerial bindings init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
