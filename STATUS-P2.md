@@ -6,12 +6,19 @@
 
 ## In progress
 
-**C-4 | Fetch SRI integrity check**  branch: p2-c4-sri
-Next step: add lumen-js/src/sri.rs + _lumen_check_sri_integrity binding + JS fetch() wiring
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**C-4 | Fetch SRI integrity check** ✅ 2026-06-07 (merged)
+- `sri.rs`: `parse_integrity_metadata()`, `check_sri()` — sha256/384/512 + неизвестные алгоритмы пропускаются
+- при нескольких токенах проверяется только сильнейший алгоритм (spec §3.3.5)
+- `dom.rs`: `_lumen_check_sri_integrity(integrity)` binding — читает тело из FetchCache
+- JS `fetch()`: SRI проверка после `_lumen_fetch_get_body()` → `TypeError` при несовпадении
+- 6 unit-тестов: sha256 match/mismatch, sha384/sha512 match, unknown algo, multiple hashes
+- lumen-js: 1291 тест + 6 новых SRI ✅, Clippy чист
 
 **C-3 | WebSocket permessage-deflate** ✅ 2026-06-07 (merged)
 - `websocket/deflate.rs`: compress_message()/decompress_message() raw DEFLATE (no_context_takeover)
@@ -157,8 +164,8 @@ Ordered by priority. Сгруппированы по домену.
 |---|--------|--------|--------|
 | ~~C-1~~ | ~~**HTTP Cache RFC 7234**~~ — **выполнено** | L | `lumen-network` |
 | ~~C-2~~ | ~~**HTTP Cache disk persistence**~~ — **выполнено** | M | `lumen-network` |
-| C-3 | **WebSocket permessage-deflate** *(Фаза 1)* — `Sec-WebSocket-Extensions: permessage-deflate` в handshake, parse server response, `flate2::Decompress` для входящих кадров, `flate2::Compress` для исходящих (`WebSocket.compress` opt-in). 6 тестов. | M | `lumen-network` |
-| C-4 | **Fetch SRI integrity check** *(Фаза 1)* — `fetch(url, {integrity: 'sha256-BASE64'})` → после получения ответа SHA-256/384/512 тела (dep `sha2` уже есть) → сравнение с base64-decoded ожидаемым → reject TypeError при несовпадении. `parse_integrity_metadata()`. 6 тестов. | S | `lumen-js`, `lumen-network` |
+| ~~C-3~~ | ~~**WebSocket permessage-deflate**~~ — **выполнено** | M | `lumen-network` |
+| ~~C-4~~ | ~~**Fetch SRI integrity check**~~ — **выполнено** | S | `lumen-js` |
 | C-5 | **Multi-tab IndexedDB per-origin SQLite** *(Фаза 2)* — `IdbStore::for_origin(origin_key)`: `origin_key = sha256_hex(eTLD+1)[:16]`, отдельный файл `~/.config/lumen/idb/{key}.db` на origin, `IdbStore::open_or_create(path)`, shell выбирает store по URL в `parse_and_layout`. 8 тестов. | M | `lumen-storage`, `lumen-shell` |
 
 ### D — Производительность
