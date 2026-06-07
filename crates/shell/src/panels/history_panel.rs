@@ -22,6 +22,7 @@
 //! State lives on `Lumen`. [`hit_test`] classifies clicks; [`build_panel`] renders.
 //! Data is loaded from `lumen_storage::History` on every open / delete / search.
 
+use std::cmp::Reverse;
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
@@ -192,7 +193,7 @@ impl HistoryPanel {
 /// Build the display row list: insert date-group headers between entries.
 fn build_rows(mut items: Vec<HistoryItem>) -> Vec<HistoryRow> {
     // Items come in newest-first order from the DB.
-    items.sort_by(|a, b| b.visit_date.cmp(&a.visit_date));
+    items.sort_by_key(|a| Reverse(a.visit_date));
 
     let now_secs = now_unix_secs();
     let mut rows: Vec<HistoryRow> = Vec::with_capacity(items.len() * 2);
@@ -422,7 +423,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
                         ));
                     }
                     HistoryRow::Entry(item) => {
-                        let row_bg = if entry_idx % 2 == 0 { ROW_EVEN } else { ROW_ODD };
+                        let row_bg = if entry_idx.is_multiple_of(2) { ROW_EVEN } else { ROW_ODD };
                         let row_bg = if panel.hover_row == Some(entry_idx) {
                             ROW_HOVER_BG
                         } else {

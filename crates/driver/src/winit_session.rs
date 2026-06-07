@@ -938,6 +938,7 @@ impl WinitSession {
         }
     }
 
+    #[allow(dead_code)]
     fn deliver_lcp_entry(
         &mut self,
         _element_id: i32,
@@ -945,12 +946,11 @@ impl WinitSession {
         _start_ms: f64,
         _render_time_ms: f64,
     ) -> crate::Result<()> {
-        // Phase 4: headless driver doesn't support JS delivery
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn deliver_layout_shift(&mut self, _value: f64, _session_id: u32, _had_input: bool) -> crate::Result<()> {
-        // Phase 4: headless driver doesn't support JS delivery
         Ok(())
     }
 }

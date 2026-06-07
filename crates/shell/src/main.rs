@@ -439,6 +439,9 @@ fn run_window_mode(
             &network_log,
         )),
         privacy: panels::privacy_panel::PrivacyPanel::new(network_log),
+        a11y_store: lumen_storage::A11yPrefs::open_in_memory()
+            .expect("a11y_prefs in-memory"),
+        a11y_panel: panels::a11y_panel::A11yPanel::new(),
         settings_store: lumen_storage::BrowserSettings::open_in_memory()
             .expect("settings in-memory"),
         settings_panel: panels::settings_panel::SettingsPanel::new(),
@@ -1112,9 +1115,9 @@ pub(crate) trait PersistentJs {
     ///
     /// Must be called after `update_viewport_size` so JS reads consistent
     /// dimensions. Shell calls it after every `relayout_page` and any
-    /// `prefers-color-scheme` toggle.
+    /// `prefers-color-scheme` or `prefers-reduced-motion` toggle.
     #[allow(dead_code)]
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool);
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool);
     /// Poll all live `WebSocket` instances and deliver queued events to JS.
     ///
     /// Must be called on every event-loop step so that `onopen`/`onmessage`/
@@ -1321,11 +1324,11 @@ impl PersistentJs for QuickPersistentJs {
     fn notify_window_loaded(&self) {
         self.rt.notify_window_loaded();
     }
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool) {
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool) {
         let dark = if prefers_dark { "true" } else { "false" };
-        // prefers_reduced_motion: shell doesn't yet expose this preference, hard-coded false.
+        let rm = if reduced_motion { "true" } else { "false" };
         self.eval_js(&format!(
-            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},false);"
+            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},{rm});"
         ));
     }
     fn pump_websockets(&self) {
@@ -1767,6 +1770,8 @@ enum KeyCommand {
     ToggleCookieBannerDismiss,
     /// Показать/скрыть правую боковую панель (Ctrl+Shift+A, 7D.3).
     ToggleSidebar,
+    /// Открыть/закрыть панель настроек доступности (Ctrl+Shift+Q, E-2).
+    ToggleA11y,
     /// Показать/скрыть менеджер закладок (Ctrl+Shift+O, task #22).
     ToggleBookmarks,
     /// Показать/скрыть панель истории браузера (Ctrl+H, task D-5).
@@ -1925,6 +1930,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+V — toggle picture-in-picture video window (task #21)
         KeyCode::KeyV if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::TogglePip)
+        }
+        // Ctrl+Shift+Q — toggle accessibility settings panel (E-2)
+        KeyCode::KeyQ if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleA11y)
         }
         // Ctrl+Shift+R — toggle Read-later panel (§12.3)
         KeyCode::KeyR if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
@@ -3871,6 +3880,17 @@ struct Lumen {
     ///
     /// [`network_panel`]: Lumen::network_panel
     privacy: panels::privacy_panel::PrivacyPanel,
+    /// Persistent accessibility preferences store (task E-2).
+    ///
+    /// Backed by SQLite (in-memory for the session). Stores font-size
+    /// multiplier, prefers-reduced-motion, forced-colors, and cursor size.
+    /// Read on panel open; written when panel closes.
+    a11y_store: lumen_storage::A11yPrefs,
+    /// Accessibility settings panel overlay (task E-2, `Ctrl+Shift+Q`).
+    ///
+    /// A centred 300×260 px modal. Holds a working draft; on close the draft
+    /// is persisted to `a11y_store` and media changes are re-delivered to JS.
+    a11y_panel: panels::a11y_panel::A11yPanel,
     /// Persistent browser settings store (task D-7).
     ///
     /// Backed by SQLite (in-memory for the session). Stores homepage, search
@@ -3998,7 +4018,7 @@ impl Lumen {
         // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
         let meta_scale = meta_initial_scale(src);
         let (css_w, css_h) =
-            zoom::effective_viewport(vp_size.width as f32, vp_size.height as f32, meta_scale, self.zoom_factor);
+            zoom::effective_viewport(vp_size.width, vp_size.height, meta_scale, self.zoom_factor);
         let viewport = Size::new(css_w, css_h);
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
@@ -4049,7 +4069,7 @@ impl Lumen {
                 // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                 // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
                 // read from winit at window creation / refreshed on ThemeChanged.
-                js.deliver_media_query_changes(viewport.width, viewport.height, self.dark_mode);
+                js.deliver_media_query_changes(viewport.width, viewport.height, self.dark_mode, self.a11y_store.reduced_motion());
                 // After fresh rects are in JS: fire lazy-load proximity check.
                 // Images that entered the viewport+margin are queued by JS via
                 // _lumen_request_lazy_image_load; we drain and fetch them below.
@@ -4231,7 +4251,7 @@ impl Lumen {
                 || Size::new(1024.0, 720.0),
                 |r| {
                     let s = r.viewport_size();
-                    Size::new(s.width as f32, s.height as f32)
+                    Size::new(s.width, s.height)
                 },
             );
             let ls_store = self.source.origin_str().map(|o| {
@@ -4361,7 +4381,7 @@ impl Lumen {
             || Size::new(1024.0, 720.0),
             |r| {
                 let s = r.viewport_size();
-                Size::new(s.width as f32, s.height as f32)
+                Size::new(s.width, s.height)
             },
         );
 
@@ -4460,7 +4480,7 @@ impl Lumen {
     fn paint_partial_dom(&mut self, doc: &lumen_dom::Document) {
         let Some(renderer) = self.renderer.as_ref() else { return };
         let vp_size = renderer.viewport_size();
-        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        let viewport = Size::new(vp_size.width, vp_size.height);
 
         let font = match lumen_font::Font::parse(INTER_FONT) {
             Ok(f) => f,
@@ -4711,7 +4731,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     || Size::new(1024.0, 720.0),
                     |r| {
                         let s = r.viewport_size();
-                        Size::new(s.width as f32, s.height as f32)
+                        Size::new(s.width, s.height)
                     },
                 );
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
@@ -5281,7 +5301,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     };
                 }
                 // B-7: Active resize — update element width/height as mouse moves.
-                // Calculate delta and call JS binding to update style.
+                #[cfg(feature = "quickjs")]
                 if let Some((node_id, start_x, start_y)) = self.resize_active {
                     let dpr = self
                         .renderer
@@ -5292,18 +5312,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let y_css = (position.y as f32) / dpr;
                     let delta_x = x_css - start_x;
                     let delta_y = y_css - start_y;
-
-                    // Update the element's width and height via JS binding.
-                    // The binding `_lumen_apply_resize(node_id, delta_x, delta_y)` will
-                    // modify the inline style of the element.
-                    #[cfg(feature = "quickjs")]
-                    {
-                        let nid_u32 = node_id.index() as u32;
-                        self.eval_js(&format!(
-                            "_lumen_apply_resize({}, {}, {});",
-                            nid_u32, delta_x, delta_y
-                        ));
-                    }
+                    let nid_u32 = node_id.index() as u32;
+                    self.eval_js(&format!(
+                        "_lumen_apply_resize({}, {}, {});",
+                        nid_u32, delta_x, delta_y
+                    ));
                     self.request_redraw();
                 }
             }
@@ -5386,13 +5399,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     // B-7: Check if click is on resize grip of any element in layout tree.
                     // If so, activate resize mode. This must be checked before other UI panels.
-                    if let Some(ref layout_box) = self.layout_box {
-                        if let Some(nid) = self.find_resize_grip_node(layout_box, x_css, y_css) {
+                    if let Some(ref layout_box) = self.layout_box
+                        && let Some(nid) = self.find_resize_grip_node(layout_box, x_css, y_css) {
                             self.resize_active = Some((nid, x_css, y_css));
                             self.request_redraw();
                             return;
                         }
-                    }
 
                     // Command palette (task #23): modal — captures every click.
                     // A click on a row activates it; a click on the scrim closes.
@@ -5794,6 +5806,49 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // Accessibility settings panel (E-2): centred overlay.
+                    if self.a11y_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        use panels::a11y_panel::A11yHit;
+                        let hit = panels::a11y_panel::hit_test(
+                            &self.a11y_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        );
+                        match hit {
+                            A11yHit::Close => {
+                                let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                                self.a11y_panel.visible = false;
+                                self.deliver_a11y_media_changes();
+                            }
+                            A11yHit::FontMultiplier(v) => {
+                                self.a11y_panel.draft.font_size_multiplier = v as f64;
+                            }
+                            A11yHit::ReducedMotion => {
+                                self.a11y_panel.draft.reduced_motion =
+                                    !self.a11y_panel.draft.reduced_motion;
+                            }
+                            A11yHit::ForcedColors => {
+                                self.a11y_panel.draft.forced_colors =
+                                    !self.a11y_panel.draft.forced_colors;
+                            }
+                            A11yHit::CursorSizeOption(size) => {
+                                self.a11y_panel.draft.cursor_size = size;
+                            }
+                            A11yHit::Inside => { /* swallow */ }
+                            A11yHit::Outside => {
+                                let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                                self.a11y_panel.visible = false;
+                                self.deliver_a11y_media_changes();
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
                     // Settings panel (task D-7): centred overlay.
                     if self.settings_panel.visible {
                         let win_w = self.viewport_width_css();
@@ -6036,7 +6091,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
                 } else {
-                    // Released — завершаем drag (если он был).
+                    // Released — завершаем drag (если был) и сбрасываем resize.
+                    self.resize_active = None;
                     // CSS :active — clear on release.
                     if self.active_nid.is_some() {
                         self.active_nid = None;
@@ -6073,19 +6129,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // не приходит, поэтому делаем вручную).
                     self.update_cursor_icon();
                 }
-            }
-            // B-7 Phase 1: Handle mouse release to clear resize state.
-            // This is separate from the MouseInput Pressed block above.
-            WindowEvent::MouseInput { state: ref state2, button: ref button2, .. } if button2 == &MouseButton::Left && state2 == &ElementState::Released => {
-                // Clear resize_active on mouse release.
-                self.resize_active = None;
-                // Clear :active pseudo-class if set.
-                if self.active_nid.is_some() {
-                    self.active_nid = None;
-                    self.relayout();
-                    self.request_redraw();
-                }
-                self.update_cursor_icon();
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 // Privacy network panel intercepts the wheel while visible:
@@ -6723,6 +6766,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut bm_cmds);
                 }
 
+                // Accessibility settings panel (E-2): centred overlay, Ctrl+Shift+Q.
+                if self.a11y_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let win_size = (win_w as u32, win_h as u32);
+                    let mut a11y_cmds =
+                        panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size);
+                    overlay_buf.append(&mut a11y_cmds);
+                }
+
                 // Settings panel (task D-7): centred overlay, Ctrl+, or about:settings.
                 if self.settings_panel.visible {
                     let win_w = self.viewport_width_css();
@@ -6766,8 +6819,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         tabs::strip::build_tab_bar(&self.tab_strip, tab_area_w);
                     overlay_buf.append(&mut tab_cmds);
                     // Tab tier tooltip on hover.
-                    if let Some(idx) = self.hovered_tab_idx {
-                        if let Some(tab) = self.tab_strip.tabs.get(idx) {
+                    if let Some(idx) = self.hovered_tab_idx
+                        && let Some(tab) = self.tab_strip.tabs.get(idx) {
                             let tab_w = tab_area_w / self.tab_strip.tabs.len().max(1) as f32;
                             let tab_center_x = (idx as f32 + 0.5) * tab_w;
                             if let Some(mut tooltip_cmds) = tabs::strip::build_tab_tooltip(
@@ -6778,7 +6831,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 overlay_buf.append(&mut tooltip_cmds);
                             }
                         }
-                    }
                     // Archive toolbar button (rightmost 36 px of tab bar).
                     let mut arch_btn = tabs::archive::build_button(
                         &self.archive,
@@ -7751,6 +7803,17 @@ impl Lumen {
                 }
                 self.request_redraw();
             }
+            KeyCommand::ToggleA11y => {
+                if self.a11y_panel.visible {
+                    let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                    self.a11y_panel.visible = false;
+                    self.deliver_a11y_media_changes();
+                } else {
+                    self.a11y_panel.load_draft(self.a11y_store.snapshot());
+                    self.a11y_panel.visible = true;
+                }
+                self.request_redraw();
+            }
             KeyCommand::ToggleSettings => {
                 let snap = self.settings_store.snapshot();
                 if self.settings_panel.visible {
@@ -7842,6 +7905,23 @@ impl Lumen {
     /// layout for the first `<video>` element and embeds its `src` / `poster`;
     /// if the page has no video, the card opens with a placeholder so the user
     /// still gets feedback (and can drag / close it).
+    /// Re-deliver media query changes to JS after accessibility prefs change.
+    ///
+    /// Called when the a11y panel closes so `prefers-reduced-motion` MQLs fire.
+    fn deliver_a11y_media_changes(&self) {
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let w = self.viewport_width_css();
+            let h = self.viewport_height_css();
+            let dark = if self.dark_mode { "true" } else { "false" };
+            let rm = if self.a11y_store.reduced_motion() { "true" } else { "false" };
+            js.eval_js(&format!(
+                "if(typeof _lumen_deliver_media_changes==='function')\
+                 _lumen_deliver_media_changes({w},{h},{dark},{rm});"
+            ));
+        }
+    }
+
     fn toggle_pip(&mut self) {
         if self.pip.active {
             self.pip.close();
@@ -8420,8 +8500,8 @@ impl Lumen {
                 true
             }
             _ => {
-                if self.history_panel.search_active {
-                    if let Some(text) = key_event.text.as_ref()
+                if self.history_panel.search_active
+                    && let Some(text) = key_event.text.as_ref()
                         && !text.is_empty()
                         && !text.chars().any(char::is_control)
                     {
@@ -8432,7 +8512,6 @@ impl Lumen {
                         self.request_redraw();
                         return true;
                     }
-                }
                 false
             }
         }
@@ -8460,8 +8539,8 @@ impl Lumen {
                 true
             }
             _ => {
-                if self.settings_panel.focused_input.is_some() {
-                    if let Some(text) = key_event.text.as_ref()
+                if self.settings_panel.focused_input.is_some()
+                    && let Some(text) = key_event.text.as_ref()
                         && !text.is_empty()
                         && !text.chars().any(char::is_control)
                     {
@@ -8471,7 +8550,6 @@ impl Lumen {
                         self.request_redraw();
                         return true;
                     }
-                }
                 false
             }
         }
@@ -9334,7 +9412,7 @@ impl Lumen {
             return;
         };
         let vp_size = renderer.viewport_size();
-        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        let viewport = Size::new(vp_size.width, vp_size.height);
         scroll::decode_gating::discard_offscreen_images(
             &mut self.image_cache,
             root,
@@ -9723,7 +9801,7 @@ impl Lumen {
             || (1024.0_f32, 720.0_f32),
             |r| {
                 let s = r.viewport_size();
-                (s.width as f32, s.height as f32)
+                (s.width, s.height)
             },
         );
         let meta_scale = meta_initial_scale(&layout_source);

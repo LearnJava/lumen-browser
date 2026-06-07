@@ -6381,6 +6381,8 @@ impl Renderer {
     ///
     /// # Errors
     /// Propagates errors from the CPU rasterizer (e.g., invalid display commands).
+    // BUG-066: guard was missing; render_tile uses cpu_raster which requires cpu-render.
+    #[cfg(feature = "cpu-render")]
     pub fn render_tile(
         content: &[crate::DisplayCommand],
         overlay: &[crate::DisplayCommand],

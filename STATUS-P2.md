@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+E-2 | Accessibility settings panel  branch: p2-e2-a11y-panel
+Next step: tests + merge  STATUS-P2.md:12
 
 ---
 
