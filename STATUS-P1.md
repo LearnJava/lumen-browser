@@ -6,13 +6,29 @@
 
 ## In progress
 
-*(свободен)*
+E-2: Performance Resource Timing Level 2  branch: p1-e2-resource-timing
+Next step: clippy + tests → merge  crates/js/src/dom.rs:7155
+
+---
+
+## Next
+
+### E — Phase 2 Web APIs (продолжение)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| ~~E-1~~ | ~~**HTML5 Drag and Drop API**~~ — **выполнено** | M | `lumen-js` |
+| E-2 | **Performance Resource Timing Level 2** — W3C Resource Timing §4: `PerformanceResourceTiming` entry (fetchStart/domainLookupStart/connectStart/requestStart/responseStart/responseEnd/duration=0 Phase 0). `performance.getEntriesByType('resource')` возвращает эти записи. `_lumen_record_resource_timing(url, initiator, start_ms, duration_ms)` нативный биндинг. 6 тестов. | M | `lumen-js`, `lumen-network` |
+| E-3 | **MediaRecorder API stub** — W3C MediaStream Recording L2 Phase 0: `new MediaRecorder(stream, opts?)`, `.start(timeslice?)/.stop()/.pause()/.resume()`, `.state` (inactive/recording/paused), `.mimeType`, `ondataavailable` (fires с пустым Blob при stop), `onstop/onerror/onstart/onpause/onresume`. `BlobEvent` класс. `MediaRecorder.isTypeSupported() → false`. 7 тестов. | S | `lumen-js` |
+| E-4 | **WebSerial API stub** — W3C Serial API L1 Phase 0: `navigator.serial.requestPort({filters?})` → reject NotSupportedError, `navigator.serial.getPorts()` → Promise<[]>. `SerialPort` stub (open/close/read/write → reject). 4 теста. | XS | `lumen-js` |
+| E-5 | **Compute Pressure API stub** — W3C Compute Pressure L1 Phase 0: `new PressureObserver(callback)`, `.observe('cpu')/.unobserve('cpu')/.disconnect()`. `PressureRecord {source, state:'nominal', time}` класс. `PressureObserver.knownSources() → ['cpu']`. 5 тестов. | XS | `lumen-js` |
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | E-1: HTML5 Drag and Drop API | HTML LS §9.10 Phase 0: `DataTransfer` (setData/getData/clearData/types/items/files/effectAllowed/dropEffect/setDragImage no-op). `DataTransferItem` (kind/type/getAsString/getAsFile→null). `DataTransferItemList` (add/remove/clear/length, indexed access через _rebuild_indices, Symbol.iterator). `DragEvent` обновлён: auto-creates DataTransfer. `_lumen_dispatch_drag_event(nid, type, x, y, data_json)` — биндинг для Rust shell Phase 1. Элемент: draggable getter/setter + inline handlers ondragstart/drag/dragend/dragenter/dragover/dragleave/drop. Нормализация 'text'→'text/plain', 'url'→'text/uri-list'. Экспорт window.DataTransfer/DataTransferItem/DataTransferItemList. BUG-070 зафиксирован (document_pip pre-existing). 9 тестов. lumen-js: clippy чист, 1326 тестов (+9 vs 1317). |
 | 2026-06-07 | D-6: Extension system stub | `shell/src/extensions/mod.rs`: `ExtensionManifest {name,version,permissions,content_scripts}`, `ContentScript {matches,js}`, `ExtensionRegistry`. Загрузка из `<config>/lumen/extensions/<id>/manifest.json` (Chrome MV3 JSON, hand-rolled). URL-matching: `<all_urls>`, `*://host/*`, `https://host/*`, `*.host/*`, glob-path. `run_scripts_with_dom`: параметр `extra_scripts &[String]`; content-скрипты инжектируются после inline+module скриптов. Оба call-site (main.rs + hibernate.rs) грузят `ExtensionRegistry::load()`. `chrome.runtime` stub в WEB_API_SHIM: `sendMessage` (fire-and-forget), `onMessage.{addListener,removeListener,hasListener}`, `getURL`, `getManifest`. Алиас `window.browser` (Firefox compat). `_lumen_chrome_runtime_send_message` — нативный no-op биндинг. lumen-shell: clippy чист, 1054 тестов (+11). lumen-js: clippy чист, 1308 тестов (+6). |
 | 2026-06-07 | D-1: Certificate viewer panel | Ctrl+Shift+C overlay 500×440px: `panels/cert_panel.rs` с `CertPanel`, `PanelCertData`, `CertHit` hit-test, `build_panel()` рендеринг (DrawText/FillRect). `lumen_network::CertInfo`: subject CN/Org, issuer CN/Org, not-before/after, SHA-256 fingerprint, SAN list, TLS version; `stub_for()` Phase 0. `KeyCommand::ToggleCert` + `Ctrl+Shift+C`. Per-tab `cert_info: Option<PanelCertData>` в `PageSnapshot` (сохранение/восстановление при переключении вкладок). Wheel scroll. lumen-shell: clippy чист, 1043 тестов (+32). |
 | 2026-06-07 | D-4: Keyboard shortcuts settings panel | Ctrl+Shift+/ overlay 360×500px: `lumen_storage::KeyboardShortcuts` SQLite (command/modifier/key), 10 unit-тестов. `panels/shortcuts_panel.rs`: 30 команд со стандартными байндингами, click→rebind mode (accept_rebind/cancel_rebind), scroll wheel, hit-test. `KeyCommand::ToggleShortcuts` + `handle_shortcuts_key`. Загрузка overrides при старте. 12 unit-тестов. lumen-storage: 543 тестов, lumen-shell: 1011 тестов. |
