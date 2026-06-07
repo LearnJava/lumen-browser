@@ -64,7 +64,7 @@ pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
 pub use tls::{
-    TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
+    CertInfo, TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
     ChromeJa3Snapshot, JA4ChromeSnapshot, http_to_tls_profile,
 };
 pub use cors::{

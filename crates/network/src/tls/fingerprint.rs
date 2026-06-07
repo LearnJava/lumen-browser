@@ -106,6 +106,59 @@ pub const CHROME_130_SIG_ALGORITHMS: &[u16] = &[
     0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601, 0x0201,
 ];
 
+// ── CertInfo ─────────────────────────────────────────────────────────────────
+
+/// X.509 certificate information extracted after a TLS handshake.
+///
+/// Phase 0: populated from stub data when no real cert is available.
+/// Phase 1: filled from `rustls::Certificate` ASN.1 parsing.
+#[derive(Debug, Clone, Default)]
+pub struct CertInfo {
+    /// Common Name from the certificate Subject field (e.g. `"example.com"`).
+    pub subject_cn: String,
+    /// Organisation name from the certificate Subject field.
+    pub subject_org: String,
+    /// Common Name from the Issuer field (e.g. `"Let's Encrypt Authority X3"`).
+    pub issuer_cn: String,
+    /// Organisation name from the Issuer field.
+    pub issuer_org: String,
+    /// Certificate validity start in ISO 8601 format (e.g. `"2025-01-01T00:00:00Z"`).
+    pub not_before: String,
+    /// Certificate validity end in ISO 8601 format (e.g. `"2026-01-01T00:00:00Z"`).
+    pub not_after: String,
+    /// Hex-formatted SHA-256 fingerprint of the DER-encoded certificate,
+    /// bytes separated by colons (e.g. `"AA:BB:CC:…"`). Empty if unavailable.
+    pub fingerprint_sha256: String,
+    /// Subject Alternative Names (DNS names only) listed in the SAN extension.
+    pub san_list: Vec<String>,
+    /// Human-readable TLS protocol version string (e.g. `"TLS 1.3"`, `"TLS 1.2"`).
+    pub tls_version: String,
+}
+
+impl CertInfo {
+    /// Return `true` when the cert info was populated (subject_cn is non-empty).
+    pub fn is_populated(&self) -> bool {
+        !self.subject_cn.is_empty()
+    }
+
+    /// Build a stub `CertInfo` for a given hostname (Phase 0 placeholder).
+    ///
+    /// Used when a real certificate is not yet extractable from rustls.
+    pub fn stub_for(host: &str, tls_version: &str) -> Self {
+        Self {
+            subject_cn: host.to_owned(),
+            subject_org: String::new(),
+            issuer_cn: String::from("(unavailable in Phase 0)"),
+            issuer_org: String::new(),
+            not_before: String::new(),
+            not_after: String::new(),
+            fingerprint_sha256: String::new(),
+            san_list: vec![host.to_owned()],
+            tls_version: tls_version.to_owned(),
+        }
+    }
+}
+
 // ── TlsHandshakeInfo ─────────────────────────────────────────────────────────
 
 /// TLS handshake parameters extracted from a ClientHello for fingerprinting.
