@@ -53,6 +53,7 @@ pub mod trusted_types;
 pub mod sanitizer;
 pub mod screen_orientation;
 pub mod scroll_snap_events;
+pub mod sri;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;

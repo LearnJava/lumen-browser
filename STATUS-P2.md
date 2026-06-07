@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**C-4 | Fetch SRI integrity check**  branch: p2-c4-sri
+Next step: add lumen-js/src/sri.rs + _lumen_check_sri_integrity binding + JS fetch() wiring
 
 ---
 
