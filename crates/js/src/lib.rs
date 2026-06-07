@@ -60,6 +60,7 @@ pub mod compute_pressure;
 pub mod csp;
 pub mod permissions_policy;
 pub mod web_codecs;
+pub mod ua_client_hints;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -527,6 +528,12 @@ impl QuickJsRuntime {
             // AudioDecoder/AudioEncoder constructors + state machine. isConfigSupported() → false.
             if let Err(e) = web_codecs::install_web_codecs(&ctx) {
                 eprintln!("Web Codecs API init failed: {}", e);
+            }
+
+            // Install User-Agent Client Hints (W3C UA-CH §4–6) — after navigator shim.
+            // Phase 0: navigator.userAgentData with static Chrome 114 / Windows 10 profile.
+            if let Err(e) = ua_client_hints::install_ua_client_hints_bindings(&ctx) {
+                eprintln!("UA Client Hints init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
