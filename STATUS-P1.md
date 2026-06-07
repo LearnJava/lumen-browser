@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+E-2: Performance Resource Timing Level 2  branch: p1-e2-resource-timing
+Next step: clippy + tests → merge  crates/js/src/dom.rs:7155
 
 ---
 

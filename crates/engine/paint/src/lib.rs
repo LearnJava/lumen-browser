@@ -232,10 +232,10 @@ impl MultiFontMeasurer {
     /// // CSS: font-stretch
     pub fn resolve_font_stretch(&self, families: &[String], stretch_pct: f32) -> Option<f32> {
         for family in families {
-            if let Some(metrics) = self.faces.get(&family.to_ascii_lowercase()) {
-                if let Some((min, max)) = metrics.wdth_axis {
-                    return Some(stretch_pct.clamp(min, max));
-                }
+            if let Some(metrics) = self.faces.get(&family.to_ascii_lowercase())
+                && let Some((min, max)) = metrics.wdth_axis
+            {
+                return Some(stretch_pct.clamp(min, max));
             }
         }
         None
