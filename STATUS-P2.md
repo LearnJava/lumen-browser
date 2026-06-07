@@ -6,12 +6,20 @@
 
 ## In progress
 
-E-2 | Accessibility settings panel  branch: p2-e2-a11y-panel
-Next step: tests + merge  STATUS-P2.md:12
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**E-2 | Accessibility settings panel** ✅ 2026-06-07 (merged)
+- `lumen_storage::A11yPrefs` — SQLite-store: font_size_multiplier (0.8/1/1.25/1.5/2.0), reduced_motion, forced_colors, cursor_size (Normal/Large/ExtraLarge). 6 тестов.
+- `panels/a11y_panel.rs` — центрированная панель 300×260px: pills выбора множителя шрифта, тоггл prefers-reduced-motion → `_lumen_deliver_media_changes`, тоггл forced-colors, pills размера курсора.
+- `Ctrl+Shift+Q` → `ToggleA11y` — открытие/закрытие с сохранением draft в `A11yPrefs` и re-доставкой JS media-changes.
+- `deliver_media_query_changes` расширен 4-м параметром `reduced_motion: bool`.
+- BUG-066 FIXED: `render_tile()` добавлен `#[cfg(feature = "cpu-render")]`.
+- Popутная clippy-чистка pre-existing: unreachable_patterns, unused vars, collapsible_if × 5, vec_init_then_push × 2, sort_by_key, is_multiple_of × 2, redundant f32 casts.
+- 10 тестов a11y_panel + 6 тестов a11y_prefs ✅ (999 total lumen-shell, 533 lumen-storage), Clippy чист
 
 **D-2 | CSS animation GPU layer** ✅ 2026-06-07 (merged)
 - `LayerCache.promoted_nodes: HashMap<u32, LayerKey>` — NodeId → LayerKey для will-change узлов
