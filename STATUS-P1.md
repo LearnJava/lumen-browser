@@ -6,14 +6,14 @@
 
 ## In progress
 
-D-6: Extension system stub  branch: p1-d6-extensions
-Next step: create crates/shell/src/extensions/mod.rs  crates/shell/src/main.rs
+*(свободен)*
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-07 | D-6: Extension system stub | `shell/src/extensions/mod.rs`: `ExtensionManifest {name,version,permissions,content_scripts}`, `ContentScript {matches,js}`, `ExtensionRegistry`. Загрузка из `<config>/lumen/extensions/<id>/manifest.json` (Chrome MV3 JSON, hand-rolled). URL-matching: `<all_urls>`, `*://host/*`, `https://host/*`, `*.host/*`, glob-path. `run_scripts_with_dom`: параметр `extra_scripts &[String]`; content-скрипты инжектируются после inline+module скриптов. Оба call-site (main.rs + hibernate.rs) грузят `ExtensionRegistry::load()`. `chrome.runtime` stub в WEB_API_SHIM: `sendMessage` (fire-and-forget), `onMessage.{addListener,removeListener,hasListener}`, `getURL`, `getManifest`. Алиас `window.browser` (Firefox compat). `_lumen_chrome_runtime_send_message` — нативный no-op биндинг. lumen-shell: clippy чист, 1054 тестов (+11). lumen-js: clippy чист, 1308 тестов (+6). |
 | 2026-06-07 | D-1: Certificate viewer panel | Ctrl+Shift+C overlay 500×440px: `panels/cert_panel.rs` с `CertPanel`, `PanelCertData`, `CertHit` hit-test, `build_panel()` рендеринг (DrawText/FillRect). `lumen_network::CertInfo`: subject CN/Org, issuer CN/Org, not-before/after, SHA-256 fingerprint, SAN list, TLS version; `stub_for()` Phase 0. `KeyCommand::ToggleCert` + `Ctrl+Shift+C`. Per-tab `cert_info: Option<PanelCertData>` в `PageSnapshot` (сохранение/восстановление при переключении вкладок). Wheel scroll. lumen-shell: clippy чист, 1043 тестов (+32). |
 | 2026-06-07 | D-4: Keyboard shortcuts settings panel | Ctrl+Shift+/ overlay 360×500px: `lumen_storage::KeyboardShortcuts` SQLite (command/modifier/key), 10 unit-тестов. `panels/shortcuts_panel.rs`: 30 команд со стандартными байндингами, click→rebind mode (accept_rebind/cancel_rebind), scroll wheel, hit-test. `KeyCommand::ToggleShortcuts` + `handle_shortcuts_key`. Загрузка overrides при старте. 12 unit-тестов. lumen-storage: 543 тестов, lumen-shell: 1011 тестов. |
 | 2026-06-07 | D-8: Encoding API streaming | WHATWG Encoding §9.1 streaming: TextDecoder._pending буфер уже был в коде; добавлено 6 unit-тестов: stream_mode_ascii, stream_mode_buffers_partial_utf8, stream_mode_reassembles_split_multibyte, stream_mode_final_flush_clears_buffer, no_arg_returns_empty_string, decoder_stream_splits_multibyte. TextDecoderStream (использует {stream:true} внутри) корректно сплитит 3-байтовый символ между двумя write()-чанками. lumen-js: clippy чист, 1302 тестов (+6 vs 1296). |
@@ -129,7 +129,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~D-8~~ | ~~**Encoding API streaming**~~ — **выполнено** | XS | **1** | `lumen-js` |
 | ~~D-4~~ | ~~**Keyboard shortcuts settings panel**~~ — **выполнено** | M | 2 | `lumen-shell`, `lumen-storage` |
 | ~~D-1~~ | ~~**Certificate viewer panel**~~ — **выполнено** | S | 2 | `lumen-shell` |
-| D-6 | **Extension system stub** — `shell/src/extensions/`: `ExtensionManifest {name, version, permissions, content_scripts}`, `ExtensionRegistry`, загрузка из `~/.config/lumen/extensions/<id>/manifest.json`, инъекция `content_scripts` как `extra_scripts`, `chrome.runtime.sendMessage()` stub. 10 тестов. | M | 2 | `lumen-shell` |
+| ~~D-6~~ | ~~**Extension system stub**~~ — **выполнено** | M | 2 | `lumen-shell` |
 
 ---
 
