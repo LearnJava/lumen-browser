@@ -813,6 +813,46 @@ fn border_style_short(s: BorderStyle) -> &'static str {
 
 /// Returns `true` if the display list contains any `backdrop-filter` element.
 ///
+/// Cull a display list to only commands that intersect the given tile region.
+///
+/// `tile_x` and `tile_y` are tile-space coordinates; the tile covers CSS pixels
+/// `[tile_x*tile_size, (tile_x+1)*tile_size) × [tile_y*tile_size, (tile_y+1)*tile_size)`.
+///
+/// Commands that carry a bounding rect are included only when their rect
+/// overlaps the tile (AABB test). State commands (`PushClipRect`, `PopClipRect`,
+/// `PushScrollLayer`, `PopScrollLayer`, `PushOpacity`, `PopOpacity`,
+/// `PushTransform`, `PopTransform`, `PushBlendMode`, `PopBlendMode`, etc.)
+/// always pass through unchanged so that the GPU state machine remains correct.
+///
+/// Returns owned clones of the matching commands, ready to pass to the renderer.
+#[must_use]
+pub fn cull_display_list(
+    dl: &[DisplayCommand],
+    tile_x: i32,
+    tile_y: i32,
+    tile_size: f32,
+) -> Vec<DisplayCommand> {
+    let tx = tile_x as f32 * tile_size;
+    let ty = tile_y as f32 * tile_size;
+
+    let mut out = Vec::new();
+    for cmd in dl {
+        match get_command_rect(cmd) {
+            Some(r) => {
+                // AABB intersection: both axes must overlap.
+                let overlaps_x = r.x < tx + tile_size && r.x + r.width > tx;
+                let overlaps_y = r.y < ty + tile_size && r.y + r.height > ty;
+                if overlaps_x && overlaps_y {
+                    out.push(cmd.clone());
+                }
+            }
+            // State / stack commands always pass through.
+            None => out.push(cmd.clone()),
+        }
+    }
+    out
+}
+
 /// Cheap pre-check the renderer uses to decide whether computing a frame
 /// content hash for [`hash_display_list`] is worthwhile — pages without a
 /// backdrop-filter pay zero hashing cost.

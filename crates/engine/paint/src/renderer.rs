@@ -6344,6 +6344,47 @@ impl Renderer {
         crate::cpu_raster::rasterize_cpu(width, height, commands, scroll_x, scroll_y)
     }
 
+    /// Render a single `tile_size × tile_size` tile at tile coordinates
+    /// `(tile_x, tile_y)` using the CPU rasterizer.
+    ///
+    /// The display list is culled to only commands that intersect the tile
+    /// region before rasterization. Scroll offsets are applied so that the
+    /// rendered pixels match what the user would see at that scroll position.
+    ///
+    /// Tile coordinates are in tile space: CSS pixel `p` is in tile
+    /// `(p / tile_size).floor()`. The returned `Image` has dimensions
+    /// `tile_size × tile_size` (RGBA8).
+    ///
+    /// # Errors
+    /// Propagates errors from the CPU rasterizer (e.g., invalid display commands).
+    pub fn render_tile(
+        content: &[crate::DisplayCommand],
+        overlay: &[crate::DisplayCommand],
+        scroll_x: f32,
+        scroll_y: f32,
+        tile_x: i32,
+        tile_y: i32,
+        tile_size: u32,
+    ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
+        let ts = tile_size as f32;
+
+        // Cull both lanes to commands that touch this tile.
+        let culled_content = crate::display_list::cull_display_list(content, tile_x, tile_y, ts);
+        let culled_overlay = crate::display_list::cull_display_list(overlay, tile_x, tile_y, ts);
+
+        // Merge both lanes (overlay on top).
+        let mut all = culled_content;
+        all.extend(culled_overlay);
+
+        // Translate so the tile origin is at (0,0) in the rasterised image.
+        // The scroll offset shifts content upward (subtract scroll) so that
+        // what is visible at scroll_y appears at y=0.
+        let offset_x = scroll_x + tile_x as f32 * ts;
+        let offset_y = scroll_y + tile_y as f32 * ts;
+
+        crate::cpu_raster::rasterize_cpu(tile_size, tile_size, &all, offset_x, offset_y)
+    }
+
     // Note: render_to_image for GPU path has different signature:
     // &mut self, commands, scroll_y, scroll_x (3 params after self)
 
