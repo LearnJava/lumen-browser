@@ -6,11 +6,22 @@
 
 ## In progress
 
-_(нет)_
+In progress: H-1: Cookie Store API  branch: p1-h1-cookie-store
+Next step: cargo check + test в .claude/worktrees/h1-cookie-store/  crates/js/src/cookie_store.rs:1
 
 ---
 
 ## Next
+
+### H — Advanced Web Platform APIs
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| H-1 | **Cookie Store API** — WHATWG Cookie Store API: `cookieStore.get/getAll/set/delete`, `CookieChangeEvent`, `cookieStore.onchange`, `CookieStoreManager` на SW Registration (stub). Phase 0: in-memory store. 7 тестов. | S | `lumen-js` |
+| H-2 | **Badging API** — W3C Badging API: `navigator.setAppBadge(count?)` → Promise, `navigator.clearAppBadge()` → Promise. Phase 0: no-op, _lumen_set_app_badge binding. 4 теста. | XS | `lumen-js` |
+| H-3 | **Virtual Keyboard API** — W3C VK API: `navigator.virtualKeyboard.show()/hide()`, `boundingRect` (DOMRect), `overlaysContent`, `geometrychange` event. 4 теста. | XS | `lumen-js` |
+| H-4 | **Reporting API** — W3C Reporting API L1: `ReportingObserver(callback, opts)`, `.observe()/.disconnect()/.takeRecords()`, `Report {type, url, body}`, `_lumen_deliver_report` binding. 5 тестов. | S | `lumen-js` |
+| H-5 | **Periodic Background Sync API** — W3C PBSync: `registration.periodicSync.register(tag, {minInterval})`, `.unregister()`, `.getTags()` → Promise. 4 теста. | XS | `lumen-js` |
 
 ### F — Security & Media APIs
 
