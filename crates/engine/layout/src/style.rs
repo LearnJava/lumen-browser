@@ -2250,6 +2250,14 @@ pub struct ComputedStyle {
     /// CSS Grid Layout L1 §7.2 — `grid-template-rows`. Non-inherited.
     /// Default `[]` (no explicit tracks). Parsed track-list.
     pub grid_template_rows: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §7.2 — auto-fill/auto-fit repeat metadata for columns.
+    /// `Some` when `grid-template-columns` contains `repeat(auto-fill|auto-fit, ...)`.
+    /// Resolved at layout time via `resolve_auto_fill_fit_count`. Non-inherited. Default `None`.
+    pub grid_template_col_auto_repeat: Option<GridRepeat>,
+    /// CSS Grid Layout L1 §7.2 — auto-fill/auto-fit repeat metadata for rows.
+    /// `Some` when `grid-template-rows` contains `repeat(auto-fill|auto-fit, ...)`.
+    /// Resolved at layout time via `resolve_auto_fill_fit_count`. Non-inherited. Default `None`.
+    pub grid_template_row_auto_repeat: Option<GridRepeat>,
     /// CSS Grid Layout L1 §7.3 — `grid-template-areas`. Non-inherited.
     /// Default `[]` (none). Outer vec = rows (top-to-bottom), inner vec = columns
     /// (left-to-right). Each string is a cell name; `"."` means unnamed cell.
@@ -3702,6 +3710,32 @@ impl GridTrackSize {
     }
 }
 
+/// Extracts auto-fill/auto-fit repeat metadata from a track-list string.
+/// Returns `Some(GridRepeat)` when the string is exactly `repeat(auto-fill|auto-fit, ...)`.
+/// Used in Phase 2 of CSS Grid auto-repeat expansion (CSS Grid L1 §7.2.3.4).
+pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
+    let trimmed = s.trim();
+    // Must start with "repeat(" (case-insensitive) and end with ")"
+    let lc = trimmed.to_ascii_lowercase();
+    let inner = lc.strip_prefix("repeat(")?.strip_suffix(')')?;
+    let (count_s, rest) = split_paren_aware_comma(inner)?;
+    let count = match count_s.trim() {
+        "auto-fill" => RepeatCount::AutoFill,
+        "auto-fit" => RepeatCount::AutoFit,
+        _ => return None,
+    };
+    // Re-parse from original string to preserve case in track sizes
+    let orig_inner = trimmed
+        .get("repeat(".len()..trimmed.len() - 1)?;
+    let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
+    let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
+    if tracks.is_empty() {
+        return None;
+    }
+    let _ = rest; // suppress unused warning from lc version
+    Some(GridRepeat { count, tracks })
+}
+
 /// Split a comma inside a track-list token that may contain nested parens.
 fn split_paren_aware_comma(s: &str) -> Option<(&str, &str)> {
     let mut depth = 0i32;
@@ -4364,6 +4398,8 @@ impl ComputedStyle {
             order: 0,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            grid_template_col_auto_repeat: None,
+            grid_template_row_auto_repeat: None,
             grid_template_areas: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
             grid_auto_columns: GridTrackSize::Auto,
@@ -4656,6 +4692,8 @@ pub fn compute_style(
         // CSS Grid Layout L1 — grid properties не наследуются.
         grid_template_columns: Vec::new(),
         grid_template_rows: Vec::new(),
+        grid_template_col_auto_repeat: None,
+        grid_template_row_auto_repeat: None,
         grid_template_areas: Vec::new(),
         grid_auto_flow: GridAutoFlow::Row,
         grid_auto_columns: GridTrackSize::Auto,
@@ -9638,15 +9676,21 @@ fn apply_declaration(
         "grid-template-columns" => {
             if !val.trim().eq_ignore_ascii_case("none") {
                 style.grid_template_columns = GridTrackSize::parse_track_list(val, is_quirks);
+                // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
+                style.grid_template_col_auto_repeat = parse_auto_repeat(val.trim());
             } else {
                 style.grid_template_columns = Vec::new();
+                style.grid_template_col_auto_repeat = None;
             }
         }
         "grid-template-rows" => {
             if !val.trim().eq_ignore_ascii_case("none") {
                 style.grid_template_rows = GridTrackSize::parse_track_list(val, is_quirks);
+                // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
+                style.grid_template_row_auto_repeat = parse_auto_repeat(val.trim());
             } else {
                 style.grid_template_rows = Vec::new();
+                style.grid_template_row_auto_repeat = None;
             }
         }
         "grid-template-areas" => {
@@ -9678,13 +9722,18 @@ fn apply_declaration(
             if trimmed.eq_ignore_ascii_case("none") {
                 style.grid_template_columns = Vec::new();
                 style.grid_template_rows = Vec::new();
+                style.grid_template_col_auto_repeat = None;
+                style.grid_template_row_auto_repeat = None;
             } else if let Some(pos) = find_slash(trimmed) {
                 let rows_s = trimmed[..pos].trim();
                 let cols_s = trimmed[pos + 1..].trim();
                 style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
                 style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+                style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
             } else {
                 style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+                style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
             }
         }
         "grid" => {
@@ -9696,9 +9745,12 @@ fn apply_declaration(
                     let rows_s = trimmed[..pos].trim();
                     let cols_s = trimmed[pos + 1..].trim();
                     style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                    style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
                     style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+                    style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
                 } else {
                     style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+                    style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
                 }
             }
         }
@@ -13198,6 +13250,8 @@ fn apply_css_wide_keyword(
                 // inherit: copy from parent (non-inherited → initial)
                 style.grid_template_columns = init.grid_template_columns.clone();
                 style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_template_col_auto_repeat = init.grid_template_col_auto_repeat.clone();
+                style.grid_template_row_auto_repeat = init.grid_template_row_auto_repeat.clone();
                 style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
@@ -13209,6 +13263,8 @@ fn apply_css_wide_keyword(
             } else {
                 style.grid_template_columns = init.grid_template_columns.clone();
                 style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_template_col_auto_repeat = init.grid_template_col_auto_repeat.clone();
+                style.grid_template_row_auto_repeat = init.grid_template_row_auto_repeat.clone();
                 style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
