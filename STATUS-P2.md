@@ -6,12 +6,23 @@
 
 ## In progress
 
-**D-2 | CSS animation GPU layer** branch: p2-d2-gpu-layer
-Next step: commit + clippy + tests  layer_cache.rs:promote_layer, shell/main.rs:promote_will_change_layers
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**D-2 | CSS animation GPU layer** ✅ 2026-06-07 (merged)
+- `LayerCache.promoted_nodes: HashMap<u32, LayerKey>` — NodeId → LayerKey для will-change узлов
+- `promote_layer(node_id, w, h)` — регистрирует GPU-слой, создаёт LayerCache-запись
+- `is_layer_promoted(node_id)` — проверка; `demote_layer` — снятие с освобождением памяти
+- `sync_promoted_layers(current_nodes)` — удаление устаревших записей после релayout
+- `RenderBackend` trait: `promote_layer/is_layer_promoted/demote_layer` (no-op defaults)
+- `WgpuBackend`: переопределения делегируют к `Renderer`
+- Shell: `promote_will_change_layers(lb, renderer)` — обход дерева + вызов `promote_layer`
+- Вызов в `relayout()` после `self.layout_box = Some(lb)` с `// CSS: will-change` комментарием
+- `AnimationScheduler::tick()` уже минует relayout для promoted transform/opacity узлов (D-1)
+- 6 тестов в `layer_cache.rs` ✅ (545 total lumen-paint), Clippy чист
 
 **D-1 | Tile-based rendering** ✅ 2026-06-07 (merged)
 - `TileGrid {tile_size: 256, tiles: HashMap<(i32,i32), TileDirty>}` — новый модуль `tile_grid.rs` в lumen-paint
@@ -220,8 +231,8 @@ Ordered by priority. Сгруппированы по домену.
 | ~~D-4~~ | ~~**Image HEIC/HEIF stub**~~ — **выполнено** | XS | `lumen-image` |
 | ~~D-5~~ | ~~**DOM node count limit**~~ — **выполнено** | S | `lumen-dom`, `lumen-js` |
 | ~~D-3~~ | ~~**Image JPEG XL stub**~~ — **выполнено** | XS | `lumen-image` |
-| D-1 | **Tile-based rendering** *(Фаза 2)* — `TileGrid {tile_size: 256, tiles: HashMap<(i32,i32), TileDirty>}` в `lumen-paint`, `cull_display_list(dl, tile_x, tile_y, w, h)` — AABB тест каждой команды, `Renderer::render_tile()`. Shell: dirty-rect tracking из diff. 8 тестов. | L | `lumen-paint`, `lumen-shell` |
-| D-2 | **CSS animation GPU layer** *(Фаза 2)* — `will-change: transform/opacity/filter` → `Renderer::promote_layer(node_id)` создаёт `LayerCache` entry; `AnimationScheduler::tick()` обновляет только transform matrix без relayout. `// CSS: will-change`. 6 тестов. | M | `lumen-paint`, `lumen-shell` |
+| ~~D-1~~ | ~~**Tile-based rendering**~~ — **выполнено** | L | `lumen-paint`, `lumen-shell` |
+| ~~D-2~~ | ~~**CSS animation GPU layer**~~ — **выполнено** | M | `lumen-paint`, `lumen-shell` |
 
 ### E — Shell UI
 
