@@ -363,7 +363,7 @@ fn run_window_mode(
         validation_tooltip: None,
         color_picker_node: None,
         ls_storage: HashMap::new(),
-        idb_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+        idb_dir: lumen_idb_dir(),
         sw_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
@@ -2347,7 +2347,9 @@ struct PageSnapshot {
     validation_tooltip: Option<(Rect, String)>,
     color_picker_node: Option<NodeId>,
     ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
-    idb_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Directory for per-origin IndexedDB SQLite files. Cloned from the active
+    /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
+    idb_dir: Option<std::path::PathBuf>,
     sw_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     js_ctx: Option<Box<dyn PersistentJs>>,
     first_paint_delivered: bool,
@@ -2784,6 +2786,34 @@ fn meta_initial_scale(src: &LayoutSource) -> f32 {
 
 /// Get-or-create the localStorage partition for the given `ResourceBase` origin.
 /// Returns `None` for file: bases (no persistent origin-partitioned storage).
+/// Returns the platform-specific directory for per-origin IndexedDB SQLite files,
+/// creating it if it does not exist.
+///
+/// - Windows: `%APPDATA%\lumen\idb\`
+/// - Unix:    `$HOME/.config/lumen/idb/`
+/// - Fallback (env vars missing): `./lumen-idb/` (relative to working directory)
+///
+/// Returns `None` when directory creation fails — the caller falls back to
+/// ephemeral in-memory IDB storage for the session.
+fn lumen_idb_dir() -> Option<std::path::PathBuf> {
+    let dir = if cfg!(target_os = "windows") {
+        std::env::var("APPDATA")
+            .ok()
+            .map(|p| std::path::PathBuf::from(p).join("lumen").join("idb"))
+    } else {
+        std::env::var("HOME")
+            .ok()
+            .map(|p| std::path::PathBuf::from(p).join(".config").join("lumen").join("idb"))
+    }
+    .unwrap_or_else(|| std::path::PathBuf::from("lumen-idb"));
+
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("idb: не удалось создать директорию {}: {e}", dir.display());
+        return None;
+    }
+    Some(dir)
+}
+
 fn ls_store_for_base(
     base: &ResourceBase,
     ls_storage: &mut HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
@@ -2803,21 +2833,49 @@ fn ls_store_for_base(
 }
 
 /// Build the per-origin IndexedDB persistence handle for the given `ResourceBase`.
-/// Returns `None` for `file:` bases (no origin-partitioned persistent storage),
-/// matching `ls_store_for_base`. The returned `IdbStore` shares `backend`, so
-/// the same origin sees its databases across reloads.
+///
+/// Returns `None` for `file:` bases (no origin storage).
+/// When `idb_dir` is `Some`, opens or creates a dedicated SQLite file
+/// `{idb_dir}/{sha256_hex(eTLD+1)[:16]}.db`; when `None` uses an ephemeral
+/// in-memory store (tests / headless — no cross-reload persistence).
 fn idb_store_for_base(
     base: &ResourceBase,
-    backend: &Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    idb_dir: Option<&std::path::Path>,
 ) -> Option<Arc<dyn lumen_core::ext::IdbBackend>> {
-    let origin = match base {
-        ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
-            let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
-            format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
-        })?,
+    let url = match base {
+        ResourceBase::Url(u) => u.as_str(),
         ResourceBase::File(_) => return None,
     };
-    Some(Arc::new(lumen_storage::IdbStore::new(Arc::clone(backend), origin)))
+    idb_store_for_url(url, idb_dir)
+}
+
+/// Core IDB store builder — shared by [`idb_store_for_base`] and the reload path.
+fn idb_store_for_url(
+    url: &str,
+    idb_dir: Option<&std::path::Path>,
+) -> Option<Arc<dyn lumen_core::ext::IdbBackend>> {
+    let parsed = lumen_core::url::Url::parse(url).ok()?;
+    let host = parsed.host();
+    if host.is_empty() {
+        return None;
+    }
+    // eTLD+1 for key derivation; falls back to raw host (IPs, localhost, unknown TLDs).
+    let etld_plus_one = {
+        use lumen_core::ext::PublicSuffixList;
+        lumen_storage::PslProvider::new()
+            .registrable_domain(host)
+            .unwrap_or(host)
+            .to_string()
+    };
+    if let Some(dir) = idb_dir {
+        lumen_storage::IdbStore::for_origin(&etld_plus_one, dir).ok()
+    } else {
+        let origin = format!("{}://{}", parsed.scheme(), parsed.host());
+        Some(Arc::new(lumen_storage::IdbStore::new(
+            Arc::new(Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+            origin,
+        )))
+    }
 }
 
 /// Build the per-origin Service Worker registration persistence handle for the
@@ -3477,11 +3535,11 @@ struct Lumen {
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.
     ls_storage: HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
-    /// Shared backend for IndexedDB persistence (one per process, origin-partitioned
-    /// inside). A per-origin `IdbStore` is built over this for each page load, so
-    /// IndexedDB databases survive page reloads within the session (mirrors
-    /// `ls_storage`). Swap `InMemoryStorage` for `SqliteStorage` to persist on disk.
-    idb_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Directory for per-origin IndexedDB SQLite files (`{sha256(eTLD+1)[:16]}.db`).
+    /// `None` → ephemeral in-memory store per page (headless / tests).
+    /// `Some(dir)` → each origin gets its own SQLite file in `dir`; data persists
+    /// across page reloads and is shared across tabs of the same origin.
+    idb_dir: Option<std::path::PathBuf>,
     /// Shared backend for Service Worker registration persistence. A per-origin
     /// `SwStore` is built over this for each page load so SW registrations survive
     /// page navigations within the session (same pattern as `idb_backend`).
@@ -4129,10 +4187,10 @@ impl Lumen {
                     Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
                 }))
             });
-            let idb_backend = self.source.origin_str().map(|o| {
-                Arc::new(lumen_storage::IdbStore::new(Arc::clone(&self.idb_backend), o))
-                    as Arc<dyn lumen_core::ext::IdbBackend>
-            });
+            let idb_backend = self
+                .source
+                .url_str()
+                .and_then(|u| idb_store_for_url(u, self.idb_dir.as_deref()));
             let sw_backend = self.source.origin_str().map(|o| {
                 Arc::new(lumen_storage::SwStore::new(Arc::clone(&self.sw_backend), o))
                     as Arc<dyn lumen_core::ext::SwBackend>
@@ -4601,7 +4659,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     },
                 );
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
-                let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
+                let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
                 match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar))) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
@@ -9538,7 +9596,7 @@ impl Lumen {
             doc,
             event_sink,
             &mut self.ls_storage,
-            &self.idb_backend,
+            self.idb_dir.as_deref(),
             &self.sw_backend,
             cookie_banner_dismiss,
             deterministic,
@@ -9717,12 +9775,7 @@ impl Lumen {
             validation_tooltip: self.validation_tooltip.take(),
             color_picker_node: self.color_picker_node.take(),
             ls_storage: std::mem::take(&mut self.ls_storage),
-            idb_backend: std::mem::replace(
-                &mut self.idb_backend,
-                Arc::new(std::sync::Mutex::new(
-                    lumen_storage::store::InMemoryStorage::new(),
-                )),
-            ),
+            idb_dir: self.idb_dir.clone(),
             sw_backend: std::mem::replace(
                 &mut self.sw_backend,
                 Arc::new(std::sync::Mutex::new(
@@ -9783,7 +9836,7 @@ impl Lumen {
         self.validation_tooltip = snap.validation_tooltip;
         self.color_picker_node = snap.color_picker_node;
         self.ls_storage = snap.ls_storage;
-        self.idb_backend = snap.idb_backend;
+        self.idb_dir = snap.idb_dir;
         self.sw_backend = snap.sw_backend;
         self.js_ctx = snap.js_ctx;
         self.first_paint_delivered = snap.first_paint_delivered;
@@ -9833,9 +9886,7 @@ impl Lumen {
         self.validation_tooltip = None;
         self.color_picker_node = None;
         self.ls_storage = HashMap::new();
-        self.idb_backend = Arc::new(std::sync::Mutex::new(
-            lumen_storage::store::InMemoryStorage::new(),
-        ));
+        // idb_dir is session-level — intentionally not reset here.
         self.sw_backend = Arc::new(std::sync::Mutex::new(
             lumen_storage::store::InMemoryStorage::new(),
         ));

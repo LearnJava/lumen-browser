@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+C-5 | Multi-tab IndexedDB per-origin SQLite  branch: p2-c5-idb-per-origin
+Next step: origin_key() + IdbStore::open_or_create() + IdbStore::for_origin()  crates/storage/src/indexed_db.rs
 
 ---
 

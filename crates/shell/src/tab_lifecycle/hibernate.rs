@@ -66,7 +66,7 @@ pub(crate) fn restore_js_context(
     doc: Document,
     event_sink: Arc<dyn EventSink>,
     ls_storage: &mut HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
-    idb_backend: &Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
+    idb_dir: Option<&std::path::Path>,
     sw_backend: &Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: bool,
@@ -76,7 +76,7 @@ pub(crate) fn restore_js_context(
 
     // Per-origin persistence + network providers, identical to a fresh load.
     let ls_store = crate::ls_store_for_base(&base, ls_storage);
-    let idb = crate::idb_store_for_base(&base, idb_backend);
+    let idb = crate::idb_store_for_base(&base, idb_dir);
     let sw = crate::sw_store_for_base(&base, sw_backend);
     let (fetch_provider, ws_provider, sse_provider) = match &base {
         ResourceBase::Url(_) => {

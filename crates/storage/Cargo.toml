@@ -15,6 +15,9 @@ rusqlite.workspace = true
 # в lumen-core::ext. Graduation criterion: реалистично — никогда (формат
 # PSL стабилен, обновления списка приходят снаружи через bump версии crate-а).
 psl = "2"
+# Permanent (§5): SHA-256 for per-origin IDB file key derivation (C-5).
+# Already in the dependency graph via lumen-js and lumen-network (sha2 0.10).
+sha2 = "0.10"
 # Provisional (§5): deflate compression for T3-hibernated DOM blobs (ADR-008 §10J.1).
 # Reuses the already-vendored flate2 (PNG iCCP path) — no new external dependency.
 # Pure-Rust miniz_oxide backend, cross-OS bit-stable, no C toolchain. Graduation
