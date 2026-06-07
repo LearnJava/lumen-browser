@@ -1022,6 +1022,19 @@ fn install_primitives(
                 .map_or_else(Vec::new, |r| r.body.clone())
         });
 
+        // _lumen_check_sri_integrity(integrity) → bool
+        // Verifies the cached response body against the SRI `integrity` string
+        // (W3C SRI §3.3.5). Must be called after _lumen_fetch_sync / _lumen_fetch_sync_with_body
+        // and before reading the body. Returns true if integrity is empty or passes.
+        {
+            let c_sri = Arc::clone(&cache);
+            reg!("_lumen_check_sri_integrity", move |integrity: String| -> bool {
+                let guard = c_sri.lock().unwrap();
+                let body = guard.as_ref().map_or(&[] as &[u8], |r| r.body.as_slice());
+                crate::sri::check_sri(body, &integrity)
+            });
+        }
+
         // _lumen_fetch_sync_with_body(url, method, content_type, body_bytes) → bool
         // Used by fetch() when init.body is present (FormData, string, ArrayBuffer).
         // Shares the same FetchCache slot as _lumen_fetch_sync.
@@ -5720,6 +5733,12 @@ function fetch(input, init) {
         var statusText = _lumen_fetch_get_status_text();
         var rawHeaders = _lumen_fetch_get_headers();
         var body = _lumen_fetch_get_body();
+        // SRI integrity check (W3C SRI §3.3.5): verify body hash before exposing response.
+        var integrity = (init && init.integrity) ? String(init.integrity)
+                      : (typeof input === 'object' && input && input.integrity ? String(input.integrity) : '');
+        if (integrity && !_lumen_check_sri_integrity(integrity)) {
+            return Promise.reject(new TypeError('fetch: SRI integrity check failed for ' + url));
+        }
         var hdrs = [];
         for (var i = 0; i + 1 < rawHeaders.length; i += 2) {
             hdrs.push([rawHeaders[i], rawHeaders[i + 1]]);
