@@ -6,12 +6,18 @@
 
 ## In progress
 
-F-4: CSS color-scheme UA form elements  branch: p2-f4-color-scheme
-Next step: add ua_form_element_colors() + update apply_ua_form_controls()  crates/engine/layout/src/style.rs:7718
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**F-4 | CSS color-scheme UA form elements** ✅ 2026-06-08 (merged)
+- `pub fn ua_form_element_colors(tag, dark_mode)` → `(border, bg, fg)`: Light (#767676/#fff/black) / Dark (#616161/#1e1e1e/white); button отличается bg (#efefef/#3a3a3c)
+- `apply_ua_form_controls(dark_mode)` — применяет `background_color` и `color` из ua_form_element_colors + добавлены `<progress>` и `<meter>` (300×16 px)
+- `// CSS: color-scheme` handoff → P4 подключит ComputedStyle.color_scheme для полных system-color keywords
+- 4 теста: light/dark input colors, dark button bg distinct, computed style dark mode
+- Итого: 2382 теста lumen-layout ✅, Clippy чист
 
 **F-3 | CSS font-stretch axis matching** ✅ 2026-06-07 (merged)
 - `OwnedFontMetrics.wdth_axis: Option<(f32, f32)>` — парсится из fvar при регистрации @font-face шрифта
