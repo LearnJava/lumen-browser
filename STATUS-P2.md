@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**G-3 | Memory pressure shell integration**  branch: p2-g3-memory-pressure
+Next step: add atlas_on_memory_pressure to Renderer + RenderBackend + WgpuBackend + shell  crates/engine/paint/src/backend.rs:152
 
 ---
 
