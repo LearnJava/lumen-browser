@@ -442,6 +442,7 @@ fn run_window_mode(
         a11y_store: lumen_storage::A11yPrefs::open_in_memory()
             .expect("a11y_prefs in-memory"),
         a11y_panel: panels::a11y_panel::A11yPanel::new(),
+        print_panel: panels::print_panel::PrintPanel::new(),
         settings_store: lumen_storage::BrowserSettings::open_in_memory()
             .expect("settings in-memory"),
         settings_panel: panels::settings_panel::SettingsPanel::new(),
@@ -540,6 +541,65 @@ fn do_print_to_pdf(
     let mut pages = paginate(&parsed.layout, &ctx);
     let page_count_total = pages.len() as u32;
     // Attach @page margin-box data: page N of M at bottom-center.
+    attach_page_boxes(&mut pages, page_count_total, &ctx);
+    let cmds = build_print_display_list(&pages);
+    let split_pages = split_at_page_breaks(cmds);
+
+    let images = Renderer::render_print_pages(
+        INTER_FONT.to_vec(),
+        &split_pages,
+        PDF_PAGE_W,
+        PDF_PAGE_H,
+    )?;
+
+    let page_count = images.len();
+    let pdf_bytes = encode_images_as_pdf(&images, PDF_PAGE_W, PDF_PAGE_H);
+    std::fs::write(output, &pdf_bytes)?;
+    Ok(page_count)
+}
+
+/// Print with custom margin values (in CSS px) from the print dialog (E-1).
+///
+/// `margin_tb` applies to top + bottom; `margin_lr` applies to left + right.
+fn do_print_to_pdf_with_opts(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+    margin_tb: f32,
+    margin_lr: f32,
+) -> Result<usize, Box<dyn Error>> {
+    use lumen_layout::{paginate, PaginationContext};
+    use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
+
+    let raw = source.load_bytes(event_sink.clone(), None)?;
+    let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
+    let parsed = parse_and_layout(
+        &raw.bytes,
+        raw.content_type,
+        &raw.base,
+        &event_sink,
+        vp,
+        &mut std::collections::HashSet::new(),
+        None,
+        None,
+        None,
+        &NullHyphenationProvider,
+        false,
+        false,
+        false,
+        None,
+    )?;
+
+    let ctx = PaginationContext {
+        page_width: PDF_PAGE_W as f32,
+        page_height: PDF_PAGE_H as f32,
+        margin_top: margin_tb,
+        margin_bottom: margin_tb,
+        margin_left: margin_lr,
+        margin_right: margin_lr,
+    };
+    let mut pages = paginate(&parsed.layout, &ctx);
+    let page_count_total = pages.len() as u32;
     attach_page_boxes(&mut pages, page_count_total, &ctx);
     let cmds = build_print_display_list(&pages);
     let split_pages = split_at_page_breaks(cmds);
@@ -1800,6 +1860,8 @@ enum KeyCommand {
     ToggleReaderView,
     /// Открыть просмотр исходного кода текущей страницы (Ctrl+U, §D-2).
     ViewSource,
+    /// Открыть/закрыть диалог печати страницы (Ctrl+P, E-1).
+    TogglePrint,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1943,6 +2005,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::F9 if no_mods => Some(KeyCommand::ToggleReaderView),
         // Ctrl+U — view page source (§D-2)
         KeyCode::KeyU if ctrl_only => Some(KeyCommand::ViewSource),
+        // Ctrl+P — print dialog (E-1)
+        KeyCode::KeyP if ctrl_only => Some(KeyCommand::TogglePrint),
         // Ctrl+= — zoom in
         KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
         // Ctrl+- — zoom out
@@ -3891,6 +3955,12 @@ struct Lumen {
     /// A centred 300×260 px modal. Holds a working draft; on close the draft
     /// is persisted to `a11y_store` and media changes are re-delivered to JS.
     a11y_panel: panels::a11y_panel::A11yPanel,
+    /// Print dialog overlay (task E-1, `Ctrl+P`).
+    ///
+    /// A centred 560×400 px modal with paper size, orientation, margins,
+    /// page range, colour mode, and output-file fields. Clicking **Print**
+    /// calls `do_print_to_pdf()` with the configured settings.
+    print_panel: panels::print_panel::PrintPanel,
     /// Persistent browser settings store (task D-7).
     ///
     /// Backed by SQLite (in-memory for the session). Stores homepage, search
@@ -5849,6 +5919,69 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // Print dialog (E-1): centred overlay, Ctrl+P.
+                    if self.print_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        use panels::print_panel::PrintHit;
+                        let hit = panels::print_panel::hit_test(
+                            &self.print_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        );
+                        match hit {
+                            PrintHit::Close | PrintHit::Cancel => {
+                                self.print_panel.close();
+                            }
+                            PrintHit::Print => {
+                                let path = std::path::PathBuf::from(
+                                    self.print_panel.output_path.clone()
+                                );
+                                let source = self.source.clone();
+                                let sink = Arc::clone(&self.event_sink);
+                                let (margin_tb, margin_lr) = self.print_panel.margin_px();
+                                if let Err(e) = do_print_to_pdf_with_opts(
+                                    &source,
+                                    &path,
+                                    sink,
+                                    margin_tb,
+                                    margin_lr,
+                                ) {
+                                    eprintln!("Ошибка печати: {e}");
+                                }
+                                self.print_panel.close();
+                            }
+                            PrintHit::PaperSize(s) => {
+                                self.print_panel.paper = s;
+                            }
+                            PrintHit::Orientation(o) => {
+                                self.print_panel.orientation = o;
+                            }
+                            PrintHit::Margins(m) => {
+                                self.print_panel.margins = m;
+                            }
+                            PrintHit::PageRangeField => {
+                                self.print_panel.editing_field =
+                                    Some(panels::print_panel::PrintField::PageRange);
+                            }
+                            PrintHit::ColorMode(c) => {
+                                self.print_panel.color_mode = c;
+                            }
+                            PrintHit::OutputPathField => {
+                                self.print_panel.editing_field =
+                                    Some(panels::print_panel::PrintField::OutputPath);
+                            }
+                            PrintHit::Inside => { /* swallow */ }
+                            PrintHit::Outside => {
+                                self.print_panel.close();
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
                     // Settings panel (task D-7): centred overlay.
                     if self.settings_panel.visible {
                         let win_w = self.viewport_width_css();
@@ -6776,6 +6909,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut a11y_cmds);
                 }
 
+                // Print dialog (E-1): centred overlay, Ctrl+P.
+                if self.print_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let pp_x = (win_w - panels::print_panel::PANEL_W) * 0.5;
+                    let pp_y = (win_h - panels::print_panel::PANEL_H) * 0.5;
+                    // Dim backdrop behind the modal.
+                    overlay_buf.push(lumen_paint::DisplayCommand::FillRect {
+                        rect: lumen_core::geom::Rect::new(0.0, 0.0, win_w, win_h),
+                        color: lumen_layout::Color { r: 0, g: 0, b: 0, a: 110 },
+                    });
+                    let mut pp_cmds =
+                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y);
+                    overlay_buf.append(&mut pp_cmds);
+                }
+
                 // Settings panel (task D-7): centred overlay, Ctrl+, or about:settings.
                 if self.settings_panel.visible {
                     let win_w = self.viewport_width_css();
@@ -7527,6 +7676,9 @@ impl Lumen {
         }
 
         // Settings panel text inputs + Esc. Modified keys fall through for global shortcuts.
+        if self.print_panel.visible && self.handle_print_key(code, key_event) {
+            return;
+        }
         if self.settings_panel.visible && self.handle_settings_key(code, key_event) {
             return;
         }
@@ -7883,6 +8035,10 @@ impl Lumen {
             }
             KeyCommand::ViewSource => {
                 self.show_view_source();
+            }
+            KeyCommand::TogglePrint => {
+                self.print_panel.toggle();
+                self.request_redraw();
             }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
@@ -8509,6 +8665,42 @@ impl Lumen {
                             self.history_panel.append_search(ch);
                         }
                         self.refresh_history();
+                        self.request_redraw();
+                        return true;
+                    }
+                false
+            }
+        }
+    }
+
+    /// Handle keyboard input when the print dialog is visible (E-1).
+    ///
+    /// Printable chars go to the focused text field. Escape closes the dialog.
+    /// Returns `true` if the key was consumed.
+    fn handle_print_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.print_panel.close();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.print_panel.editing_field.is_some() => {
+                self.print_panel.pop_char();
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.print_panel.editing_field.is_some()
+                    && let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.print_panel.push_char(ch);
+                        }
                         self.request_redraw();
                         return true;
                     }

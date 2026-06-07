@@ -2,6 +2,7 @@
 //! page viewport (split view, vertical tabs, sidebar panels, etc.).
 
 pub mod a11y_panel;
+pub mod print_panel;
 pub mod bookmark_panel;
 pub mod command_palette;
 pub mod settings_panel;
