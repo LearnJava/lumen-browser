@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**F-5 | BiDi 8H.3: network response body** branch: p2-f5-bidi-response-body
+Next step: add `response_bodies: HashMap<u64, Vec<u8>>` to BidiState + `record_response_body()` + `network.getResponseBody` command  crates/shell/src/bidi/protocol.rs:54
 
 ---
 
