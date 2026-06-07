@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: H-1: Cookie Store API  branch: p1-h1-cookie-store
-Next step: cargo check + test в .claude/worktrees/h1-cookie-store/  crates/js/src/cookie_store.rs:1
+_(нет)_
 
 ---
 
@@ -17,7 +16,7 @@ Next step: cargo check + test в .claude/worktrees/h1-cookie-store/  crates/js/s
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| H-1 | **Cookie Store API** — WHATWG Cookie Store API: `cookieStore.get/getAll/set/delete`, `CookieChangeEvent`, `cookieStore.onchange`, `CookieStoreManager` на SW Registration (stub). Phase 0: in-memory store. 7 тестов. | S | `lumen-js` |
+| ~~H-1~~ | ~~**Cookie Store API**~~ — **выполнено** | S | `lumen-js` |
 | H-2 | **Badging API** — W3C Badging API: `navigator.setAppBadge(count?)` → Promise, `navigator.clearAppBadge()` → Promise. Phase 0: no-op, _lumen_set_app_badge binding. 4 теста. | XS | `lumen-js` |
 | H-3 | **Virtual Keyboard API** — W3C VK API: `navigator.virtualKeyboard.show()/hide()`, `boundingRect` (DOMRect), `overlaysContent`, `geometrychange` event. 4 теста. | XS | `lumen-js` |
 | H-4 | **Reporting API** — W3C Reporting API L1: `ReportingObserver(callback, opts)`, `.observe()/.disconnect()/.takeRecords()`, `Report {type, url, body}`, `_lumen_deliver_report` binding. 5 тестов. | S | `lumen-js` |
@@ -48,6 +47,7 @@ Next step: cargo check + test в .claude/worktrees/h1-cookie-store/  crates/js/s
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | H-1: Cookie Store API | WHATWG Cookie Store API Phase 0: глобальный `cookieStore` — `get(name|opts)` → Promise<CookieListItem\|null>, `getAll(opts?)` → Promise<CookieListItem[]>, `set(name, value|CookieInit)` → Promise, `delete(name|opts)` → Promise. `CookieChangeEvent {changed, deleted}` + `onchange`/`addEventListener('change')`. `CookieStoreManager` на `ServiceWorkerRegistration.prototype.cookies` (stub: subscribe/unsubscribe/getSubscriptions). Phase 0: in-memory хранилище `_cookies`, one-way sync в `document.cookie` при set. `_lumen_cookie_store_set`/`_lumen_cookie_store_delete` биндинги для shell Phase 1. Новый модуль `crates/js/src/cookie_store.rs`. lumen-js: clippy чист, 8 unit-тестов (+8 vs 1393). |
 | 2026-06-08 | F-5: MediaCapabilities API | W3C Media Capabilities §5 Phase 0: `navigator.mediaCapabilities` singleton. `decodingInfo(config)` и `encodingInfo(config)` → Promise<{supported:true, smooth:true, powerEfficient:false}>. Валидация аргументов: config должен быть объектом с полем type (string). `MediaCapabilitiesInfo` и `MediaCapabilities` экспортированы на window. Новый модуль `crates/js/src/media_capabilities.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1378). |
 | 2026-06-08 | F-4: User-Agent Client Hints | W3C UA-CH §4–6 Phase 0: `navigator.userAgentData` — `NavigatorUAData` с геттерами `brands`/`mobile`/`platform` (низкоэнтропийные). `getHighEntropyValues(hints)` → Promise<UADataValues>: статический Chrome 114/Windows 10 x64 профиль (brands×3, fullVersionList×3, platformVersion:"10.0.0", architecture:"x86", bitness:"64", model:"", uaFullVersion, wow64). `toJSON()` возвращает низкоэнтропийные поля. `NavigatorUAData` экспортирован на globalThis. Новый модуль `crates/js/src/ua_client_hints.rs`. lumen-js: clippy чист, 4 unit-теста (+4 vs 1374). |
 | 2026-06-08 | F-3: Web Codecs API stub | W3C Web Codecs Phase 0: `VideoDecoder`/`VideoEncoder`/`AudioDecoder`/`AudioEncoder` стабы. Конструктор {output,error}, state machine (unconfigured→configured→closed), `configure()`/`decode|encode()`/`flush()`→Promise/`reset()`/`close()`. `isConfigSupported()` → Promise<{supported:false, config}>. Phase 0: decode/encode — no-op, flush() — сразу resolved. Вспомогательные типы: `EncodedVideoChunk`, `EncodedAudioChunk`, `VideoFrame`, `AudioData` (конструкторы + copyTo/clone/close). Новый модуль `crates/js/src/web_codecs.rs`. lumen-js: clippy чист, 12 unit-тестов (+12 vs 1358). |
