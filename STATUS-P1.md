@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+D-2: Page source viewer  branch: p1-d2-view-source
+Next step: реализация завершена, тесты проходят, merge  crates/shell/src/source_view.rs
 
 ---
 

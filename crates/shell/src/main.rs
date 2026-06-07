@@ -42,6 +42,7 @@ mod omnibox;
 mod panels;
 mod platform;
 mod reader_view;
+mod source_view;
 pub mod surface;
 mod runtime;
 mod scroll;
@@ -1791,6 +1792,8 @@ enum KeyCommand {
     ToggleReadLater,
     /// Включить/выключить Reader View (F9, §D-3): clean article layout.
     ToggleReaderView,
+    /// Открыть просмотр исходного кода текущей страницы (Ctrl+U, §D-2).
+    ViewSource,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1928,6 +1931,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         }
         // F9 — toggle Reader View (§D-3)
         KeyCode::F9 if no_mods => Some(KeyCommand::ToggleReaderView),
+        // Ctrl+U — view page source (§D-2)
+        KeyCode::KeyU if ctrl_only => Some(KeyCommand::ViewSource),
         // Ctrl+= — zoom in
         KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
         // Ctrl+- — zoom out
@@ -7771,6 +7776,9 @@ impl Lumen {
             KeyCommand::ToggleReaderView => {
                 self.toggle_reader_view();
             }
+            KeyCommand::ViewSource => {
+                self.show_view_source();
+            }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
                 self.relayout();
@@ -8101,6 +8109,13 @@ impl Lumen {
     /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
     /// → record in search_history → plain navigate.
     fn handle_omnibox_commit(&mut self, value: String) {
+        // `view-source:<url>` — fetch and display syntax-highlighted source (§D-2).
+        if let Some(target_url) = value.trim().strip_prefix("view-source:") {
+            let target_url = target_url.trim().to_owned();
+            self.show_view_source_for_url(&target_url);
+            return;
+        }
+
         // `about:settings` — open the browser settings overlay (task D-7).
         if value.trim() == "about:settings" {
             let snap = self.settings_store.snapshot();
@@ -8702,6 +8717,47 @@ impl Lumen {
         self.reader_original_source = Some(self.source.clone());
         self.source = PageSource::Snapshot { html: reader_html, base_url };
         self.reload();
+    }
+
+    /// Show syntax-highlighted source of the current page (Ctrl+U, §D-2).
+    ///
+    /// Uses the already-parsed HTML stored in `layout_source.html_source`.
+    /// No-op when the page has no HTML source (e.g. empty tab).
+    fn show_view_source(&mut self) {
+        let html = match self.layout_source.as_ref().and_then(|ls| ls.html_source.as_deref()) {
+            Some(s) if !s.is_empty() => s.to_owned(),
+            _ => return,
+        };
+        let url = self.source.url_str()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "about:source".to_owned());
+        let source_html = source_view::build_view_source_html(&url, &html);
+        self.navigate_to(PageSource::Snapshot {
+            html: source_html,
+            base_url: format!("view-source:{url}"),
+        });
+    }
+
+    /// Fetch `url` and display its raw bytes as syntax-highlighted source (§D-2).
+    ///
+    /// Used when the user types `view-source:<url>` in the address bar.
+    fn show_view_source_for_url(&mut self, url: &str) {
+        let source = PageSource::from_arg(Some(url));
+        let sink = Arc::clone(&self.event_sink);
+        let jar = Arc::clone(&self.cookie_jar);
+        match source.load_bytes(sink, Some(jar)) {
+            Ok(raw) => {
+                let html_str = String::from_utf8_lossy(&raw.bytes).into_owned();
+                let source_html = source_view::build_view_source_html(url, &html_str);
+                self.navigate_to(PageSource::Snapshot {
+                    html: source_html,
+                    base_url: format!("view-source:{url}"),
+                });
+            }
+            Err(e) => {
+                eprintln!("view-source: не удалось загрузить {url}: {e}");
+            }
+        }
     }
 
     fn refresh_read_later(&mut self) {
