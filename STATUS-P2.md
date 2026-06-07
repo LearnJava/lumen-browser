@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**E-1 | Print dialog UI**  branch: p2-e1-print-dialog
+Next step: create `panels/print_panel.rs`  crates/shell/src/panels/print_panel.rs
 
 ---
 
