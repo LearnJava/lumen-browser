@@ -6,8 +6,8 @@
 
 ## In progress
 
-E-4: WebSerial API stub  branch: p1-e4-webserial
-Next step: создать crates/js/src/serial.rs, добавить в lib.rs
+E-5: Compute Pressure API stub  branch: p1-e5-compute-pressure
+Next step: создать crates/js/src/compute_pressure.rs, добавить в lib.rs
 
 ---
 
@@ -20,7 +20,7 @@ Next step: создать crates/js/src/serial.rs, добавить в lib.rs
 | ~~E-1~~ | ~~**HTML5 Drag and Drop API**~~ — **выполнено** | M | `lumen-js` |
 | ~~E-2~~ | ~~**Performance Resource Timing Level 2**~~ — **выполнено** | M | `lumen-js`, `lumen-network` |
 | ~~E-3~~ | ~~**MediaRecorder API stub**~~ — **выполнено** | S | `lumen-js` |
-| E-4 | **WebSerial API stub** — W3C Serial API L1 Phase 0: `navigator.serial.requestPort({filters?})` → reject NotSupportedError, `navigator.serial.getPorts()` → Promise<[]>. `SerialPort` stub (open/close/read/write → reject). 4 теста. | XS | `lumen-js` |
+| ~~E-4~~ | ~~**WebSerial API stub**~~ — **выполнено** | XS | `lumen-js` |
 | E-5 | **Compute Pressure API stub** — W3C Compute Pressure L1 Phase 0: `new PressureObserver(callback)`, `.observe('cpu')/.unobserve('cpu')/.disconnect()`. `PressureRecord {source, state:'nominal', time}` класс. `PressureObserver.knownSources() → ['cpu']`. 5 тестов. | XS | `lumen-js` |
 
 ---
