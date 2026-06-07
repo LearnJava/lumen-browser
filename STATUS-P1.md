@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+D-1: Certificate viewer panel  branch: p1-d1-cert-panel
+Next step: cargo check + clippy + tests  crates/shell/src/panels/cert_panel.rs
 
 ---
 

@@ -461,6 +461,8 @@ fn run_window_mode(
         restore_spinner_start_ms: None,
         resize_active: None,
         reader_original_source: None,
+        cert_info: None,
+        cert_panel: panels::cert_panel::CertPanel::new(),
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -1869,6 +1871,8 @@ enum KeyCommand {
     ToggleShortcuts,
     /// Открыть/закрыть диалог печати страницы (Ctrl+P, E-1).
     TogglePrint,
+    /// Открыть/закрыть просмотр TLS-сертификата (Ctrl+Shift+C, §D-1).
+    ToggleCert,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -2016,6 +2020,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Slash if ctrl_and_shift => Some(KeyCommand::ToggleShortcuts),
         // Ctrl+P — print dialog (E-1)
         KeyCode::KeyP if ctrl_only => Some(KeyCommand::TogglePrint),
+        // Ctrl+Shift+C — certificate viewer (§D-1)
+        KeyCode::KeyC if ctrl_and_shift => Some(KeyCommand::ToggleCert),
         // Ctrl+= — zoom in
         KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
         // Ctrl+- — zoom out
@@ -2469,6 +2475,11 @@ struct PageSnapshot {
     /// Original page source preserved while Reader View (§D-3) is active.
     /// `None` = this tab is not in reader mode.
     reader_original_source: Option<PageSource>,
+    /// TLS certificate data for the current page (§D-1).
+    ///
+    /// Populated when a successful HTTPS connection is made; `None` for HTTP pages
+    /// or when cert extraction is not yet wired (Phase 0 uses stubs).
+    cert_info: Option<panels::cert_panel::PanelCertData>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3986,6 +3997,11 @@ struct Lumen {
     ///
     /// Shows all `KeyCommand` bindings with rebind-on-click support.
     shortcuts_panel: panels::shortcuts_panel::ShortcutsPanel,
+    /// Certificate viewer panel (Ctrl+Shift+C, §D-1).
+    ///
+    /// Centred 500×440 overlay showing X.509 cert data (subject CN/Org, issuer,
+    /// validity dates, SHA-256 fingerprint, SAN list, TLS version).
+    cert_panel: panels::cert_panel::CertPanel,
     /// Whether the curated system-font fallback chain has been preloaded into
     /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
     ///
@@ -4039,6 +4055,11 @@ struct Lumen {
     /// `Some` when the current page is showing the clean reader HTML (F9 toggle);
     /// `None` in normal browsing mode.  Toggling F9 again restores this source.
     reader_original_source: Option<PageSource>,
+    /// TLS certificate information for the current tab (§D-1).
+    ///
+    /// Populated when a page loads over HTTPS; cleared on tab switch / navigation.
+    /// Phase 0: shell can set this to a stub value via `CertInfo::stub_for`.
+    cert_info: Option<panels::cert_panel::PanelCertData>,
 }
 
 /// State for an in-progress CSS View Transition cross-fade (CSS View Transitions L1).
@@ -6088,6 +6109,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // Certificate viewer panel (§D-1): centred overlay.
+                    if self.cert_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
+                        let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
+                        let lx = x_css - cp_x;
+                        let ly = y_css - cp_y;
+                        if (0.0..panels::cert_panel::PANEL_W).contains(&lx)
+                            && (0.0..panels::cert_panel::PANEL_H).contains(&ly)
+                        {
+                            use panels::cert_panel::CertHit;
+                            match self.cert_panel.hit_test(lx, ly) {
+                                CertHit::Close | CertHit::Header => {
+                                    self.cert_panel.close();
+                                }
+                                CertHit::Body => { /* swallow */ }
+                            }
+                        } else {
+                            self.cert_panel.close();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
                     // History panel (task D-5): centred floating overlay.
                     if self.history_panel.visible {
                         let (px, py) = self.history_panel_anchor();
@@ -6382,6 +6428,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
                     };
                     self.shortcuts_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // Certificate viewer panel intercepts the wheel while visible (§D-1).
+                if self.cert_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.cert_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
                     self.request_redraw();
                     return;
                 }
@@ -6992,6 +7048,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
                     let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
                     self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y);
+                }
+
+                // Certificate viewer panel (§D-1): centred floating overlay.
+                if self.cert_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
+                    let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
+                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y);
                 }
 
                 // History panel (task D-5): centred floating overlay.
@@ -8107,6 +8172,11 @@ impl Lumen {
             }
             KeyCommand::TogglePrint => {
                 self.print_panel.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::ToggleCert => {
+                let cert = self.cert_info.clone();
+                self.cert_panel.toggle(cert);
                 self.request_redraw();
             }
             KeyCommand::ZoomIn => {
@@ -10289,6 +10359,7 @@ impl Lumen {
                 String::from("null"),
             ),
             reader_original_source: self.reader_original_source.take(),
+            cert_info: self.cert_info.take(),
         }
     }
 
@@ -10339,6 +10410,7 @@ impl Lumen {
         self.display_url = snap.display_url;
         self.current_history_state_json = snap.current_history_state_json;
         self.reader_original_source = snap.reader_original_source;
+        self.cert_info = snap.cert_info;
     }
 
     /// Reset all per-page fields to blank-tab defaults.
@@ -10391,6 +10463,7 @@ impl Lumen {
         self.display_url = None;
         self.current_history_state_json = String::from("null");
         self.reader_original_source = None;
+        self.cert_info = None;
         // Cancel in-flight scroll animations.
         self.scroll_anim = None;
         self.momentum_anim = None;
