@@ -13,6 +13,7 @@ pub mod canvas2d;
 pub mod clipboard;
 pub mod contacts;
 pub mod cookie_banner;
+pub mod cookie_store;
 pub mod payment_request;
 pub mod credentials;
 pub mod device_sensors;
@@ -621,6 +622,13 @@ impl QuickJsRuntime {
             // permissionState(). Phase 0: static endpoint, in-memory subscriptions.
             if let Err(e) = push_api::init_push_api(&ctx) {
                 eprintln!("Push API init failed: {}", e);
+            }
+
+            // Install Cookie Store API (WHATWG Cookie Store API, Phase 0) — after DOM so
+            // Promise and document.cookie are available. Provides window.cookieStore with
+            // get/getAll/set/delete and CookieChangeEvent. Phase 0: in-memory store.
+            if let Err(e) = cookie_store::init_cookie_store(&ctx) {
+                eprintln!("Cookie Store API init failed: {}", e);
             }
 
             // Install cookie-banner auto-dismiss shim (7C.3) — last, after full DOM.
