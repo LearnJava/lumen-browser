@@ -6,12 +6,18 @@
 
 ## In progress
 
-F-3: CSS font-stretch axis matching  branch: p2-f3-font-stretch
-Next step: добавить wdth_axis в OwnedFontMetrics + resolve_font_stretch в MultiFontMeasurer  paint/src/lib.rs:132
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**F-3 | CSS font-stretch axis matching** ✅ 2026-06-07 (merged)
+- `OwnedFontMetrics.wdth_axis: Option<(f32, f32)>` — парсится из fvar при регистрации @font-face шрифта
+- `MultiFontMeasurer::resolve_font_stretch(families, stretch_pct) -> Option<f32>` — перебирает семьи, находит первую с wdth осью, зажимает значение в [min, max] (CSS Fonts L4 §5.2)
+- `// CSS: font-stretch` handoff → STATUS-P4.md "Needs wiring": P4 добавляет поле в ComputedStyle + apply_declaration
+- 4 теста: no_families→None, non_variable→None, clamps_below_min, clamps_above_max
+- Итого: 555 тестов lumen-paint ✅, Clippy чист
 
 **F-2 | CSS hyphens soft hyphen rendering** ✅ 2026-06-07 (merged)
 - Реализация (strip_soft_hyphens + try_hyp_break) уже была добавлена P4 (hyphens-engine)
