@@ -70,6 +70,29 @@ impl fmt::Display for DomSnapshotError {
 
 impl std::error::Error for DomSnapshotError {}
 
+/// Hard limit on the number of nodes in a single `Document` arena.
+///
+/// JS-driven `document.createElement()` returns a `QuotaExceededError` when this
+/// threshold is reached. HTML-parser allocations are not gated (they use
+/// `create_element` directly), so overly large HTML files may still exceed the
+/// limit in the arena — this guard is a JS-mutation fence, not a hard memory cap.
+pub const MAX_DOM_NODES: usize = 50_000;
+
+/// Soft warning threshold — `console.warn` fires once when node count crosses this.
+pub const WARN_DOM_NODES: usize = 40_000;
+
+/// Returned by [`Document::try_create_element`] when [`MAX_DOM_NODES`] is reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeLimitExceeded;
+
+impl fmt::Display for NodeLimitExceeded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DOM node limit exceeded (max {MAX_DOM_NODES})")
+    }
+}
+
+impl std::error::Error for NodeLimitExceeded {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(u32);
 
@@ -1162,11 +1185,33 @@ impl Document {
         id
     }
 
+    /// Number of nodes currently allocated in this document's arena (including the root).
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Create an element unconditionally. Used by the HTML parser — does **not** enforce
+    /// [`MAX_DOM_NODES`]. JS-driven mutations should use [`try_create_element`][Self::try_create_element].
     pub fn create_element(&mut self, name: QualName) -> NodeId {
         self.alloc(NodeData::Element {
             name,
             attrs: Vec::new(),
         })
+    }
+
+    /// Create an element, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+    /// holds [`MAX_DOM_NODES`] or more nodes.
+    ///
+    /// Called by the `_lumen_create_element` JS binding so that JS-driven DOM mutations
+    /// cannot grow the tree beyond the safety limit.
+    pub fn try_create_element(&mut self, name: QualName) -> Result<NodeId, NodeLimitExceeded> {
+        if self.nodes.len() >= MAX_DOM_NODES {
+            return Err(NodeLimitExceeded);
+        }
+        Ok(self.alloc(NodeData::Element {
+            name,
+            attrs: Vec::new(),
+        }))
     }
 
     pub fn create_text(&mut self, content: impl Into<String>) -> NodeId {
@@ -5963,5 +6008,45 @@ mod tests {
         // Even with zero JS refs, shadow root must not be collected
         let dead = doc.dead_node_ids();
         assert!(!dead.contains(&shadow_root));
+    }
+
+    // ── DOM node count / limit tests ──────────────────────────────────────────
+
+    #[test]
+    fn node_count_returns_arena_length() {
+        let mut doc = Document::new();
+        let before = doc.node_count();
+        doc.create_element(QualName::html("div"));
+        assert_eq!(doc.node_count(), before + 1);
+    }
+
+    #[test]
+    fn try_create_element_ok_below_limit() {
+        let mut doc = Document::new();
+        let result = doc.try_create_element(QualName::html("span"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn try_create_element_err_at_limit() {
+        let mut doc = Document::new();
+        // Fill arena to exactly MAX_DOM_NODES nodes.
+        while doc.node_count() < MAX_DOM_NODES {
+            doc.create_element(QualName::html("div"));
+        }
+        assert_eq!(doc.node_count(), MAX_DOM_NODES);
+        let result = doc.try_create_element(QualName::html("p"));
+        assert_eq!(result, Err(NodeLimitExceeded));
+    }
+
+    #[test]
+    fn node_limit_exceeded_display() {
+        let msg = NodeLimitExceeded.to_string();
+        assert!(msg.contains("50000"), "display should mention MAX_DOM_NODES");
+    }
+
+    #[test]
+    fn warn_threshold_less_than_max() {
+        const { assert!(WARN_DOM_NODES < MAX_DOM_NODES) };
     }
 }

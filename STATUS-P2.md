@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none)
+**D-5 | DOM node count limit**  branch: p2-d5-dom-node-limit — READY TO MERGE
+Реализовано: MAX_DOM_NODES=50_000, WARN_DOM_NODES=40_000, NodeLimitExceeded, node_count(), try_create_element(), _lumen_dom_node_count() binding, QuotaExceededError throw при limit, исправлен баг u32::MAX→-1 в JS шиме.
+213 тестов lumen-dom ✅, 1296 тестов lumen-js ✅ (7 pre-existing PiP fail), Clippy чист.
 
 ---
 

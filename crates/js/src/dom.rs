@@ -610,6 +610,17 @@ fn install_primitives(
         );
     }
 
+    // ── DOM node count ───────────────────────────────────────────────────────
+    {
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_dom_node_count",
+            move || -> u32 {
+                d.lock().unwrap().node_count() as u32
+            }
+        );
+    }
+
     // ── tree mutation ────────────────────────────────────────────────────────
     {
         let d = Arc::clone(&doc);
@@ -617,8 +628,11 @@ fn install_primitives(
             "_lumen_create_element",
             move |tag: String| -> u32 {
                 let mut doc = d.lock().unwrap();
-                let nid = doc.create_element(QualName::html(tag.to_ascii_lowercase()));
-                nid.index() as u32
+                // Returns u32::MAX when MAX_DOM_NODES is reached; JS shim handles this.
+                match doc.try_create_element(QualName::html(tag.to_ascii_lowercase())) {
+                    Ok(nid) => nid.index() as u32,
+                    Err(_) => u32::MAX,
+                }
             }
         );
         let d = Arc::clone(&doc);
@@ -3868,6 +3882,7 @@ var _FS_ATTR = 'data-lumen-fullscreen';
 var _doc_hidden = false;
 var _doc_visibility_state = 'visible';
 var _doc_ready_state = 'loading';
+var __dom_node_warned = false;
 
 var document = {
     get title()  { return _lumen_get_document_title(); },
@@ -3891,7 +3906,17 @@ var document = {
         return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
     },
     createElement:     function(tag) {
-        return _lumen_make_element(_lumen_create_element(String(tag).toLowerCase()));
+        var nid = _lumen_create_element(String(tag).toLowerCase());
+        // QuickJS converts the Rust u32::MAX sentinel to -1 (signed overflow).
+        if (nid < 0) {
+            throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
+        }
+        var cnt = _lumen_dom_node_count();
+        if (!__dom_node_warned && cnt >= 40000) {
+            __dom_node_warned = true;
+            console.warn('DOM tree exceeds 40000 nodes');
+        }
+        return _lumen_make_element(nid);
     },
     createTextNode:         function(t)   { return _lumen_make_element(_lumen_create_text_node(String(t))); },
     createComment:          function()    { return _lumen_make_element(_lumen_create_text_node('')); },
@@ -18901,5 +18926,71 @@ mod tests {
             "#
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── DOM node count / limit bindings ───────────────────────────────────────
+
+    #[test]
+    fn dom_node_count_binding_returns_positive() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_lumen_dom_node_count() > 0").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dom_node_count_increments_after_create_element() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var before = _lumen_dom_node_count();
+            document.createElement('span');
+            _lumen_dom_node_count() === before + 1
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dom_node_count_at_max_after_prefill() {
+        let doc = {
+            use lumen_dom::{Document, QualName};
+            let mut d = Document::new();
+            while d.node_count() < lumen_dom::MAX_DOM_NODES {
+                d.create_element(QualName::html("div"));
+            }
+            // Verify prefill worked
+            assert_eq!(d.node_count(), lumen_dom::MAX_DOM_NODES);
+            Arc::new(Mutex::new(d))
+        };
+        let rt = runtime_with_dom(doc);
+        // The binding should reflect the pre-filled count
+        let r = rt.eval(&format!("_lumen_dom_node_count() >= {}", lumen_dom::MAX_DOM_NODES)).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dom_create_element_throws_quota_exceeded_when_full() {
+        // Pre-fill the arena to MAX_DOM_NODES via the Rust API so the JS
+        // binding returns the error sentinel without 50 000 JS evals.
+        let doc = {
+            use lumen_dom::{Document, QualName};
+            let mut d = Document::new();
+            while d.node_count() < lumen_dom::MAX_DOM_NODES {
+                d.create_element(QualName::html("div"));
+            }
+            Arc::new(Mutex::new(d))
+        };
+        let rt = runtime_with_dom(doc);
+        // QuickJS converts Rust u32::MAX to -1 (signed overflow), so the shim
+        // now checks `nid < 0` and throws QuotaExceededError.
+        let r = rt.eval(
+            r#"
+            var caught = '';
+            try { document.createElement('p'); }
+            catch (e) { caught = e.name; }
+            caught
+            "#,
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("QuotaExceededError".into()));
     }
 }
