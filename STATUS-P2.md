@@ -6,12 +6,19 @@
 
 ## In progress
 
-**F-5 | BiDi 8H.3: network response body** branch: p2-f5-bidi-response-body
-Next step: add `response_bodies: HashMap<u64, Vec<u8>>` to BidiState + `record_response_body()` + `network.getResponseBody` command  crates/shell/src/bidi/protocol.rs:54
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**F-5 | BiDi 8H.3: network response body** ✅ 2026-06-08 (merged)
+- `BidiState.response_bodies: HashMap<u64, Vec<u8>>` — буфер тел ответов per-requestId
+- `record_response_body(request_id, body)` — заполняет буфер, эмитирует `network.responseBodyReceived` при подписке
+- `network.getResponseBody` — BiDi §12.6.4: возвращает тело как `{type:"base64", value:...}` или `"no such request"`
+- `network_response_body_event_params(request_id, body)` — формирует параметры события
+- 6 тестов: get_response_body_returns_base64, missing_request_id_errors, unknown_request_errors, record_emits_event_when_subscribed, no_event_when_not_subscribed, second_record_overwrites_first
+- Итого bidi: 37 тестов ✅, Clippy чист
 
 **F-4 | CSS color-scheme UA form elements** ✅ 2026-06-08 (merged)
 - `pub fn ua_form_element_colors(tag, dark_mode)` → `(border, bg, fg)`: Light (#767676/#fff/black) / Dark (#616161/#1e1e1e/white); button отличается bg (#efefef/#3a3a3c)
