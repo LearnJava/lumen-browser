@@ -6,7 +6,8 @@
 
 ## In progress
 
-*(свободен)*
+D-8: Encoding API streaming  branch: p1-d8-encoding-stream
+Next step: 6 тестов добавлены, clippy + тесты, merge  crates/js/src/dom.rs:5680
 
 ---
 
