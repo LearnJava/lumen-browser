@@ -5166,13 +5166,32 @@ fn lay_out_grid(
         .map(|ctx| ctx.gap)
         .unwrap_or_else(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0));
 
+    // CSS Grid L1 §7.2.3.4 — Phase 2: expand repeat(auto-fill|auto-fit, ...) at layout time.
+    // If the style carried auto-repeat metadata, resolve the track count and build an expanded list.
+    let auto_fill_col_tracks: Vec<GridTrackSize> =
+        if let Some(ref rep) = s.grid_template_col_auto_repeat {
+            let n = resolve_auto_fill_fit_count(content_width, &rep.tracks, col_gap).max(1);
+            let mut tracks = Vec::with_capacity(n * rep.tracks.len());
+            for _ in 0..n {
+                tracks.extend_from_slice(&rep.tracks);
+            }
+            tracks
+        } else {
+            Vec::new()
+        };
+    let eff_col_template: &[GridTrackSize] = if s.grid_template_col_auto_repeat.is_some() {
+        &auto_fill_col_tracks
+    } else {
+        &s.grid_template_columns
+    };
+
     // Determine explicit track counts.
     // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
     // for placement purposes use the number of inherited tracks (or 1 for auto-placement).
-    let n_explicit_cols = if s.grid_template_columns.first() == Some(&GridTrackSize::Subgrid) {
+    let n_explicit_cols = if eff_col_template.first() == Some(&GridTrackSize::Subgrid) {
         inherited_cols.as_ref().map(|ctx| ctx.sizes.len()).unwrap_or(1).max(1)
     } else {
-        s.grid_template_columns.len().max(1)
+        eff_col_template.len().max(1)
     };
 
     // --- Step 1: Resolve placements for every item ---
@@ -5385,7 +5404,7 @@ fn lay_out_grid(
         // Normal grid: compute column widths from the style.
         let mut col_widths: Vec<f32> = (0..n_cols)
             .map(|c| {
-                let ts = grid_track(c, &s.grid_template_columns, &s.grid_auto_columns);
+                let ts = grid_track(c, eff_col_template, &s.grid_auto_columns);
                 match ts {
                     GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
                     GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
@@ -5403,11 +5422,11 @@ fn lay_out_grid(
 
         // Distribute fr among column tracks.
         let total_fr: f32 = (0..n_cols)
-            .map(|c| grid_track(c, &s.grid_template_columns, &s.grid_auto_columns).fr().unwrap_or(0.0))
+            .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).fr().unwrap_or(0.0))
             .sum();
         let auto_col_count = (0..n_cols)
             .filter(|&c| matches!(
-                grid_track(c, &s.grid_template_columns, &s.grid_auto_columns),
+                grid_track(c, eff_col_template, &s.grid_auto_columns),
                 GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
             ))
             .count();
@@ -5421,7 +5440,7 @@ fn lay_out_grid(
         };
 
         for c in 0..n_cols {
-            match grid_track(c, &s.grid_template_columns, &s.grid_auto_columns) {
+            match grid_track(c, eff_col_template, &s.grid_auto_columns) {
                 GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
                 GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
                     col_widths[c as usize] = auto_col_width;
@@ -8986,6 +9005,126 @@ mod tests {
         let tracks: Vec<GridTrackSize> = vec![];
         let count = resolve_auto_fill_fit_count(500.0, &tracks, 0.0);
         assert_eq!(count, 1, "empty track list should return 1");
+    }
+
+    // CSS Grid auto-fill/auto-fit Phase 2 layout tests (G-1)
+
+    /// Collect (x, y, width) of all Block children of the first grid container found.
+    fn collect_grid_item_rects(root: &super::LayoutBox) -> Vec<(f32, f32, f32)> {
+        fn walk(b: &super::LayoutBox, out: &mut Vec<(f32, f32, f32)>, in_grid: bool) {
+            if in_grid && matches!(b.kind, super::BoxKind::Block) {
+                out.push((b.rect.x, b.rect.y, b.rect.width));
+            }
+            let next_in_grid = in_grid || matches!(b.kind, super::BoxKind::Block);
+            for c in &b.children {
+                walk(c, out, next_in_grid && !in_grid);
+            }
+        }
+        // Find the first grid container and collect its direct children.
+        fn find_grid(b: &super::LayoutBox) -> Option<Vec<(f32, f32, f32)>> {
+            if b.style.display == super::Display::Grid {
+                let items: Vec<_> = b.children.iter()
+                    .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+                    .map(|c| (c.rect.x, c.rect.y, c.rect.width))
+                    .collect();
+                return Some(items);
+            }
+            for c in &b.children {
+                if let Some(v) = find_grid(c) {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        let _ = walk; // suppress unused warning
+        find_grid(root).unwrap_or_default()
+    }
+
+    #[test]
+    fn grid_auto_fill_expands_columns_at_layout() {
+        // repeat(auto-fill, 100px) in a 500px container → 5 columns; items flow into columns
+        let html = "<div class='grid'>\
+                     <div>A</div><div>B</div><div>C</div><div>D</div><div>E</div>\
+                    </div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fill, 100px); \
+                           width: 500px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(500.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(items.len() >= 2, "should have at least 2 items placed");
+        // First item should be ~100px wide (one column)
+        let (_, _, w0) = items[0];
+        assert!(
+            (w0 - 100.0).abs() < 2.0,
+            "first item width should be ~100px (auto-fill expanded), got {}",
+            w0
+        );
+        // Second item should be in the second column (x ≈ 100)
+        let (x1, _, _) = items[1];
+        assert!(
+            (90.0..=110.0).contains(&x1),
+            "second item x should be ~100px (column 2), got {}",
+            x1
+        );
+    }
+
+    #[test]
+    fn grid_auto_fill_minimum_one_column() {
+        // Even when container is very small, at least 1 track must be produced (no crash)
+        let html = "<div class='grid'><div>X</div></div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fill, 200px); \
+                           width: 50px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(50.0, 300.0));
+        // Should not panic; grid should have content
+        assert!(!root.children.is_empty(), "grid should have content");
+        let items = collect_grid_item_rects(&root);
+        assert!(!items.is_empty(), "should have at least one item placed");
+    }
+
+    #[test]
+    fn grid_auto_fit_expands_columns_at_layout() {
+        // repeat(auto-fit, 100px) in a 300px container → 3 columns
+        let html = "<div class='grid'>\
+                     <div>P</div><div>Q</div><div>R</div>\
+                    </div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fit, 100px); \
+                           width: 300px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(items.len() >= 2, "should have at least 2 items placed");
+        let (_, _, w0) = items[0];
+        assert!(
+            (w0 - 100.0).abs() < 2.0,
+            "first item width ~100px for auto-fit, got {}",
+            w0
+        );
+        let (x1, _, _) = items[1];
+        assert!(
+            (90.0..=110.0).contains(&x1),
+            "second item x ~100px (column 2), got {}",
+            x1
+        );
+    }
+
+    #[test]
+    fn grid_auto_fill_with_minmax_tracks() {
+        // repeat(auto-fill, minmax(80px, 1fr)) in 400px → multiple tracks, no panic
+        let html = "<div class='grid'>\
+                     <div>M</div><div>N</div>\
+                    </div>";
+        let css = ".grid { display: grid; \
+                           grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); \
+                           width: 400px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(!items.is_empty(), "minmax auto-fill items should be laid out");
     }
 
     // CSS Grid dense packing tests (B-4)

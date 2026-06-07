@@ -12,6 +12,15 @@
 
 ## Current / Recently Merged
 
+**G-1 | CSS Grid auto-fill/auto-fit Phase 2** ✅ 2026-06-08 (merged)
+- `grid_template_col_auto_repeat: Option<GridRepeat>` и `grid_template_row_auto_repeat: Option<GridRepeat>` в `ComputedStyle`
+- `parse_auto_repeat(s: &str) -> Option<GridRepeat>` — извлекает авто-повтор из строки CSS
+- `apply_declaration` для `grid-template-columns/rows` и `grid-template/grid` shorthands заполняет новые поля
+- `lay_out_grid`: `auto_fill_col_tracks` расширяет треки через `resolve_auto_fill_fit_count(content_width, tracks, col_gap).max(1)` перед layout
+- `eff_col_template` — указатель на расширенный список или оригинальный `grid_template_columns`
+- 4 теста: `grid_auto_fill_expands_columns_at_layout`, `grid_auto_fill_minimum_one_column`, `grid_auto_fit_expands_columns_at_layout`, `grid_auto_fill_with_minmax_tracks`
+- Итого lumen-layout: 2382 тестов ✅, Clippy чист
+
 **F-5 | BiDi 8H.3: network response body** ✅ 2026-06-08 (merged)
 - `BidiState.response_bodies: HashMap<u64, Vec<u8>>` — буфер тел ответов per-requestId
 - `record_response_body(request_id, body)` — заполняет буфер, эмитирует `network.responseBodyReceived` при подписке
@@ -261,6 +270,16 @@
 ## Next
 
 Ordered by priority. Сгруппированы по домену.
+
+### G — Фаза 2 / завершение незавершённых фич
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| ~~G-1~~ | ~~**CSS Grid auto-fill/auto-fit Phase 2**~~ — **выполнено** | M | `lumen-layout` |
+| G-2 | **BiDi дополнительные gaps (8H.3)** — `bidi/protocol.rs`: locale/timezone intercept (`session.setDefaultUserContextLocale`, `browser.setTimezoneOverride`), offline intercept, per-context UA override. 4 теста. | S | `lumen-shell` |
+| G-3 | **Memory pressure shell integration** — `shell/src/main.rs`: `CacheRegistry` (GlyphAtlas + ImageDecodeCache + LayerCache) + `Win32MemoryPressureSource` poll loop, `broadcast_pressure()` каждые 5с в `about_to_wait`. 3 теста. | XS | `lumen-shell` |
+| G-4 | **Web Notifications API stub** — `lumen-js/src/notifications.rs`: `Notification(title, {body, icon})` класс, `permission` (default 'granted'), `requestPermission()→Promise<'granted'>`, `showNotification()`, `getNotifications()→Promise<[]>`. 5 тестов. | S | `lumen-js` |
+| G-5 | **CSS Grid Table border-collapse Phase 2** — `layout/src/table.rs` и `box_tree.rs`: border-spacing layout (col_widths + row_heights учитывают border-spacing), collapsed border merging (применить `CollapsedBorder::resolve_conflict`). 4 теста. | S | `lumen-layout` |
 
 ### A — Рендеринг / GPU
 
