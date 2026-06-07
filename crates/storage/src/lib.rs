@@ -12,6 +12,7 @@
 //! Оба бэкенда соблюдают одинаковую семантику origin-партиционирования
 //! (`None` и `Some("")` — один namespace) и реализуют тот же trait.
 
+pub mod a11y_prefs;
 pub mod autofill;
 pub mod browser_settings;
 pub mod omnibox_aliases;
@@ -52,6 +53,7 @@ pub mod tab_snapshot;
 pub mod web_manifest;
 pub mod workspaces;
 
+pub use a11y_prefs::{A11yPrefs, A11yPrefsSnapshot, CursorSize};
 pub use autofill::{Autofill, AutofillEntry};
 pub use browser_settings::{BrowserSettings, BrowserSettingsSnapshot};
 pub use bfcache::{BfCache, BfCacheEntry};

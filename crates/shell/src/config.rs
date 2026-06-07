@@ -152,31 +152,28 @@ impl FingerprintProfile {
             .with_tls_profile(self.effective_tls_profile());
 
         // Wire DoH resolver if configured
-        if let Some(doh_url) = &self.doh_url {
-            if let Ok(endpoint) = Url::parse(doh_url) {
-                // Bootstrap HttpClient for DoH queries (uses system DNS to resolve DoH endpoint itself).
-                let bootstrap_client = std::sync::Arc::new(
-                    HttpClient::new()
-                        .with_fingerprint_profile(self.http_profile)
-                        .with_tls_profile(self.effective_tls_profile()),
-                );
-                // Create DoH resolver wrapping the bootstrap HTTP client.
-                let doh_resolver = std::sync::Arc::new(
-                    lumen_network::DohResolver::new(endpoint, bootstrap_client),
-                );
-                // Cache the DoH resolver results to reduce redundant queries.
-                let cached = std::sync::Arc::new(
-                    lumen_network::CachedDnsResolver::new(doh_resolver),
-                );
-                client = client.with_dns_resolver(cached);
-            }
+        if let Some(doh_url) = &self.doh_url
+            && let Ok(endpoint) = Url::parse(doh_url)
+        {
+            let bootstrap_client = std::sync::Arc::new(
+                HttpClient::new()
+                    .with_fingerprint_profile(self.http_profile)
+                    .with_tls_profile(self.effective_tls_profile()),
+            );
+            let doh_resolver = std::sync::Arc::new(
+                lumen_network::DohResolver::new(endpoint, bootstrap_client),
+            );
+            let cached = std::sync::Arc::new(
+                lumen_network::CachedDnsResolver::new(doh_resolver),
+            );
+            client = client.with_dns_resolver(cached);
         }
 
         // Wire HTTP proxy if configured
-        if let Some(proxy_str) = &self.proxy {
-            if let Some(proxy) = parse_http_proxy(proxy_str) {
-                client = client.with_proxy(std::sync::Arc::new(proxy));
-            }
+        if let Some(proxy_str) = &self.proxy
+            && let Some(proxy) = parse_http_proxy(proxy_str)
+        {
+            client = client.with_proxy(std::sync::Arc::new(proxy));
         }
 
         client
@@ -377,12 +374,12 @@ fn parse_http_proxy(proxy_url: &str) -> Option<lumen_network::HttpProxy> {
     let port: u16 = port_str.parse().ok()?;
 
     let mut proxy = HttpProxy::new(host.to_string(), port);
-    if !auth_part.is_empty() {
-        if let Some(colon_idx) = auth_part.find(':') {
-            let user = &auth_part[..colon_idx];
-            let pass = &auth_part[colon_idx + 1..];
-            proxy = proxy.with_basic_auth(user, pass);
-        }
+    if !auth_part.is_empty()
+        && let Some(colon_idx) = auth_part.find(':')
+    {
+        let user = &auth_part[..colon_idx];
+        let pass = &auth_part[colon_idx + 1..];
+        proxy = proxy.with_basic_auth(user, pass);
     }
     Some(proxy)
 }

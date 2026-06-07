@@ -78,7 +78,7 @@ BUG-062 | FIXED 2026-06-04 | network | clippy «very complex type» в doh.rs �
 BUG-063 | FIXED 2026-06-04 | layout  | clippy: manual_clamp → scale.clamp(), удалён #[expect(dead_code)], collapsible_if схлопнуты, unneeded_struct_pattern убран | crates/engine/layout/src/mathml.rs:88
 BUG-064 | FIXED 2026-06-04 | driver  | test_33_multi_column падал (ожидал 7 контейнеров height:60px и 22 .col, получал 52px): коммит cefb8475 (C8/P4) изменил высоты .mc с 60→52px, widths контейнеров 5/6 (680→660, 320→660) и заменил .col на .col-sm в группах 5-6; тест не был обновлён | crates/driver/tests/test_33.rs:34
 BUG-065 | FIXED 2026-06-04 | shell   | Клик по ссылке <a href> не срабатывал: hit-test вычислял page_y = y_css + scroll_y, не вычитая TAB_BAR_HEIGHT=36px, на которую страница сдвигается через PushTransform при рендере. Исправлено в page_point, handle_click_at, dispatch_mouse_move, update_cursor_icon | crates/shell/src/main.rs
-BUG-066 | OPEN  | paint  | render_tile() в Renderer не имеет #[cfg(feature = "cpu-render")] но вызывает crate::cpu_raster::rasterize_cpu — clippy lumen-shell --all-targets падает без фичи cpu-render | crates/engine/paint/src/renderer.rs:6409
+BUG-066 | FIXED 2026-06-07 | paint  | render_tile() в Renderer не имеет #[cfg(feature = "cpu-render")] но вызывает crate::cpu_raster::rasterize_cpu — clippy lumen-shell --all-targets падает без фичи cpu-render | crates/engine/paint/src/renderer.rs:6409
 ```
 
 ---
