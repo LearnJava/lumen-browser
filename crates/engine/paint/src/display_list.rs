@@ -3586,7 +3586,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             out.push(DisplayCommand::FillRect { rect: b.rect, color: grey });
             emit_outline(b, out);
         }
-        BoxKind::Iframe { src } => {
+        BoxKind::Iframe { src, .. } => {
             if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
                 return;
             }
@@ -4222,7 +4222,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             out.push(DisplayCommand::FillRect { rect: b.rect, color: grey });
             emit_outline(b, out);
         }
-        BoxKind::Iframe { src } => {
+        BoxKind::Iframe { src, .. } => {
             if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
                 return;
             }

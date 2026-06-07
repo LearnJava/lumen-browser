@@ -107,7 +107,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     if let BoxKind::Audio { src, controls } = &b.kind {
         let _ = write!(out, " src={src:?} controls={controls}");
     }
-    if let BoxKind::Iframe { src } = &b.kind {
+    if let BoxKind::Iframe { src, .. } = &b.kind {
         let _ = write!(out, " src={src:?}");
     }
     if let BoxKind::SvgShape { shape, .. } = &b.kind {

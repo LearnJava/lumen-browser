@@ -2366,6 +2366,9 @@ pub fn check_navigation_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
 pub struct IframeInfo {
     /// Значение атрибута `src`, если задан.
     pub src: Option<String>,
+    /// Inline HTML content from `srcdoc` attribute (HTML spec §4.8.5).
+    /// When present, this HTML is used instead of fetching `src`.
+    pub srcdoc: Option<String>,
     /// Sandbox-флаги согласно HTML §7.6.5. `SandboxFlags::empty()` если атрибута нет.
     pub sandbox: SandboxFlags,
     /// `true` если у элемента есть атрибут `sandbox` (независимо от значения).
@@ -2380,9 +2383,10 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
         .unwrap_or(false)
     {
         let src = node.get_attr("src").filter(|s| !s.is_empty()).map(str::to_owned);
+        let srcdoc = node.get_attr("srcdoc").filter(|s| !s.is_empty()).map(str::to_owned);
         let is_sandboxed = node.get_attr("sandbox").is_some();
         let sandbox = node.sandbox_flags().unwrap_or_else(SandboxFlags::empty);
-        out.push(IframeInfo { src, sandbox, is_sandboxed });
+        out.push(IframeInfo { src, srcdoc, sandbox, is_sandboxed });
     }
     for &child in &node.children.clone() {
         collect_iframes_inner(doc, child, out);
@@ -4792,6 +4796,27 @@ mod tests {
         assert!(!frames[1].sandbox.contains(SandboxFlags::FORMS));
         assert!(frames[2].is_sandboxed);
         assert_eq!(frames[2].sandbox, SandboxFlags::all_restrictions());
+    }
+
+    #[test]
+    fn collect_iframes_srcdoc_attribute() {
+        let mut doc = Document::new();
+        let body = doc.create_element(QualName::html("body"));
+        doc.append_child(doc.root(), body);
+
+        let f = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(f).data {
+            attrs.push(Attribute {
+                name: QualName::html("srcdoc"),
+                value: "<p>hello</p>".to_string(),
+            });
+        }
+        doc.append_child(body, f);
+
+        let frames = collect_iframes(&doc);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].srcdoc.as_deref(), Some("<p>hello</p>"));
+        assert!(frames[0].src.is_none());
     }
 
     // ── check_popup_gate ──────────────────────────────────────────────────────

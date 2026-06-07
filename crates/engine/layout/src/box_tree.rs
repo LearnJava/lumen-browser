@@ -1292,10 +1292,15 @@ pub enum BoxKind {
     /// Phase 0: rendered as a grey `DrawImage` placeholder (no sub-document
     /// navigation). Intrinsic size comes from `width`/`height` HTML attributes;
     /// UA defaults are 300×150 CSS px (HTML spec §4.8.5). `src` is the URL
-    /// to display in paint-side label and in JS `src` property.
+    /// to display in paint-side label and in JS `src` property. When `srcdoc`
+    /// is `Some`, the inline HTML was parsed via [`build_iframe_document`] and
+    /// is available for future Phase 1 sub-document rendering.
     Iframe {
         /// Primary document URL (`src` attribute), may be empty.
         src: String,
+        /// Inline HTML content from `srcdoc` attribute (HTML spec §4.8.5).
+        /// `None` if the element has no `srcdoc` attribute.
+        srcdoc: Option<String>,
     },
     /// Replaced element: HTML form control (`<input>`, `<button>`, `<select>`,
     /// `<textarea>`). Phase 0: block-level replaced. Размеры берутся из
@@ -1555,6 +1560,16 @@ pub fn layout_measured_hyp(
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
     root
+}
+
+/// Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5).
+///
+/// Returns the parsed `Document` ready for sub-document layout. The document
+/// has no base URL — relative resource references inside `srcdoc` HTML are
+/// interpreted as `about:blank`-relative (effectively unresolvable until
+/// Phase 1 navigation wiring).
+pub fn build_iframe_document(srcdoc: &str) -> Document {
+    lumen_html_parser::parse(srcdoc)
 }
 
 /// CSS Backgrounds L3 §2.11.2 — «The Canvas Background and the Root Element»:
@@ -2405,6 +2420,7 @@ fn build_box(
             } else if is_iframe_element(doc, id) {
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
+                let srcdoc = node.get_attr("srcdoc").filter(|s| !s.is_empty()).map(str::to_owned);
                 // HTML spec §4.8.5: UA default intrinsic size is 300×150 CSS px.
                 // Explicit width/height attrs applied earlier as presentational hints;
                 // fill only if still unset.
@@ -2414,7 +2430,7 @@ fn build_box(
                 if style.height.is_none() {
                     style.height = Some(Length::Px(150.0));
                 }
-                BoxKind::Iframe { src }
+                BoxKind::Iframe { src, srcdoc }
             } else if is_form_control_element(doc, id) {
                 let kind = {
                     let node = doc.get(id);

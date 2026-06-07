@@ -51,7 +51,7 @@ pub use animation::{
     AnimationScheduler, TransitionScheduler,
 };
 pub use box_tree::{
-    apply_container_styles,
+    apply_container_styles, build_iframe_document,
     collect_background_image_requests, collect_image_requests, layout, layout_measured,
     layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, ViewBox,
@@ -7158,7 +7158,7 @@ mod tests {
         let root = lay(r#"<iframe src="https://example.com"></iframe>"#, "");
         let frame = first_iframe_child(&root);
         match &frame.kind {
-            BoxKind::Iframe { src } => assert_eq!(src, "https://example.com"),
+            BoxKind::Iframe { src, .. } => assert_eq!(src, "https://example.com"),
             other => panic!("expected BoxKind::Iframe, got {other:?}"),
         }
     }
@@ -7205,9 +7205,45 @@ mod tests {
         let root = lay(r#"<iframe></iframe>"#, "");
         let frame = first_iframe_child(&root);
         match &frame.kind {
-            BoxKind::Iframe { src } => assert_eq!(src, ""),
+            BoxKind::Iframe { src, .. } => assert_eq!(src, ""),
             other => panic!("expected BoxKind::Iframe, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn iframe_srcdoc_stored_in_box_kind() {
+        let root = lay(r#"<iframe srcdoc="<p>hello</p>"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        match &frame.kind {
+            BoxKind::Iframe { srcdoc, .. } => {
+                assert_eq!(srcdoc.as_deref(), Some("<p>hello</p>"));
+            }
+            other => panic!("expected BoxKind::Iframe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_iframe_document_empty_html_returns_document() {
+        let doc = build_iframe_document("");
+        // Empty input still produces a valid Document with a root node that has children.
+        // lumen_html_parser::parse always inserts implicit html/head/body.
+        assert!(!doc.get(doc.root()).children.is_empty());
+    }
+
+    #[test]
+    fn build_iframe_document_parses_inline_html() {
+        let doc = build_iframe_document("<p>hello world</p>");
+        // The parsed document should contain a paragraph element somewhere in the tree.
+        let mut found = false;
+        let mut stack = vec![doc.root()];
+        while let Some(id) = stack.pop() {
+            if doc.get(id).element_name().is_some_and(|n| n.local == "p") {
+                found = true;
+                break;
+            }
+            stack.extend_from_slice(&doc.get(id).children);
+        }
+        assert!(found, "expected <p> in parsed srcdoc document");
     }
 
     // ──────── <picture> / <img srcset> source-selection integration ────────
