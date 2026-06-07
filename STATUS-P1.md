@@ -6,14 +6,14 @@
 
 ## In progress
 
-D-2: Page source viewer  branch: p1-d2-view-source
-Next step: реализация завершена, тесты проходят, merge  crates/shell/src/source_view.rs
+*(свободен)*
 
 ---
 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-07 | D-2: Page source viewer | Ctrl+U / `view-source:<url>`: новый модуль `crates/shell/src/source_view.rs` с `build_view_source_html(url, raw)` и state-machine tokeniser `highlight_html`. 4 CSS-класса: vs-tag (#569cd6), vs-attr (#d7ba7d), vs-str (#ce9178), vs-cmt (#608b4e). Тёмный фон #1e1e1e (VS Code dark). `KeyCommand::ViewSource` + `keybinding_for(Ctrl+U)`. `show_view_source()` — из layout_source.html_source. `show_view_source_for_url(url)` — через load_bytes. `handle_omnibox_commit`: перехват `view-source:` до других обработчиков. lumen-shell: clippy чист, 12 новых тестов. |
 | 2026-06-04 | D-7: Settings page | Ctrl+, / `about:settings`: `panels/settings_panel.rs` центрированный overlay 640×480px с 4 секциями (Общие/Конфиденц./Вид/Загрузки). Тогглы shields/DoH, пиллы fingerprint/theme, кнопки ±2px font-size, текстовые поля homepage/download_path с keyboard focus. `lumen_storage::BrowserSettings` SQLite с snapshot/apply_snapshot. 10 тестов storage + 10 тестов panel. lumen-shell + lumen-storage: clippy чист. |
 | 2026-06-04 | D-5: Browser history panel | Ctrl+H floating overlay: `panels/history_panel.rs` с HistoryPanel, HistoryItem, HistoryRow. Группировка по датам (Today/Yesterday/YYYY-MM-DD). Поиск через HistoryFts::search или History::recent(50). Удаление записи (×), "Очистить всё" (History::clear + HistoryFts::clear). Ctrl+H → KeyCommand::ToggleHistory, Esc=закрыть, ↑/↓=скролл, wheel scroll. history_store: History::open_in_memory() в Lumen, record_visit при каждой навигации. Центрированный оверлей 480×500px. 15 unit-тестов. lumen-shell: cargo check OK, 15/15 тестов. |
 | 2026-06-04 | D-3: Reader View | F9 toggle: `extract_article(html)` ищет `<article>`/`<main>`/`role="main"`, вырезает `<script>`/`<nav>`/`<aside>`/`<header>`/`<footer>`, извлекает title из `<title>` или первого `<h1>`. `build_reader_html()` → clean HTML (max-width:680px, 1.1rem, line-height:1.6). `toggle_reader_view()` в shell: вход — reload как PageSource::Snapshot, выход — восстановление оригинала. Keybinding F9 (Ctrl+Shift+R занят Read-later). `reader_original_source: Option<PageSource>` в Lumen + PageSnapshot (save/restore/reset). lumen-shell: clippy чист, 16/16 unit-тестов. |
@@ -121,7 +121,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~D-3~~ | ~~**Reader View**~~ — **выполнено** | M | **1** | `lumen-js`, `lumen-shell` |
 | ~~D-5~~ | ~~**Browser history panel**~~ — **выполнено** | M | **1** | `lumen-shell` |
 | ~~D-7~~ | ~~**Settings page**~~ — **выполнено** | M | **1** | `lumen-shell`, `lumen-storage` |
-| D-2 | **Page source viewer** — `view-source:` URI схема в `navigate_to`: fetch raw bytes → `PageSource::Source(html)` → layout как `<pre>` с 4-цветным syntax highlight (тег/атрибут/строка/комментарий). `KeyCommand::ViewSource` + `Ctrl+U`. | S | **1** | `lumen-shell` |
+| ~~D-2~~ | ~~**Page source viewer**~~ — **выполнено** | S | **1** | `lumen-shell` |
 | D-8 | **Encoding API streaming** — `TextDecoder {stream: true}`: `decode(chunk, {stream: true})` не сбрасывает частичный многобайтовый символ, финальный `decode()` flush. `TextDecoderStream` использует streaming decode. 6 тестов. | XS | **1** | `lumen-js` |
 | D-4 | **Keyboard shortcuts settings panel** — `panels/shortcuts_panel.rs` (360×500px), список всех `KeyCommand` + бинд, клик → rebind mode (ожидание нажатия), `lumen-storage::KeyboardShortcuts` SQLite `(command, modifier, key)`, загрузка при старте. 12 тестов. | M | 2 | `lumen-shell`, `lumen-storage` |
 | D-1 | **Certificate viewer panel** — `Ctrl+Shift+C`: `panels/cert_panel.rs`, из `TlsHandshakeInfo`: subject CN/O, issuer, not-before/after, SHA-256 fingerprint, SAN list, TLS version. Per-tab `cert_info: Option<TlsHandshakeInfo>` в `PageSnapshot`. 10 тестов. | S | 2 | `lumen-shell` |
