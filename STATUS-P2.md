@@ -6,12 +6,20 @@
 
 ## In progress
 
-**D-1 | Tile-based rendering**  branch: p2-d1-tile-rendering
-Next step: создать tile_grid.rs + cull_display_list + render_tile  paint/src/tile_grid.rs:1
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**D-1 | Tile-based rendering** ✅ 2026-06-07 (merged)
+- `TileGrid {tile_size: 256, tiles: HashMap<(i32,i32), TileDirty>}` — новый модуль `tile_grid.rs` в lumen-paint
+- `TileDirty` enum: `Clean | Dirty`; методы `mark_dirty/clean/is_dirty/dirty_tiles/mark_all_dirty`
+- `update_from_diff(old_dl, new_dl)` — O(n) diff, помечает тайлы с изменёнными командами
+- `cull_display_list(dl, tile_x, tile_y, tile_size)` в display_list.rs: AABB-тест, state-команды всегда проходят
+- `Renderer::render_tile(content, overlay, scroll_x, scroll_y, tile_x, tile_y, tile_size)` — CPU-растер тайла
+- Shell: `Lumen.tile_grid: TileGrid`; `mark_all_dirty` при полной загрузке; `update_from_diff` при relayout
+- 9 тестов ✅ (539 total lumen-paint), Clippy чист
 
 **E-3 | about:blank and about:srcdoc** ✅ 2026-06-07 (merged)
 - `PageSource::AboutBlank` — `from_arg("about:blank")` → пустой документ без HTTP-запроса
