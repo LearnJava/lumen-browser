@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**F-2 | CSS hyphens soft hyphen rendering** — branch: p2-f2-hyphens
+Next step: tests написаны (4 шт.), commit готов — задача завершена.
 
 ---
 
