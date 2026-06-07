@@ -59,6 +59,7 @@ pub mod serial;
 pub mod compute_pressure;
 pub mod csp;
 pub mod permissions_policy;
+pub mod web_codecs;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -520,6 +521,12 @@ impl QuickJsRuntime {
             // Phase 1: shell calls _lumen_set_permissions_policy after HTTP response headers.
             if let Err(e) = permissions_policy::install_permissions_policy_bindings(&ctx) {
                 eprintln!("Permissions Policy bindings init failed: {}", e);
+            }
+
+            // Install Web Codecs API stubs (W3C Web Codecs) — Phase 0: VideoDecoder/VideoEncoder/
+            // AudioDecoder/AudioEncoder constructors + state machine. isConfigSupported() → false.
+            if let Err(e) = web_codecs::install_web_codecs(&ctx) {
+                eprintln!("Web Codecs API init failed: {}", e);
             }
 
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
