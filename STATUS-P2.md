@@ -6,12 +6,20 @@
 
 ## In progress
 
-**E-3 | about:blank and about:srcdoc**  branch: p2-e3-about-blank
-Next step: tests + merge  crates/shell/src/main.rs:960, crates/engine/layout/src/box_tree.rs:1296
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**E-3 | about:blank and about:srcdoc** ✅ 2026-06-07 (merged)
+- `PageSource::AboutBlank` — `from_arg("about:blank")` → пустой документ без HTTP-запроса
+- `url_str()` = "about:blank" — отображается в адресной строке
+- `start_streaming_load` skip для `AboutBlank`
+- `IframeInfo.srcdoc` — `collect_iframes` собирает атрибут `srcdoc` из DOM
+- `BoxKind::Iframe { srcdoc: Option<String> }` — layout сохраняет значение
+- `build_iframe_document(srcdoc: &str) -> Document` — парсит inline HTML (HTML spec §4.8.5)
+- 7 тестов: 1 lumen-dom + 4 lumen-layout + 3 lumen-shell ✅, Clippy чист
 
 **D-5 | DOM node count limit** ✅ 2026-06-07 (merged)
 - `MAX_DOM_NODES = 50_000`, `WARN_DOM_NODES = 40_000` константы в lumen-dom
