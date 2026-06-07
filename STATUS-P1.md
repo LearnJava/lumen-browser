@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+F-5: MediaCapabilities API  branch: p1-f5-media-capabilities
+Next step: clippy + tests → merge  crates/js/src/media_capabilities.rs
 
 ---
 

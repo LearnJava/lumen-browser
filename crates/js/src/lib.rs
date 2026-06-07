@@ -61,6 +61,7 @@ pub mod csp;
 pub mod permissions_policy;
 pub mod web_codecs;
 pub mod ua_client_hints;
+pub mod media_capabilities;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -758,6 +759,13 @@ impl QuickJsRuntime {
             // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
             if let Err(e) = media_stream_recording::init_media_stream_recording(&ctx) {
                 eprintln!("MediaRecorder API init failed: {}", e);
+            }
+
+            // Install Media Capabilities API (W3C Media Capabilities §5) — after DOM/navigator.
+            // Phase 0: navigator.mediaCapabilities singleton; decodingInfo/encodingInfo always
+            // return supported=true, smooth=true, powerEfficient=false.
+            if let Err(e) = media_capabilities::install_media_capabilities_bindings(&ctx) {
+                eprintln!("Media Capabilities API init failed: {}", e);
             }
 
             Ok(())
