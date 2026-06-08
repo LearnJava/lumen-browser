@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BUG-075 — display:table shrink-to-fit  branch: p3-bug075-table-width
+Next step: table_intrinsic_content_width + BoxKind::Table branch  crates/engine/layout/src/box_tree.rs:4101
 
 ## Next
 

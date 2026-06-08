@@ -3537,7 +3537,7 @@ fn lay_out(
 
     let content_x = b.rect.x + padding_left + s.border_left_width;
     let content_y = b.rect.y + padding_top + s.border_top_width;
-    let content_width = (b.rect.width
+    let mut content_width = (b.rect.width
         - padding_left - padding_right
         - s.border_left_width - s.border_right_width).max(0.0);
 
@@ -4099,7 +4099,18 @@ fn lay_out(
             };
         }
         BoxKind::Table => {
-            // CSS 2.1 §17 — table container: compute global column widths, lay out rows.
+            // CSS 2.1 §17 / §17.5.2 — table container: compute global column widths, lay out rows.
+            // When no explicit CSS width is given, tables use shrink-to-fit: the table box is
+            // only as wide as its columns require (total column widths + border-spacing gaps).
+            // This differs from block elements which fill the available inline size.
+            if s.width.is_none() {
+                let intrinsic = table_intrinsic_content_width(b, viewport);
+                if intrinsic > 0.0 && intrinsic < content_width {
+                    b.rect.width = (intrinsic + padding_left + padding_right
+                        + s.border_left_width + s.border_right_width).max(0.0);
+                    content_width = intrinsic;
+                }
+            }
             let content_height = lay_out_table(
                 b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
             );
@@ -4611,6 +4622,40 @@ fn decrement_rowspan_map(map: &mut [u32]) {
     for v in map.iter_mut() {
         *v = v.saturating_sub(1);
     }
+}
+
+/// CSS 2.1 §17.5.2 — minimum (shrink-to-fit) content width for a table box.
+///
+/// Returns `sum(explicit_column_widths) + (n_cols + 1) * border_spacing_h`.
+/// Cells without an explicit CSS width contribute 0 (effectively auto/min-content).
+/// Used to shrink `display:table` boxes that have no explicit CSS `width`.
+fn table_intrinsic_content_width(b: &LayoutBox, viewport: Size) -> f32 {
+    let h_spacing = b.style.border_spacing_h;
+    let mut col_explicit: Vec<Option<f32>> = Vec::new();
+    let mut rowspan_map: Vec<u32> = Vec::new();
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => {
+                scan_row_explicit_widths(child, &mut col_explicit, &mut rowspan_map, 0.0, viewport);
+                decrement_rowspan_map(&mut rowspan_map);
+            }
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        scan_row_explicit_widths(row, &mut col_explicit, &mut rowspan_map, 0.0, viewport);
+                        decrement_rowspan_map(&mut rowspan_map);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let n_cols = col_explicit.len();
+    if n_cols == 0 {
+        return 0.0;
+    }
+    let total_explicit: f32 = col_explicit.iter().filter_map(|w| *w).sum();
+    total_explicit + (n_cols + 1) as f32 * h_spacing
 }
 
 /// Computes per-column widths for a `BoxKind::Table` element by scanning all rows
