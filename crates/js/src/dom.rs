@@ -5935,6 +5935,33 @@ FormData.prototype._toUrlEncoded = function() {
     }).join('&');
 };
 
+FormData.prototype._toMultipart = function(boundary) {
+    var enc = new TextEncoder();
+    var parts = [];
+    var dash = enc.encode('--');
+    var bnd = enc.encode(boundary);
+    var crlf = enc.encode('\\r\\n');
+    for (var i = 0; i < this._entries.length; i++) {
+        var name = this._entries[i][0];
+        var value = this._entries[i][1];
+        var safeName = name.replace(/\\r/g, '%0D').replace(/\\n/g, '%0A').replace(/\\x22/g, '%22');
+        var disp = 'Content-Disposition: form-data; name=\\x22' + safeName + '\\x22\\r\\n\\r\\n';
+        var dispHeader = enc.encode(disp);
+        var body = enc.encode(value);
+        parts.push(dash, bnd, crlf, dispHeader, body, crlf);
+    }
+    parts.push(dash, bnd, enc.encode('--'), crlf);
+    var totalLen = 0;
+    for (var j = 0; j < parts.length; j++) { totalLen += parts[j].length; }
+    var out = new Uint8Array(totalLen);
+    var off = 0;
+    for (var k = 0; k < parts.length; k++) {
+        out.set(parts[k], off);
+        off += parts[k].length;
+    }
+    return out;
+};
+
 // ── TextEncoder / TextDecoder (WHATWG Encoding §8–9) ─────────────────────────
 // Pure-JS UTF-8 implementation; QuickJS does not provide a built-in.
 
@@ -6043,6 +6070,7 @@ TextDecoder.prototype.decode = function(buf, options) {
 // fetch() (Fetch Standard §3) — synchronous under the hood, wrapped in Promise.
 // Supports request body: FormData → application/x-www-form-urlencoded,
 // string → text/plain;charset=UTF-8, Uint8Array/ArrayBuffer → application/octet-stream.
+// FormData → multipart/form-data with a generated boundary (Fetch spec §5.4 «extract a body»).
 function fetch(input, init) {
     try {
         var url = typeof input === 'string' ? input : (input && input.url ? input.url : String(input));
@@ -6056,9 +6084,12 @@ function fetch(input, init) {
         if (reqBody !== null && reqBody !== undefined) {
             var bodyBytes, contentType;
             if (reqBody instanceof FormData) {
-                var enc = reqBody._toUrlEncoded();
-                bodyBytes = Array.from(new TextEncoder().encode(enc));
-                contentType = 'application/x-www-form-urlencoded';
+                // Fetch spec §5.4: FormData body → multipart/form-data with random boundary.
+                // Phase 0: deterministic boundary for testability; production boundary is random.
+                var boundary = '----LumenFormBoundary' + Math.random().toString(36).slice(2, 10).toUpperCase();
+                var multipartBytes = reqBody._toMultipart(boundary);
+                bodyBytes = Array.from(multipartBytes);
+                contentType = 'multipart/form-data; boundary=' + boundary;
             } else if (typeof reqBody === 'string') {
                 bodyBytes = Array.from(new TextEncoder().encode(reqBody));
                 contentType = 'text/plain;charset=UTF-8';
@@ -14669,6 +14700,83 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::String("k=v".into()));
     }
 
+    #[test]
+    fn formdata_to_multipart_contains_boundary() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('name', 'alice'); \
+             var bnd = 'test-boundary'; \
+             var bytes = fd._toMultipart(bnd); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('--test-boundary') >= 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_to_multipart_contains_field_name_and_value() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('email', 'user@example.com'); \
+             var bytes = fd._toMultipart('bnd'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('name=\"email\"') >= 0 && s.indexOf('user@example.com') >= 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_to_multipart_ends_with_closing_delimiter() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('x', '1'); \
+             var bytes = fd._toMultipart('B'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('--B--') >= 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_to_multipart_empty_entries_yields_only_closing_boundary() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); \
+             var bytes = fd._toMultipart('B'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.trim()"
+        ).unwrap();
+        // Empty FormData → just --B--\r\n
+        assert_eq!(r, lumen_core::JsValue::String("--B--".into()));
+    }
+
+    #[test]
+    fn formdata_to_multipart_escapes_quotes_in_name() {
+        // Use \" in the JS string to pass a double-quote character as field name.
+        // In the Rust string, \" is a literal " (Rust escape); QuickJS then evaluates
+        // 'ev\"il' in single-quoted JS string, where \" is interpreted as ".
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('ev\\\"il', 'val'); \
+             var bytes = fd._toMultipart('B'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('ev%22il') >= 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_to_multipart_multiple_fields_ordered() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('a', '1'); fd.append('b', '2'); \
+             var bytes = fd._toMultipart('X'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('name=\"a\"') < s.indexOf('name=\"b\"')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     // Mock fetch provider that records calls to fetch_with_body_sync.
     type FetchCall = (String, String, String, Vec<u8>);
     struct CaptureFetch {
@@ -14698,7 +14806,8 @@ mod tests {
     }
 
     #[test]
-    fn fetch_post_formdata_sends_url_encoded_body() {
+    fn fetch_post_formdata_sends_multipart_body() {
+        // Fetch spec §5.4: FormData body → multipart/form-data (not urlencoded).
         let capture = CaptureFetch::new();
         let rt = runtime_with_fetch(Arc::clone(&capture));
         rt.eval(
@@ -14710,8 +14819,17 @@ mod tests {
         let (url, method, ct, body) = &calls[0];
         assert_eq!(url, "https://example.com/api");
         assert_eq!(method, "POST");
-        assert_eq!(ct, "application/x-www-form-urlencoded");
-        assert_eq!(std::str::from_utf8(body).unwrap(), "user=bob&age=30");
+        // Content-Type must start with multipart/form-data and include a boundary.
+        assert!(ct.starts_with("multipart/form-data; boundary="),
+            "expected multipart/form-data content-type, got: {ct}");
+        // Body must contain the field names and values in multipart format.
+        let body_str = std::str::from_utf8(body).unwrap();
+        assert!(body_str.contains("name=\"user\""), "body should contain field name 'user'");
+        assert!(body_str.contains("bob"), "body should contain value 'bob'");
+        assert!(body_str.contains("name=\"age\""), "body should contain field name 'age'");
+        assert!(body_str.contains("30"), "body should contain value '30'");
+        // Body must end with closing boundary --boundary--\r\n
+        assert!(body_str.contains("--\r\n"), "body must contain closing boundary");
     }
 
     #[test]
