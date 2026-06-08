@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_
+_(none)_ — p4-object-fit влит 2026-06-08
 
 ## Workflow
 
