@@ -70,6 +70,7 @@ pub mod wake_lock;
 pub mod web_locks;
 pub mod scheduler;
 pub mod reporting_api;
+pub mod web_audio;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -825,6 +826,12 @@ impl QuickJsRuntime {
             // Phase 0: user-blocking → queueMicrotask, user-visible → setTimeout(0), background → setTimeout(200).
             if let Err(e) = scheduler::install_scheduler_api(&ctx) {
                 eprintln!("Scheduler API init failed: {}", e);
+            }
+
+            // Install W3C Web Audio API Level 1 — AudioContext, AudioNode hierarchy, AudioParam.
+            // Phase 0: no DSP; graph operations in-memory only; decodeAudioData returns silent buffer.
+            if let Err(e) = web_audio::install_web_audio_api(&ctx) {
+                eprintln!("Web Audio API init failed: {}", e);
             }
 
             Ok(())
