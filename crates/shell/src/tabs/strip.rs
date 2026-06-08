@@ -28,10 +28,14 @@ const TAB_TEXT_DIM: Color = Color { r: 140, g: 140, b: 148, a: 255 };
 const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
 const DIVIDER: Color = Color { r: 45, g: 46, b: 52, a: 255 };
 
-/// Badge colour for BackgroundOld tier — amber moon indicator.
+/// Badge colour for BackgroundOld tier — amber "z" sleep icon.
 const BADGE_OLD_COLOR: Color = Color { r: 255, g: 168, b: 0, a: 210 };
-/// Badge colour for Hibernated tier — grey disk indicator.
+/// Badge colour for Hibernated tier — grey "Z" sleep icon.
 const BADGE_HIBERNATE_COLOR: Color = Color { r: 110, g: 110, b: 120, a: 210 };
+/// Dimmed background for BackgroundOld (T2) tabs — signals reduced activity.
+const TAB_T2_BG: Color = Color { r: 26, g: 27, b: 30, a: 255 };
+/// Dimmed background for Hibernated (T3) tabs — signals deep sleep.
+const TAB_T3_BG: Color = Color { r: 21, g: 21, b: 24, a: 255 };
 
 const FONT_SZ: f32 = 12.0;
 /// Minimum tab button width in CSS px.
@@ -44,8 +48,8 @@ const TAB_PAD: f32 = 10.0;
 const CLOSE_SZ: f32 = 14.0;
 /// Gap between text area right edge and close-button left edge.
 const CLOSE_MARGIN: f32 = 4.0;
-/// Badge dot diameter in CSS px.
-const BADGE_SIZE: f32 = 5.0;
+/// Font size for the "Z"/"z" sleep-icon badge on T2/T3 tabs.
+const BADGE_Z_SZ: f32 = 9.0;
 /// Height of the container border-top strip in CSS px (7D.2). Drawn at the
 /// very top of each tab button when its `container` is not `ContainerKind::None`.
 const CONTAINER_STRIP_HEIGHT: f32 = 3.0;
@@ -61,8 +65,8 @@ pub struct TabEntry {
     /// Current lifecycle tier for this tab.
     ///
     /// `Active` — foreground tab, no badge rendered.
-    /// `BackgroundOld` — amber badge (moon): JS heap off-loaded to disk.
-    /// `Hibernated` — grey badge (disk): DOM snapshot on disk, minimal RAM.
+    /// `BackgroundOld` — amber "z" badge + dimmed background (fade-opacity T2).
+    /// `Hibernated` — grey "Z" badge + darker background (fade-opacity T3).
     /// Other tiers — no badge rendered.
     pub tab_state: TabState,
     /// ID of the tab that opened this one, or `None` for root (top-level) tabs.
@@ -281,8 +285,16 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
         let (left, right) = tab_x_range(i, n, window_w);
         let is_active = i == strip.active;
 
-        // Tab background.
-        let bg = if is_active { TAB_ACTIVE_BG } else { TAB_INACTIVE_BG };
+        // Tab background: T2/T3 use darker backgrounds as fade-opacity signal.
+        let bg = if is_active {
+            TAB_ACTIVE_BG
+        } else {
+            match tab.tab_state {
+                TabState::BackgroundOld => TAB_T2_BG,
+                TabState::Hibernated => TAB_T3_BG,
+                _ => TAB_INACTIVE_BG,
+            }
+        };
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(left, 0.0, right - left, TAB_BAR_HEIGHT),
             color: bg,
@@ -313,22 +325,27 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
             });
         }
 
-        // Lifecycle badge — small coloured circle at top-right corner.
-        // BackgroundOld → amber (moon); Hibernated → grey (disk). Other states: no badge.
-        let badge_color = match tab.tab_state {
-            TabState::BackgroundOld => Some(BADGE_OLD_COLOR),
-            TabState::Hibernated => Some(BADGE_HIBERNATE_COLOR),
+        // Lifecycle badge — "Z" glyph at top-right corner (sleep icon).
+        // BackgroundOld → amber lowercase "z"; Hibernated → grey uppercase "Z".
+        let badge_info: Option<(&str, Color)> = match tab.tab_state {
+            TabState::BackgroundOld => Some(("z", BADGE_OLD_COLOR)),
+            TabState::Hibernated => Some(("Z", BADGE_HIBERNATE_COLOR)),
             _ => None,
         };
-        if let Some(color) = badge_color {
-            // Position: top-right of the tab, inset 3px from right edge and 4px from top.
-            let bx = right - BADGE_SIZE - 3.0;
-            let by = 4.0;
-            let r = BADGE_SIZE / 2.0;
-            out.push(DisplayCommand::FillRoundedRect {
-                rect: Rect::new(bx, by, BADGE_SIZE, BADGE_SIZE),
-                radii: CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r },
+        if let Some((glyph, color)) = badge_info {
+            // Position: top-right of the tab, inset 3px from right edge, 3px from top.
+            let bx = right - BADGE_Z_SZ - 3.0;
+            let by = 3.0;
+            out.push(DisplayCommand::DrawText {
+                rect: Rect::new(bx, by, BADGE_Z_SZ, BADGE_Z_SZ * 1.2),
+                text: glyph.to_owned(),
+                font_size: BADGE_Z_SZ,
                 color,
+                font_family: Vec::new(),
+                font_weight: FontWeight::BOLD,
+                font_style: FontStyle::Italic,
+                font_variation_axes: Vec::new(),
+                tab_size: 0.0,
             });
         }
 
@@ -525,9 +542,12 @@ mod tests {
     fn build_tab_bar_no_badge_for_active() {
         let s = TabStrip::new(); // single Active tab
         let dl = build_tab_bar(&s, 1024.0);
-        // Active tab must not emit any FillRoundedRect (all tab bar rects are FillRect).
-        let has_rounded = dl.iter().any(|c| matches!(c, DisplayCommand::FillRoundedRect { .. }));
-        assert!(!has_rounded, "Active tab must not render a lifecycle badge");
+        // Active tab must not emit a sleep-icon badge (no "Z"/"z" glyph).
+        let has_sleep_badge = dl.iter().any(|c| match c {
+            DisplayCommand::DrawText { text, .. } => text == "Z" || text == "z",
+            _ => false,
+        });
+        assert!(!has_sleep_badge, "Active tab must not render a sleep badge");
     }
 
     #[test]
@@ -536,14 +556,14 @@ mod tests {
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
         let dl = build_tab_bar(&s, 1024.0);
-        // Amber badge: r=255, g=168
-        let has_amber = dl.iter().any(|c| match c {
-            DisplayCommand::FillRoundedRect { color, .. } => {
-                color.r == BADGE_OLD_COLOR.r && color.g == BADGE_OLD_COLOR.g
+        // Amber "z" glyph badge for BackgroundOld tier.
+        let has_z = dl.iter().any(|c| match c {
+            DisplayCommand::DrawText { text, color, .. } => {
+                text == "z" && color.r == BADGE_OLD_COLOR.r && color.g == BADGE_OLD_COLOR.g
             }
             _ => false,
         });
-        assert!(has_amber, "BackgroundOld tab must render amber badge");
+        assert!(has_z, "BackgroundOld tab must render amber 'z' badge");
     }
 
     #[test]
@@ -552,14 +572,44 @@ mod tests {
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
         let dl = build_tab_bar(&s, 1024.0);
-        // Grey badge: r=110, g=110
-        let has_grey = dl.iter().any(|c| match c {
-            DisplayCommand::FillRoundedRect { color, .. } => {
-                color.r == BADGE_HIBERNATE_COLOR.r && color.g == BADGE_HIBERNATE_COLOR.g
+        // Grey "Z" glyph badge for Hibernated tier.
+        let has_z = dl.iter().any(|c| match c {
+            DisplayCommand::DrawText { text, color, .. } => {
+                text == "Z" && color.r == BADGE_HIBERNATE_COLOR.r && color.g == BADGE_HIBERNATE_COLOR.g
             }
             _ => false,
         });
-        assert!(has_grey, "Hibernated tab must render grey badge");
+        assert!(has_z, "Hibernated tab must render grey 'Z' badge");
+    }
+
+    #[test]
+    fn build_tab_bar_fade_bg_for_background_old() {
+        let mut s = TabStrip::new();
+        s.push_blank(0.0); // index 0 — active
+        s.push_blank(0.0); // index 1 — inactive BackgroundOld
+        s.set_tab_state(1, TabState::BackgroundOld);
+        let dl = build_tab_bar(&s, 1024.0);
+        // T2 background must be TAB_T2_BG, not TAB_INACTIVE_BG.
+        let has_t2_bg = dl.iter().any(|c| match c {
+            DisplayCommand::FillRect { color, .. } => *color == TAB_T2_BG,
+            _ => false,
+        });
+        assert!(has_t2_bg, "BackgroundOld inactive tab must use dimmed T2 background");
+    }
+
+    #[test]
+    fn build_tab_bar_fade_bg_for_hibernated() {
+        let mut s = TabStrip::new();
+        s.push_blank(0.0); // index 0 — active
+        s.push_blank(0.0); // index 1 — inactive Hibernated
+        s.set_tab_state(1, TabState::Hibernated);
+        let dl = build_tab_bar(&s, 1024.0);
+        // T3 background must be TAB_T3_BG.
+        let has_t3_bg = dl.iter().any(|c| match c {
+            DisplayCommand::FillRect { color, .. } => *color == TAB_T3_BG,
+            _ => false,
+        });
+        assert!(has_t3_bg, "Hibernated inactive tab must use dimmed T3 background");
     }
 
     // ── Container strip tests (7D.2) ─────────────────────────────────────────
