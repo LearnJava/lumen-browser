@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`font-variation-settings` TextMeasurer wiring  branch: p4-font-variation-settings
-Next step: add OwnedVariableFont to OwnedFontMetrics, wire char_width_varied in MultiFontMeasurer
+_(none)_
 
 ## Workflow
 
@@ -37,7 +36,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 | ~~3~~ | ~~`text-align-last` wiring в align_lines~~ — **выполнено** (p4-text-align-last, 2026-06-08) | S | none | → [`docs/tasks/p4-text-align-last.md`](docs/tasks/p4-text-align-last.md) |
 | ~~4~~ | ~~`::selection` pseudo-element~~ — **выполнено** (p4-selection-pseudo, 2026-06-08) | S | none | — |
 | 5 | `attr()` with type (CSS Values L4) | M | none | — |
-| 6 | `font-variation-settings` TextMeasurer wiring | M | none (P1 face.rs stub готов) | — |
+| ~~6~~ | ~~`font-variation-settings` TextMeasurer wiring~~ — **выполнено** (p4-font-variation-settings, 2026-06-08) | M | — | — |
 | 7 | `overflow: scroll` scrollable containers | L | P3 shell scroll event | — |
 | 8 | `:host` / `::slotted` (Shadow DOM) | M | none | — |
 | ~~3~~  | ~~`perspective()` + `transform-style: preserve-3d`~~ — **выполнено P2** (p2-css-3d-wiring, 2026-06-03) | — | — | — |
@@ -274,6 +273,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-08 | `font-variation-settings` | CSS Fonts L4 §6.3; OwnedVariableFont in lumen-paint; char_width_varied() in TextMeasurer + MultiFontMeasurer; measure_text_w_varied() in box_tree.rs; 6 unit tests + graphic test 68 |
 | 2026-06-08 | `attr()` typed | CSS Values L4 §7.7; find_attr_open() + expand_attr_val() in style.rs; unit-suffix/string/color types; fallback; 4 unit tests + graphic test 67 |
 | 2026-06-08 | `::selection` | CSS Pseudo-elements L4 §5.6; SelectionHighlight struct; build_display_list_with_selection(); frag_selection_highlight() byte-proportional; 4 unit tests in style.rs; graphic test 66 |
 | 2026-06-08 | `text-align-last` | CSS Text L3 §7.2; align_lines wired with 5th arg; 4 unit tests in box_tree.rs |
