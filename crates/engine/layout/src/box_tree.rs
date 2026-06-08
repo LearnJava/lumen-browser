@@ -27,7 +27,8 @@ use crate::style::{
     VerticalAlign, WordBreak,
 };
 use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
-                      build_counter_style_registry, format_counter_with_registry};
+                      build_counter_style_registry, format_counter_with_registry,
+                      build_list_marker_text};
 use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
 use crate::TextMeasurer;
 
@@ -2156,65 +2157,6 @@ fn li_ordinal(doc: &Document, id: NodeId) -> u32 {
     1
 }
 
-fn to_roman(n: u32, upper: bool) -> String {
-    const VALS: &[(u32, &str, &str)] = &[
-        (1000, "M", "m"), (900, "CM", "cm"), (500, "D", "d"), (400, "CD", "cd"),
-        (100, "C", "c"), (90, "XC", "xc"), (50, "L", "l"), (40, "XL", "xl"),
-        (10, "X", "x"), (9, "IX", "ix"), (5, "V", "v"), (4, "IV", "iv"), (1, "I", "i"),
-    ];
-    if n == 0 { return "0".to_string(); }
-    let mut out = String::new();
-    let mut rem = n;
-    for &(val, up, lo) in VALS {
-        while rem >= val {
-            out.push_str(if upper { up } else { lo });
-            rem -= val;
-        }
-    }
-    out
-}
-
-fn to_alpha(n: u32, upper: bool) -> String {
-    if n == 0 { return "0".to_string(); }
-    let base = if upper { b'A' } else { b'a' };
-    let mut out = String::new();
-    let mut rem = n;
-    while rem > 0 {
-        rem -= 1;
-        out.insert(0, (base + (rem % 26) as u8) as char);
-        rem /= 26;
-    }
-    out
-}
-
-fn to_greek(n: u32) -> String {
-    const GREEK: &[char] = &['α','β','γ','δ','ε','ζ','η','θ','ι','κ','λ','μ',
-                              'ν','ξ','ο','π','ρ','σ','τ','υ','φ','χ','ψ','ω'];
-    if n == 0 { return "0".to_string(); }
-    let idx = ((n - 1) as usize) % GREEK.len();
-    GREEK[idx].to_string()
-}
-
-/// CSS Lists L3 §2.1 — builds the marker string from `list-style-type` + ordinal.
-/// Bullet types (Disc/Circle/Square) return "" — rendered as geometric shapes by
-/// the display-list emitter (FillRoundedRect / DrawBorder / FillRect).
-/// CSS: @counter-style — P4 extends with custom counter styles.
-fn marker_text(lst: ListStyleType, ordinal: u32) -> String {
-    match lst {
-        ListStyleType::None   => String::new(),
-        ListStyleType::Disc   => String::new(), // geometric: filled circle
-        ListStyleType::Circle => String::new(), // geometric: hollow circle
-        ListStyleType::Square => String::new(), // geometric: filled square
-        ListStyleType::Decimal            => format!("{}. ", ordinal),
-        ListStyleType::DecimalLeadingZero => format!("{:02}. ", ordinal),
-        ListStyleType::LowerRoman => format!("{}. ", to_roman(ordinal, false)),
-        ListStyleType::UpperRoman => format!("{}. ", to_roman(ordinal, true)),
-        ListStyleType::LowerAlpha => format!("{}. ", to_alpha(ordinal, false)),
-        ListStyleType::UpperAlpha => format!("{}. ", to_alpha(ordinal, true)),
-        ListStyleType::LowerGreek => format!("{}. ", to_greek(ordinal)),
-    }
-}
-
 /// CSS Lists L3 §2.1 — creates `BoxKind::Marker` and prepends to children.
 /// Calls `compute_pseudo_element_style("marker")` so CSS `::marker` rules (color,
 /// font, content) override the defaults. `content: none` on `::marker` suppresses
@@ -2245,7 +2187,8 @@ fn inject_marker(
     // CSS: list-style-image — P4 wires image markers.
     let text = match &ms.content {
         Content::Items(items) => marker_content_text(items, doc, parent_id, counters, registry),
-        _ => marker_text(style.list_style_type, ordinal),
+        // CSS: list-style-type (custom counter-style) — build_list_marker_text consults registry.
+        _ => build_list_marker_text(style.list_style_type, ordinal, registry),
     };
     ms.display = Display::Inline;
     children.insert(0, LayoutBox {

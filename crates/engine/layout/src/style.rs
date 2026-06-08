@@ -2546,6 +2546,8 @@ impl ListStyleType {
             "lower-alpha" | "lower-latin" => Some(Self::LowerAlpha),
             "upper-alpha" | "upper-latin" => Some(Self::UpperAlpha),
             "lower-greek" => Some(Self::LowerGreek),
+            // CSS: list-style-type (custom counter-style) — P4 adds `ListStyleType::Custom(name)`
+            // and returns `Some(Self::Custom(s.to_string()))` here for unrecognised idents.
             _ => None,
         }
     }
