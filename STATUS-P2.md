@@ -6,8 +6,7 @@
 
 ## In progress
 
-K-4 | `<form>` multipart/form-data encoding  branch: p2-k4-form-multipart
-Next step: Add FormData._toMultipart(boundary) + fix fetch() FormData → multipart/form-data  crates/js/src/dom.rs:5931
+(none)
 
 ---
 
@@ -20,12 +19,21 @@ Next step: Add FormData._toMultipart(boundary) + fix fetch() FormData → multip
 | ~~K-1~~ | ~~**WebAssembly Phase 0 stub**~~ — **выполнено** | S | `lumen-js` |
 | ~~K-2~~ | ~~**`<select>` interactive dropdown**~~ — **выполнено** | M | `lumen-shell`, `lumen-layout` |
 | ~~K-3~~ | ~~**Fetch streaming body (ReadableStream)**~~ — **выполнено** | M | `lumen-js`, `lumen-network` |
-| K-4 | **`<form>` multipart/form-data encoding** | S | `lumen-js`, `lumen-core` |
+| ~~K-4~~ | ~~**`<form>` multipart/form-data encoding**~~ — **выполнено** | S | `lumen-js`, `lumen-core` |
 | K-5 | **CSS `local()` system font matching** | S | `lumen-shell`, `lumen-font` |
 
 ---
 
 ## Current / Recently Merged
+
+**K-4 | `<form>` multipart/form-data encoding** ✅ 2026-06-08 (merged)
+- `FormData._toMultipart(boundary)` — RFC 7578 §4.1 pure-JS encoder: name-escaping (CR→%0D, LF→%0A, `"`→%22), CRLF separators, Uint8Array output
+- `fetch()` с FormData body → `multipart/form-data; boundary=<rand>` (Fetch spec §5.4), не urlencoded
+- `get_form_enctype(doc, submit_node) -> String` — читает `enctype` атрибут формы (дефолт urlencoded)
+- `encode_form_fields_multipart(fields, boundary) -> (content_type, Vec<u8>)` — thin wrapper над `lumen_core::form::encode_form_multipart`
+- shell SubmitForm handler: читает enctype → выбирает кодировку; GET-формы с enctype=multipart всегда urlencoded в URL
+- 6 тестов formdata_to_multipart_* в lumen-js + 7 тестов в lumen-shell
+- Итого lumen-js: 1570 тестов (+15), lumen-shell: 1080 тестов (+7), Clippy чист
 
 **K-3 | Fetch streaming body (ReadableStream)** ✅ 2026-06-08 (merged)
 - ReadableStream сохраняет `_rs_pull_fn`; `read()` при пустой очереди вызывает `pull()` повторно (demand-driven, Streams spec §3.6.3)
