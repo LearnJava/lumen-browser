@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+K-2: Video Picture-in-Picture API  branch: p1-k2-video-pip-api
+Next step: создать crates/js/src/video_pip.rs, добавить в lib.rs
 
 ---
 

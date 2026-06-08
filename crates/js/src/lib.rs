@@ -79,6 +79,7 @@ pub mod element_internals;
 pub mod presentation_api;
 pub mod webassembly;
 pub mod generic_sensor;
+pub mod video_pip;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -564,6 +565,14 @@ impl QuickJsRuntime {
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
             if let Err(e) = video_bindings::install_video_bindings(&ctx) {
                 eprintln!("Video bindings init failed: {}", e);
+            }
+
+            // Install Video Picture-in-Picture API (W3C PiP L1 §3) — after video_bindings.
+            // Phase 0: video.requestPictureInPicture() → Promise<PictureInPictureWindow>,
+            // document.exitPictureInPicture(), pictureInPictureElement, pictureInPictureEnabled.
+            // Shell integration (P3) connects _lumen_pip_enter/_lumen_pip_exit to OS float window.
+            if let Err(e) = video_pip::install_video_pip_api(&ctx) {
+                eprintln!("Video Picture-in-Picture API init failed: {}", e);
             }
 
             // Install HTMLAudioElement stubs (HTML spec §4.8.10) — after DOM/video.
