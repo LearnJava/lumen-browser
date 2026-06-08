@@ -4809,7 +4809,13 @@ impl Lumen {
 
 impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let (win_w, win_h) = if self.deterministic { (1280.0, 800.0) } else { (1024.0, 720.0) };
+        let (win_w, win_h) = if self.deterministic {
+            (1280.0, 800.0)
+        } else {
+            // Высота окна = CSS viewport (720) + tab bar (36) = 756, чтобы
+            // веб-контент получал ровно 720 CSS px, как ожидают graphic tests.
+            (1024.0, 720.0 + tabs::strip::TAB_BAR_HEIGHT)
+        };
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(win_w, win_h))
