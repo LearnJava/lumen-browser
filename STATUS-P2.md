@@ -6,7 +6,8 @@
 
 ## In progress
 
-None
+**O-2 | T2 → SQLite JS heap persistence**  branch: p2-tab-snapshot
+Next step: SleepingTabStore in lumen-storage  crates/storage/src/tab_snapshot.rs
 
 ---
 
