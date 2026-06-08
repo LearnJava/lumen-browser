@@ -111,6 +111,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('67', '67-attr-typed.html',         0.5, 'CSS Values L4 §7.7 attr() typed substitution: content:attr(data-label) generates ::before labels from HTML attributes; 5 labelled bar rows with distinct colours and widths'),
     ('68', '68-font-variation-settings.html', 0.5, 'CSS Fonts L4 §6.3 font-variation-settings: parsing and layout stability; coloured boxes with varied wght/wdth/slnt axes and inherited settings'),
     ('69', '69-border-spacing.html', 0.5, 'CSS 2.1 §17.6 border-spacing: equal and asymmetric gaps between table cells; three tables showing 12px equal, 8px/24px asymmetric, and 0 spacing'),
+    ('70', '70-object-fit.html', 0.5, 'CSS Images L3 §5.5 object-fit / object-position: SVG viewBox scaling modes fill/contain/cover/none/scale-down and object-position alignment'),
 ]
 
 # --- PNG reader (stdlib only) ---
