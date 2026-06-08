@@ -230,6 +230,7 @@ fn txt(
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     }
 }
 

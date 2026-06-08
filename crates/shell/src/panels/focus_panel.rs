@@ -315,6 +315,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Status line below the ring: "Focus" / "Paused" / "Done".
@@ -336,6 +337,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Hint line.
@@ -349,6 +351,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // `×` exit glyph, top-right corner.
@@ -362,6 +365,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     out

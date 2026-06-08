@@ -4226,6 +4226,7 @@ impl Renderer {
                     font_style: _,
                     font_variation_axes,
                     tab_size,
+                    highlight_name: _,
                 } => {
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if parsed_faces

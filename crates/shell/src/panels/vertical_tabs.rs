@@ -215,6 +215,7 @@ pub fn build_panel(strip: &TabStrip, tab_bar_height: f32, window_h: f32) -> Disp
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
 
         // Tab title, truncated between icon and close button.
@@ -232,6 +233,7 @@ pub fn build_panel(strip: &TabStrip, tab_bar_height: f32, window_h: f32) -> Disp
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 

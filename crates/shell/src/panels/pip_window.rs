@@ -284,6 +284,7 @@ pub fn build_panel(pip: &PipWindow) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // `×` close glyph.
@@ -297,6 +298,7 @@ pub fn build_panel(pip: &PipWindow) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Centre play / pause button: circular scrim + glyph.

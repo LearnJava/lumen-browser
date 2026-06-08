@@ -200,6 +200,7 @@ pub fn build_hints_overlay(state: &HintState, scroll_x: f32, scroll_y: f32) -> D
                 font_style: FontStyle::Normal,
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
+                highlight_name: None,
             });
         }
     }
