@@ -65,6 +65,7 @@ pub mod web_codecs;
 pub mod ua_client_hints;
 pub mod media_capabilities;
 pub mod virtual_keyboard;
+pub mod web_locks;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -789,6 +790,13 @@ impl QuickJsRuntime {
             // Phase 0: geometry stubs + geometrychange event infrastructure.
             if let Err(e) = virtual_keyboard::install_virtual_keyboard_bindings(&ctx) {
                 eprintln!("Virtual Keyboard API init failed: {}", e);
+            }
+
+            // Install Web Locks API (W3C Web Locks Level 1) — after DOM/navigator.
+            // Phase 0: in-memory per-context FIFO lock queue; supports exclusive/shared modes,
+            // ifAvailable, steal, and AbortSignal. navigator.locks → LockManager.
+            if let Err(e) = web_locks::install_web_locks_bindings(&ctx) {
+                eprintln!("Web Locks API init failed: {}", e);
             }
 
             Ok(())
