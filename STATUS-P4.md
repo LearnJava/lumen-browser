@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`color-mix()` CSS parsing  branch: p4-color-mix-parsing
+Next step: add parse_color_mix() + parse_color_with_pct() helpers, wire in parse_function_color  style.rs:15605
 
 ## Workflow
 
