@@ -6,8 +6,7 @@
 
 ## In progress
 
-K-5 | **CSS `local()` system font matching** | branch: p2-k5-local-font
-Next step: add `resolve_local_bytes()` to FontRegistry, wire in load_font_faces() shell/src/main.rs:2773
+(none)
 
 ---
 
@@ -21,11 +20,19 @@ Next step: add `resolve_local_bytes()` to FontRegistry, wire in load_font_faces(
 | ~~K-2~~ | ~~**`<select>` interactive dropdown**~~ — **выполнено** | M | `lumen-shell`, `lumen-layout` |
 | ~~K-3~~ | ~~**Fetch streaming body (ReadableStream)**~~ — **выполнено** | M | `lumen-js`, `lumen-network` |
 | ~~K-4~~ | ~~**`<form>` multipart/form-data encoding**~~ — **выполнено** | S | `lumen-js`, `lumen-core` |
-| K-5 | **CSS `local()` system font matching** | S | `lumen-shell`, `lumen-font` |
+| ~~K-5~~ | ~~**CSS `local()` system font matching**~~ — **выполнено** | S | `lumen-shell`, `lumen-font` |
 
 ---
 
 ## Current / Recently Merged
+
+**K-5 | CSS `local()` system font matching** ✅ 2026-06-08 (merged)
+- `FontRegistry::resolve_local_bytes(name, weight, style)` — ищет в SystemFontIndex по family-имени (CSS Fonts L4 §4.3, case-insensitive), читает байты с диска
+- `FontRegistry::with_dirs(dirs)` — конструктор для тестов и headless-режимов
+- `load_font_faces()` в shell: вместо `continue` для Local-источников — полноценная обработка: found → register + break, not found → try next source
+- CSS §4.1 semantics: local() перед url() экономит сетевой запрос когда шрифт уже установлен
+- 4 теста: finds_bundled_inter / unknown_family_returns_none / case_insensitive / empty_dir_returns_none
+- Итого: lumen-font 316 тестов (+4), Clippy чист
 
 **K-4 | `<form>` multipart/form-data encoding** ✅ 2026-06-08 (merged)
 - `FormData._toMultipart(boundary)` — RFC 7578 §4.1 pure-JS encoder: name-escaping (CR→%0D, LF→%0A, `"`→%22), CRLF separators, Uint8Array output
