@@ -109,6 +109,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('65', '65-flex-align-content.html', 0.5, 'CSS Flexbox align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch for multi-line flex containers'),
     ('66', '66-selection-pseudo.html',  0.5, 'CSS ::selection pseudo-element: background-color + color override; swatch boxes show parsed selection colours; page renders correctly with ::selection rules present'),
     ('67', '67-attr-typed.html',         0.5, 'CSS Values L4 §7.7 attr() typed substitution: content:attr(data-label) generates ::before labels from HTML attributes; 5 labelled bar rows with distinct colours and widths'),
+    ('68', '68-font-variation-settings.html', 0.5, 'CSS Fonts L4 §6.3 font-variation-settings: parsing and layout stability; coloured boxes with varied wght/wdth/slnt axes and inherited settings'),
 ]
 
 # --- PNG reader (stdlib only) ---

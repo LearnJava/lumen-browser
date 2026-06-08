@@ -101,7 +101,7 @@ pub use style::{
     ClearSide, ContainFlags, ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
-    FontVariant, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
+    FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
@@ -142,14 +142,9 @@ pub struct SelectionHighlight {
 ///
 /// Реализуется на стороне вызывающего кода (paint/shell), где есть доступ
 /// к шрифтовым данным. Layout использует его только в `layout_measured()`.
-// CSS: font-variation-settings — P4 расширяет этот трейт методом
-// char_width_varied(ch, font_size_px, axes: &[([u8;4], f32)]) -> f32
-// чтобы layout учитывал HVAR advance widths при line wrapping для VF шрифтов.
 pub trait TextMeasurer {
     /// Ширина символа `ch` при размере шрифта `font_size_px` пикселей.
     /// Возвращает 0.0 для неизвестных символов.
-    // CSS: font-variation-settings — вариационные оси здесь не передаются;
-    // P4 добавит вариантную версию этого метода после cascade для font-variation-settings.
     fn char_width(&self, ch: char, font_size_px: f32) -> f32;
 
     /// Ширина символа `ch` с учётом CSS `font-family` каскада.
@@ -163,6 +158,25 @@ pub trait TextMeasurer {
     fn char_width_with_families(&self, ch: char, font_size_px: f32, families: &[String]) -> f32 {
         let _ = families;
         self.char_width(ch, font_size_px)
+    }
+
+    /// Ширина символа `ch` с учётом CSS `font-family` и `font-variation-settings`.
+    ///
+    /// CSS Fonts L4 §6.3 — вариационные оси передаются в порядке каскада.
+    /// Для шрифтов без fvar/HVAR игнорирует `axes` и делегирует к
+    /// [`Self::char_width_with_families`]. Для variable fonts применяет
+    /// HVAR delta через нормализованные координаты осей.
+    ///
+    /// Дефолтная реализация игнорирует `axes` — достаточно для статических шрифтов.
+    fn char_width_varied(
+        &self,
+        ch: char,
+        font_size_px: f32,
+        axes: &[FontVariationSetting],
+        families: &[String],
+    ) -> f32 {
+        let _ = axes;
+        self.char_width_with_families(ch, font_size_px, families)
     }
 
     /// Descent шрифта в пикселях при размере `font_size_px`.

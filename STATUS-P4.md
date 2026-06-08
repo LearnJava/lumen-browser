@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`font-variation-settings` TextMeasurer wiring  branch: p4-font-variation-settings
+Next step: add OwnedVariableFont to OwnedFontMetrics, wire char_width_varied in MultiFontMeasurer
 
 ## Workflow
 
