@@ -80,6 +80,7 @@ pub mod presentation_api;
 pub mod webassembly;
 pub mod generic_sensor;
 pub mod video_pip;
+pub mod web_midi;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -898,6 +899,13 @@ impl QuickJsRuntime {
             // AmbientLightSensor. start() activates sensor; no readings until Phase 1 OS integration.
             if let Err(e) = generic_sensor::install_generic_sensor_bindings(&ctx) {
                 eprintln!("Generic Sensor API init failed: {}", e);
+            }
+
+            // Phase 0: W3C Web MIDI L1 — navigator.requestMIDIAccess() resolves with empty
+            // MIDIAccess (no hardware). Phase 1 wires _lumen_midi_deliver_message to
+            // CoreMIDI / WinMM / ALSA backends.
+            if let Err(e) = web_midi::install_web_midi_api(&ctx) {
+                eprintln!("Web MIDI API init failed: {}", e);
             }
 
             Ok(())

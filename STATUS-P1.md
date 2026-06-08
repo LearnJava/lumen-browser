@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+K-3: Web MIDI API stub  branch: p1-k3-web-midi
+Next step: реализация завершена, clippy чист, 11 тестов  crates/js/src/web_midi.rs:1
 
 ---
 
