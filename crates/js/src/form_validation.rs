@@ -158,11 +158,15 @@ const FORM_VALIDATION_SHIM: &str = r#"
     };
   }
 
-  // Apply mixin to all submittable element prototypes
-  const inputProto    = HTMLInputElement    ? HTMLInputElement.prototype    : null;
-  const textareaProto = HTMLTextAreaElement ? HTMLTextAreaElement.prototype : null;
-  const selectProto   = HTMLSelectElement   ? HTMLSelectElement.prototype   : null;
-  const buttonProto   = HTMLButtonElement   ? HTMLButtonElement.prototype   : null;
+  // Apply mixin to all submittable element prototypes.
+  // BUG-072: in the real install_dom environment these constructors are NOT
+  // defined as globals, so a bare `HTMLInputElement` reference throws
+  // ReferenceError and aborts the whole shim before it can install. Guard each
+  // with `typeof` so a missing constructor yields a null proto (skipped below).
+  const inputProto    = typeof HTMLInputElement    !== 'undefined' ? HTMLInputElement.prototype    : null;
+  const textareaProto = typeof HTMLTextAreaElement !== 'undefined' ? HTMLTextAreaElement.prototype : null;
+  const selectProto   = typeof HTMLSelectElement   !== 'undefined' ? HTMLSelectElement.prototype   : null;
+  const buttonProto   = typeof HTMLButtonElement   !== 'undefined' ? HTMLButtonElement.prototype   : null;
 
   for (const proto of [inputProto, textareaProto, selectProto, buttonProto]) {
     if (proto) applyConstraintValidationMixin(proto);
@@ -288,6 +292,29 @@ mod tests {
             .unwrap();
             install_form_validation_bindings(&ctx).unwrap();
             f(&ctx);
+        });
+    }
+
+    /// BUG-072: the real `install_dom` environment does NOT define
+    /// `HTMLInputElement`/`HTMLTextAreaElement`/`HTMLSelectElement`/`HTMLButtonElement`
+    /// as global constructors. Before the fix, the shim referenced them by bare
+    /// name and threw `ReferenceError: HTMLInputElement is not defined`, aborting
+    /// the whole install. The `typeof` guards must let it install cleanly.
+    #[test]
+    fn installs_without_form_element_constructors() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            // Minimal environment: window only, no HTML*Element constructors —
+            // mirrors the real install_dom globals.
+            ctx.eval::<(), _>("var window = globalThis;").unwrap();
+            install_form_validation_bindings(&ctx)
+                .expect("shim must install without throwing when element constructors are absent");
+            // ValidityState is still exported (the part that survives regardless),
+            // and HTMLFormElement.prototype methods are guarded by typeof.
+            let ok: bool = ctx
+                .eval("typeof window.ValidityState === 'function'")
+                .unwrap();
+            assert!(ok);
         });
     }
 
