@@ -319,10 +319,10 @@
 | 8D.2 | ✅ `wait_for(Cond::NetworkIdle)` — active_network_requests counter; saturating_sub after HTTP fetch | network-аware | P1 done 2026-05-31 |
 | 8D.3 | ✅ `wait_for(Cond::JsIdle)` — pending_js_microtasks counter; set_pending_js_tasks() for shell hook | shell runtime-аware | P1 done 2026-05-31 |
 | 8E | ✅ **`[P1]` Per-context isolation by default** (Phase 1) | `OriginIsolationContext`: CookieJar + localStorage/sessionStorage + IDB per origin-group | `driver/src/isolation.rs` | P1 done 2026-06-01: `OriginGroup`+`OriginIsolationContext`, `InProcessSession::with_origin_isolation()`, 22 тестов |
-| 8F | ⬜ **`[P3]` Deterministic mode** (Phase 1) | Repeatable tests, опирается на §9.5 anti-fp инфраструктуру | `driver/src/determinism.rs` |
-| 8F.1 | ⬜ `set_clock(ClockMode::Frozen / Real / Monotonic)` | shell timers + Performance.now bridge | — |
-| 8F.2 | ⬜ `set_rng_seed(u64)` — детерминированный `Math.random()` | JS runtime hook | — |
-| 8F.3 | ⬜ `freeze_fingerprint(profile)` — фиксированные canvas/WebGL/audio/font enumeration | §9.5 anti-fp + bundled-only fonts mode | — |
+| 8F | ✅ **`[P1]` Deterministic mode** (Phase 1) | `driver/src/determinism.rs`: `DeterministicConfig`, `seed_from_url()`, `ClockMode::Monotonic{step_ms}`. `BrowserSession::set_clock/set_rng_seed/freeze_fingerprint`. `lumen-js::freeze_fingerprint()` (audio analyser + font). Shell `--rng-seed`/`--monotonic-clock`. P1 done 2026-06-08 |
+| 8F.1 | ✅ `set_clock(ClockMode::Frozen / Real / Monotonic)` | `ClockMode::Monotonic{step_ms}` в lumen-core; `SessionContext::set_clock_mode()`/`read_clock_ms()`. P1 done 2026-06-08 |
+| 8F.2 | ✅ `set_rng_seed(u64)` — детерминированный `Math.random()` | JS runtime hook через `set_deterministic_mode()` + `context.rng_seed`. P1 done 2026-06-08 |
+| 8F.3 | ✅ `freeze_fingerprint(profile)` — фиксированные canvas/WebGL/audio/font enumeration | `QuickJsRuntime::freeze_fingerprint()` JS shim: AnalyserNode + document.fonts overrides. P1 done 2026-06-08 |
 | 8G | ✅ **`[P3+P1]` A11y tree first-class** (Phase 1, **зависит от P1 `lumen-a11y`**) | Semantic locator surface для tests + AI agents | `lumen-a11y` published interface. P1 done 2026-05-31: `AXRole::as_str()`, `A11yState`, enriched `A11yNode` (node_id/description/placeholder/state), `a11y_tree()` uses `build_ax_tree()`, 14 тестов |
 | 8G.1 | ✅ A11y tree доступна через `BrowserSession::a11y_tree()` | `driver/src/session.rs` uses `lumen_a11y::build_ax_tree()` | P1 done 2026-05-31 |
 | 8G.2 | ✅ `Query::Role { role, name }` matching по a11y-tree (Playwright-стиль `getByRole`) | `driver/src/session.rs` `find_a11y_node`/`find_all_a11y_nodes` + `matches_query` | P1 done 2026-05-31 |

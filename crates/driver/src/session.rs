@@ -571,6 +571,24 @@ impl BrowserSession for InProcessSession {
     fn set_user_agent(&mut self, ua: &str) -> Result<()> {
         self.context.set_user_agent(ua)
     }
+
+    // ── Deterministic mode (Task 8F, Phase 1) ────────────────────────────────
+
+    fn set_clock(&mut self, mode: crate::ClockMode) -> Result<()> {
+        self.context.set_clock_mode(mode);
+        Ok(())
+    }
+
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()> {
+        self.context.set_rng_seed(seed);
+        Ok(())
+    }
+
+    fn freeze_fingerprint(&mut self, profile: FingerprintProfile) -> Result<()> {
+        self.context.set_fingerprint_profile(profile)?;
+        self.context.freeze_fingerprint();
+        Ok(())
+    }
 }
 
 /// Adapter: InProcessSession также реализует базовый BrowserSession из lumen-core::ext.
@@ -646,10 +664,7 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
     }
 
     fn set_clock(&mut self, mode: lumen_core::ClockMode) -> Result<()> {
-        match mode {
-            lumen_core::ClockMode::Frozen(ts) => self.context.set_frozen_clock(ts),
-            lumen_core::ClockMode::Real => self.context.clear_frozen_clock(),
-        }
+        self.context.set_clock_mode(mode);
         Ok(())
     }
 
@@ -1419,5 +1434,76 @@ mod tests {
         assert_eq!(sess.context.rng_seed(), Some(12345));
         lumen_core::ext::BrowserSession::set_rng_seed(&mut sess, None).unwrap();
         assert_eq!(sess.context.rng_seed(), None);
+    }
+
+    // ── Deterministic mode (8F) driver trait tests ────────────────────────────
+
+    #[test]
+    fn driver_set_clock_frozen() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::set_clock(&mut sess, crate::ClockMode::Frozen(999_000)).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), Some(999_000));
+    }
+
+    #[test]
+    fn driver_set_clock_real_clears() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::set_clock(&mut sess, crate::ClockMode::Frozen(1)).unwrap();
+        BrowserSession::set_clock(&mut sess, crate::ClockMode::Real).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), None);
+    }
+
+    #[test]
+    fn driver_set_clock_monotonic_advances() {
+        use lumen_core::ext::ClockMode;
+        let mut sess = InProcessSession::new();
+        BrowserSession::set_clock(&mut sess, ClockMode::Monotonic { step_ms: 10 }).unwrap();
+        // First read returns 0.
+        assert_eq!(sess.context.read_clock_ms(), Some(0));
+        // Second read advances by step_ms.
+        assert_eq!(sess.context.read_clock_ms(), Some(10));
+        assert_eq!(sess.context.read_clock_ms(), Some(20));
+    }
+
+    #[test]
+    fn driver_set_rng_seed() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::set_rng_seed(&mut sess, Some(42)).unwrap();
+        assert_eq!(sess.context.rng_seed(), Some(42));
+        BrowserSession::set_rng_seed(&mut sess, None).unwrap();
+        assert_eq!(sess.context.rng_seed(), None);
+    }
+
+    #[test]
+    fn driver_freeze_fingerprint_locks_profile() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::freeze_fingerprint(&mut sess, FingerprintProfile::Strict).unwrap();
+        assert_eq!(sess.fingerprint_profile(), FingerprintProfile::Strict);
+        // Profile is now locked — change must fail.
+        assert!(BrowserSession::set_fingerprint_profile(&mut sess, FingerprintProfile::Standard).is_err());
+    }
+
+    #[test]
+    fn driver_freeze_fingerprint_standard_profile() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::freeze_fingerprint(&mut sess, FingerprintProfile::Standard).unwrap();
+        assert_eq!(sess.fingerprint_profile(), FingerprintProfile::Standard);
+        assert!(sess.context.is_fingerprint_frozen());
+    }
+
+    #[test]
+    fn deterministic_config_apply() {
+        use crate::determinism::DeterministicConfig;
+        let mut sess = InProcessSession::new();
+        let cfg = DeterministicConfig {
+            clock: crate::ClockMode::Frozen(1234),
+            rng_seed: Some(99),
+            freeze_fingerprint: Some(FingerprintProfile::Strict),
+        };
+        cfg.apply(&mut sess).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), Some(1234));
+        assert_eq!(sess.context.rng_seed(), Some(99));
+        assert_eq!(sess.fingerprint_profile(), FingerprintProfile::Strict);
+        assert!(sess.context.is_fingerprint_frozen());
     }
 }

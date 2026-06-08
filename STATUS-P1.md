@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+N-2: 8F Deterministic mode  branch: p1-n2-deterministic-mode
+Next step: driver/src/determinism.rs + ClockMode::Monotonic + freeze_fingerprint  driver/src/lib.rs:159
 
 ---
 
