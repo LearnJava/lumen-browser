@@ -6,7 +6,7 @@
 
 ## In progress
 
-BUG-111: lumen-paint compile regression after A-2 merge  branch: p3-bug-paint-compile
+_(нет)_
 
 ## Next
 
@@ -62,6 +62,7 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 ## Recent fixes
 
+- **BUG-111 lumen-paint compile regression** (2026-06-08) — после мержа A-2 CSS Custom Highlight API `lumen-paint` не компилировался: (1) дубликат `emit_text_with_highlights` (старый 3-arg stub + новый 11-arg), (2) `DrawText` в select-dropdown missing `highlight_name: None` ×2, (3) осиротевший `///`-блок в style.rs (`empty_line_after_doc_comment`), (4) `collapsible_if` в highlight_tests. lumen-paint 578/578, lumen-layout 2459/2459, clippy чист. Влито `p3-bug-paint-compile`.
 - **BUG-073 chrome.runtime CDP-маркер** (2026-06-08) — WEB_API_SHIM (D-6) безусловно устанавливал `window.chrome.runtime` → тест `chrome_runtime_absent` в `no_automation_markers.rs` падал: CDP-маркер виден всем скриптам, нарушая ADR-007 anti-fingerprint. Fix: IIFE chrome.runtime гардировано флагом `globalThis._LUMEN_EXTENSION_ACTIVE`; тесты dom.rs выставляют флаг перед `install_dom`. lumen-js --lib 1616/1616, no_automation_markers 19/19, clippy чист. Влито `p3-bug071-mock-session-methods`.
 - **BUG-071 MockSession в lumen-mcp** (2026-06-08) — `MockSession` в `crates/mcp/src/server.rs:508` не реализовывала `set_clock`, `set_rng_seed`, `freeze_fingerprint` из трейта `BrowserSession` (добавлены P1 в N-2 deterministic mode) → `cargo check -p lumen-mcp --all-targets` падал с E0046. Fix: добавлены заглушки `Ok(())` для трёх методов. lumen-mcp 15/15, clippy чист. Влито `p3-bug071-mock-session-methods`.
 - **BUG-068 collapsible_if в reader_view.rs** (2026-06-08) — уже исправлено коммитом D-4 (`a90b88ae`): `if let ... && let ...` let-chains, BUGS.md обновлён. Влито `p3-bug071-mock-session-methods`.
