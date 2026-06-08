@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-align-content single-line flex  branch: p4-flex-align-content-single
-Next step: merge  box_tree.rs:5190
+_(none)_ — p4-flex-align-content-single влит 2026-06-08
 
 ## Workflow
 
@@ -263,6 +262,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-08 | `align-content` single-line flex | CSS Box Alignment L3; убран guard n_lines>1; flex-wrap:wrap с одной строкой теперь реагирует на flex-end/center/space-around/space-evenly; 2 новых unit-теста; TEST-65 ожидается улучшение 23.52%→~0% |
 | 2026-06-08 | `object-fit` / `object-position` | CSS Images L3 §5.5; `compute_object_fit_transform()` в box_tree.rs; Fill fallback на SVG preserveAspectRatio; Contain/Cover/None/ScaleDown; object-position free-space фракции; 6 unit-тестов + graphic test 70 |
 | 2026-06-08 | `border-spacing` | CSS 2.1 §17.6; `border_spacing_h/v: f32` в ComputedStyle (inherited); парсинг 1-/2-значного shorthand; h_spacing → compute_table_col_widths + lay_out_table_row (новый параметр); v_spacing → lay_out_table; 5 unit tests + graphic test 69 |
 | 2026-06-08 | `list-style-type` custom ident | CSS Lists L3 §2.1; `ListStyleType::Custom(Box<str>)`; parse() → Custom для нераспознанных idents; build_list_marker_text() → format_counter_with_registry; 3 unit-теста + graphic test 32 |
