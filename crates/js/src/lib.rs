@@ -72,6 +72,7 @@ pub mod scheduler;
 pub mod reporting_api;
 pub mod web_audio;
 pub mod webgpu;
+pub mod webxr;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -839,6 +840,13 @@ impl QuickJsRuntime {
             // Phase 0: no GPU; all create* ops in-memory only; submit/draw/dispatch are no-ops.
             if let Err(e) = webgpu::install_webgpu_bindings(&ctx) {
                 eprintln!("WebGPU API init failed: {}", e);
+            }
+
+            // Install WebXR Device API (W3C WebXR Device API §5) — after DOM/navigator.
+            // Phase 0: isSessionSupported() → false, requestSession() → NotSupportedError.
+            // XRSession/XRFrame/XRReferenceSpace/XRView stubs exported on window.
+            if let Err(e) = webxr::install_webxr_bindings(&ctx) {
+                eprintln!("WebXR Device API init failed: {}", e);
             }
 
             Ok(())
