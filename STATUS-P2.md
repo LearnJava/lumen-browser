@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**I-1 | Web Locks API** — branch: `p2-i1-web-locks`
+Next step: реализовать `crates/js/src/web_locks.rs` — JS-шим + native биндинги
 
 ---
 
@@ -388,6 +389,16 @@ Ordered by priority. Сгруппированы по домену.
 | F-5 | **BiDi 8H.3: network response body** — `network.responseBodyReceived` событие (при подписке) + `network.getResponseBody(request: {requestId})` команда в `bidi/protocol.rs`: буферизация последнего тела ответа per-request в `BidiState.response_bodies: HashMap<u64, Vec<u8>>`. 6 тестов. | S | `lumen-shell` |
 
 > **RB-10** `VelloBackend` полный — заблокирован (vello API нестабилен, Phase 3+). Взять после стабилизации vello 0.x API.
+
+### I — Новые Web Platform APIs
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| I-1 | **Web Locks API** — W3C Web Locks L1: `navigator.locks.request(name, {mode?, signal?}, callback)` → Promise, `LockManager.query()` → LockManagerSnapshot. Phase 0: in-memory per-context, FIFO queue, exclusive/shared modes. `// locks: Web Locks API`. 5 тестов. | S | `lumen-js` |
+| I-2 | **Screen Wake Lock API** — W3C Screen Wake Lock L1: `navigator.wakeLock.request('screen')` → `WakeLockSentinel`, `.release()`, `onrelease` event, автоматический release при `document.visibilitychange` → hidden. 4 теста. | XS | `lumen-js` |
+| I-3 | **Compression Streams API** — WHATWG Compression Streams: `new CompressionStream('gzip'|'deflate'|'deflate-raw')`, `new DecompressionStream(...)`. `.readable`/`.writable` (TransformStream). Phase 0: gzip/deflate через miniz_oxide в Rust, `_lumen_compress_bytes`/`_lumen_decompress_bytes` биндинги. 5 тестов. | S | `lumen-js`, `lumen-network` |
+| I-4 | **Web Share API** — W3C Web Share L2: `navigator.share({title?, text?, url?, files?})` → Promise, `navigator.canShare(data)` → bool. Phase 0: Windows → `ShellExecute` mailto, Linux/macOS → no-op. `_lumen_share_data(title,text,url)` биндинг. 4 теста. | XS | `lumen-js` |
+| I-5 | **Scheduler API** — W3C Scheduler API L1: `scheduler.postTask(callback, {priority?, delay?, signal?})` → Promise, `scheduler.yield()` → Promise. Приоритеты: `user-blocking`/`user-visible`/`background`. Phase 0: оборачивает `setTimeout`/`queueMicrotask`. `TaskController`/`TaskSignal`. 5 тестов. | S | `lumen-js` |
 
 ---
 
