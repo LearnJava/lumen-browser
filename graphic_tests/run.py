@@ -192,10 +192,11 @@ def read_png(path: str) -> tuple[int, int, int, bytes]:
 def _bring_pid_to_front(pid: int) -> None:
     """Bring the main visible window of the given PID to the foreground (Windows)."""
     user32 = ctypes.windll.user32
-    EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-    found: list[ctypes.wintypes.HWND] = []
+    # Use c_size_t (pointer-sized) for HWND to avoid overflow on 64-bit Windows
+    EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
+    found: list[int] = []
 
-    def _cb(hwnd: ctypes.wintypes.HWND, _: ctypes.wintypes.LPARAM) -> bool:
+    def _cb(hwnd: int, _: int) -> bool:
         proc_id = ctypes.wintypes.DWORD(0)
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
         if proc_id.value == pid and user32.IsWindowVisible(hwnd):
