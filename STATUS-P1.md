@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: I-1 Web Audio API Phase 1  branch: p1-i1-web-audio
-Next step: расширить audio_bindings.rs — добавить все стандартные узлы AudioContext  crates/js/src/audio_bindings.rs:49
+_(нет)_
 
 ---
 
@@ -17,7 +16,7 @@ Next step: расширить audio_bindings.rs — добавить все ст
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| I-1 | **Web Audio API Phase 1** — полный граф AudioContext: `createGain`, `createBiquadFilter`, `createBufferSource`, `createPanner`, `createStereoPanner`, `createConvolver`, `createDelay`, `createChannelSplitter`, `createChannelMerger`, `createDynamicsCompressor`, `createMediaElementSource`, `createMediaStreamSource`, `createMediaStreamDestination`. `AudioParam` с `setValueAtTime/linearRampToValueAtTime/exponentialRampToValueAtTime/cancelScheduledValues`. `AudioNode` base с `connect/disconnect`. `ctx.destination` (AudioDestinationNode). `ctx.audioWorklet.addModule()` → Promise.resolve(). Экспорт всех классов на globalThis. 10 тестов. | M | `lumen-js` |
+| ~~I-1~~ | ~~**Web Audio API Phase 1**~~ — **выполнено** | M | `lumen-js` |
 | I-2 | **WebXR Device API stub** — W3C WebXR Device API §5 Phase 0: `navigator.xr.isSessionSupported(mode)` → Promise<false>, `navigator.xr.requestSession(mode)` → reject NotSupportedError, `XRSession`/`XRFrame`/`XRReferenceSpace`/`XRView` стабы. `navigator.xr.addEventListener('devicechange')`. Экспорт на window. 4 теста. | XS | `lumen-js` |
 | I-3 | **HTML Form Constraint Validation API** — WHATWG HTML §4.10.21: `ValidityState` (valueMissing/typeMismatch/patternMismatch/tooLong/tooShort/rangeUnderflow/rangeOverflow/stepMismatch/badInput/customError/valid). `element.checkValidity()` → fires `invalid` event, `element.reportValidity()`, `element.validity`, `element.setCustomValidity(msg)`, `element.validationMessage`, `element.willValidate`. `form.checkValidity()` / `form.reportValidity()` итерирует controls. 6 тестов. | S | `lumen-js` |
 | I-4 | **CSS `@counter-style` algorithm stub** — CSS Lists & Counters L3 §7: `CounterStyleDef {system, symbols, prefix, suffix, pad, fallback}` в `layout/src/counter_style.rs`. Системы: cyclic, numeric, alphabetic, symbolic, additive, fixed. `resolve_counter_value(def, n) -> String`. Wire в `build_list_marker_text()`. `// CSS: list-style-type (custom counter-style)` P4 handoff в STATUS-P4.md. 8 тестов. | S | `lumen-layout` |
@@ -58,6 +57,7 @@ Next step: расширить audio_bindings.rs — добавить все ст
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | I-1: Web Audio API Phase 1 | W3C Web Audio Level 2: полный граф AudioContext. AudioParam с планировщиком (setValueAtTime/linearRamp/exponentialRamp/setTargetAtTime/cancelScheduled). AudioNode base с connect/disconnect. AudioDestinationNode (ctx.destination), AudioListener (ctx.listener), AudioWorklet stub (ctx.audioWorklet.addModule() → Promise.resolve()), AudioWorkletNode stub. Все стандартные узлы: GainNode, BiquadFilterNode, OscillatorNode, AudioBufferSourceNode, AnalyserNode, DynamicsCompressorNode, DelayNode, ConvolverNode, PannerNode (setPosition/setOrientation), StereoPannerNode, WaveShaperNode, IIRFilterNode, ChannelSplitterNode, ChannelMergerNode, MediaElementAudioSourceNode, MediaStreamAudioSourceNode, MediaStreamAudioDestinationNode, PeriodicWave. OfflineAudioContext принимает оба формата конструктора. Все 22 класса экспортированы на globalThis. lumen-js: clippy чист, 29 unit-тестов (+18 vs 11). |
 | 2026-06-08 | H-5: Periodic Background Sync API | W3C PBSync Phase 0: `registration.periodicSync.register(tag, {minInterval})` хранит тег в памяти, `.unregister(tag)` удаляет, `.getTags()` → Promise<string[]>. Lazy-getter через Object.defineProperty. Нативные биндинги `_lumen_periodic_sync_register` / `_lumen_periodic_sync_unregister` для shell Phase 1 (OS task scheduler). Новый модуль `crates/js/src/periodic_sync.rs`. lumen-js: clippy чист, 4 unit-теста (+4 vs 1415). |
 | 2026-06-08 | H-4: Reporting API | W3C Reporting API L1 Phase 0: `new ReportingObserver(callback, opts)` с opts `{types, buffered}`. `.observe()` — регистрирует наблюдатель, replays buffered reports при buffered=true. `.disconnect()` — снимает, очищает очередь. `.takeRecords()` → Report[]. `Report {type, url, body}` класс с `toJSON()`. Глобальный буфер последних 100 отчётов. `_lumen_deliver_report(type, url, body_json)` — биндинг для shell Phase 1 (CSP violations, deprecation, intervention, crash). Новый модуль `crates/js/src/reporting_api.rs`. lumen-js: clippy чист, 6 unit-тестов (+6 vs 1411). |
 | 2026-06-08 | H-3: Virtual Keyboard API | W3C Virtual Keyboard API Phase 0: `navigator.virtualKeyboard` singleton. `show()`/`hide()` — no-op запросы отображения VK. `boundingRect` → DOMRect(0,0,0,0) (Phase 0: нулевая геометрия, ленивая инициализация). `overlaysContent` — bool getter/setter. `geometrychange` event + `addEventListener`/`ongeometrychange`. `_lumen_fire_vk_geometry_change(x,y,w,h)` — биндинг для shell Phase 1. `_lumen_vk_show`/`_lumen_vk_hide` — no-op хуки. Новый модуль `crates/js/src/virtual_keyboard.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1406). |
