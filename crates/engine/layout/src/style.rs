@@ -7809,6 +7809,12 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
                     style.width = Some(Length::Px(13.0));
                     style.height = Some(Length::Px(13.0));
                 }
+                "range" => {
+                    style.width = Some(Length::Px(129.0));
+                    style.height = Some(Length::Px(20.0));
+                    // Range input has no visible border — track/thumb are drawn by paint.
+                    return;
+                }
                 _ => {
                     style.width = Some(Length::Px(174.0));
                     style.height = Some(Length::Px(21.0));

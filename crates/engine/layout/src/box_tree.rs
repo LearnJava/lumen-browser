@@ -237,7 +237,7 @@ pub enum SvgShapeKind {
 
 /// Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
 /// (фокус-рамка, checkbox/radio indicator, placeholder, стрелка select и т.д.).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FormControlKind {
     /// `<input>` — carries input type (from `type` attribute) and initial
     /// checked state (from presence of `checked` attribute in DOM). Paint uses
@@ -249,6 +249,16 @@ pub enum FormControlKind {
     /// to draw the visible label without re-querying the DOM.
     Select { selected_text: String },
     Textarea,
+    /// `<input type="range">` — carries current value and bounds so paint can
+    /// draw track / fill / thumb without re-querying the DOM.
+    Range {
+        /// Current slider value clamped to [min, max].
+        value: f32,
+        /// Minimum bound (HTML `min` attribute; default 0).
+        min: f32,
+        /// Maximum bound (HTML `max` attribute; default 100).
+        max: f32,
+    },
 }
 
 /// Collect the text label of the currently selected `<option>` inside a
@@ -2436,8 +2446,23 @@ fn build_box(
                         _ => {
                             let input_type = node.input_type()
                                 .unwrap_or(lumen_dom::InputType::Text);
-                            let checked = node.get_attr("checked").is_some();
-                            FormControlKind::Input { input_type, checked }
+                            if input_type == lumen_dom::InputType::Range {
+                                let min = node.get_attr("min")
+                                    .and_then(|v| v.trim().parse::<f32>().ok())
+                                    .unwrap_or(0.0);
+                                let max = node.get_attr("max")
+                                    .and_then(|v| v.trim().parse::<f32>().ok())
+                                    .unwrap_or(100.0);
+                                let default_val = (min + max) / 2.0;
+                                let value = node.get_attr("value")
+                                    .and_then(|v| v.trim().parse::<f32>().ok())
+                                    .unwrap_or(default_val)
+                                    .clamp(min, max);
+                                FormControlKind::Range { value, min, max }
+                            } else {
+                                let checked = node.get_attr("checked").is_some();
+                                FormControlKind::Input { input_type, checked }
+                            }
                         }
                     }
                 };
