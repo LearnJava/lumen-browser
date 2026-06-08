@@ -24,7 +24,7 @@ use lumen_layout::{
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
-    ScrollbarWidth,
+    ScrollbarWidth, SelectionHighlight,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow,
     TransformStyle,
@@ -1439,7 +1439,26 @@ fn blend_mode_name(m: BlendMode) -> &'static str {
 
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
     let mut list = Vec::new();
-    walk(root, &mut list, 1.0);
+    walk(root, &mut list, 1.0, None);
+    list
+}
+
+/// Like [`build_display_list`] but applies `::selection` CSS highlight styles
+/// to text fragments that fall within `sel`.
+///
+/// Pass `Some(&SelectionHighlight)` to enable `::selection` rendering — selected
+/// text receives a `FillRect` background (from `sel.bg_color`) and optionally an
+/// overridden text colour (from `sel.fg_color`). Pass `None` to get the same
+/// output as `build_display_list`.
+///
+/// This function is a pure function per ADR-008 Invariant 3: it depends only on
+/// the function parameters and carries no hidden global state.
+pub fn build_display_list_with_selection(
+    root: &LayoutBox,
+    sel: Option<&SelectionHighlight>,
+) -> DisplayList {
+    let mut list = Vec::new();
+    walk(root, &mut list, 1.0, sel);
     list
 }
 
@@ -1614,7 +1633,7 @@ pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
             let dy = frag.page_y_offset - frag.layout_box.rect.y;
             let matrix = Mat4::translation_2d(0.0, dy);
             cmds.push(DisplayCommand::PushTransform { matrix });
-            walk(&frag.layout_box, &mut cmds, 1.0);
+            walk(&frag.layout_box, &mut cmds, 1.0, None);
             cmds.push(DisplayCommand::PopTransform);
         }
         // Emit margin-box text content (headers, footers, page numbers).
@@ -1868,12 +1887,22 @@ fn emit_text_with_highlights(
 }
 
 /// Emits shadow + DrawText + decorations for every visible frag in `line`.
+///
+/// When `sel` is `Some`, fragments that overlap the active selection range
+/// receive a `FillRect` highlight background before the text, and optionally
+/// have their text colour overridden by `sel.fg_color` (CSS Pseudo-elements
+/// L4 §5.6 `::selection`).
+///
+/// Phase 0 limitation: selection pixel bounds are estimated proportionally
+/// by byte offset, which is accurate for ASCII but approximate for non-ASCII.
+/// Per-glyph accuracy requires a `TextMeasurer` which is not available here.
 fn emit_text_frags(
     line: &[InlineFrag],
     container_x: f32,
     container_width: f32,
     line_y: f32,
     line_h: f32,
+    sel: Option<&SelectionHighlight>,
     out: &mut Vec<DisplayCommand>,
 ) {
     for frag in line {
@@ -1893,13 +1922,27 @@ fn emit_text_frags(
             });
             continue;
         }
+
+        // ::selection highlight — emit FillRect for selected portion before text.
+        let sel_fg = sel.and_then(|s| {
+            let hi = frag_selection_highlight(frag, s);
+            if let Some((sel_x, sel_w)) = hi {
+                out.push(DisplayCommand::FillRect {
+                    rect: Rect::new(container_x + sel_x, line_y, sel_w, line_h),
+                    color: s.bg_color,
+                });
+            }
+            if hi.is_some() { s.fg_color } else { None }
+        });
+
+        let text_color = sel_fg.unwrap_or(frag.style.color);
         let base_rect = Rect::new(container_x + frag.x, frag_y, container_width, line_h);
         emit_text_shadows(out, base_rect, line_h, frag);
         out.push(DisplayCommand::DrawText {
             rect: base_rect,
             text: frag.text.clone(),
             font_size: frag.style.font_size,
-            color: frag.style.color,
+            color: text_color,
             font_family: frag.style.font_family.clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
@@ -1920,6 +1963,54 @@ fn emit_text_frags(
     }
 }
 
+/// Compute the (frag-relative x, width) pixel span that is covered by the
+/// active selection for a single inline fragment.
+///
+/// Returns `None` when the fragment is outside the selection range.
+///
+/// Uses byte-proportional estimation for sub-fragment boundaries.  Accurate
+/// for ASCII text; approximate for variable-width or multi-byte characters.
+fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Option<(f32, f32)> {
+    let range = &sel.range;
+    if range.is_collapsed() {
+        return None;
+    }
+    let frag_end = frag.source_char_offset + frag.text.len() as u32;
+    let same_start = range.start.container == frag.source_node;
+    let same_end = range.end.container == frag.source_node;
+
+    // byte offsets within the frag's text
+    let (byte_start, byte_end): (u32, u32) = if same_start && same_end {
+        let s = range.start.offset.max(frag.source_char_offset).min(frag_end)
+            - frag.source_char_offset;
+        let e = range.end.offset.max(frag.source_char_offset).min(frag_end)
+            - frag.source_char_offset;
+        if e <= s { return None; }
+        (s, e)
+    } else if same_start {
+        let s = range.start.offset.max(frag.source_char_offset).min(frag_end)
+            - frag.source_char_offset;
+        (s, frag.text.len() as u32)
+    } else if same_end {
+        let e = range.end.offset.max(frag.source_char_offset).min(frag_end)
+            - frag.source_char_offset;
+        if e == 0 { return None; }
+        (0, e)
+    } else {
+        // Frag node is between range endpoints: fully selected, but multi-node
+        // selection depth is not tracked in Phase 0 without tree traversal.
+        return None;
+    };
+
+    let total = frag.text.len() as f32;
+    if total <= 0.0 {
+        return None;
+    }
+    let x_start = frag.x + frag.width * (byte_start as f32 / total);
+    let x_end   = frag.x + frag.width * (byte_end   as f32 / total);
+    Some((x_start, (x_end - x_start).max(0.0)))
+}
+
 /// Renders all lines of a [`BoxKind::InlineRun`].
 ///
 /// When `text-overflow: ellipsis` (CSS UI L4 §3) is active on the box style
@@ -1931,7 +2022,12 @@ fn emit_text_frags(
 ///
 /// Requires `overflow_x != visible` on the box (CSS UI L4 §3 precondition).
 /// The parent block's overflow:hidden clip ensures no pixel escapes the container.
-fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<DisplayCommand>) {
+fn emit_inline_run(
+    b: &LayoutBox,
+    lines: &[Vec<InlineFrag>],
+    sel: Option<&SelectionHighlight>,
+    out: &mut Vec<DisplayCommand>,
+) {
     let line_h = b.style.font_size * b.style.line_height;
     let wants_ellipsis = matches!(b.style.text_overflow, TextOverflow::Ellipsis)
         && overflow_clips(b.style.overflow_x);
@@ -1964,7 +2060,7 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
             out.push(DisplayCommand::PushClipRect {
                 rect: Rect::new(b.rect.x, line_y, clip_w, line_h),
             });
-            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
             out.push(DisplayCommand::PopClip);
             out.push(DisplayCommand::DrawText {
                 rect: Rect::new(b.rect.x + clip_w, line_y, ew, line_h),
@@ -1987,7 +2083,7 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
                 tab_size: 0.0,
             });
         } else {
-            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
         }
     }
 }
@@ -2137,7 +2233,7 @@ fn fill_buckets(
     if is_sc_root {
         let bucket = &mut buckets[current_sc.0 as usize];
         bucket.pre.extend(pre_ops);
-        emit_box_self(b, &mut bucket.root_bg, dpr);
+        emit_box_self(b, &mut bucket.root_bg, dpr, None);
         // `post` эмитится в фазе InlineContent после descendants — заполним
         // его сейчас, чтобы не повторно вычислять триггеры.
         bucket.post.extend(post_ops);
@@ -2159,7 +2255,7 @@ fn fill_buckets(
         // триггерят SC сами, до сюда не дойдут с не-пустым pre_ops).
         let bucket = &mut buckets[current_sc.0 as usize];
         bucket.contents.extend(pre_ops);
-        emit_box_self(b, &mut bucket.contents, dpr);
+        emit_box_self(b, &mut bucket.contents, dpr, None);
 
         for child in &b.children {
             let child_creates_sc =
@@ -3378,7 +3474,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
 
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
-fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Option<&SelectionHighlight>) {
     // opacity:0 → whole-subtree invisible (см. is_opacity_subtree_painted).
     // emit_box_self не идёт в children, но self-content тоже skip-аем.
     if !is_opacity_subtree_painted(b) {
@@ -3441,7 +3537,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             emit_outline(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, out);
+            emit_inline_run(b, lines, sel, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace | BoxKind::Contents => {}
         BoxKind::Marker { .. } => {
@@ -3794,7 +3890,7 @@ fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
     order
 }
 
-fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
+fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
     // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
     // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
     // skip-ом (отличие от visibility:hidden, где children могут
@@ -3990,11 +4086,11 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                 emit_table_box(b, out, dpr);
             } else if establishes_3d_rendering_context(b) {
                 for i in depth_sorted_child_order(&b.children) {
-                    walk(&b.children[i], out, dpr);
+                    walk(&b.children[i], out, dpr, sel);
                 }
             } else {
                 for child in &b.children {
-                    walk(child, out, dpr);
+                    walk(child, out, dpr, sel);
                 }
             }
             if has_overflow_clip {
@@ -4134,7 +4230,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // Анонимный контейнер: нет фона/бордера собственного.
             // Просто рекурсивно рисуем всех дочерних (BoxKind::Block).
             for child in &b.children {
-                walk(child, out, dpr);
+                walk(child, out, dpr, sel);
             }
         }
         BoxKind::InlineSpace => {}
@@ -4142,7 +4238,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             emit_list_marker(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, out);
+            emit_inline_run(b, lines, sel, out);
         }
         BoxKind::Image { src, alt } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
@@ -4378,7 +4474,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                 out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
             }
             for child in &b.children {
-                walk(child, out, dpr);
+                walk(child, out, dpr, sel);
             }
         }
         BoxKind::SvgShape { shape, .. } => {
@@ -4889,11 +4985,11 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         }
         BoxKind::InlineSpace => {}
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, out);
+            emit_inline_run(b, lines, None, out);
         }
         // Image and other kinds: no compositor-offloadable properties, delegate to walk.
         _ => {
-            walk(b, out, dpr);
+            walk(b, out, dpr, None);
         }
     }
     if is_sticky {
@@ -5074,7 +5170,7 @@ fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
                 emit_table_row(row_group, out, dpr);
             }
             _ => {
-                walk(row_group, out, dpr);
+                walk(row_group, out, dpr, None);
             }
         }
     }
@@ -5159,7 +5255,7 @@ fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 
     // Обрабатываем контент ячейки (текст, вложенные блоки и т.д.)
     for child in &b.children {
-        walk(child, out, dpr);
+        walk(child, out, dpr, None);
     }
 }
 

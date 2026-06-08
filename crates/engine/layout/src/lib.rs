@@ -66,6 +66,7 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use selection::{caret_at_point, selection_rects};
+pub use style::compute_selection_style;
 pub use selector_query::{
     computed_style_by_selector, computed_style_to_map, find_all_by_selector,
     find_box_by_selector, matches_selector, query_all, ComputedStyleSnapshot,
@@ -113,6 +114,29 @@ pub use style::{
     UserSelect, Visibility,
     WhiteSpace, WordBreak,
 };
+
+/// Computed `::selection` highlight data — passed to the paint layer so it can
+/// apply `::selection` CSS overrides when rendering selected text.
+///
+/// CSS Pseudo-elements L4 §5.6 restricts `::selection` to a limited set of
+/// properties: `color`, `background-color`, `text-decoration-*`, `text-shadow`.
+/// The paint layer reads only `fg_color` and `bg_color`; other properties from
+/// the full `ComputedStyle` are ignored during selection rendering.
+///
+/// Build via [`compute_selection_style`] or construct directly with OS-default
+/// colours when no `::selection` rules are present.
+#[derive(Debug, Clone)]
+pub struct SelectionHighlight {
+    /// The active DOM selection range. Must not be collapsed.
+    pub range: lumen_dom::Range,
+    /// Text colour override from `::selection { color: ... }`. `None` = inherit
+    /// (keep each fragment's own `color`).
+    pub fg_color: Option<Color>,
+    /// Selection background from `::selection { background-color: ... }`.
+    /// The default when no `::selection` rule is present is the OS accent colour;
+    /// callers should supply a sensible fallback (e.g. `#308aff`).
+    pub bg_color: Color,
+}
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///

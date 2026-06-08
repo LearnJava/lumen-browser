@@ -5452,7 +5452,11 @@ pub fn compute_pseudo_element_style(
 
     // ::before/::after require content: to render; ::first-letter/::first-line do not.
     // ::marker renders by default (content comes from list-style-type); content:none suppresses it.
-    if pseudo.eq_ignore_ascii_case("first-letter") || pseudo.eq_ignore_ascii_case("first-line") {
+    // ::selection applies to active text selection — no content required (CSS Pseudo-elements L4 §5.6).
+    if pseudo.eq_ignore_ascii_case("first-letter")
+        || pseudo.eq_ignore_ascii_case("first-line")
+        || pseudo.eq_ignore_ascii_case("selection")
+    {
         Some(style)
     } else if pseudo.eq_ignore_ascii_case("marker") {
         match &style.content {
@@ -5465,6 +5469,28 @@ pub fn compute_pseudo_element_style(
             _ => None,
         }
     }
+}
+
+/// Computes the `::selection` override style for a DOM element.
+///
+/// Collects all CSS rules targeting `element::selection`, applies declarations
+/// in specificity order, and returns the computed style. Returns `None` when
+/// no `::selection` rules match `node` (callers should fall back to the OS
+/// default selection highlight colour in that case).
+///
+/// Only a limited subset of properties are honoured by `::selection` per
+/// CSS Pseudo-elements L4 §5.6: `color`, `background-color`,
+/// `text-decoration-*`, `text-shadow`. Other declared properties are parsed
+/// and stored but should be ignored by the paint layer.
+pub fn compute_selection_style(
+    doc: &Document,
+    node: NodeId,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
+    compute_pseudo_element_style(doc, node, "selection", sheet, parent, viewport, dark_mode)
 }
 
 /// CSS Properties and Values L1 §1.1: для каждого зарегистрированного
@@ -24010,6 +24036,77 @@ mod tests {
         assert!(parse_color("color-mix(srgb, red, blue)").is_none());
         // Only 2 comma-separated parts → None
         assert!(parse_color("color-mix(in srgb, red)").is_none());
+    }
+
+    // ── ::selection pseudo-element ─────────────────────────────────────────────
+
+    fn make_selection_doc() -> (lumen_dom::Document, lumen_dom::NodeId) {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let div = doc.create_element(lumen_dom::QualName::html("div"));
+        doc.append_child(root, div);
+        (doc, div)
+    }
+
+    #[test]
+    fn selection_style_returns_some_when_rules_match() {
+        // ::selection rule with matching div selector
+        let css = "div::selection { background-color: #0078D4; color: white; }";
+        let sheet = lumen_css_parser::parse(css);
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_selection_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_some(), "::selection rules should produce Some(style)");
+        let s = result.unwrap();
+        // background-color #0078D4 = rgb(0, 120, 212)
+        if let Some(CssColor::Rgba(bg)) = s.background_color {
+            assert_eq!(bg.r, 0,   "r should be 0");
+            assert_eq!(bg.g, 120, "g should be 120");
+            assert_eq!(bg.b, 212, "b should be 212");
+        } else {
+            panic!("background_color should be CssColor::Rgba, got {:?}", s.background_color);
+        }
+    }
+
+    #[test]
+    fn selection_style_returns_none_when_no_rules() {
+        // No ::selection rules at all → None
+        let sheet = lumen_css_parser::parse("div { color: red; }");
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_selection_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_none(), "no ::selection rules → None");
+    }
+
+    #[test]
+    fn selection_style_no_content_required() {
+        // ::selection without 'content' property should still return Some
+        let sheet = lumen_css_parser::parse("div::selection { color: green; }");
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_selection_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_some(), "::selection without content should still return Some");
+        let s = result.unwrap();
+        // color: green = rgb(0, 128, 0)
+        assert_eq!(s.color.r, 0,   "color red should be 0");
+        assert_eq!(s.color.g, 128, "color green should be 128");
+    }
+
+    #[test]
+    fn selection_style_inherits_font_from_parent() {
+        // ::selection should inherit font-size from originating element
+        let sheet = lumen_css_parser::parse("div::selection { background-color: yellow; }");
+        let (doc, node) = make_selection_doc();
+        let mut parent = ComputedStyle::root();
+        parent.font_size = 24.0;
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_selection_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_some());
+        let s = result.unwrap();
+        assert!((s.font_size - 24.0).abs() < 0.01, "font-size should inherit: got {}", s.font_size);
     }
 
 }
