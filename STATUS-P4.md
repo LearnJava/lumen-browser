@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`attr()` with type (CSS Values L4) — branch: p4-attr-typed
+Next step: add expand_attr_val() in style.rs, wire into compute_style/apply_container_rules/compute_pseudo_element_style loops
 
 ## Workflow
 
