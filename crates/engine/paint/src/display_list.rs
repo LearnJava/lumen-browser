@@ -1875,21 +1875,6 @@ fn emit_text_emphasis_marks(
     }
 }
 
-/// Emits highlight background rects for ::highlight() pseudo-element.
-/// Phase 0: stub that stores highlight name for P4 wiring to CSS.highlights registry.
-/// P4 will: (1) check if highlight name is registered, (2) query background color,
-/// (3) emit FillRect background before DrawText.
-/// CSS: ::highlight(name)
-#[allow(dead_code)]
-fn emit_text_with_highlights(
-    _name: &str,
-    _text_rect: Rect,
-    _out: &mut Vec<DisplayCommand>,
-) {
-    // Phase 1: P4 fills in the implementation after ::highlight() CSS wiring complete
-    // For now, this is a no-op stub
-}
-
 /// Emits shadow + DrawText + decorations for every visible frag in `line`.
 ///
 /// When `sel` is `Some`, fragments that overlap the active selection range
@@ -3523,6 +3508,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<Displ
             font_style: s.font_style,
             font_variation_axes: vec![],
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 
@@ -3547,6 +3533,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<Displ
         font_style: s.font_style,
         font_variation_axes: vec![],
         tab_size: 0.0,
+        highlight_name: None,
     });
 }
 
@@ -11039,13 +11026,15 @@ mod highlight_tests {
             &mut out2,
         );
         
-        if let DisplayCommand::DrawText { text: t1, highlight_name: h1, .. } = &out1[0] {
-            if let DisplayCommand::DrawText { text: t2, highlight_name: h2, .. } = &out2[0] {
-                assert_eq!(t1, "first");
-                assert_eq!(h1.as_ref(), Some(&"search".to_string()));
-                assert_eq!(t2, "second");
-                assert_eq!(h2.as_ref(), Some(&"spelling".to_string()));
-            }
+        if let (
+            DisplayCommand::DrawText { text: t1, highlight_name: h1, .. },
+            DisplayCommand::DrawText { text: t2, highlight_name: h2, .. },
+        ) = (&out1[0], &out2[0])
+        {
+            assert_eq!(t1, "first");
+            assert_eq!(h1.as_ref(), Some(&"search".to_string()));
+            assert_eq!(t2, "second");
+            assert_eq!(h2.as_ref(), Some(&"spelling".to_string()));
         }
     }
 }
