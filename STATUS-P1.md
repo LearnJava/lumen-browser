@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+I-3: HTML Form Constraint Validation API  branch: p1-i3-form-validation
+Next step: commit implementation  crates/js/src/form_validation.rs:1
 
 ---
 
