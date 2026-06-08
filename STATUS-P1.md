@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+K-4: StorageManager API  branch: p1-k4-storage-manager
+Next step: clippy → full test run → commit  crates/js/src/storage_manager.rs:1
 
 ---
 

@@ -81,6 +81,7 @@ pub mod webassembly;
 pub mod generic_sensor;
 pub mod video_pip;
 pub mod web_midi;
+pub mod storage_manager;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -906,6 +907,13 @@ impl QuickJsRuntime {
             // CoreMIDI / WinMM / ALSA backends.
             if let Err(e) = web_midi::install_web_midi_api(&ctx) {
                 eprintln!("Web MIDI API init failed: {}", e);
+            }
+
+            // Phase 0: WHATWG Storage §9 — navigator.storage singleton.
+            // estimate() → {usage:0, quota:10GiB}; persist/persisted → true; getDirectory() → OPFS stub.
+            // Phase 1: _lumen_storage_estimate/persist/get_directory wire real OS metrics + sandboxed FS.
+            if let Err(e) = storage_manager::install_storage_manager_bindings(&ctx) {
+                eprintln!("StorageManager API init failed: {}", e);
             }
 
             Ok(())
