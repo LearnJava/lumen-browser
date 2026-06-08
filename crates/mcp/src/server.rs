@@ -605,6 +605,18 @@ mod tests {
         fn set_user_agent(&mut self, _ua: &str) -> lumen_core::error::Result<()> {
             Ok(())
         }
+
+        fn set_clock(&mut self, _mode: lumen_driver::ClockMode) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn set_rng_seed(&mut self, _seed: Option<u64>) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn freeze_fingerprint(&mut self, _profile: lumen_driver::FingerprintProfile) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
     }
 
     fn make_request(method: &str, params: serde_json::Value) -> String {
