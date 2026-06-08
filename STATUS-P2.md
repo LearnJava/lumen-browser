@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+K-4 | `<form>` multipart/form-data encoding  branch: p2-k4-form-multipart
+Next step: Add FormData._toMultipart(boundary) + fix fetch() FormData → multipart/form-data  crates/js/src/dom.rs:5931
 
 ---
 
