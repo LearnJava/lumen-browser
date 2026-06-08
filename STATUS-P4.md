@@ -87,14 +87,8 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
   4. At `anchor.rs:153/160`, call `registry.register(node_id, &style.anchor_name)`.
 - **Entry points:** `lumen-layout/src/anchor.rs:35` — `AnchorRegistry`; `:146` — `resolve_anchor_position` caller.
 
-### `list-style-type` (custom counter-style) (P1 feature p1-i4-counter-style, 2026-06-08)
-- **Status:** Algorithm ready. `build_list_marker_text(lst: ListStyleType, ordinal: u32, registry: &CounterStyleRegistry) -> String` in `lumen-layout/src/counters.rs`. Registry lookup via `format_counter_with_registry`. All built-in types work. Comment `// CSS: list-style-type (custom counter-style)` marks the extension point in `ListStyleType::parse()` at `style.rs:2549`.
-- **P4 task:**
-  1. Add `Custom(Box<str>)` (or `Custom(String)`) variant to `ListStyleType` enum in `lumen-layout/src/style.rs` — note this removes `Copy` from the enum, adjust derives accordingly.
-  2. In `ListStyleType::parse()` at `style.rs:2549`, return `Some(Self::Custom(s.into()))` for unrecognised idents instead of `None`.
-  3. In `build_list_marker_text()` in `counters.rs`, add the `Custom(ref name)` arm: `ListStyleType::Custom(ref name) => format_counter_with_registry(ordinal as i32, name, registry)`.
-  4. `apply_declaration("list-style-type")` already routes through `ListStyleType::parse()` — no change needed.
-- **Entry points:** `lumen-layout/src/counters.rs` — `build_list_marker_text`; `lumen-layout/src/style.rs:2549` — `// CSS: list-style-type` comment.
+### ~~`list-style-type` (custom counter-style)~~ — **ВЫПОЛНЕНО** (p4-list-style-type-custom, 2026-06-08)
+`ListStyleType::Custom(Box<str>)` добавлен; `parse()` возвращает `Custom` для нераспознанных idents; `build_list_marker_text()` резолвит через `format_counter_with_registry`; shorthand-парсер исправлен (position до type). 3 unit-теста + graphic test 32.
 
 ### `gap-rule-width`, `gap-rule-style`, `gap-rule-color` (P2 feature p2-e5-gap-decorations, 2026-06-07)
 - **Status:** Paint-side emit logic ready. `lumen-paint::emit_gap_rules(boxes, gaps, ctx)` in `gap_decorations.rs` takes a `GapDecorationContext {rule_width, rule_style, rule_color}` and a slice of `GapSegment {rect, horizontal}` and returns `Vec<DisplayCommand::DrawBorder>`. Rules are centered in each gap rectangle; column gaps get vertical rules (right-side DrawBorder), row gaps get horizontal rules (bottom-side DrawBorder). Clamped to gap size if rule_width > gap. 6 unit tests pass.
@@ -273,6 +267,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-08 | `list-style-type` custom ident | CSS Lists L3 §2.1; `ListStyleType::Custom(Box<str>)`; parse() → Custom для нераспознанных idents; build_list_marker_text() → format_counter_with_registry; 3 unit-теста + graphic test 32 |
 | 2026-06-08 | `font-variation-settings` | CSS Fonts L4 §6.3; OwnedVariableFont in lumen-paint; char_width_varied() in TextMeasurer + MultiFontMeasurer; measure_text_w_varied() in box_tree.rs; 6 unit tests + graphic test 68 |
 | 2026-06-08 | `attr()` typed | CSS Values L4 §7.7; find_attr_open() + expand_attr_val() in style.rs; unit-suffix/string/color types; fallback; 4 unit tests + graphic test 67 |
 | 2026-06-08 | `::selection` | CSS Pseudo-elements L4 §5.6; SelectionHighlight struct; build_display_list_with_selection(); frag_selection_highlight() byte-proportional; 4 unit tests in style.rs; graphic test 66 |
