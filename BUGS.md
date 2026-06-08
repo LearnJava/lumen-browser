@@ -123,6 +123,7 @@ BUG-107 | OPEN   | layout         | flex align-content multi-line: space-between
 BUG-108 | OPEN   | paint          | ::selection pseudo-element: background-color/color override not applied — TEST-66: 6.18% | crates/engine/paint/src/display_list.rs
 BUG-109 | OPEN   | css-parser/font | font-variation-settings: wght/wdth/slnt axis values not forwarded to rasterizer — TEST-68: 3.21% | crates/engine/layout/src/style.rs
 BUG-110 | OPEN   | layout/paint   | object-fit: SVG viewBox scaling (fill/contain/cover/none/scale-down) ~8% deviation — TEST-70: 8.03% | crates/engine/layout/src/box_tree.rs
+BUG-111 | FIXED 2026-06-08 | paint  | lumen-paint не компилировался после мержа A-2 CSS Custom Highlight API: (1) дубликат `emit_text_with_highlights` (stub 3-arg vs новый 11-arg), (2) `DrawText` в select-dropdown missing `highlight_name`, (3) осиротевший `///`-блок в style.rs, (4) collapsible_if в тест | crates/engine/paint/src/display_list.rs
 ```
 
 ---

@@ -12017,21 +12017,12 @@ pub(crate) struct ParsedTextDecorationShorthand {
     pub any_recognized: bool,
 }
 
-/// Разбирает `text-decoration` shorthand или `text-decoration-line`.
-///
-/// CSS Text Decoration L3 §2.1 shorthand: `<line> || <style> || <color>` в любом
-/// порядке. `text-decoration-thickness` исключена из L3 shorthand-а (L4
-/// собирается её туда вернуть; пока следуем L3).
-///
-/// Phase 0 keyword-ы линий: `underline`, `overline`, `line-through`, `none`.
-/// `none` сбрасывает все линии (CSS3 «none — initial value», явный сброс
-/// побеждает другие line-keyword-ы).
-/// Стиль: `solid`/`wavy`/`dashed`/`dotted`/`double`. `blink` (CSS2 deprecated)
-/// тихо поглощаем, чтобы не попадал в color-парсер.
-///
-/// `currentcolor` keyword сбрасывает color в None (= fallback на currentColor
-/// при рендеринге).
-/// Wrapper для тестов и потребителей вне quirks-aware каскада.
+// parse_text_decoration_shorthand_q: разбирает `text-decoration` shorthand или
+// `text-decoration-line`. CSS Text Decoration L3 §2.1 shorthand: `<line> || <style>
+// || <color>` в любом порядке. `text-decoration-thickness` исключена из L3
+// shorthand-а. Phase 0 keyword-ы линий: `underline`, `overline`, `line-through`,
+// `none`. `none` сбрасывает все линии. `currentcolor` keyword сбрасывает color в
+// None. Wrapper для тестов: parse_text_decoration_shorthand (#[cfg(test)]).
 
 /// Resolve CSS Logical Properties based on writing-mode.
 ///

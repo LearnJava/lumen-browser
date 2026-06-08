@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(нет)_
+BUG-111: lumen-paint compile regression after A-2 merge  branch: p3-bug-paint-compile
 
 ## Next
 
