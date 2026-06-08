@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+H-4: Reporting API  branch: p1-h4-reporting-api
+Next step: реализовать `reporting_api.rs`, подключить в `lib.rs`  crates/js/src/reporting_api.rs:1
 
 ---
 
