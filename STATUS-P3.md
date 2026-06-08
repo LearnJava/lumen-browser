@@ -62,6 +62,7 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 ## Recent fixes
 
+- **snapshot_cpu регрессии 32/33/34** (2026-06-08) — CPU-эталоны устарели после мержа P4/P2/P1: 32-list-markers (P4 @counter-style +6 li), 33-multi-column (C8 column-span/fill), 34-forms (forms-ui). Регенерированы через `SAVE_CPU_SNAPSHOTS=1`, все 57 snapshot_cpu тестов проходят. Влито `p3-snapshot-regen`.
 - **BUG-112 test_32_list_markers регрессия** (2026-06-08) — P4 добавил 2 `@counter-style` списка по 3 items → 32 li (было 26), 30 маркеров (было 24); тест не обновлён. 1/1. Влито `p3-test32-update`.
 - **BUG-111 lumen-paint/shell compile regression** (2026-06-08) — после мержа A-2 CSS Custom Highlight API не компилировались lumen-paint и lumen-shell: (1) дубликат `emit_text_with_highlights`, (2) 73× `DrawText` struct-инициализатора missing `highlight_name: None` (display_list×2, renderer, main, shell/*), (3) осиротевший `///`-блок в style.rs, (4) collapsible_if в тест. cargo check/clippy чист для paint+shell. Влито в 2 коммита: `p3-bug-paint-compile` + `p3-bug111-remaining`.
 - **BUG-073 chrome.runtime CDP-маркер** (2026-06-08) — WEB_API_SHIM (D-6) безусловно устанавливал `window.chrome.runtime` → тест `chrome_runtime_absent` в `no_automation_markers.rs` падал: CDP-маркер виден всем скриптам, нарушая ADR-007 anti-fingerprint. Fix: IIFE chrome.runtime гардировано флагом `globalThis._LUMEN_EXTENSION_ACTIVE`; тесты dom.rs выставляют флаг перед `install_dom`. lumen-js --lib 1616/1616, no_automation_markers 19/19, clippy чист. Влито `p3-bug071-mock-session-methods`.
