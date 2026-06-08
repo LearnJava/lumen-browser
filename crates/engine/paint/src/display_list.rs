@@ -3351,6 +3351,12 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
         FormControlKind::Range { value, min, max } => {
             emit_range_slider(b, *value, *min, *max, out);
         }
+        FormControlKind::Progress { value, max } => {
+            emit_progress_bar(b, *value, *max, out);
+        }
+        FormControlKind::Meter { value, min, max, low, high, optimum } => {
+            emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
+        }
     }
 }
 
@@ -3396,6 +3402,96 @@ fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, out: &mut Ve
         radii: thumb_radii,
         color: blue,
     });
+}
+
+/// Draw a `<progress>` bar inside the border box.
+///
+/// Determinate: blue fill proportional to `value / max`.
+/// Indeterminate (`value` is `None`): static 30% fill to indicate pending state.
+fn emit_progress_bar(b: &LayoutBox, value: Option<f32>, max: f32, out: &mut Vec<DisplayCommand>) {
+    let pad = 2.0_f32;
+    let bar_x = b.rect.x + pad;
+    let bar_y = b.rect.y + pad;
+    let bar_max_w = (b.rect.width - pad * 2.0).max(0.0);
+    let bar_h = (b.rect.height - pad * 2.0).max(1.0);
+    let blue = Color { r: 21, g: 90, b: 192, a: 255 };
+    let radii = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
+
+    let fraction = match value {
+        None => 0.3,
+        Some(v) => (v / max.max(f32::EPSILON)).clamp(0.0, 1.0),
+    };
+
+    let fill_w = (bar_max_w * fraction).max(0.0);
+    if fill_w > 0.0 {
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(bar_x, bar_y, fill_w, bar_h),
+            radii,
+            color: blue,
+        });
+    }
+}
+
+/// Draw a `<meter>` gauge bar inside the border box (HTML5 §4.10.14).
+///
+/// Fill color: green = optimal zone, yellow = sub-optimal, red = bad.
+#[allow(clippy::too_many_arguments)]
+fn emit_meter_bar(
+    b: &LayoutBox,
+    value: f32,
+    min: f32,
+    max: f32,
+    low: f32,
+    high: f32,
+    optimum: f32,
+    out: &mut Vec<DisplayCommand>,
+) {
+    let range = (max - min).max(f32::EPSILON);
+    let fraction = ((value - min) / range).clamp(0.0, 1.0);
+
+    let pad = 2.0_f32;
+    let bar_x = b.rect.x + pad;
+    let bar_y = b.rect.y + pad;
+    let bar_max_w = (b.rect.width - pad * 2.0).max(0.0);
+    let bar_h = (b.rect.height - pad * 2.0).max(1.0);
+    let radii = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
+
+    let fill_color = meter_gauge_color(value, min, max, low, high, optimum);
+    let fill_w = (bar_max_w * fraction).max(0.0);
+    if fill_w > 0.0 {
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(bar_x, bar_y, fill_w, bar_h),
+            radii,
+            color: fill_color,
+        });
+    }
+}
+
+/// HTML5 §4.10.14 — determine meter gauge fill color from value and thresholds.
+///
+/// Optimum zone → green, adjacent zone → yellow, far zone → red.
+pub(crate) fn meter_gauge_color(value: f32, _min: f32, _max: f32, low: f32, high: f32, optimum: f32) -> Color {
+    let green  = Color { r: 100, g: 180, b:  60, a: 255 };
+    let yellow = Color { r: 210, g: 175, b:  20, a: 255 };
+    let red    = Color { r: 200, g:  60, b:  60, a: 255 };
+
+    // Where does optimum fall?
+    let opt_in_low    = optimum <= low;
+    let opt_in_high   = optimum >= high;
+    let opt_in_middle = !opt_in_low && !opt_in_high;
+
+    let val_in_low    = value < low;
+    let val_in_high   = value > high;
+    let val_in_middle = !val_in_low && !val_in_high;
+
+    if opt_in_middle {
+        if val_in_middle { green } else { yellow }
+    } else if opt_in_low {
+        if val_in_low { green } else if val_in_middle { yellow } else { red }
+    } else {
+        // opt_in_high
+        if val_in_high { green } else if val_in_middle { yellow } else { red }
+    }
 }
 
 /// Draw the selected option label and a dropdown arrow (▼) inside a `<select>` box.
@@ -10651,5 +10747,65 @@ mod tests {
         let mid_count = dl_mid.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count();
         let explicit_count = dl_explicit.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count();
         assert_eq!(mid_count, explicit_count, "default and explicit value=50 should produce same FillRoundedRect count");
+    }
+
+    // ── <progress> ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn progress_determinate_emits_filled_bar() {
+        // value=0.5/max=1.0 → bar fill present (at least one FillRoundedRect inside the control).
+        let dl = build(r#"<progress value="0.5" max="1.0"></progress>"#, "");
+        let filled: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(!filled.is_empty(), "determinate progress should emit at least one FillRoundedRect");
+    }
+
+    #[test]
+    fn progress_indeterminate_emits_partial_fill() {
+        // No value attr → indeterminate; still emits a 30% bar.
+        let dl = build(r#"<progress max="1.0"></progress>"#, "");
+        let filled: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(!filled.is_empty(), "indeterminate progress should emit a partial bar");
+    }
+
+    #[test]
+    fn progress_zero_value_emits_no_fill() {
+        // value=0 → fraction=0 → no FillRoundedRect from the bar (but FillRect from background may exist).
+        let dl = build(r#"<progress value="0" max="1.0"></progress>"#, "");
+        let rounded: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(rounded.is_empty(), "progress at 0 should emit no rounded fill, got {}", rounded.len());
+    }
+
+    // ── <meter> ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn meter_emits_filled_bar() {
+        let dl = build(r#"<meter min="0" max="10" value="5"></meter>"#, "");
+        let filled: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(!filled.is_empty(), "meter should emit a FillRoundedRect bar");
+    }
+
+    #[test]
+    fn meter_gauge_optimal_is_green() {
+        // value inside optimum range → green fill.
+        let green = super::meter_gauge_color(5.0, 0.0, 10.0, 2.0, 8.0, 5.0);
+        assert_eq!(green.r, 100, "optimal zone should be green (r=100)");
+        assert!(green.g > green.r, "green channel should dominate");
+    }
+
+    #[test]
+    fn meter_gauge_suboptimal_is_yellow() {
+        // optimum in (low, high), value in low segment → yellow.
+        let yellow = super::meter_gauge_color(1.0, 0.0, 10.0, 2.0, 8.0, 5.0);
+        assert!(yellow.r > 100, "yellow should have high red channel");
+        assert!(yellow.g > 100, "yellow should have high green channel");
+        assert!(yellow.b < 50,  "yellow should have low blue channel");
+    }
+
+    #[test]
+    fn meter_gauge_bad_is_red() {
+        // optimum in high segment, value in low segment → red (farthest from optimum).
+        let red = super::meter_gauge_color(1.0, 0.0, 10.0, 2.0, 8.0, 9.0);
+        assert!(red.r > 100, "red zone should have high red channel");
+        assert!(red.g < 100, "red zone should have low green channel");
     }
 }

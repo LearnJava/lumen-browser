@@ -6,7 +6,8 @@
 
 ## In progress
 
-None
+**L-4 | `<meter>`/`<progress>` visual fill rendering**  branch: p2-l4-meter-progress
+Next step: `FormControlKind::{Progress,Meter}` + `emit_progress_bar` + `emit_meter_bar`  `engine/layout/src/box_tree.rs:241`
 
 ---
 
@@ -16,8 +17,8 @@ None
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| N-1 | **10A: TabState state machine T0–T4** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + trigger-условия (idle timeout ∨ memory pressure ∨ LRU budget) + per-user timeout-конфиг (5 мин / 30 мин / pinned-never). `shell/src/tab_lifecycle/state.rs` | M | `lumen-shell`, `lumen-storage` |
-| N-2 | **10E.4: Scroll-discard** — при удалении узла >3 экранов от viewport освобождать `ImageHandle`; `shell/src/scroll/decode_gating.rs`. Зависит от `ImageDecodeCache` (уже готов). | XS | `lumen-shell`, `lumen-image` |
+| ~~N-1~~ | ~~**10A: TabState state machine T0–T4**~~ — **выполнено P1** (коммит fcf9fc78) | M | `lumen-shell`, `lumen-storage` |
+| ~~N-2~~ | ~~**10E.4: Scroll-discard**~~ — **выполнено P1** (коммит в `shell/src/scroll/decode_gating.rs`) | XS | `lumen-shell`, `lumen-image` |
 
 ### O — Закрытие Phase 2
 
