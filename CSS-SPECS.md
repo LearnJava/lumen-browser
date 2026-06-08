@@ -73,7 +73,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
-| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last; hyphens:auto | **#23** |
+| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ⬜ | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing/`perspective` wiring ⬜ (P4) | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
@@ -237,7 +237,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `text-decoration` / `text-decoration-*` | ✅ | line/style/color/thickness |
 | `text-shadow` | ✅ | |
 | `vertical-align` | ✅ | baseline/top/middle/bottom/sub/super/length/% |
-| `text-align-last` | 🟡 | parsed; last-line apply ⬜ |
+| `text-align-last` | ✅ | parsed + wired in align_lines; last-line override (CSS Text L3 §7.2); 4 tests |
 | `hyphens` | 🟡 | none/manual ✅; auto (HyphenationProvider) ⬜ |
 | `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
 | `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
