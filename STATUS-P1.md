@@ -12,6 +12,24 @@ _(нет)_
 
 ## Next
 
+### N — Закрытие Phase 1 (выполнить первыми)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| N-1 | **8C: Native input injection** — mouse/keyboard-события идут в event loop тем же путём что winit-сигналы от ОС; `event.isTrusted=true`; НЕ через JS `dispatchEvent`. `shell/src/input/native.rs` | S | `lumen-shell` |
+| N-2 | **8F: Deterministic mode** — `set_clock(ClockMode::Frozen/Real/Monotonic)`, `set_rng_seed(u64)` → `Math.random()`, `freeze_fingerprint(profile)` → canvas/WebGL/audio/font enum фиксированы. `driver/src/determinism.rs` | M | `lumen-driver`, `lumen-js`, `lumen-shell` |
+
+### O — Закрытие Phase 2
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| O-1 | **8H.1/8H.2: BiDi transport + модули** — вынести WS-transport из shell-stub в `bidi/src/transport.rs`; реализовать BiDi-модули `script.*` / `network.*` / `input.*` (session.* и browsingContext.* уже готовы) | M | `lumen-bidi-server`, `lumen-shell` |
+| O-2 | **6.9: Performance-observer JS binding** — `PerformanceObserver` callback delivery + JS binding `_lumen_deliver_perf_entry`; DOM-типы и mark/measure уже есть, нужен observer callback. `js/src/performance.rs` | S | `lumen-js` |
+| O-3 | **7D.1: Passkeys CTAP2-over-USB** — roaming authenticator transport (CTAP2 over HID); software `VirtualAuthenticator` уже готов, нужен реальный USB-транспорт. `network/src/webauthn.rs` | M | `lumen-network`, `lumen-js` |
+| O-4 | **10L: JS heap GC tuning per tier** — активная вкладка: мягкий GC (`gc_level=0`), idle: агрессивный (`gc_level=2`). `js/src/gc_policy.rs` | S | `lumen-js` |
+| O-5 | **6+ (a11y bridges): Platform a11y bridges** — macOS Accessibility API, Windows UI Automation, Linux AT-SPI2; P1 владеет `lumen-a11y`. `a11y/src/platform/` | M | `lumen-a11y`, `lumen-shell` |
+| O-6 | **KnowledgeStore** — FTS / read-later / notes (§12.1); базируется на уже готовом `HistoryFts`. `crates/knowledge/` | L | `lumen-knowledge`, `lumen-storage`, `lumen-shell` |
+
 ### M — Web Platform Completeness Phase 5
 
 | # | Задача | Размер | Крейты |
