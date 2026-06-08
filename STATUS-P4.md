@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`border-spacing`  branch: p4-border-spacing
-Next step: add fields to ComputedStyle, parse in apply_declaration, wire in box_tree.rs  style.rs:2052 / box_tree.rs:4584
+_(none)_
 
 ## Workflow
 
@@ -268,6 +267,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-08 | `border-spacing` | CSS 2.1 §17.6; `border_spacing_h/v: f32` в ComputedStyle (inherited); парсинг 1-/2-значного shorthand; h_spacing → compute_table_col_widths + lay_out_table_row (новый параметр); v_spacing → lay_out_table; 5 unit tests + graphic test 69 |
 | 2026-06-08 | `list-style-type` custom ident | CSS Lists L3 §2.1; `ListStyleType::Custom(Box<str>)`; parse() → Custom для нераспознанных idents; build_list_marker_text() → format_counter_with_registry; 3 unit-теста + graphic test 32 |
 | 2026-06-08 | `font-variation-settings` | CSS Fonts L4 §6.3; OwnedVariableFont in lumen-paint; char_width_varied() in TextMeasurer + MultiFontMeasurer; measure_text_w_varied() in box_tree.rs; 6 unit tests + graphic test 68 |
 | 2026-06-08 | `attr()` typed | CSS Values L4 §7.7; find_attr_open() + expand_attr_val() in style.rs; unit-suffix/string/color types; fallback; 4 unit tests + graphic test 67 |
