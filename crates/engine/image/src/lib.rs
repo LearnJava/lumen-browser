@@ -27,9 +27,16 @@ pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 /// Передаётся в `PictureParams::supported_types` через `lumen-layout`, чтобы
 /// неподдерживаемые `<source type="...">` пропускались picker-ом и браузер
 /// выбирал подходящий fallback вместо пустой коробки.
+///
+/// Содержит только форматы, которые реально декодируются в готовые пиксели.
+/// `image/jxl` / `image/heic` / `image/heif` НЕ входят: их декодеры — заглушки
+/// (`decode_jxl` / `decode_heic` всегда возвращают `Err`), поэтому объявлять их
+/// поддерживаемыми означало бы заставить picker выбрать такой `<source>` и
+/// показать пустую коробку — ровно то, что эта функция призвана предотвратить.
+/// `image/avif` остаётся: декодер настоящий, лишь за feature-флагом `avif`.
 #[must_use]
 pub fn supported_mime_types() -> &'static [&'static str] {
-    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif", "image/jxl", "image/heic", "image/heif"]
+    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif"]
 }
 
 /// Декодирует растровое изображение по сигнатуре первых байтов.
@@ -871,9 +878,12 @@ mod tests {
     }
 
     #[test]
-    fn supported_mime_types_includes_jxl() {
+    fn supported_mime_types_excludes_jxl_stub() {
+        // `decode_jxl` — заглушка (всегда Err), поэтому image/jxl НЕ должен
+        // числиться поддерживаемым: иначе picture-picker выберет
+        // `<source type="image/jxl">` и покажет пустую коробку вместо fallback.
         let types = supported_mime_types();
-        assert!(types.contains(&"image/jxl"), "image/jxl должен быть в поддерживаемых типах");
+        assert!(!types.contains(&"image/jxl"), "image/jxl (декодер-заглушка) не должен числиться поддерживаемым");
     }
 
     fn make_ftyp_bytes(major: &[u8; 4]) -> Vec<u8> {
@@ -900,15 +910,19 @@ mod tests {
     }
 
     #[test]
-    fn supported_mime_types_includes_heic() {
+    fn supported_mime_types_excludes_heic_stub() {
+        // `decode_heic` — заглушка (всегда Err): image/heic не должен числиться
+        // поддерживаемым, иначе picker выберет heic-source и покажет пустую коробку
+        // вместо fallback на `<img src>` (BUG-069).
         let types = supported_mime_types();
-        assert!(types.contains(&"image/heic"), "image/heic должен быть в поддерживаемых типах");
+        assert!(!types.contains(&"image/heic"), "image/heic (декодер-заглушка) не должен числиться поддерживаемым");
     }
 
     #[test]
-    fn supported_mime_types_includes_heif() {
+    fn supported_mime_types_excludes_heif_stub() {
+        // Та же причина, что и heic: `decode_heic` обслуживает heif-ветку заглушкой.
         let types = supported_mime_types();
-        assert!(types.contains(&"image/heif"), "image/heif должен быть в поддерживаемых типах");
+        assert!(!types.contains(&"image/heif"), "image/heif (декодер-заглушка) не должен числиться поддерживаемым");
     }
 
     #[test]
