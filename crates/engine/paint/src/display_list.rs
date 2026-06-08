@@ -6322,6 +6322,23 @@ mod tests {
     }
 
     #[test]
+    fn background_image_paint_emits_draw_background_image_with_paint_src() {
+        // CSS Paint API (Houdini) Phase 0 — `background-image: paint(name)` must emit
+        // DrawBackgroundImage with src prefixed "paint:" for renderer identification.
+        let dl = build(
+            "<div></div>",
+            "div { width: 80px; height: 40px; background-image: paint(my-worklet); }",
+        );
+        let paint_bg = dl.iter().find(|c| {
+            matches!(c, DisplayCommand::DrawBackgroundImage { src, .. } if src.starts_with("paint:"))
+        });
+        assert!(paint_bg.is_some(), "paint() must emit DrawBackgroundImage with 'paint:' src");
+        if let Some(DisplayCommand::DrawBackgroundImage { src, .. }) = paint_bg {
+            assert_eq!(src, "paint:my-worklet", "src must be paint:<name>");
+        }
+    }
+
+    #[test]
     fn background_image_respects_background_clip_padding_box() {
         // background-clip: padding-box ужимает rect под border на каждой стороне.
         // box-sizing по умолчанию content-box: width=100 — это контент,

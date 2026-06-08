@@ -158,4 +158,128 @@ mod tests {
         let cloned = def.clone();
         assert_eq!(def, cloned);
     }
+
+    // ── JS integration tests ──────────────────────────────────────────────────
+
+    fn make_ctx() -> (rquickjs::Runtime, rquickjs::Context) {
+        let rt = rquickjs::Runtime::new().unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
+        (rt, ctx)
+    }
+
+    fn install(ctx: &rquickjs::Ctx) {
+        ctx.eval::<(), _>(
+            r#"
+            if (!globalThis.CSS) { globalThis.CSS = {}; }
+            if (typeof Promise === 'undefined') {
+                globalThis.Promise = {
+                    resolve: function(v) {
+                        return { then: function(fn) { fn(v); return this; } };
+                    }
+                };
+            }
+            "#,
+        )
+        .unwrap();
+        install_paint_worklet_api(ctx).unwrap();
+    }
+
+    #[test]
+    fn js_css_paintworklet_exists_and_has_add_module() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    "typeof CSS !== 'undefined' && typeof CSS.paintWorklet !== 'undefined' \
+                     && typeof CSS.paintWorklet.addModule === 'function'",
+                )
+                .unwrap();
+            assert!(ok, "CSS.paintWorklet.addModule must be a function");
+        });
+    }
+
+    #[test]
+    fn js_add_module_returns_promise_like_object() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            // addModule() must return a thenable (Promise-like) — spec §4.2.
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var p = CSS.paintWorklet.addModule('https://example.com/paint.js');
+                    p !== null && p !== undefined && typeof p.then === 'function'
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "addModule must return a thenable");
+        });
+    }
+
+    #[test]
+    fn js_register_paint_stores_worklet_in_registry() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            // registerPaint() must store the worklet definition in _lumen_paint_worklets.
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    class MyPainter {
+                        static get inputProperties() { return ['--color', '--size']; }
+                        paint(ctx, geom, props) {}
+                    }
+                    registerPaint('my-paint', MyPainter);
+                    _lumen_paint_worklets.has('my-paint')
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "registerPaint must store worklet in _lumen_paint_worklets");
+        });
+    }
+
+    #[test]
+    fn js_register_paint_non_string_name_throws() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            // registerPaint with a non-string name must throw TypeError.
+            let threw: bool = ctx
+                .eval(
+                    r#"
+                    var threw = false;
+                    try {
+                        registerPaint(42, function() {});
+                    } catch (e) {
+                        threw = e instanceof TypeError || e.name === 'TypeError';
+                    }
+                    threw
+                    "#,
+                )
+                .unwrap();
+            assert!(threw, "registerPaint(non-string) must throw TypeError");
+        });
+    }
+
+    #[test]
+    fn js_register_paint_stores_input_properties() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let props_len: i32 = ctx
+                .eval(
+                    r#"
+                    class Painter {
+                        static get inputProperties() { return ['--a', '--b', '--c']; }
+                    }
+                    registerPaint('props-test', Painter);
+                    var def = _lumen_paint_worklets.get('props-test');
+                    def ? def.inputProperties.length : -1
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(props_len, 3, "inputProperties must have 3 entries");
+        });
+    }
 }

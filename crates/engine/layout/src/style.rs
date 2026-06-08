@@ -10533,6 +10533,9 @@ fn apply_declaration(
                     BackgroundImage::Url(s.to_string())
                 } else if let Some((a, b, t)) = parse_cross_fade(s) {
                     BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }
+                } else if let Some(paint_name) = parse_paint_function(s) {
+                    // CSS Paint API (Houdini) — `paint(name)` invokes registered worklet.
+                    BackgroundImage::Paint(paint_name)
                 } else if let Some(url) = parse_url_value(s) {
                     BackgroundImage::Url(url)
                 } else if is_gradient_function(s) {
@@ -23713,6 +23716,22 @@ mod tests {
         assert_eq!(parse_paint_function("gradient(test)"), None);
         assert_eq!(parse_paint_function("paint(test"), None);
         assert_eq!(parse_paint_function("paint(test))"), None);
+    }
+
+    #[test]
+    fn background_image_paint_function_parsed_to_paint_variant() {
+        // CSS Paint API (Houdini) — `background-image: paint(name)` must produce BackgroundImage::Paint.
+        let s = cascade_at("<div></div>", "div { background-image: paint(my-worklet); }", &[0]);
+        assert_eq!(s.background_layers.len(), 1);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("my-worklet".to_string()));
+    }
+
+    #[test]
+    fn background_image_paint_function_with_quotes_parsed() {
+        // paint("name") with double-quotes must strip quotes and produce Paint("name").
+        let s = cascade_at("<div></div>", r#"div { background-image: paint("checker"); }"#, &[0]);
+        assert_eq!(s.background_layers.len(), 1);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("checker".to_string()));
     }
 
     #[test]
