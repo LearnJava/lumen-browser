@@ -76,6 +76,7 @@ pub mod webgpu;
 pub mod webxr;
 pub mod form_validation;
 pub mod element_internals;
+pub mod presentation_api;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -866,6 +867,11 @@ impl QuickJsRuntime {
             // Phase 0: element.attachInternals() + CustomStateSet; :state() selector is P4 handoff.
             if let Err(e) = element_internals::install_element_internals_bindings(&ctx) {
                 eprintln!("ElementInternals API init failed: {}", e);
+            }
+
+            // Phase 0: navigator.presentation + PresentationRequest/Connection stubs.
+            if let Err(e) = presentation_api::install_presentation_api(&ctx) {
+                eprintln!("Presentation API init failed: {}", e);
             }
 
             Ok(())

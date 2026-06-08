@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**J-5 | Presentation API stub**  branch: p2-j5-presentation-api
+Next step: коммит готов — перейти к merge
 
 ---
 
