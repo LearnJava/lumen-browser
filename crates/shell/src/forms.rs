@@ -19,8 +19,8 @@ use lumen_dom::{
     invalid_controls_in_form, submit_form, Attribute, Document, FormSubmitEvent, InputType,
     NodeData, NodeId, QualName,
 };
-use lumen_layout::{BorderStyle, BoxKind, Color, FontStyle, FontWeight, LayoutBox};
-use lumen_paint::{DisplayCommand, DisplayList};
+use lumen_layout::{BorderStyle, BoxKind, Color, FontStyle, FontWeight, LayoutBox, Mat4};
+use lumen_paint::{build_display_list, DisplayCommand, DisplayList};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Runtime state
@@ -313,6 +313,77 @@ pub fn find_box_rect(root: &LayoutBox, node: NodeId) -> Option<Rect> {
         }
     }
     None
+}
+
+/// Find the LayoutBox subtree for `node`. Returns `None` if the node has no box.
+pub fn find_layout_box(root: &LayoutBox, node: NodeId) -> Option<&LayoutBox> {
+    if root.node == node {
+        return Some(root);
+    }
+    for child in &root.children {
+        if let Some(lb) = find_layout_box(child, node) {
+            return Some(lb);
+        }
+    }
+    None
+}
+
+/// Walk `doc` and collect all NodeIds with `data-lumen-modal` attribute
+/// (set by `dialog.showModal()`, cleared by `close()` and Escape handler).
+/// Returns them in DOM order (first opened first).
+pub fn collect_modal_dialogs(doc: &Document) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    collect_modal_dialogs_in(doc, doc.root(), &mut out);
+    out
+}
+
+fn collect_modal_dialogs_in(doc: &Document, node: NodeId, out: &mut Vec<NodeId>) {
+    if doc.get(node).get_attr("data-lumen-modal").is_some() {
+        out.push(node);
+    }
+    for &child in &doc.get(node).children.clone() {
+        collect_modal_dialogs_in(doc, child, out);
+    }
+}
+
+/// Build a `::backdrop` + translated dialog overlay for a modal `<dialog>`.
+///
+/// Renders the `::backdrop` (full-viewport dim) followed by the dialog content
+/// shifted to the center of the viewport. The dialog paint commands are produced
+/// by re-walking `dialog_lb` via `build_display_list`, then wrapped in a
+/// `PushTransform`/`PopTransform` pair that translates document-space coords
+/// to viewport-space center. (HTML5 §4.11.7 — top-layer rendering emulation.)
+///
+/// `scroll_y` is the current page scroll in CSS px (document-space → viewport-space).
+pub fn build_dialog_overlay(
+    dialog_lb: &LayoutBox,
+    scroll_y: f32,
+    vp_w: f32,
+    vp_h: f32,
+) -> DisplayList {
+    let r = dialog_lb.rect;
+    // Center the dialog in the viewport.
+    // dialog center in viewport-space: x stays, y adjusted for scroll.
+    let dlg_cx_doc = r.x + r.width * 0.5;
+    let dlg_cy_vp = r.y + r.height * 0.5 - scroll_y;
+    let dx = vp_w * 0.5 - dlg_cx_doc;
+    let dy = vp_h * 0.5 - dlg_cy_vp;
+
+    let mut out: DisplayList = Vec::new();
+
+    // ::backdrop — full viewport, semi-transparent (HTML5 §15.3.9 UA default).
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, vp_w, vp_h),
+        color: Color { r: 0, g: 0, b: 0, a: 100 },
+    });
+
+    // Dialog content: re-paint from layout subtree, shifted to viewport center.
+    let dialog_dl = build_display_list(dialog_lb);
+    out.push(DisplayCommand::PushTransform { matrix: Mat4::translation_2d(dx, dy) });
+    out.extend(dialog_dl);
+    out.push(DisplayCommand::PopTransform);
+
+    out
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -815,6 +886,7 @@ pub fn apply_select_choice(doc: &mut Document, options: &[SelectOption], opt_idx
 mod tests {
     use super::*;
     use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
+    use lumen_layout::ComputedStyle;
 
     fn make_submit_doc() -> (Document, NodeId) {
         // <form action="/go" method="get">
@@ -1326,5 +1398,95 @@ mod tests {
         let summary = doc.create_element(QualName::html("summary"));
         doc.append_child(doc.root(), summary);
         matches!(classify_click(&doc, summary), FormClickAction::Nothing);
+    }
+
+    // ── <dialog> modal overlay tests ─────────────────────────────────────────
+
+    fn make_dialog_doc() -> (Document, NodeId) {
+        let mut doc = Document::new();
+        let dlg = doc.create_element(QualName::html("dialog"));
+        doc.append_child(doc.root(), dlg);
+        (doc, dlg)
+    }
+
+    fn make_dialog_lb(node: NodeId, rect: Rect) -> LayoutBox {
+        LayoutBox {
+            node,
+            rect,
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        }
+    }
+
+    #[test]
+    fn collect_modal_dialogs_empty_without_sentinel() {
+        let (doc, _) = make_dialog_doc();
+        // No `data-lumen-modal` attr → empty result.
+        assert!(collect_modal_dialogs(&doc).is_empty());
+    }
+
+    #[test]
+    fn collect_modal_dialogs_finds_sentinel() {
+        let (mut doc, dlg) = make_dialog_doc();
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(dlg).data {
+            attrs.push(Attribute {
+                name: QualName::html("data-lumen-modal"),
+                value: String::new(),
+            });
+        }
+        let result = collect_modal_dialogs(&doc);
+        assert_eq!(result, vec![dlg]);
+    }
+
+    #[test]
+    fn collect_modal_dialogs_finds_multiple_in_order() {
+        let mut doc = Document::new();
+        let d1 = doc.create_element(QualName::html("dialog"));
+        let d2 = doc.create_element(QualName::html("dialog"));
+        doc.append_child(doc.root(), d1);
+        doc.append_child(doc.root(), d2);
+        for &id in &[d1, d2] {
+            if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(id).data {
+                attrs.push(Attribute {
+                    name: QualName::html("data-lumen-modal"),
+                    value: String::new(),
+                });
+            }
+        }
+        assert_eq!(collect_modal_dialogs(&doc), vec![d1, d2]);
+    }
+
+    #[test]
+    fn build_dialog_overlay_starts_with_backdrop() {
+        let mut _doc = Document::new();
+        let nid = _doc.create_element(QualName::html("dialog"));
+        let lb = make_dialog_lb(nid, Rect::new(200.0, 100.0, 300.0, 200.0));
+        let overlay = build_dialog_overlay(&lb, 0.0, 1024.0, 720.0);
+        // First command must be a full-viewport FillRect (the ::backdrop).
+        match overlay.first() {
+            Some(DisplayCommand::FillRect { rect, .. }) => {
+                assert!((rect.width - 1024.0).abs() < 1.0);
+                assert!((rect.height - 720.0).abs() < 1.0);
+            }
+            other => panic!("expected FillRect backdrop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_dialog_overlay_wraps_with_transform() {
+        let mut _doc = Document::new();
+        let nid = _doc.create_element(QualName::html("dialog"));
+        let lb = make_dialog_lb(nid, Rect::new(0.0, 0.0, 200.0, 100.0));
+        let overlay = build_dialog_overlay(&lb, 0.0, 1024.0, 720.0);
+        let has_push = overlay.iter().any(|c| matches!(c, DisplayCommand::PushTransform { .. }));
+        let has_pop = overlay.iter().any(|c| matches!(c, DisplayCommand::PopTransform));
+        assert!(has_push, "overlay must contain PushTransform");
+        assert!(has_pop, "overlay must contain PopTransform");
     }
 }

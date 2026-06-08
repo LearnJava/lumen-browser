@@ -6817,6 +6817,30 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
+                // <dialog> modal overlay (L-2) — ::backdrop + centered dialog above page.
+                if let Some(lb) = &self.layout_box {
+                    let doc =
+                        self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
+                    if let Some(doc) = doc {
+                        let modal_nids = forms::collect_modal_dialogs(&doc);
+                        if !modal_nids.is_empty() {
+                            let vp_h = self.viewport_height_css();
+                            for &dlg_nid in &modal_nids {
+                                if let Some(dlg_lb) = forms::find_layout_box(lb, dlg_nid) {
+                                    let mut dlg_overlay = forms::build_dialog_overlay(
+                                        dlg_lb,
+                                        self.scroll_y,
+                                        vp_w,
+                                        vp_h,
+                                    );
+                                    dlg_overlay.append(&mut overlay_buf);
+                                    overlay_buf = dlg_overlay;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Адресная строка (Ctrl+L) — рисуется поверх всего остального.
                 if self.address_bar.is_open() {
                     let win_size = self.window.as_ref().map_or((1024, 720), |w| {

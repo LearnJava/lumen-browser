@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+L-2 | `<dialog>` modal overlay rendering + `::backdrop`  branch: p2-l2-dialog
+Next step: JS sentinel data-lumen-modal + :modal pseudo + backdrop overlay in shell
 
 ---
 

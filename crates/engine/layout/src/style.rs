@@ -5917,12 +5917,10 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // реализован (p1-fullscreen-api); sentinel — `data-lumen-fullscreen`.
         // CSS: :fullscreen — P4: check doc.get_attr(node.id,"data-lumen-fullscreen").is_some()
         PseudoClass::Fullscreen => doc.get(node).get_attr("data-lumen-fullscreen").is_some(),
-        // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` после
-        // `dialog.showModal()` (но не `dialog.show()` non-modal) или
-        // элемент в fullscreen top-layer. Runtime-only: атрибут `open`
-        // не разделяет modal vs non-modal dialog. Phase 0 без dialog
-        // runtime — всегда `false`.
-        PseudoClass::Modal => false,
+        // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` opened via
+        // `showModal()`. JS sets `data-lumen-modal` sentinel; `show()` / author
+        // attribute do not set it, so non-modal dialogs stay unmatched.
+        PseudoClass::Modal => doc.get(node).get_attr("data-lumen-modal").is_some(),
         // HTML LS §6.12.2 `:popover-open` — popover в открытом состоянии
         // после `element.showPopover()` / клика по `popovertarget`.
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
@@ -23693,6 +23691,32 @@ mod tests {
         let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
         assert_eq!(style.color.b, 255, ":popover-open rule should apply when sentinel attr present");
         assert_eq!(style.color.r, 0);
+    }
+
+    #[test]
+    fn modal_pseudo_matches_data_lumen_modal_attr() {
+        // :modal matches only when showModal() sets `data-lumen-modal` sentinel.
+        let html = r#"<dialog id="d" data-lumen-modal="" open>content</dialog>"#;
+        let css = r#":modal { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.color.r, 255, ":modal rule should apply when sentinel attr present");
+    }
+
+    #[test]
+    fn modal_pseudo_does_not_match_show_dialog() {
+        // Non-modal dialog (show() — no data-lumen-modal attr) must NOT match :modal.
+        let html = r#"<dialog id="d" open>content</dialog>"#;
+        let css = r#":modal { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_ne!(style.color.r, 255, ":modal rule must NOT apply without sentinel attr");
     }
 
     #[test]

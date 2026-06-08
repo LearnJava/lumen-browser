@@ -3395,6 +3395,7 @@ function _lumen_make_element(nid) {
         },
         showModal: function() {
             _lumen_set_attr(nid, 'open', '');
+            _lumen_set_attr(nid, 'data-lumen-modal', '');
             if (_lumen_modal_dialog_nids.indexOf(nid) < 0) {
                 _lumen_modal_dialog_nids.push(nid);
             }
@@ -3403,6 +3404,7 @@ function _lumen_make_element(nid) {
             if (_lumen_get_attr(nid, 'open') === undefined) return;
             if (rv !== undefined) _returnValue = String(rv);
             _lumen_remove_attr(nid, 'open');
+            _lumen_remove_attr(nid, 'data-lumen-modal');
             var idx = _lumen_modal_dialog_nids.indexOf(nid);
             if (idx >= 0) _lumen_modal_dialog_nids.splice(idx, 1);
             var closeEvt = new Event('close', { bubbles: false, cancelable: false });
@@ -9146,6 +9148,7 @@ document.addEventListener('keydown', function(evt) {
     var notPrevented = _lumen_dispatch(lastNid, cancelEvt);
     if (notPrevented) {
         _lumen_remove_attr(lastNid, 'open');
+        _lumen_remove_attr(lastNid, 'data-lumen-modal');
         _lumen_modal_dialog_nids.pop();
         var closeEvt = new Event('close', { bubbles: false, cancelable: false });
         _lumen_dispatch(lastNid, closeEvt);
