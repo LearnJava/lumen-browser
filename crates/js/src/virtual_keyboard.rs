@@ -31,9 +31,24 @@ const VIRTUAL_KEYBOARD_SHIM: &str = r#"
   function VirtualKeyboard() {
     this._overlaysContent = false;
     this._listeners = {};
-    // Phase 0: zero bounding rect (keyboard not visible / not integrated).
-    this.boundingRect = new DOMRect(0, 0, 0, 0);
+    // Phase 0: zero bounding rect; DOMRect may not be available yet — defer.
+    this._boundingRect = null;
   }
+
+  // Lazy boundingRect: create DOMRect on first access so DOMRect is guaranteed defined.
+  Object.defineProperty(VirtualKeyboard.prototype, 'boundingRect', {
+    get: function() {
+      if (!this._boundingRect) {
+        this._boundingRect = (typeof DOMRect !== 'undefined')
+          ? new DOMRect(0, 0, 0, 0)
+          : { x: 0, y: 0, width: 0, height: 0 };
+      }
+      return this._boundingRect;
+    },
+    set: function(v) { this._boundingRect = v; },
+    enumerable: true,
+    configurable: true,
+  });
 
   // §4.1: overlaysContent getter/setter.
   Object.defineProperty(VirtualKeyboard.prototype, 'overlaysContent', {
