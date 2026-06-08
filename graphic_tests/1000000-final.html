@@ -863,5 +863,32 @@
   </div>
 </div><!-- /font-variation-settings card -->
 
+<!-- list-style-type custom @counter-style demo card -->
+<style>
+  @counter-style bracket {
+    system: alphabetic;
+    symbols: "a" "b" "c" "d" "e";
+    prefix: "(";
+    suffix: ") ";
+  }
+  .lst-card { background:#16213e; padding:8px; border-radius:4px; }
+  .lst-row { display:flex; gap:16px; margin-top:8px; }
+  .lst-col { flex:1; }
+  .lst-col ol { padding-left:40px; list-style-type: bracket; margin:0; }
+  .lst-col li { color:#e0e0e0; font-size:14px; line-height:1.5; }
+</style>
+<div class="card lst-card">
+  <h4>list-style-type: custom @counter-style</h4>
+  <div class="lst-row">
+    <div class="lst-col">
+      <ol>
+        <li>Apple</li>
+        <li>Banana</li>
+        <li>Cherry</li>
+      </ol>
+    </div>
+  </div>
+</div><!-- /list-style-type custom card -->
+
 </body>
 </html>

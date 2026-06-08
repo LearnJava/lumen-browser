@@ -2505,7 +2505,7 @@ impl ScrollbarGutter {
 }
 
 /// CSS Lists L3 §2.1 — markers для list items.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ListStyleType {
     /// `none` — без marker.
     None,
@@ -2530,6 +2530,8 @@ pub enum ListStyleType {
     UpperAlpha,
     /// `lower-greek` — α, β, γ, ...
     LowerGreek,
+    /// `<custom-ident>` — ссылка на именованный `@counter-style`.
+    Custom(Box<str>),
 }
 
 impl ListStyleType {
@@ -2546,8 +2548,8 @@ impl ListStyleType {
             "lower-alpha" | "lower-latin" => Some(Self::LowerAlpha),
             "upper-alpha" | "upper-latin" => Some(Self::UpperAlpha),
             "lower-greek" => Some(Self::LowerGreek),
-            // CSS: list-style-type (custom counter-style) — P4 adds `ListStyleType::Custom(name)`
-            // and returns `Some(Self::Custom(s.to_string()))` here for unrecognised idents.
+            // Any unrecognised ident is a reference to a named @counter-style.
+            s if !s.is_empty() => Some(Self::Custom(s.into())),
             _ => None,
         }
     }
@@ -4657,7 +4659,7 @@ pub fn compute_style(
         perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
         transform_style: TransformStyle::Flat,
         // CSS Lists — list-style-* наследуются.
-        list_style_type: inherited.list_style_type,
+        list_style_type: inherited.list_style_type.clone(),
         list_style_position: inherited.list_style_position,
         list_style_image: inherited.list_style_image.clone(),
         // CSS Transitions / Animations — не наследуются. Initial = empty list.
@@ -5362,7 +5364,7 @@ pub fn compute_pseudo_element_style(
     style.word_break = parent.word_break;
     style.line_break = parent.line_break;
     style.hyphens = parent.hyphens;
-    style.list_style_type = parent.list_style_type;
+    style.list_style_type = parent.list_style_type.clone();
     style.list_style_position = parent.list_style_position;
     style.list_style_image = parent.list_style_image.clone();
     style.orphans = parent.orphans;
@@ -11273,15 +11275,10 @@ fn apply_declaration(
         }
         "list-style" => {
             // Shorthand: type | position | image, в любом порядке.
-            // Простой парсер: пытаемся каждое слово.
+            // Позиция проверяется раньше типа — иначе "inside"/"outside" могут
+            // быть поглощены как Custom counter-style ident.
             for token in val.split_whitespace() {
-                if let Some(t) = ListStyleType::parse(token) {
-                    style.list_style_type = t;
-                } else if let Some(p) = ListStylePosition::parse(token) {
-                    style.list_style_position = p;
-                } else if let Some(u) = parse_url_value(token) {
-                    style.list_style_image = Some(u);
-                } else if token.eq_ignore_ascii_case("none") {
+                if token.eq_ignore_ascii_case("none") {
                     // `none` неоднозначен: type=None И image=None. Per spec,
                     // `none` сначала применяется к type, потом к image (если
                     // повторяется). Простая трактовка: первый none → type=None,
@@ -11291,6 +11288,12 @@ fn apply_declaration(
                     } else {
                         style.list_style_image = None;
                     }
+                } else if let Some(p) = ListStylePosition::parse(token) {
+                    style.list_style_position = p;
+                } else if let Some(u) = parse_url_value(token) {
+                    style.list_style_image = Some(u);
+                } else if let Some(t) = ListStyleType::parse(token) {
+                    style.list_style_type = t;
                 }
             }
         }
