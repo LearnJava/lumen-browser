@@ -11795,6 +11795,46 @@ mod tests {
         );
     }
 
+    /// CSS 2.1 §17.5.2 — table without explicit CSS width shrinks to fit its columns.
+    /// 3×3 grid with border-spacing:12px and cell width:60px should be 228px
+    /// (3×60 + 4×12), not the full container width.
+    #[test]
+    fn table_without_explicit_width_shrinks_to_fit() {
+        let root = lay(
+            "<body><table><tr>\
+               <td style=\"width:60px;height:20px\"></td>\
+               <td style=\"width:60px;height:20px\"></td>\
+               <td style=\"width:60px;height:20px\"></td>\
+             </tr></table></body>",
+            "body { width:800px } table { border-spacing:12px } td { margin:0; padding:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        // Expected: 3×60 + 4×12 = 180 + 48 = 228px
+        assert!(
+            (table.rect.width - 228.0).abs() < 0.01,
+            "table should shrink to 228px, got {}",
+            table.rect.width
+        );
+    }
+
+    /// CSS 2.1 §17.5.2 — table with explicit CSS width is NOT shrunk to fit.
+    #[test]
+    fn table_with_explicit_width_keeps_that_width() {
+        let root = lay(
+            "<body><table><tr>\
+               <td style=\"width:60px;height:20px\"></td>\
+               <td style=\"width:60px;height:20px\"></td>\
+             </tr></table></body>",
+            "body { width:800px } table { width:400px; border-spacing:8px } td { margin:0; padding:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        assert!(
+            (table.rect.width - 400.0).abs() < 0.01,
+            "table with explicit width:400px should stay 400px, got {}",
+            table.rect.width
+        );
+    }
+
     /// Author CSS `background-color` выигрывает у presentational hint `bgcolor`.
     #[test]
     fn author_css_overrides_bgcolor_hint() {
