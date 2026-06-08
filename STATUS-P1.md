@@ -6,8 +6,7 @@
 
 ## In progress
 
-K-2: Video Picture-in-Picture API  branch: p1-k2-video-pip-api
-Next step: создать crates/js/src/video_pip.rs, добавить в lib.rs
+_(нет)_
 
 ---
 
@@ -18,7 +17,7 @@ Next step: создать crates/js/src/video_pip.rs, добавить в lib.rs
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~K-1~~ | ~~**Generic Sensor API**~~ — **выполнено** | S | `lumen-js` |
-| K-2 | **Video Picture-in-Picture API** — W3C PiP L1 §3: `video.requestPictureInPicture()`, `document.pictureInPictureElement`, `document.exitPictureInPicture()`, `PictureInPictureWindow` | S | `lumen-js` |
+| ~~K-2~~ | ~~**Video Picture-in-Picture API**~~ — **выполнено** | S | `lumen-js` |
 | K-3 | **Web MIDI API stub** — W3C Web MIDI L1: `navigator.requestMIDIAccess()`, `MIDIAccess`, `MIDIInput/Output`, `MIDIMessageEvent` | XS | `lumen-js` |
 | K-4 | **StorageManager API** — WHATWG Storage §9: `navigator.storage.estimate()`, `persist()`, `persisted()`, `getDirectory()` → OPFS root | S | `lumen-js` |
 | K-5 | **FedCM (Federated Credential Management) stub** — FedCM §5: `navigator.credentials.get({identity: {providers}})` → reject NotSupportedError, `IdentityCredential` class | XS | `lumen-js` |
@@ -68,6 +67,7 @@ Next step: создать crates/js/src/video_pip.rs, добавить в lib.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | K-2: Video Picture-in-Picture API stub | W3C PiP L1 §3 Phase 0: `video.requestPictureInPicture()` → `Promise<PictureInPictureWindow>`; `document.exitPictureInPicture()` → `Promise<void>`; `document.pictureInPictureElement` getter → current PiP video or null; `document.pictureInPictureEnabled` → true; `HTMLVideoElement.disablePictureInPicture` attribute. `PictureInPictureWindow {width, height}` extends EventTarget. События `enterpictureinpicture` / `leavepictureinpicture` на `<video>`. `_lumen_pip_enter(nid)` / `_lumen_pip_exit(nid)` / `_lumen_pip_deliver_resize(w,h)` биндинги для shell Phase 1. Новый модуль `crates/js/src/video_pip.rs`. lumen-js: clippy чист, 11 unit-тестов (+11 vs 1527). |
 | 2026-06-08 | K-1: Generic Sensor API stub | W3C Generic Sensor API Phase 0: Sensor базовый класс (activated/hasReading/timestamp, start()/stop(), мини-EventTarget без зависимости от глобального EventTarget). Accelerometer/LinearAccelerationSensor/GravitySensor/Gyroscope/Magnetometer — x/y/z = null до аппаратного источника. AmbientLightSensor — illuminance. OrientationSensor + populateMatrix(Float32/64Array/DOMMatrix) — кватернион → матрица вращения. AbsoluteOrientationSensor (§8) / RelativeOrientationSensor (§9). SensorErrorEvent. `_lumen_sensor_deliver_reading(type, payload)` биндинг для Phase 1 (CoreMotion/SensorManager/Windows Sensor API). Новый модуль `crates/js/src/generic_sensor.rs`. lumen-js: clippy чист, 16 unit-тестов (+16 vs 1494). |
 | 2026-06-08 | I-5: ElementInternals + Custom State Pseudo-class | WHATWG HTML §4.13.2 Phase 0: `element.attachInternals()` → `ElementInternals` с `CustomStateSet` (add/has/delete/clear/size/values/forEach/Symbol.iterator). `setValidity(flags, message, anchor)` — устанавливает флаги валидации; `checkValidity()` фаерит 'invalid' event; `reportValidity()` = checkValidity Phase 0. ARIA-поля (role/ariaLabel/ariaDisabled/…). `_lumen_element_internals_get_states(nid)` — нативный биндинг для shell. Кеш: повторный `attachInternals()` возвращает тот же экземпляр. `// CSS: :state()` — P4 handoff. Новый модуль `crates/js/src/element_internals.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1482). |
 | 2026-06-08 | I-4: CSS @counter-style algorithm stub | CSS Lists L3 §7: `build_list_marker_text(lst, ordinal, registry) -> String` — канонический агрегатор для маркеров списков; встроенные типы форматируются стандартно, registry консультируется через `format_counter_with_registry`. `resolve_counter_value(def, n, registry) -> String` — публичная обёртка для форматирования по явному `CounterStyleDef`. `lower-greek` добавлен в `format_counter`. `inject_marker` использует `build_list_marker_text` (мёртвый `marker_text` + `to_roman/to_alpha/to_greek` удалены). Комментарий `// CSS: list-style-type (custom counter-style)` в `ListStyleType::parse()`. P4 handoff в STATUS-P4.md: добавить `Custom(name)` вариант + маршрутизацию. lumen-layout: clippy чист, 2406 тестов (+8 vs 2398). |
