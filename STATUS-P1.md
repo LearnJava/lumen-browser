@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: I-4 CSS @counter-style algorithm stub  branch: p1-i4-counter-style
+Next step: add build_list_marker_text + resolve_counter_value to counters.rs:217
 
 ---
 
