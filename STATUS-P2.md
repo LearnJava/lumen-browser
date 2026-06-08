@@ -6,12 +6,20 @@
 
 ## In progress
 
-**J-5 | Presentation API stub**  branch: p2-j5-presentation-api
-Next step: коммит готов — перейти к merge
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**J-5 | Presentation API stub** ✅ 2026-06-08 (merged)
+- `navigator.presentation` singleton: `defaultRequest` getter/setter, `requestAvailability()` → `Promise<{value:false}>`
+- `PresentationRequest([urls])`: `start()`/`reconnect()` → reject `NotSupportedError`, `getAvailability()` → `Promise<PresentationAvailability>`, `addEventListener()`
+- `PresentationAvailability`: read-only `value === false`
+- `PresentationConnection`: `id`/`url`/`state`, `send()`/`close()`/`terminate()`/`addEventListener()`
+- Phase 0: no-op — нет обнаружения дисплеев и реальных соединений
+- 6 тестов: navigator_presentation_exists, start_returns_rejected_promise, default_request_getter_setter, availability_value_false, get_availability_resolves_with_false_value, connection_state_lifecycle
+- Итого lumen-js: 1496 тестов (+6), Clippy чист
 
 **J-4 | Background Fetch API stub** ✅ 2026-06-08 (merged)
 - `BackgroundFetchManager` на `registration.backgroundFetch`: fetch(id, reqs, opts)/get(id)/getIds()
@@ -478,7 +486,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~J-2~~ | ~~**WebGPU API Phase 0**~~ — **выполнено** | M | `lumen-js` |
 | ~~J-3~~ | ~~**CSS Houdini Paint Worklet Phase 0**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
 | ~~J-4~~ | ~~**Background Fetch API stub**~~ — **выполнено** | XS | `lumen-js` |
-| J-5 | **Presentation API stub** — `navigator.presentation` singleton; `PresentationRequest.new([urls])` → reject NotSupportedError; `navigator.presentation.defaultRequest` getter/setter; `PresentationAvailability` + `navigator.presentation.requestAvailability()` → Promise<{value:false}>; `PresentationConnection` class (id/url/state/send/close/terminate/addEventListener). Phase 0: no-op. 5 тестов. | XS | `lumen-js` |
+| ~~J-5~~ | ~~**Presentation API stub**~~ — **выполнено** | XS | `lumen-js` |
 
 ---
 
