@@ -6,8 +6,7 @@
 
 ## In progress
 
-K-3: Web MIDI API stub  branch: p1-k3-web-midi
-Next step: реализация завершена, clippy чист, 11 тестов  crates/js/src/web_midi.rs:1
+_(нет)_
 
 ---
 
@@ -19,7 +18,7 @@ Next step: реализация завершена, clippy чист, 11 тест
 |---|--------|--------|--------|
 | ~~K-1~~ | ~~**Generic Sensor API**~~ — **выполнено** | S | `lumen-js` |
 | ~~K-2~~ | ~~**Video Picture-in-Picture API**~~ — **выполнено** | S | `lumen-js` |
-| K-3 | **Web MIDI API stub** — W3C Web MIDI L1: `navigator.requestMIDIAccess()`, `MIDIAccess`, `MIDIInput/Output`, `MIDIMessageEvent` | XS | `lumen-js` |
+| ~~K-3~~ | ~~**Web MIDI API stub**~~ — **выполнено** | XS | `lumen-js` |
 | K-4 | **StorageManager API** — WHATWG Storage §9: `navigator.storage.estimate()`, `persist()`, `persisted()`, `getDirectory()` → OPFS root | S | `lumen-js` |
 | K-5 | **FedCM (Federated Credential Management) stub** — FedCM §5: `navigator.credentials.get({identity: {providers}})` → reject NotSupportedError, `IdentityCredential` class | XS | `lumen-js` |
 
@@ -68,6 +67,7 @@ Next step: реализация завершена, clippy чист, 11 тест
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | K-3: Web MIDI API stub | W3C Web MIDI L1 §4 Phase 0: `navigator.requestMIDIAccess(options?)` → `Promise<MIDIAccess>` с пустыми inputs/outputs. Классы `MIDIPort` / `MIDIInput` / `MIDIOutput` / `MIDIPortMap` / `MIDIAccess` / `MIDIMessageEvent` / `MIDIConnectionEvent` экспортированы на window. MIDIPort.open()/close() → Promise. MIDIOutput.send()/clear() — no-op Phase 0. Нативный биндинг `_lumen_midi_deliver_message(portId, data)` для Phase 1 (CoreMIDI/WinMM/ALSA). Новый модуль `crates/js/src/web_midi.rs`. lumen-js: clippy чист, 11 unit-тестов (+11 vs 1538). |
 | 2026-06-08 | K-2: Video Picture-in-Picture API stub | W3C PiP L1 §3 Phase 0: `video.requestPictureInPicture()` → `Promise<PictureInPictureWindow>`; `document.exitPictureInPicture()` → `Promise<void>`; `document.pictureInPictureElement` getter → current PiP video or null; `document.pictureInPictureEnabled` → true; `HTMLVideoElement.disablePictureInPicture` attribute. `PictureInPictureWindow {width, height}` extends EventTarget. События `enterpictureinpicture` / `leavepictureinpicture` на `<video>`. `_lumen_pip_enter(nid)` / `_lumen_pip_exit(nid)` / `_lumen_pip_deliver_resize(w,h)` биндинги для shell Phase 1. Новый модуль `crates/js/src/video_pip.rs`. lumen-js: clippy чист, 11 unit-тестов (+11 vs 1527). |
 | 2026-06-08 | K-1: Generic Sensor API stub | W3C Generic Sensor API Phase 0: Sensor базовый класс (activated/hasReading/timestamp, start()/stop(), мини-EventTarget без зависимости от глобального EventTarget). Accelerometer/LinearAccelerationSensor/GravitySensor/Gyroscope/Magnetometer — x/y/z = null до аппаратного источника. AmbientLightSensor — illuminance. OrientationSensor + populateMatrix(Float32/64Array/DOMMatrix) — кватернион → матрица вращения. AbsoluteOrientationSensor (§8) / RelativeOrientationSensor (§9). SensorErrorEvent. `_lumen_sensor_deliver_reading(type, payload)` биндинг для Phase 1 (CoreMotion/SensorManager/Windows Sensor API). Новый модуль `crates/js/src/generic_sensor.rs`. lumen-js: clippy чист, 16 unit-тестов (+16 vs 1494). |
 | 2026-06-08 | I-5: ElementInternals + Custom State Pseudo-class | WHATWG HTML §4.13.2 Phase 0: `element.attachInternals()` → `ElementInternals` с `CustomStateSet` (add/has/delete/clear/size/values/forEach/Symbol.iterator). `setValidity(flags, message, anchor)` — устанавливает флаги валидации; `checkValidity()` фаерит 'invalid' event; `reportValidity()` = checkValidity Phase 0. ARIA-поля (role/ariaLabel/ariaDisabled/…). `_lumen_element_internals_get_states(nid)` — нативный биндинг для shell. Кеш: повторный `attachInternals()` возвращает тот же экземпляр. `// CSS: :state()` — P4 handoff. Новый модуль `crates/js/src/element_internals.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1482). |
