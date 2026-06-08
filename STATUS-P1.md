@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+H-5: Periodic Background Sync API  branch: p1-h5-periodic-sync
+Next step: clippy + tests → merge  crates/js/src/periodic_sync.rs
 
 ---
 
