@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**O-1: 8H.1/8H.2 BiDi transport + модули**  branch: p1-o1-bidi-modules
+Next step: создать `bidi/src/transport.rs`, добавить `input.*` / `script.disown` / `script.getRealms` / network intercept  `crates/shell/src/bidi/`
 
 ---
 
@@ -17,7 +18,7 @@ _(нет)_
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~N-1~~ | ~~**8C: Native input injection**~~ — **выполнено** | S | `lumen-shell` |
-| N-2 | **8F: Deterministic mode** — `set_clock(ClockMode::Frozen/Real/Monotonic)`, `set_rng_seed(u64)` → `Math.random()`, `freeze_fingerprint(profile)` → canvas/WebGL/audio/font enum фиксированы. `driver/src/determinism.rs` | M | `lumen-driver`, `lumen-js`, `lumen-shell` |
+| ~~N-2~~ | ~~**8F: Deterministic mode**~~ — **выполнено** | M | `lumen-driver`, `lumen-js`, `lumen-shell` |
 
 ### O — Закрытие Phase 2
 
