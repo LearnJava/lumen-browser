@@ -83,6 +83,7 @@ pub mod video_pip;
 pub mod web_midi;
 pub mod storage_manager;
 pub mod xhr;
+pub mod dom_parser;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -924,6 +925,15 @@ impl QuickJsRuntime {
             // and load/error/progress/abort events.  Reuses the fetch HTTP stack.
             if let Err(e) = xhr::install_xhr_bindings(&ctx) {
                 eprintln!("XMLHttpRequest API init failed: {}", e);
+            }
+
+            // W3C DOM Parsing and Serialization — DOMParser + XMLSerializer.
+            // After DOM and _lumen_get_attr_names / _lumen_get_children / _lumen_is_text_node
+            // bindings are registered.  DOMParser.parseFromString() creates independent
+            // virtual documents (pure-JS nodes, not backed by Rust lumen_dom).
+            // XMLSerializer.serializeToString() handles both virtual and native nodes.
+            if let Err(e) = dom_parser::install_dom_parser(&ctx) {
+                eprintln!("DOMParser/XMLSerializer init failed: {}", e);
             }
 
             Ok(())

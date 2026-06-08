@@ -6,8 +6,9 @@
 
 ## In progress
 
-L-2 | `<dialog>` modal overlay rendering + `::backdrop`  branch: p2-l2-dialog
-Next step: JS sentinel data-lumen-modal + :modal pseudo + backdrop overlay in shell
+**A-1: CSS Properties & Values API (Houdini)**  
+Branch: `p2-a1-css-properties-values`  
+Next step: Implement `RegisteredPropertiesMap` registry + JS shim for `CSS.registerProperty()` in lumen-js/src/css_properties_values_api.rs
 
 ---
 
@@ -18,7 +19,7 @@ Next step: JS sentinel data-lumen-modal + :modal pseudo + backdrop overlay in sh
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~L-1~~ | ~~**`<details>`/`<summary>` interactive collapse/expand**~~ — **выполнено** | S | `lumen-shell`, `lumen-js` |
-| L-2 | `<dialog>` modal overlay rendering + `::backdrop` | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
+| ~~L-2~~ | ~~**`<dialog>` modal overlay rendering + `::backdrop`**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
 | L-3 | `<input type="range">` slider visual rendering + drag | S | `lumen-shell`, `lumen-layout`, `lumen-paint` |
 | L-4 | `<meter>`/`<progress>` visual fill rendering | S | `lumen-layout`, `lumen-paint` |
 | L-5 | CSS Scroll-Driven Animations Phase 1 shell wiring | M | `lumen-shell`, `lumen-layout` |
@@ -477,131 +478,78 @@ Next step: JS sentinel data-lumen-modal + :modal pseudo + backdrop overlay in sh
 
 Ordered by priority. Сгруппированы по домену.
 
-### G — Фаза 2 / завершение незавершённых фич
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~G-1~~ | ~~**CSS Grid auto-fill/auto-fit Phase 2**~~ — **выполнено** | M | `lumen-layout` |
-| ~~G-2~~ | ~~**BiDi дополнительные gaps (8H.3)**~~ — **выполнено** | S | `lumen-shell` |
-| ~~G-3~~ | ~~**Memory pressure shell integration**~~ — **выполнено** | XS | `lumen-shell` |
-| ~~G-4~~ | ~~**Web Notifications API stub**~~ — **выполнено** | S | `lumen-js` |
-| ~~G-5~~ | ~~**CSS Grid Table border-collapse Phase 2**~~ — **выполнено** | S | `lumen-layout` |
-
 ### A — Рендеринг / GPU
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| ~~A-1~~ | ~~**CSS Properties & Values API (Houdini)**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-layout` |
-| ~~A-2~~ | ~~**CSS Custom Highlight API**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
-| ~~A-3~~ | ~~**CSS Typed OM (partial)**~~ — **выполнено** | M | `lumen-js` |
-| ~~A-4~~ | ~~**OffscreenCanvas**~~ — **выполнено** | M | `lumen-js` |
-| ~~A-5~~ | ~~**WebGL2 context**~~ — **выполнено** | M | `lumen-paint`, `lumen-js` |
-| ~~A-9~~ | ~~**SVG text rendering**~~ — **выполнено** | M | `lumen-layout`, `lumen-paint` |
+| A-1 | **CSS Properties & Values API (Houdini)** — `CSS.registerProperty({name, syntax, inherits, initialValue})` в JS, `@property` at-rule в css-parser (дескрипторы name/syntax/inherits/initial-value), `StyleSheet.registered_properties`, `compute_style` применяет `initial-value` как fallback при сломанной var(). `// CSS: @property`. 8 тестов. | M | `lumen-js`, `lumen-css-parser`, `lumen-layout` |
+| A-2 | **CSS Custom Highlight API** — `CSS.highlights` `HighlightRegistry {set/get/has/delete/clear}`, `new Highlight(...ranges)`, `highlight.priority`, `::highlight(name)` pseudo-element в css-parser, `emit_text_with_highlights()` в `display_list.rs`: DrawText с highlight background rect overlay. 8 тестов. | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
+| A-3 | **CSS Typed OM (partial)** — `element.attributeStyleMap {get/set/has/delete/entries/keys/values}`, `element.computedStyleMap()` → read-only map, `CSSStyleValue`, `CSSUnitValue {value, unit}` (px/em/%), `CSSKeywordValue {value}`, `CSSNumericValue.to(unit)`. 12 тестов. | M | `lumen-js` |
+| A-4 | **OffscreenCanvas** — `new OffscreenCanvas(w, h)`, `getContext('2d')` → `lumen_canvas::Context2D`, `transferToImageBitmap()` → `ImageBitmap {width, height, close()}`, `createImageBitmap(source)` из Blob/ImageData/HTMLImageElement, доступен в Workers. 8 тестов. | M | `lumen-js` |
+| A-5 | **WebGL2 context** — `getContext('webgl2')` → `WebGL2RenderingContext`, расширяет `SoftwareWebGl`: VAOs (`createVertexArray/bindVertexArray/deleteVertexArray`), `drawArraysInstanced/drawElementsInstanced`, integer uniforms (`uniform1ui/2ui/3ui/4ui`), `texImage3D` stub. 10 тестов. | M | `lumen-paint`, `lumen-js` |
+| A-9 | **SVG text rendering** — `<text>/<tspan>/<textPath>` элементы: `BoxKind::SvgText`, измерение через `TextMeasurer`, emit `DrawText` с SVG coordinate transform, `text-anchor: start/middle/end`, `dx/dy` атрибуты, `dominant-baseline`. 8 тестов. | M | `lumen-layout`, `lumen-paint` |
+| A-10 | **Display list diffing** — `DisplayList::diff(&prev, &next) → DiffResult {changed_rects, identical}`: сравнивает команды по Debug hash, `identical=true` → `RedrawRequested` пропускает GPU upload. `diff_count` метрика для bench. 8 тестов. | M | `lumen-paint` |
 
 ### B — Layout rendering
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| ~~B-1~~ | ~~**Table layout rendering**~~ — **выполнено** | M | `lumen-paint` |
-| ~~B-2~~ | ~~**CSS Flex align-content**~~ — **выполнено** | S | `lumen-layout` |
-| ~~B-3~~ | ~~**CSS Grid: auto-fill/auto-fit tracks**~~ — **выполнено** | M | `lumen-layout` |
-| ~~B-4~~ | ~~**CSS Grid: dense packing**~~ — **выполнено** | S | `lumen-layout` |
-| ~~B-5~~ | ~~**CSS Multi-column: column-rule rendering**~~ — **выполнено** | S | `lumen-paint` |
-| ~~B-6~~ | ~~**CSS image-rendering**~~ — **выполнено** | XS | `lumen-paint` |
-| ~~B-7~~ | ~~**CSS Resize property**~~ — **выполнено** | M | `lumen-paint`, `lumen-shell` |
-| ~~B-8~~ | ~~**CSS Appearance property**~~ — **выполнено** | S | `lumen-layout` |
-| ~~B-9~~ | ~~**CSS overflow: clip**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint` |
-| ~~B-10~~ | ~~**CSS Forced Colors media**~~ — **выполнено** | S | `lumen-layout` |
+| B-1 | **Table layout rendering** — `emit_table_box()` в `display_list.rs`: `DrawBorder` для всех ячеек (separate: 4 стороны; collapse: merged border §17.6), background per cell/row/group/table, caption. `// CSS: border-collapse, border-spacing, empty-cells`. 8 тестов. | M | `lumen-paint` |
+| B-2 | **CSS Flex align-content** — многострочный flexbox (`flex-wrap: wrap`): `align_flex_lines()` в `flex.rs`, распределяет пространство между flex lines: flex-start/end/center/space-between/around/evenly/stretch. `// CSS: align-content (flex)`. 6 тестов. | S | `lumen-layout` |
+| B-3 | **CSS Grid: auto-fill/auto-fit tracks** — `resolve_auto_fill_fit_count(avail_w, min_size, gap) → usize` в `grid.rs`, `repeat(auto-fill, minmax(200px, 1fr))` вычисляет count из available space, `auto-fit` коллапсирует пустые треки. `fit-content(N)` track size. 8 тестов. | M | `lumen-layout` |
+| B-4 | **CSS Grid: dense packing** — `grid-auto-flow: dense` back-fill pass в `lay_out_grid()`: второй проход заполняет holes не-positioned items. Обновление `place_auto_items()`. 4 теста. | S | `lumen-layout` |
+| B-5 | **CSS Multi-column: column-rule rendering** — `emit_column_rules()` в `display_list.rs`: `DrawBorder` вертикальные линии между колонками из `column-rule-width/style/color` ComputedStyle (поля уже есть). `// CSS: column-rule`. 4 теста. | S | `lumen-paint` |
+| B-6 | **CSS image-rendering** — `image_filter_mode(style) → FilterMode {Nearest, Linear}` в `display_list.rs`, `DrawImage/DrawBackgroundImage` поле `filter_mode`; Renderer: Nearest → `FilterMode::Nearest` в sampler. `// CSS: image-rendering`. 4 теста. | XS | `lumen-paint` |
+| B-7 | **CSS Resize property** — `resize: both/horizontal/vertical` на overflow≠visible элементах: 12px grip в углу emit как `DrawSvgPath`, `MouseInput Pressed` на grip → resize_active, `CursorMoved` меняет inline width/height через `_lumen_set_style_prop`. `// CSS: resize`. 6 тестов. | M | `lumen-paint`, `lumen-shell` |
+| B-8 | **CSS Appearance property** — `apply_ua_appearance(style, tag)` в `compute_style`: при `appearance: none` убирает UA border/padding/background у `<input>/<button>/<select>/<textarea>/<progress>/<meter>`. `// CSS: appearance, -webkit-appearance`. 6 тестов. | S | `lumen-layout` |
+| B-9 | **CSS overflow: clip** — `Overflow::Clip`: создаёт overflow clip boundary (как hidden) **без** нового BFC, `overflow-clip-margin: N px` расширяет clip region. `// CSS: overflow: clip, overflow-clip-margin`. Изменение в `emit_box_self`. 4 теста. | S | `lumen-layout`, `lumen-paint` |
+| B-10 | **CSS Forced Colors media** — `@media (forced-colors: active)` в `media_context_from_viewport`, `forced_colors: bool` в `MediaContext`, system color keywords (ButtonText/ButtonFace/Canvas/CanvasText/LinkText) → hardcoded RGBA, `forced-color-adjust: none` → skip. `// CSS: forced-color-adjust`. 4 теста. | S | `lumen-layout` |
 
 ### C — HTTP Cache + Storage
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| ~~C-1~~ | ~~**HTTP Cache RFC 7234**~~ — **выполнено** | L | `lumen-network` |
-| ~~C-2~~ | ~~**HTTP Cache disk persistence**~~ — **выполнено** | M | `lumen-network` |
-| ~~C-3~~ | ~~**WebSocket permessage-deflate**~~ — **выполнено** | M | `lumen-network` |
-| ~~C-4~~ | ~~**Fetch SRI integrity check**~~ — **выполнено** | S | `lumen-js` |
-| ~~C-5~~ | ~~**Multi-tab IndexedDB per-origin SQLite**~~ — **выполнено** | M | `lumen-storage`, `lumen-shell` |
+| C-1 | **HTTP Cache RFC 7234** — `HttpCache` в `lumen-network/src/cache.rs`: `CacheEntry {url, status, headers, body, cached_at, max_age}`, `Cache-Control` (max-age/no-cache/no-store/must-revalidate/private), `ETag/If-None-Match` → 304 reuse, `Last-Modified/If-Modified-Since`. In-memory LRU 50 MB. 12 тестов. | L | `lumen-network` |
+| C-2 | **HTTP Cache disk persistence** — `DiskHttpCache` поверх SQLite (`cache_entries(url, etag, last_modified, status, headers_json, body_blob, expires_at)`), `HttpCache` trait с Memory + Disk реализациями, `cache_dir = ~/.config/lumen/cache/`. 8 тестов. | M | `lumen-network`, `lumen-storage` |
+| C-3 | **WebSocket permessage-deflate** — `Sec-WebSocket-Extensions: permessage-deflate` в handshake, parse server response, `flate2::Decompress` для входящих кадров, `flate2::Compress` для исходящих (`WebSocket.compress` opt-in). 6 тестов. | M | `lumen-network` |
+| C-4 | **Fetch SRI integrity check** — `fetch(url, {integrity: 'sha256-BASE64'})` → после получения ответа SHA-256/384/512 тела (dep `sha2` уже есть) → сравнение с base64-decoded ожидаемым → reject TypeError при несовпадении. `parse_integrity_metadata()`. 6 тестов. | S | `lumen-js`, `lumen-network` |
+| C-5 | **Multi-tab IndexedDB per-origin SQLite** — `IdbStore::for_origin(origin_key)`: `origin_key = sha256_hex(eTLD+1)[:16]`, отдельный файл `~/.config/lumen/idb/{key}.db` на origin, `IdbStore::open_or_create(path)`, shell выбирает store по URL в `parse_and_layout`. 8 тестов. | M | `lumen-storage`, `lumen-shell` |
 
 ### D — Производительность
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| ~~D-4~~ | ~~**Image HEIC/HEIF stub**~~ — **выполнено** | XS | `lumen-image` |
-| ~~D-5~~ | ~~**DOM node count limit**~~ — **выполнено** | S | `lumen-dom`, `lumen-js` |
-| ~~D-3~~ | ~~**Image JPEG XL stub**~~ — **выполнено** | XS | `lumen-image` |
-| ~~D-1~~ | ~~**Tile-based rendering**~~ — **выполнено** | L | `lumen-paint`, `lumen-shell` |
-| ~~D-2~~ | ~~**CSS animation GPU layer**~~ — **выполнено** | M | `lumen-paint`, `lumen-shell` |
+| D-1 | **Tile-based rendering** — `TileGrid {tile_size: 256, tiles: HashMap<(i32,i32), TileDirty>}` в `lumen-paint`, `cull_display_list(dl, tile_x, tile_y, w, h)` — AABB тест каждой команды, `Renderer::render_tile()`. Shell: dirty-rect tracking из diff. 8 тестов. | L | `lumen-paint`, `lumen-shell` |
+| D-2 | **CSS animation GPU layer** — `will-change: transform/opacity/filter` → `Renderer::promote_layer(node_id)` создаёт `LayerCache` entry; `AnimationScheduler::tick()` обновляет только transform matrix без relayout. `// CSS: will-change`. 6 тестов. | M | `lumen-paint`, `lumen-shell` |
+| D-3 | **Image JPEG XL stub** — `is_jxl(bytes)` (naked `\xFF\x0A` / ISOBMFF `jxl `), `JxlImageDecoder` → `Err(JxlError::NotSupported)` graceful, MIME `image/jxl` зарегистрирован. 5 тестов. | XS | `lumen-image` |
+| D-4 | **Image HEIC/HEIF stub** — `is_heic(bytes)` (ISOBMFF ftyp: heic/heix/hevc/mif1), `HeicImageDecoder` → `Err(HeicError::NotSupported)`, MIME `image/heic`/`image/heif`. 4 теста. | XS | `lumen-image` |
+| D-5 | **DOM node count limit** — `Document::node_count()`, `MAX_DOM_NODES = 50_000` const, `Document::try_create_element()` → `Err(NodeLimitExceeded)` при превышении, `console.warn("DOM tree exceeds 40000 nodes")` на 40k порог, `_lumen_dom_node_count()` binding. 6 тестов. | S | `lumen-dom`, `lumen-js` |
 
 ### E — Shell UI
 
-> E-3 — Фаза 1 (навигационный baseline). E-1, E-2, E-4, E-5 — Фаза 2.
-
-| # | Задача | Размер | Фаза | Крейты |
-|---|--------|--------|------|--------|
-| ~~E-3~~ | ~~**about:blank and about:srcdoc**~~ — **выполнено** | S | **1** | `lumen-shell`, `lumen-layout` |
-| ~~E-2~~ | ~~**Accessibility settings panel**~~ — **выполнено** | M | 2 | `lumen-shell`, `lumen-storage` |
-| ~~E-1~~ | ~~**Print dialog UI**~~ — **выполнено** | M | 2 | `lumen-shell` |
-| ~~E-4~~ | ~~**CSS font-palette rendering**~~ — **выполнено** | M | 2 | `lumen-css-parser`, `lumen-layout`, `lumen-paint` |
-| ~~E-5~~ | ~~**CSS Gap Decorations L1 stub**~~ — **выполнено** | S | 2 | `lumen-layout`, `lumen-paint` |
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| E-1 | **Print dialog UI** — `Ctrl+P`: `panels/print_panel.rs` modal 560×400px, paper size (A4/Letter/Legal), orientation, margins, page range, color mode. "Печать" → `do_print_to_pdf()` + OS save dialog. 12 тестов. | M | `lumen-shell` |
+| E-2 | **Accessibility settings panel** — `Ctrl+Shift+Q`: `panels/a11y_panel.rs` (300×260px), font-size multiplier (0.8/1.0/1.25/1.5/2.0), prefers-reduced-motion toggle → `_lumen_deliver_media_changes`, forced-colors toggle, cursor size. `lumen-storage::A11yPrefs`. 10 тестов. | M | `lumen-shell`, `lumen-storage` |
+| E-3 | **about:blank and about:srcdoc** — `navigate_to("about:blank")` → пустой `Document::new_empty()` без HTTP fetch, `about:blank` в адресной строке; `<iframe srcdoc="...">` → `build_iframe_document(srcdoc)` парсит HTML inline. 6 тестов. | S | `lumen-shell`, `lumen-layout` |
+| E-4 | **CSS font-palette rendering** — `@font-palette-values` парсинг в css-parser (base-palette/override-colors), `ComputedStyle.resolved_font_palette`, `DrawText` с palette override → OpenType COLR/CPAL цвет-подстановка в glyph atlas. `// CSS: font-palette`. 6 тестов. | M | `lumen-css-parser`, `lumen-layout`, `lumen-paint` |
+| E-5 | **CSS Gap Decorations L1 stub** — `layout/src/gap_decorations.rs`: `GapDecorationContext {rule_width, rule_style, rule_color}`, `emit_gap_rules(boxes, gaps, ctx)` → `Vec<DrawBorder>` между grid/flex/multicol cells. `// CSS: gap-rule-width/style/color`. 6 тестов. | S | `lumen-layout`, `lumen-paint` |
 
 ### F — Дополнительные
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| ~~F-1~~ | ~~**CSS text-align-last rendering**~~ — **выполнено** | S | `lumen-layout` |
-| ~~F-2~~ | ~~**CSS hyphens soft hyphen rendering**~~ — **выполнено** | S | `lumen-layout` |
-| ~~F-3~~ | ~~**CSS font-stretch axis matching**~~ — **выполнено** | S | `lumen-paint` |
-| ~~F-4~~ | ~~**CSS color-scheme UA form elements**~~ — **выполнено** | S | `lumen-layout` |
-| ~~F-5~~ | ~~**BiDi 8H.3: network response body**~~ — **выполнено** | S | `lumen-shell` |
+| F-1 | **CSS text-align-last rendering** — `apply_text_align_last(line, style)` в `box_tree.rs`: для justify-блоков последняя строка выравнивается по `text-align-last: left/right/center/justify/start/end`. `// CSS: text-align-last` (поле в ComputedStyle уже есть). 4 теста. | S | `lumen-layout` |
+| F-2 | **CSS hyphens soft hyphen rendering** — U+00AD (SHY) в `wrap_inline_run`: при `hyphens: manual` SHY становится видимым дефисом только в точке переноса строки, не рендерится иначе. `// CSS: hyphens`. `HyphenationProvider` уже подключён. 4 теста. | S | `lumen-layout` |
+| F-3 | **CSS font-stretch axis matching** — `resolve_font_stretch(families, stretch_val)` в `MultiFontMeasurer`: для variable fonts находит ось `wdth` в fvar, выбирает наиближайшее значение из допустимого диапазона (CSS Fonts L4 §5.2). `// CSS: font-stretch`. 4 теста. | S | `lumen-paint` |
+| F-4 | **CSS color-scheme UA form elements** — `ua_form_element_colors(tag, dark_mode)` в `compute_style`: при `color-scheme: dark` применяет тёмную тему к UA стилям `<input>/<select>/<textarea>/<button>/<progress>/<meter>` (border/background/color). `// CSS: color-scheme`. 4 теста. | S | `lumen-layout` |
+| F-5 | **BiDi 8H.3: network response body** — `network.responseBodyReceived` событие (при подписке) + `network.getResponseBody(request: {requestId})` команда в `bidi/protocol.rs`: буферизация последнего тела ответа per-request в `BidiState.response_bodies: HashMap<u64, Vec<u8>>`. 6 тестов. | S | `lumen-shell` |
 
 > **RB-10** `VelloBackend` полный — заблокирован (vello API нестабилен, Phase 3+). Взять после стабилизации vello 0.x API.
-
-### I — Новые Web Platform APIs
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~I-1~~ | ~~**Web Locks API**~~ — **выполнено** | S | `lumen-js` |
-| ~~I-2~~ | ~~**Screen Wake Lock API**~~ — **выполнено** | XS | `lumen-js` |
-| ~~I-3~~ | ~~**Compression Streams API**~~ — **выполнено (P1)** | S | `lumen-js`, `lumen-network` |
-| ~~I-4~~ | ~~**Web Share API**~~ — **выполнено (P1)** | XS | `lumen-js` |
-| ~~I-5~~ | ~~**Scheduler API**~~ — **выполнено** | S | `lumen-js` |
-
-### J — Новые Web Platform APIs (волна 2)
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~J-1~~ | ~~**Web Audio API Phase 0**~~ — **выполнено** | L | `lumen-js` |
-| ~~J-2~~ | ~~**WebGPU API Phase 0**~~ — **выполнено** | M | `lumen-js` |
-| ~~J-3~~ | ~~**CSS Houdini Paint Worklet Phase 0**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
-| ~~J-4~~ | ~~**Background Fetch API stub**~~ — **выполнено** | XS | `lumen-js` |
-| ~~J-5~~ | ~~**Presentation API stub**~~ — **выполнено** | XS | `lumen-js` |
 
 ---
 
 ## Recent merges
-
-- **p2-a9-svg-text-impl** ✅ 2026-06-06 — A-9: SVG text rendering Phase 1. `emit_svg_text()` реализует text-anchor (start/middle/end): горизонтальный сдвиг x (approx font_size×0.5×chars); dominant-baseline: auto/baseline→0, middle/central→−fs×0.35, hanging/text-before-edge→+fs×0.2, text-after-edge→−fs×0.8. Layout fix: `lay_out_svg_shape_position` теперь использует `transform_point()` для текста (раньше `apply_transform_to_bbox` возвращала ZERO для нулевых rect, игнорируя dx/dy). rect.width=approx_text_width, rect.height=font_size. 3 новых теста: svg_text_anchor_middle_shifts_x_left, svg_text_dx_dy_offset_applied, svg_text_dominant_baseline_middle_shifts_y. Итого 8 SVG text тестов. Сопутственно: #[allow(dead_code)] для highlight stub, 2× collapsible_if (let chains), 3× len()>0 → !is_empty(). lumen-paint: 530 тестов ✅, lumen-layout: 2357 тестов ✅. Clippy чист.
-
-- **p2-a4-offscreen-phase1** ✅ 2026-06-06 — A-4: OffscreenCanvas Phase 1. `createImageBitmap(source)` реализован для ImageData (через `_lumen_offscreen_canvas_from_image_data(w,h,hex)`) и OffscreenCanvas (через transfer). Blob/HTMLImageElement → graceful TypeError. `Context2D::from_pixels(w,h,pixels)` добавлен в lumen-canvas для инициализации canvas из RGBA8 буфера. OffscreenCanvas доступен в Workers: `install_offscreen_canvas_bindings` вызывается в `run_worker_thread`, каждый worker получает свой thread-local canvas registry. 7 новых тестов (native_from_image_data, js_create_image_bitmap, js_offscreen_canvas_available_in_fresh_context). lumen-js: 1286 тестов ✅, lumen-canvas: 20 тестов ✅.
-
-- **p2-b2-flex-align-content** ✅ 2026-06-06 — B-2: CSS Flex align-content для многострочного flexbox. Исправлен баг: `lay_out_flex` использовал `content_width` вместо высоты контейнера для cross axis при align-content. Новый параметр `explicit_cross: Option<f32>` в `lay_out_flex`; caller вычисляет из `s.height`. Поддержаны все 7 вариантов: flex-start/flex-end/center/space-between/space-around/space-evenly/stretch. 6 тестов заменены с sanity на проверку y-позиций flex items в контейнере 200×300px с 3 items (90×50px, 2 линии). lumen-layout: 2357 тестов ✅. Clippy чист.
-
-- **p2-c2-disk-cache** ✅ 2026-06-06 — C-2: HTTP Cache disk persistence Phase 1. `HttpCacheBackend` trait (get/store/revalidate/len) — общий интерфейс для Memory и Disk бэкендов. `DiskHttpCache` поверх SQLite: таблица `cache_entries(url PK, etag, last_modified, status, headers_json, body_blob, expires_at)`, хранит expires как Unix timestamp, без внешних deps (ручной JSON-парсер для headers). `lumen_cache_dir()`: %APPDATA%\lumen\cache (Win) / ~/.cache/lumen (Unix). `HttpClient::with_http_cache()` принимает `Arc<dyn HttpCacheBackend>`. 10 новых тестов: disk_cache_new_creates_db, store_and_get_fresh, no_store_not_persisted, stale_entry_not_fresh, revalidate_updates_etag, survives_reopen, fragment_stripped, lumen_cache_dir_is_some, header_serialization_roundtrip/empty. lumen-network: 677 тестов ✅. Clippy чист.
-
-- **p2-b3-grid-auto** ✅ 2026-06-04 — B-3: CSS Grid auto-fill/auto-fit/fit-content Phase 1. GridTrackSize::FitContent(Box<GridTrackSize>) variant для fit-content(<limit>) (CSS Grid L3 §9.1); GridRepeat struct + RepeatCount enum для store repeat(auto-fill|auto-fit) metadata. parse_track_list() детектит 'auto-fill' и 'auto-fit' keywords (case-insensitive), expands fixed repeats, preserves auto-fill/auto-fit для resolver на Phase 2. resolve_auto_fill_fit_count(avail_w, tracks, gap) → usize вычисляет track count = floor((avail_w + gap) / (track_min_width + gap)), min 1, из доступной ширины и min-width треков (из minmax/fit-content/length). 14 unit-тестов (parse fit-content px/%, auto-fill/auto-fit, fixed/mixed repeat, resolve count basic/with-gap/zero-width/large-gap/multiple-tracks/small-container/empty-tracks). lumen-layout: 2311 тестов. Clippy чист. Phase 1 завершена (parsing + resolve_auto_fill_fit_count). Phase 2 (future): integrate GridRepeat into lay_out_grid() resolver, expand at layout. Phase 3 (future): auto-fit collapse empty tracks.
-
-- **p2-b8-appearance** ✅ 2026-06-04 — B-8: CSS Appearance property Phase 0. `apply_ua_appearance(style, tag)` в `compute_style`: при `appearance: none` убирает UA border/padding/background у `<input>/<button>/<select>/<textarea>/<progress>/<meter>`. Функция вызывается ПОСЛЕ apply_declaration, чтобы author-CSS `appearance: none` имел приоритет над UA стилями. 6 новых unit-тестов (appearance_none_removes_*_ua_styling variants + appearance_auto_preserves_ua_styling). lumen-layout: 2311 тестов. Clippy чист. Phase 0 завершена (parsing + ComputedStyle field + apply logic). Phase 1 (future): убирать UA dimensions/height при appearance:none.
-
-- **p2-b6-image-rendering** ✅ 2026-06-04 — B-6: CSS image-rendering FilterMode Phase 0. `FilterMode` enum (Linear/Nearest) с методом `from_image_rendering(ImageRendering) → FilterMode`. Преобразование: auto/smooth/high-quality → Linear; crisp-edges/pixelated → Nearest. 4 unit-теста (from_auto_is_linear, from_smooth_is_linear, from_crisp_edges_is_nearest, from_pixelated_is_nearest). lumen-paint: 510 тестов. Clippy чист. Phase 0 завершена (conversion enum). Phase 1 (future P2/Renderer): использовать FilterMode в GPU sampler при рендере DrawImage/DrawBackgroundImage.
-
-- **p2-b5-column-rule** ✅ 2026-06-04 — B-5: CSS Multi-column column-rule rendering Phase 0. `emit_column_rules(b, out)` в `paint/src/display_list.rs`: вычисляет позиции колонок по `column-count/width/gap`, эмитит вертикальные разделители `DrawBorder` с `column-rule-width/style/color` из ComputedStyle. Геометрия зеркалирует `lay_out_multicol_children` — разделитель центрируется в gap (gap_left + (col_gap - rule_w) * 0.5). Поддержка: Solid/Dashed/Dotted через существующий `DrawBorder` (правая сторона rect); Double и прочие как Solid (Phase 0). Вызывается в 3 местах walk-цикла. 6 unit-тестов (column_rule_cmds helper): emits_separators/none_style/zero_width/single_column/no_column_props/separator_centered_in_gap. Graphic test 33-multi-column.html (7 контейнеров с разными column-count и column-rule стилями: solid red / dashed cyan / dotted yellow). Phase 0 завершена (visual rendering). Phase 1 (future): позиционирование column-span:all + column-fill поддержка (P1/P4).
-
-- **p2-a1-css-properties-values** ✅ 2026-06-04 — A-1: CSS Properties & Values API (Houdini) Phase 0–1. `CSS.registerProperty({name, syntax, inherits, initialValue})` IIFE-шим в `lumen-js`, парсинг `@property` at-rule в `lumen-css-parser` (PropertyRule struct с name/syntax/inherits/initial-value дескрипторами), `CSS._getRegisteredProperties()` API. `compute_style` применяет `initial-value` как fallback через `apply_property_initial_values` когда зарегистрированное свойство не объявлено. Registry строится из `Stylesheet.properties`, `inherits: false` сбрасывает родительское значение, `inherits: true` сохраняет наследование. `syntax` валидируется через `validate_against_syntax` при применении initial-value. 8 новых unit-тестов в lumen-layout (parse_property_rule, initial_value_fallback, no_initial_value, declared_overrides_initial, inherits_true, universal_syntax, var_substitution_with_fallback, multiple_properties). lumen-layout: 2306 тестов (было 2298 + 8 новых). Clippy чист. Phase 1 завершена (registry + initial-value fallback + syntax validation). Phase 2 (P4 handoff): синтаксис-валидация в `@property` дескрипторах, интеграция fallback в `expand_vars` для `var()`.
-
-- **p2-a10-display-list-diffing** ✅ 2026-06-04 — A-10: Display list diffing Phase 0. Функция `diff_display_lists(prev, next) -> DiffResult` сравнивает два display list-а по Debug hash каждой команды (как в hash_display_list). `DiffResult` содержит `identical: bool` и `changed_rects: Rect` для dirty-rect tracking. Алгоритм: быстрая проверка длины, затем поэлементное сравнение хешей Debug-представления. Вспомогательные функции: `get_command_rect()` извлекает rect из command, `union_rects()` объединяет два прямоугольника, `union_all_rects()` собирает bounding rect всех команд. 9 unit-тестов (diff_identical_empty_lists, diff_identical_single_command, diff_different_lengths, diff_different_colors, diff_changed_rects_bounds, diff_multiple_commands_one_changed, diff_empty_to_non_empty, diff_result_identical_constructor, diff_result_changed_constructor). lumen-paint: 506 тестов (было 497 + 9 новых). Clippy чист. Phase 0 завершена. Phase 1 (future): интеграция в shell для RedrawRequested skip, diff_count метрика для bench.
-
-- **p2-a9-svg-text-rendering** ✅ 2026-06-04 — A-9: SVG text rendering Phase 0. `BoxKind::SvgText` variant для `<text>`, `<tspan>`, `<textPath>` элементов. `collect_text_content(doc, node_id)` рекурсивно собирает текст из DOM узлов. `SvgTextAnchor` enum (Start/Middle/End, default Start) и `SvgDominantBaseline` enum (Auto/Baseline/Hanging/Middle/Central/TextBeforeEdge/TextAfterEdge, default Auto) с `#[derive(Default)]`. `parse_text_anchor()` и `parse_dominant_baseline()` парсят SVG атрибуты. Layout: `lay_out_svg_element_position` позиционирует текст по x/y + dx/dy смещениям (Phase 1: minimal bbox с zero width/height). Paint: `emit_svg_text()` эмитит `DrawText` команды с SVG fill color, font settings. 5 новых lumen-layout unit-тестов (svg_text_element_simple, svg_text_with_x_y_attributes, svg_text_anchor_middle, svg_dominant_baseline_hanging, svg_tspan_text_content). 4 новых lumen-paint unit-тестов (svg_text_emits_drawtext_command, svg_text_with_fill_color, svg_text_with_font_size, svg_textpath_collects_content). lumen-layout: 2298 тестов (было 2293), lumen-paint: 497 тестов (было 492). Clippy чист. Phase 0 завершена (parsing + basic emit). Phase 2 (future P4 handoff): text measurement via TextMeasurer, text-anchor horizontal alignment, dominant-baseline vertical alignment.
 
 - **p2-svg-layout-improvements** ✅ 2026-06-04 — A-8: Inline SVG layout improvements Phase 1. `<defs>` контейнер обрабатывается как invisible (BoxKind::Skip). SVG intrinsic ratio из viewBox: функция `svg_intrinsic_ratio(view_box: &Option<ViewBox>) -> Option<f32>` вычисляет width/height для aspect-ratio preserved sizing. `SvgTransform::translate(tx, ty)` конструктор для x/y трансформов. Handoff комментарии для P4: `object-fit`, `object-position` могут переопределять viewBox scaling (Phase 2). Новые функции проверки: `is_svg_defs()`, `is_svg_use()`. `<use href="#id">` элементы отложены на Phase 2 (требуют cycle detection). 7 новых unit-тестов (svg_defs, intrinsic_ratio, preserve_aspect_ratio variants). lumen-layout: 2293 тестов ✅ (было 2286). Clippy чист. Phase 1 завершена (intrinsic ratio + <defs> invisible). Phase 2 (future): `<use>` с cycle detection, object-fit override.
 
