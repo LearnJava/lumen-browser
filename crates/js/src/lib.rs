@@ -77,6 +77,7 @@ pub mod webxr;
 pub mod form_validation;
 pub mod element_internals;
 pub mod presentation_api;
+pub mod generic_sensor;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -872,6 +873,13 @@ impl QuickJsRuntime {
             // Phase 0: navigator.presentation + PresentationRequest/Connection stubs.
             if let Err(e) = presentation_api::install_presentation_api(&ctx) {
                 eprintln!("Presentation API init failed: {}", e);
+            }
+
+            // Phase 0: W3C Generic Sensor API — Accelerometer, Gyroscope, LinearAccelerationSensor,
+            // GravitySensor, AbsoluteOrientationSensor, RelativeOrientationSensor, Magnetometer,
+            // AmbientLightSensor. start() activates sensor; no readings until Phase 1 OS integration.
+            if let Err(e) = generic_sensor::install_generic_sensor_bindings(&ctx) {
+                eprintln!("Generic Sensor API init failed: {}", e);
             }
 
             Ok(())
