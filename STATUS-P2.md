@@ -6,8 +6,7 @@
 
 ## In progress
 
-**L-4 | `<meter>`/`<progress>` visual fill rendering**  branch: p2-l4-meter-progress
-Next step: `FormControlKind::{Progress,Meter}` + `emit_progress_bar` + `emit_meter_bar`  `engine/layout/src/box_tree.rs:241`
+None
 
 ---
 
@@ -38,7 +37,7 @@ Next step: `FormControlKind::{Progress,Meter}` + `emit_progress_bar` + `emit_met
 | ~~L-1~~ | ~~**`<details>`/`<summary>` interactive collapse/expand**~~ — **выполнено** | S | `lumen-shell`, `lumen-js` |
 | ~~L-2~~ | ~~**`<dialog>` modal overlay rendering + `::backdrop`**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
 | ~~L-3~~ | ~~**`<input type="range">` slider visual rendering + drag**~~ — **выполнено** | S | `lumen-shell`, `lumen-layout`, `lumen-paint` |
-| L-4 | `<meter>`/`<progress>` visual fill rendering | S | `lumen-layout`, `lumen-paint` |
+| ~~L-4~~ | ~~**`<meter>`/`<progress>` visual fill rendering**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint` |
 | L-5 | CSS Scroll-Driven Animations Phase 1 shell wiring | M | `lumen-shell`, `lumen-layout` |
 
 ### K — Волна 3 Web Platform APIs
@@ -54,6 +53,15 @@ Next step: `FormControlKind::{Progress,Meter}` + `emit_progress_bar` + `emit_met
 ---
 
 ## Current / Recently Merged
+
+**L-4 | `<meter>`/`<progress>` visual fill rendering** ✅ 2026-06-08 (merged)
+- `FormControlKind::Progress {value: Option<f32>, max}` — determinate/indeterminate bar
+- `FormControlKind::Meter {value, min, max, low, high, optimum}` — HTML5 §4.10.14 gauge
+- `is_form_control_element` расширен: теперь включает `"meter" | "progress"`
+- `emit_progress_bar`: FillRoundedRect пропорционально value/max; indeterminate → 30% fill
+- `emit_meter_bar` + `meter_gauge_color`: зелёный/жёлтый/красный по оптимальности
+- 7 тестов layout + 7 тестов paint
+- Итого lumen-layout: 2425 тестов (+7 vs L-3), lumen-paint: 567 (+7), Clippy чист
 
 **L-3 | `<input type="range">` slider visual rendering + drag** ✅ 2026-06-08 (merged)
 - `FormControlKind::Range { value, min, max }` в `box_tree.rs` — парсит value/min/max из DOM (defaults: 0/100/midpoint), зажимает в [min, max]
