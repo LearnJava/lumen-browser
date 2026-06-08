@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+L-1 **9F.3 Tor circuit + screen pinning + no-persistent-state**  branch: p1-l1-tor-circuit
+Next step: SOCKS5 proxy struct + handshake  crates/network/src/socks5.rs
 
 ---
 
