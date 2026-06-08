@@ -28,7 +28,7 @@ use std::collections::HashMap;
 
 use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
-use crate::style::{compute_style, ComputedStyle};
+use crate::style::{compute_style, ComputedStyle, ListStyleType};
 use lumen_css_parser::Stylesheet;
 use lumen_core::Size;
 
@@ -158,8 +158,8 @@ fn walk(
 /// Format a counter integer value according to the given `list-style-type` keyword.
 ///
 /// Supported styles: `decimal` (default), `lower-alpha` / `lower-latin`,
-/// `upper-alpha` / `upper-latin`, `lower-roman`, `upper-roman`, `disc`,
-/// `circle`, `square`, `none`. Unrecognised styles fall back to `decimal`.
+/// `upper-alpha` / `upper-latin`, `lower-roman`, `upper-roman`, `lower-greek`,
+/// `disc`, `circle`, `square`, `none`. Unrecognised styles fall back to `decimal`.
 pub fn format_counter(val: i32, style: &str) -> String {
     match style.trim() {
         "none" => String::new(),
@@ -167,6 +167,7 @@ pub fn format_counter(val: i32, style: &str) -> String {
         "upper-alpha" | "upper-latin" => alpha_counter(val, true),
         "lower-roman" => roman_counter(val, false),
         "upper-roman" => roman_counter(val, true),
+        "lower-greek" => greek_counter(val),
         "disc" => "\u{2022}".to_string(),
         "circle" => "\u{25E6}".to_string(),
         "square" => "\u{25AA}".to_string(),
@@ -212,6 +213,14 @@ fn roman_counter(n: i32, upper: bool) -> String {
         }
     }
     if upper { out.to_uppercase() } else { out }
+}
+
+fn greek_counter(n: i32) -> String {
+    const GREEK: &[char] = &['α','β','γ','δ','ε','ζ','η','θ','ι','κ','λ','μ',
+                              'ν','ξ','ο','π','ρ','σ','τ','υ','φ','χ','ψ','ω'];
+    if n <= 0 { return n.to_string(); }
+    let idx = ((n as usize) - 1) % GREEK.len();
+    GREEK[idx].to_string()
 }
 
 // ─── Custom counter styles (CSS Counter Styles L3) ───────────────────────────
@@ -740,6 +749,45 @@ fn format_symbolic(val: i32, symbols: &[String]) -> Option<String> {
     Some(symbols[idx].repeat(repeat))
 }
 
+/// CSS Counter Styles L3 §2 — format counter `n` using a resolved `CounterStyleDef`.
+///
+/// Public entry point for single-definition formatting. Used in list-marker
+/// building and `content:` counter resolution when the definition is already
+/// resolved from the registry.
+pub fn resolve_counter_value(def: &CounterStyleDef, n: i32, registry: &CounterStyleRegistry) -> String {
+    format_with_def(n, def, registry, 8)
+}
+
+/// CSS Lists L3 §2.1 — canonical wiring point for `list-style-type` + `@counter-style`.
+///
+/// Builds the full marker text string for a list item, consulting `registry` for
+/// custom `@counter-style` definitions first. Built-in types use the standard
+/// formatting with ". " suffix. Bullet types (Disc/Circle/Square) return `""` —
+/// they are rendered as geometric shapes by the display-list emitter.
+///
+/// CSS: list-style-type (custom counter-style) — P4 adds `ListStyleType::Custom(name)`
+/// and routes it through `format_counter_with_registry(ordinal, name, registry)`.
+pub fn build_list_marker_text(
+    lst: ListStyleType,
+    ordinal: u32,
+    registry: &CounterStyleRegistry,
+) -> String {
+    match lst {
+        // Bullets rendered geometrically; no text needed.
+        ListStyleType::None | ListStyleType::Disc | ListStyleType::Circle | ListStyleType::Square => String::new(),
+        // Built-in counter styles: format ordinal then append ". ".
+        ListStyleType::Decimal => format!("{}. ", format_counter_with_registry(ordinal as i32, "decimal", registry)),
+        ListStyleType::DecimalLeadingZero => format!("{:02}. ", ordinal),
+        ListStyleType::LowerRoman => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-roman", registry)),
+        ListStyleType::UpperRoman => format!("{}. ", format_counter_with_registry(ordinal as i32, "upper-roman", registry)),
+        ListStyleType::LowerAlpha => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-alpha", registry)),
+        ListStyleType::UpperAlpha => format!("{}. ", format_counter_with_registry(ordinal as i32, "upper-alpha", registry)),
+        ListStyleType::LowerGreek => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-greek", registry)),
+        // CSS: list-style-type (custom counter-style) — P4 adds here:
+        // ListStyleType::Custom(ref name) => format_counter_with_registry(ordinal as i32, name, registry),
+    }
+}
+
 fn format_additive(val: i32, tuples: &[(i32, String)]) -> Option<String> {
     if val < 0 {
         return None;
@@ -1068,5 +1116,96 @@ mod tests {
             }
             _ => panic!("expected Explicit"),
         }
+    }
+
+    // ── build_list_marker_text tests ─────────────────────────────────────────
+
+    #[test]
+    fn build_marker_decimal() {
+        let reg = CounterStyleRegistry::new();
+        assert_eq!(build_list_marker_text(ListStyleType::Decimal, 1, &reg), "1. ");
+        assert_eq!(build_list_marker_text(ListStyleType::Decimal, 9, &reg), "9. ");
+        assert_eq!(build_list_marker_text(ListStyleType::Decimal, 42, &reg), "42. ");
+    }
+
+    #[test]
+    fn build_marker_lower_roman() {
+        let reg = CounterStyleRegistry::new();
+        assert_eq!(build_list_marker_text(ListStyleType::LowerRoman, 1, &reg), "i. ");
+        assert_eq!(build_list_marker_text(ListStyleType::LowerRoman, 4, &reg), "iv. ");
+        assert_eq!(build_list_marker_text(ListStyleType::LowerRoman, 9, &reg), "ix. ");
+    }
+
+    #[test]
+    fn build_marker_upper_alpha() {
+        let reg = CounterStyleRegistry::new();
+        assert_eq!(build_list_marker_text(ListStyleType::UpperAlpha, 1, &reg), "A. ");
+        assert_eq!(build_list_marker_text(ListStyleType::UpperAlpha, 26, &reg), "Z. ");
+        assert_eq!(build_list_marker_text(ListStyleType::UpperAlpha, 27, &reg), "AA. ");
+    }
+
+    #[test]
+    fn build_marker_none_empty() {
+        let reg = CounterStyleRegistry::new();
+        assert_eq!(build_list_marker_text(ListStyleType::None, 1, &reg), "");
+    }
+
+    #[test]
+    fn build_marker_bullets_empty() {
+        let reg = CounterStyleRegistry::new();
+        assert_eq!(build_list_marker_text(ListStyleType::Disc, 1, &reg), "");
+        assert_eq!(build_list_marker_text(ListStyleType::Circle, 2, &reg), "");
+        assert_eq!(build_list_marker_text(ListStyleType::Square, 3, &reg), "");
+    }
+
+    // ── resolve_counter_value tests ──────────────────────────────────────────
+
+    #[test]
+    fn resolve_counter_value_cyclic() {
+        let mut reg = CounterStyleRegistry::new();
+        let def = CounterStyleDef {
+            system: CounterSystem::Cyclic,
+            symbols: sym(&["★", "☆"]),
+            suffix: s(" "),
+            ..CounterStyleDef::default()
+        };
+        reg.insert(s("stars"), def.clone());
+        assert_eq!(resolve_counter_value(&def, 1, &reg), "★ ");
+        assert_eq!(resolve_counter_value(&def, 2, &reg), "☆ ");
+        assert_eq!(resolve_counter_value(&def, 3, &reg), "★ ");
+    }
+
+    #[test]
+    fn resolve_counter_value_numeric() {
+        let reg = CounterStyleRegistry::new();
+        let def = CounterStyleDef {
+            system: CounterSystem::Numeric,
+            symbols: sym(&["0","1","2","3","4","5","6","7","8","9"]),
+            suffix: s("."),
+            ..CounterStyleDef::default()
+        };
+        assert_eq!(resolve_counter_value(&def, 1, &reg), "1.");
+        assert_eq!(resolve_counter_value(&def, 10, &reg), "10.");
+        assert_eq!(resolve_counter_value(&def, 42, &reg), "42.");
+    }
+
+    #[test]
+    fn resolve_counter_value_extends() {
+        // "child" extends "parent" (cyclic with ✓/✗ symbols)
+        let mut reg = CounterStyleRegistry::new();
+        let parent = CounterStyleDef {
+            system: CounterSystem::Cyclic,
+            symbols: sym(&["✓", "✗"]),
+            suffix: s(" "),
+            ..CounterStyleDef::default()
+        };
+        reg.insert(s("checks"), parent);
+        let child = CounterStyleDef {
+            system: CounterSystem::Extends(s("checks")),
+            ..CounterStyleDef::default()
+        };
+        assert_eq!(resolve_counter_value(&child, 1, &reg), "✓ ");
+        assert_eq!(resolve_counter_value(&child, 2, &reg), "✗ ");
+        assert_eq!(resolve_counter_value(&child, 3, &reg), "✓ ");
     }
 }

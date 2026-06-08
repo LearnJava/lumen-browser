@@ -38,7 +38,7 @@ pub(crate) mod vertical;
 
 pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
-    build_counter_style_registry,
+    build_counter_style_registry, build_list_marker_text, resolve_counter_value,
     CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
     CounterSystem, CounterRange, RangeBound,
 };

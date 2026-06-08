@@ -55,6 +55,15 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
+### `list-style-type` (custom counter-style) (P1 feature p1-i4-counter-style, 2026-06-08)
+- **Status:** Algorithm ready. `build_list_marker_text(lst: ListStyleType, ordinal: u32, registry: &CounterStyleRegistry) -> String` in `lumen-layout/src/counters.rs`. Registry lookup via `format_counter_with_registry`. All built-in types work. Comment `// CSS: list-style-type (custom counter-style)` marks the extension point in `ListStyleType::parse()` at `style.rs:2549`.
+- **P4 task:**
+  1. Add `Custom(Box<str>)` (or `Custom(String)`) variant to `ListStyleType` enum in `lumen-layout/src/style.rs` — note this removes `Copy` from the enum, adjust derives accordingly.
+  2. In `ListStyleType::parse()` at `style.rs:2549`, return `Some(Self::Custom(s.into()))` for unrecognised idents instead of `None`.
+  3. In `build_list_marker_text()` in `counters.rs`, add the `Custom(ref name)` arm: `ListStyleType::Custom(ref name) => format_counter_with_registry(ordinal as i32, name, registry)`.
+  4. `apply_declaration("list-style-type")` already routes through `ListStyleType::parse()` — no change needed.
+- **Entry points:** `lumen-layout/src/counters.rs` — `build_list_marker_text`; `lumen-layout/src/style.rs:2549` — `// CSS: list-style-type` comment.
+
 ### `gap-rule-width`, `gap-rule-style`, `gap-rule-color` (P2 feature p2-e5-gap-decorations, 2026-06-07)
 - **Status:** Paint-side emit logic ready. `lumen-paint::emit_gap_rules(boxes, gaps, ctx)` in `gap_decorations.rs` takes a `GapDecorationContext {rule_width, rule_style, rule_color}` and a slice of `GapSegment {rect, horizontal}` and returns `Vec<DisplayCommand::DrawBorder>`. Rules are centered in each gap rectangle; column gaps get vertical rules (right-side DrawBorder), row gaps get horizontal rules (bottom-side DrawBorder). Clamped to gap size if rule_width > gap. 6 unit tests pass.
 - **P4 task:**
