@@ -6,8 +6,7 @@
 
 ## In progress
 
-**K-2 | `<select>` interactive dropdown** — branch: p2-k2-select-dropdown
-Next step: add `FormControlKind::Select { selected_text }` + shell dropdown overlay  `crates/engine/layout/src/box_tree.rs:247`
+(none)
 
 ---
 
@@ -18,7 +17,7 @@ Next step: add `FormControlKind::Select { selected_text }` + shell dropdown over
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~K-1~~ | ~~**WebAssembly Phase 0 stub**~~ — **выполнено** | S | `lumen-js` |
-| K-2 | **`<select>` interactive dropdown** | M | `lumen-shell`, `lumen-layout` |
+| ~~K-2~~ | ~~**`<select>` interactive dropdown**~~ — **выполнено** | M | `lumen-shell`, `lumen-layout` |
 | K-3 | **Fetch streaming body (ReadableStream)** | M | `lumen-js`, `lumen-network` |
 | K-4 | **`<form>` multipart/form-data encoding** | S | `lumen-js`, `lumen-core` |
 | K-5 | **CSS `local()` system font matching** | S | `lumen-shell`, `lumen-font` |
@@ -26,6 +25,20 @@ Next step: add `FormControlKind::Select { selected_text }` + shell dropdown over
 ---
 
 ## Current / Recently Merged
+
+**K-2 | `<select>` interactive dropdown** ✅ 2026-06-08 (merged)
+- `FormControlKind::Select { selected_text: String }` — несёт метку выбранной опции для paint
+- `collect_select_label()` / `option_text()` — обходят DOM, ищут `<option selected>`, fallback на первую, fallback ""
+- `emit_select_indicator()` в paint — рисует текст выбранной опции + разделитель + стрелка ▼ (U+25BC)
+- `FormClickAction::OpenSelectDropdown(NodeId)` — новый вариант click action
+- `SelectOption { label, value, selected, disabled, node_id }` — тип для строки dropdown
+- `collect_select_options()` — рекурсивный обход `<option>`/`<optgroup>`
+- `build_select_dropdown()` — viewport-locked overlay: max 8 строк, flip вверх если не помещается
+- `hit_select_option()` — hit-test по координатам клика
+- `apply_select_choice()` — мутирует DOM: переставляет атрибут `selected`
+- Lumen: `select_dropdown_node: Option<NodeId>` + полная интеграция (render + click + reset + PageSnapshot)
+- 8 тестов: options collection, click classification, hit-test (rows 0/1/miss), DOM mutation, display list
+- Итого lumen-shell: 1073 тестов ✅, Clippy чист (layout/paint/shell)
 
 **K-1 | WebAssembly Phase 0 stub** ✅ 2026-06-08 (merged)
 - `WebAssembly` global object: compile/instantiate/compileStreaming/instantiateStreaming → Promise
