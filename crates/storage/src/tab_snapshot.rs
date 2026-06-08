@@ -229,6 +229,159 @@ impl TabSnapshotStore {
     }
 }
 
+// ── T2 (BackgroundOld) snapshot store ─────────────────────────────────────────
+
+/// Snapshot data persisted when a tab enters T2 (BackgroundOld).
+///
+/// Provides crash-recovery durability for background tabs: if the browser
+/// process exits while a tab is sleeping, `SleepingTabStore` lets it be
+/// partially restored on next startup (scroll position + form values).
+///
+/// `js_heap_blob` is reserved for a future QuickJS heap serialiser
+/// (ADR-008 §10I); it is always empty until that feature lands.
+/// `dom_blob` is optional (empty when DOM stays in RAM at T2).
+pub struct T2SleepData {
+    /// Serialised QuickJS heap.  Currently always empty (serialisation blocked).
+    pub js_heap_blob: Vec<u8>,
+    /// Bincode-serialised Document blob.  Empty when the DOM stays in RAM at T2.
+    pub dom_blob: Vec<u8>,
+    /// Horizontal scroll offset in CSS px at the time of sleeping.
+    pub scroll_x: f32,
+    /// Vertical scroll offset in CSS px at the time of sleeping.
+    pub scroll_y: f32,
+    /// JSON-serialised form state (see `tab_lifecycle::sleep`).
+    pub form_state_json: String,
+    /// Unix timestamp (seconds since epoch) when the snapshot was written.
+    pub ts: i64,
+}
+
+/// SQLite-backed store for T2 (BackgroundOld) tab checkpoints.
+///
+/// Uses a separate `tab_snapshots` table from `TabSnapshotStore`
+/// (`hibernated_tabs`) so T2 and T3 entries are independent.
+///
+/// Phase 0: uses an in-memory database.
+/// Phase 1: open a real file at the profile directory for crash recovery.
+pub struct SleepingTabStore {
+    conn: Mutex<Connection>,
+}
+
+impl std::fmt::Debug for SleepingTabStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SleepingTabStore").finish()
+    }
+}
+
+impl SleepingTabStore {
+    /// Open an in-memory store (data lost on process exit).
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| Error::Storage(format!("sleeping_tab open_in_memory: {e}")))?;
+        Self::init(conn)
+    }
+
+    /// Open a persistent on-disk store at `path`.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let conn = Connection::open(path)
+            .map_err(|e| Error::Storage(format!("sleeping_tab open: {e}")))?;
+        Self::init(conn)
+    }
+
+    fn init(conn: Connection) -> Result<Self> {
+        conn.execute_batch(
+            r#"
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            CREATE TABLE IF NOT EXISTS tab_snapshots (
+                tab_id           INTEGER PRIMARY KEY,
+                js_heap_blob     BLOB    NOT NULL DEFAULT x'',
+                dom_blob         BLOB    NOT NULL DEFAULT x'',
+                scroll_x         REAL    NOT NULL DEFAULT 0.0,
+                scroll_y         REAL    NOT NULL DEFAULT 0.0,
+                form_state_json  TEXT    NOT NULL DEFAULT '{}',
+                ts               INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )
+        .map_err(|e| Error::Storage(format!("sleeping_tab init: {e}")))?;
+        Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    /// Persist a T2 checkpoint.  Overwrites any previous entry for the same tab.
+    pub fn store(&self, tab_id: i64, data: &T2SleepData) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO tab_snapshots
+             (tab_id, js_heap_blob, dom_blob, scroll_x, scroll_y, form_state_json, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                tab_id,
+                data.js_heap_blob,
+                data.dom_blob,
+                data.scroll_x as f64,
+                data.scroll_y as f64,
+                data.form_state_json,
+                data.ts,
+            ],
+        )
+        .map_err(|e| Error::Storage(format!("sleeping_tab store: {e}")))?;
+        Ok(())
+    }
+
+    /// Load the T2 checkpoint for `tab_id`.
+    ///
+    /// Returns `Ok(None)` when no checkpoint exists.
+    pub fn fetch(&self, tab_id: i64) -> Result<Option<T2SleepData>> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT js_heap_blob, dom_blob, scroll_x, scroll_y, form_state_json, ts
+             FROM tab_snapshots WHERE tab_id = ?1",
+            params![tab_id],
+            |row| {
+                Ok(T2SleepData {
+                    js_heap_blob: row.get(0)?,
+                    dom_blob: row.get(1)?,
+                    scroll_x: row.get::<_, f64>(2)? as f32,
+                    scroll_y: row.get::<_, f64>(3)? as f32,
+                    form_state_json: row.get(4)?,
+                    ts: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| Error::Storage(format!("sleeping_tab fetch: {e}")))
+    }
+
+    /// Remove the checkpoint for `tab_id` (called after successful restore or close).
+    pub fn delete(&self, tab_id: i64) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM tab_snapshots WHERE tab_id = ?1", params![tab_id])
+            .map_err(|e| Error::Storage(format!("sleeping_tab delete: {e}")))?;
+        Ok(())
+    }
+
+    /// Returns `true` if a checkpoint exists for `tab_id`.
+    pub fn exists(&self, tab_id: i64) -> Result<bool> {
+        let conn = self.lock()?;
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tab_snapshots WHERE tab_id = ?1",
+                params![tab_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| Error::Storage(format!("sleeping_tab exists: {e}")))?;
+        Ok(n > 0)
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| Error::Storage("sleeping_tab mutex poisoned".into()))
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,5 +545,104 @@ mod tests {
         let fetched = s.fetch(7).unwrap().unwrap();
         assert_eq!(fetched.url, "https://пример.рф/");
         assert_eq!(fetched.title, "Главная страница");
+    }
+}
+
+// ── SleepingTabStore tests ────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod sleeping_tests {
+    use super::*;
+
+    fn make_sleep() -> SleepingTabStore {
+        SleepingTabStore::open_in_memory().unwrap()
+    }
+
+    fn sample_sleep() -> T2SleepData {
+        T2SleepData {
+            js_heap_blob: vec![],
+            dom_blob: vec![],
+            scroll_x: 0.0,
+            scroll_y: 250.0,
+            form_state_json: r#"{"1":{"value":"hello","checked":false}}"#.into(),
+            ts: 1_700_000_000,
+        }
+    }
+
+    #[test]
+    fn store_and_fetch() {
+        let s = make_sleep();
+        s.store(1, &sample_sleep()).unwrap();
+        let d = s.fetch(1).unwrap().unwrap();
+        assert!((d.scroll_y - 250.0).abs() < 0.01);
+        assert_eq!(d.form_state_json, r#"{"1":{"value":"hello","checked":false}}"#);
+        assert_eq!(d.ts, 1_700_000_000);
+    }
+
+    #[test]
+    fn fetch_missing_returns_none() {
+        let s = make_sleep();
+        assert!(s.fetch(999).unwrap().is_none());
+    }
+
+    #[test]
+    fn exists_after_store() {
+        let s = make_sleep();
+        assert!(!s.exists(1).unwrap());
+        s.store(1, &sample_sleep()).unwrap();
+        assert!(s.exists(1).unwrap());
+    }
+
+    #[test]
+    fn delete_removes_entry() {
+        let s = make_sleep();
+        s.store(1, &sample_sleep()).unwrap();
+        s.delete(1).unwrap();
+        assert!(s.fetch(1).unwrap().is_none());
+    }
+
+    #[test]
+    fn store_overwrites_same_tab() {
+        let s = make_sleep();
+        s.store(1, &sample_sleep()).unwrap();
+        let updated = T2SleepData { scroll_y: 99.0, ts: 1_800_000_000, ..sample_sleep() };
+        s.store(1, &updated).unwrap();
+        let d = s.fetch(1).unwrap().unwrap();
+        assert!((d.scroll_y - 99.0).abs() < 0.01);
+        assert_eq!(d.ts, 1_800_000_000);
+    }
+
+    #[test]
+    fn multiple_tabs_independent() {
+        let s = make_sleep();
+        let d1 = T2SleepData { scroll_y: 10.0, ..sample_sleep() };
+        let d2 = T2SleepData { scroll_y: 20.0, ..sample_sleep() };
+        s.store(1, &d1).unwrap();
+        s.store(2, &d2).unwrap();
+        assert!((s.fetch(1).unwrap().unwrap().scroll_y - 10.0).abs() < 0.01);
+        assert!((s.fetch(2).unwrap().unwrap().scroll_y - 20.0).abs() < 0.01);
+        s.delete(1).unwrap();
+        assert!(s.fetch(1).unwrap().is_none());
+        assert!(s.fetch(2).unwrap().is_some());
+    }
+
+    #[test]
+    fn form_state_json_roundtrip_cyrillic() {
+        let s = make_sleep();
+        let json = r#"{"42":{"value":"Привет мир","checked":true}}"#;
+        let data = T2SleepData { form_state_json: json.into(), ..sample_sleep() };
+        s.store(3, &data).unwrap();
+        let d = s.fetch(3).unwrap().unwrap();
+        assert_eq!(d.form_state_json, json);
+    }
+
+    #[test]
+    fn js_heap_blob_stored_and_fetched() {
+        let s = make_sleep();
+        let blob = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let data = T2SleepData { js_heap_blob: blob.clone(), ..sample_sleep() };
+        s.store(4, &data).unwrap();
+        let d = s.fetch(4).unwrap().unwrap();
+        assert_eq!(d.js_heap_blob, blob);
     }
 }
