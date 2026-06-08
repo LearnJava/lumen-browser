@@ -124,6 +124,7 @@ BUG-108 | OPEN   | paint          | ::selection pseudo-element: background-color
 BUG-109 | OPEN   | css-parser/font | font-variation-settings: wght/wdth/slnt axis values not forwarded to rasterizer — TEST-68: 3.21% | crates/engine/layout/src/style.rs
 BUG-110 | OPEN   | layout/paint   | object-fit: SVG viewBox scaling (fill/contain/cover/none/scale-down) ~8% deviation — TEST-70: 8.03% | crates/engine/layout/src/box_tree.rs
 BUG-111 | FIXED 2026-06-08 | paint/shell | lumen-paint/shell не компилировались после мержа A-2 CSS Custom Highlight API: (1) дубликат `emit_text_with_highlights` (stub 3-arg vs новый 11-arg), (2) 71× `DrawText` struct initializer missing `highlight_name: None` (display_list, renderer, shell/*, main.rs), (3) осиротевший `///`-блок в style.rs, (4) collapsible_if в тест | crates/engine/paint/src/display_list.rs + crates/shell/src/*
+BUG-112 | FIXED 2026-06-08 | driver | test_32_list_markers регрессия: P4 добавил 2 `@counter-style` списка по 3 items в 32-list-markers.html → 32 li (было 26), 30 маркеров (было 24). Тест не обновлён. | crates/driver/tests/test_32.rs
 ```
 
 ---
