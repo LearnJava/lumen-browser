@@ -6,12 +6,22 @@
 
 ## In progress
 
-**J-1 | Web Audio API Phase 0**  branch: p2-j1-web-audio
-Next step: создать `crates/js/src/web_audio.rs` + JS-шим `AudioContext`/AudioNode иерархия  `crates/js/src/web_audio.rs:1`
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**J-1 | Web Audio API Phase 0** ✅ 2026-06-08 (merged)
+- `crates/js/src/web_audio.rs` — JS-шим без native bindings
+- `AudioContext`/`OfflineAudioContext` state machine (running/suspended/closed)
+- `AudioNode` база (connect/disconnect); `AudioDestinationNode`, `GainNode`, `OscillatorNode`, `AudioBufferSourceNode`, `BiquadFilterNode`, `AnalyserNode`, `DelayNode`, `DynamicsCompressorNode`, `StereoPannerNode`, `PannerNode`, `ChannelMerger/SplitterNode`, `WaveShaperNode`, `ConvolverNode`, `MediaElementAudioSourceNode`, `AudioWorkletNode` stub
+- `AudioBuffer` (getChannelData/copyToChannel/copyFromChannel); `AudioParam` (setValueAtTime/linearRamp/exponentialRamp/setTargetAtTime/cancel)
+- `AudioListener` с positional AudioParams; `PeriodicWave`
+- `decodeAudioData` → Promise (silent buffer, Phase 0); `webkitAudioContext` alias
+- Phase 0: no DSP, all graph ops in-memory only
+- 13 unit-тестов в web_audio::tests
+- Итого: 1435 тестов lumen-js (+8 vs I-5 baseline), Clippy чист
 
 **I-5 | W3C Scheduler API Level 1** ✅ 2026-06-08 (merged)
 - `crates/js/src/scheduler.rs` — JS-шим + Rust install fn
@@ -429,7 +439,7 @@ Ordered by priority. Сгруппированы по домену.
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| J-1 | **Web Audio API Phase 0** — `AudioContext`/`OfflineAudioContext` state machine (running/suspended/closed/new); `AudioNode` база (connect/disconnect); узлы: `AudioDestinationNode`, `GainNode`, `OscillatorNode` (frequency/detune/type/start/stop), `AudioBufferSourceNode` (buffer/loop/start/stop), `BiquadFilterNode`, `AnalyserNode`, `DelayNode`, `DynamicsCompressorNode`, `StereoPannerNode`, `PannerNode`; `AudioBuffer` (sampleRate/length/duration/numberOfChannels/getChannelData/copyToChannel/copyFromChannel); `AudioParam` (value/automationRate/setValueAtTime/linearRampToValueAtTime/exponentialRampToValueAtTime/setTargetAtTime/cancelScheduledValues); Phase 0: no DSP, all graph ops in-memory, `currentTime` мерцает по `requestAnimationFrame`. 12+ тестов. | L | `lumen-js` |
+| ~~J-1~~ | ~~**Web Audio API Phase 0**~~ — **выполнено** | L | `lumen-js` |
 | J-2 | **WebGPU API Phase 0** — `navigator.gpu.requestAdapter()` → stub `GPUAdapter`; `adapter.requestDevice()` → stub `GPUDevice`; `GPUBuffer`/`GPUTexture`/`GPURenderPipeline`/`GPUCommandEncoder`/`GPURenderPassEncoder` стабы (create* → объект-заглушка, submit/draw → no-op); `GPUCanvasContext.configure()`/`getCurrentTexture()`; Phase 0: no GPU, Phase 1 (future) → wgpu backend. 8+ тестов. | M | `lumen-js` |
 | J-3 | **CSS Houdini Paint Worklet Phase 0** — `CSS.paintWorklet.addModule(url)` → Promise (нет fetch, url сохраняется в реестре); `registerPaint(name, class)` в worklet context; CSS `paint(name)` значение для `background-image` парсируется css-parser → `BackgroundImage::Paint(name)` вариант; paint output = placeholder FillRect в display_list. `// CSS: paint()`. 6+ тестов. | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
 | J-4 | **Background Fetch API stub** — `registration.backgroundFetch.fetch(id, requests, opts)` → Promise<BGFetchRegistration>; `.get(id)` / `.getIds()` → Promise; `BGFetchRegistration` (id/result/failureReason/recordsAvailable/downloaded/downloadTotal/uploaded/uploadTotal/activate/abort/addEventListener). Phase 0: in-memory, no actual fetch. `// _lumen_bg_fetch_*` биндинги для shell Phase 1. 6 тестов. | XS | `lumen-js` |
