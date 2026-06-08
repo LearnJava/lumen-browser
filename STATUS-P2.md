@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+K-3 **Fetch streaming body (ReadableStream)**  branch: p2-k3-fetch-streaming
+Next step: Rust bindings _lumen_fetch_body_length/_lumen_fetch_body_chunk  crates/js/src/dom.rs:1031
 
 ---
 
@@ -18,7 +19,7 @@
 |---|--------|--------|--------|
 | ~~K-1~~ | ~~**WebAssembly Phase 0 stub**~~ — **выполнено** | S | `lumen-js` |
 | ~~K-2~~ | ~~**`<select>` interactive dropdown**~~ — **выполнено** | M | `lumen-shell`, `lumen-layout` |
-| K-3 | **Fetch streaming body (ReadableStream)** | M | `lumen-js`, `lumen-network` |
+| ~~K-3~~ | ~~**Fetch streaming body (ReadableStream)**~~ — **в работе** | M | `lumen-js`, `lumen-network` |
 | K-4 | **`<form>` multipart/form-data encoding** | S | `lumen-js`, `lumen-core` |
 | K-5 | **CSS `local()` system font matching** | S | `lumen-shell`, `lumen-font` |
 
