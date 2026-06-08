@@ -6,8 +6,7 @@
 
 ## In progress
 
-In progress: I-4 CSS @counter-style algorithm stub  branch: p1-i4-counter-style
-Next step: add build_list_marker_text + resolve_counter_value to counters.rs:217
+_(нет)_
 
 ---
 
@@ -20,7 +19,7 @@ Next step: add build_list_marker_text + resolve_counter_value to counters.rs:217
 | ~~I-1~~ | ~~**Web Audio API Phase 1**~~ — **выполнено** | M | `lumen-js` |
 | ~~I-2~~ | ~~**WebXR Device API stub**~~ — **выполнено** | XS | `lumen-js` |
 | ~~I-3~~ | ~~**HTML Form Constraint Validation API**~~ — **выполнено** | S | `lumen-js` |
-| I-4 | **CSS `@counter-style` algorithm stub** — CSS Lists & Counters L3 §7: `CounterStyleDef {system, symbols, prefix, suffix, pad, fallback}` в `layout/src/counter_style.rs`. Системы: cyclic, numeric, alphabetic, symbolic, additive, fixed. `resolve_counter_value(def, n) -> String`. Wire в `build_list_marker_text()`. `// CSS: list-style-type (custom counter-style)` P4 handoff в STATUS-P4.md. 8 тестов. | S | `lumen-layout` |
+| ~~I-4~~ | ~~**CSS `@counter-style` algorithm stub**~~ — **выполнено** | S | `lumen-layout` |
 | I-5 | **ElementInternals + Custom State Pseudo-class** — WHATWG HTML §4.13.2: `element.attachInternals()` → `ElementInternals` (states: CustomStateSet, validity/checkValidity/reportValidity/setValidity, role/ariaLabel/etc.). `CustomStateSet`: `add(state)/has(state)/delete(state)/clear()`. Нативный биндинг `_lumen_element_internals_get_states(nid)`. Phase 0: JS-шим без реальной a11y-интеграции; `:state()` selector P4 handoff. 5 тестов. | XS | `lumen-js` |
 
 ### H — Advanced Web Platform APIs
@@ -58,6 +57,7 @@ Next step: add build_list_marker_text + resolve_counter_value to counters.rs:217
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | I-4: CSS @counter-style algorithm stub | CSS Lists L3 §7: `build_list_marker_text(lst, ordinal, registry) -> String` — канонический агрегатор для маркеров списков; встроенные типы форматируются стандартно, registry консультируется через `format_counter_with_registry`. `resolve_counter_value(def, n, registry) -> String` — публичная обёртка для форматирования по явному `CounterStyleDef`. `lower-greek` добавлен в `format_counter`. `inject_marker` использует `build_list_marker_text` (мёртвый `marker_text` + `to_roman/to_alpha/to_greek` удалены). Комментарий `// CSS: list-style-type (custom counter-style)` в `ListStyleType::parse()`. P4 handoff в STATUS-P4.md: добавить `Custom(name)` вариант + маршрутизацию. lumen-layout: clippy чист, 2406 тестов (+8 vs 2398). |
 | 2026-06-08 | I-3: HTML Form Constraint Validation API | WHATWG HTML §4.10.21: ValidityState с 11 флагами (valueMissing/typeMismatch/patternMismatch/tooLong/tooShort/rangeUnderflow/rangeOverflow/stepMismatch/badInput/customError/valid). element.checkValidity() → fires 'invalid' event, reportValidity(), setCustomValidity(msg), validationMessage, willValidate. HTMLFormElement.checkValidity/reportValidity итерирует controls. Mixin применён к Input/Textarea/Select/Button. Новый модуль `crates/js/src/form_validation.rs`. lumen-js: clippy чист, 6 unit-тестов (+6 vs 1473). |
 | 2026-06-08 | I-2: WebXR Device API stub | W3C WebXR Device API §5 Phase 0: `navigator.xr.isSessionSupported(mode)` → Promise<false>, `navigator.xr.requestSession(mode)` → reject NotSupportedError. Классы XRSession, XRFrame, XRReferenceSpace, XRView экспортированы на window. `navigator.xr.addEventListener('devicechange')` через XRSystem extends EventTarget. Новый модуль `crates/js/src/webxr.rs`. lumen-js: clippy чист, 4 unit-теста. |
 | 2026-06-08 | I-1: Web Audio API Phase 1 | W3C Web Audio Level 2: полный граф AudioContext. AudioParam с планировщиком (setValueAtTime/linearRamp/exponentialRamp/setTargetAtTime/cancelScheduled). AudioNode base с connect/disconnect. AudioDestinationNode (ctx.destination), AudioListener (ctx.listener), AudioWorklet stub (ctx.audioWorklet.addModule() → Promise.resolve()), AudioWorkletNode stub. Все стандартные узлы: GainNode, BiquadFilterNode, OscillatorNode, AudioBufferSourceNode, AnalyserNode, DynamicsCompressorNode, DelayNode, ConvolverNode, PannerNode (setPosition/setOrientation), StereoPannerNode, WaveShaperNode, IIRFilterNode, ChannelSplitterNode, ChannelMergerNode, MediaElementAudioSourceNode, MediaStreamAudioSourceNode, MediaStreamAudioDestinationNode, PeriodicWave. OfflineAudioContext принимает оба формата конструктора. Все 22 класса экспортированы на globalThis. lumen-js: clippy чист, 29 unit-тестов (+18 vs 11). |
