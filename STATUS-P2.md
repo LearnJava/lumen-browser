@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**J-4 | Background Fetch API stub**  branch: p2-j4-bg-fetch
+Next step: clippy + tests pass → commit → merge  crates/js/src/background_fetch.rs
 
 ---
 
