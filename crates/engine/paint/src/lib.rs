@@ -75,8 +75,8 @@ pub use webgl::SoftwareWebGl;
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
 
-use lumen_font::{Cmap, FontError, Hmtx};
-use lumen_layout::TextMeasurer;
+use lumen_font::{Cmap, FontError, Hmtx, Hvar, VariationAxis};
+use lumen_layout::{FontVariationSetting, TextMeasurer};
 
 /// Реализация [`TextMeasurer`] на основе TTF-данных шрифта.
 ///
@@ -125,6 +125,53 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
 
 use std::collections::HashMap;
 
+/// Cached variable-font data for HVAR advance width variation.
+///
+/// Extracted at `register_family` time and reused for every `char_width_varied`
+/// call. Parsing is done once; hot-path only normalises CSS axis values and
+/// evaluates pre-parsed `ItemVariationStore`.
+struct OwnedVariableFont {
+    /// fvar axes in order, used to map CSS design-space values to normalized
+    /// `[-1.0, 1.0]` coords for [`Hvar::advance_width_index`].
+    axes: Vec<VariationAxis>,
+    /// Parsed HVAR table. `None` when the font has fvar but no HVAR (rare).
+    hvar: Option<Hvar>,
+}
+
+impl OwnedVariableFont {
+    /// Normalizes a single axis value from CSS design space to `[-1.0, 1.0]`.
+    /// Follows OpenType spec §2.4 (linear normalization; ignores avar for now).
+    fn normalize(axis: &VariationAxis, value: f32) -> f32 {
+        let v = value.clamp(axis.min, axis.max);
+        if v >= axis.default {
+            let range = axis.max - axis.default;
+            if range > 0.0 { (v - axis.default) / range } else { 0.0 }
+        } else {
+            let range = axis.default - axis.min;
+            if range > 0.0 { -(axis.default - v) / range } else { 0.0 }
+        }
+    }
+
+    /// Returns HVAR-adjusted advance width for `glyph_id` given CSS `axes`.
+    /// Falls back to `base_aw` when HVAR is absent or delta lookup fails.
+    fn adjusted_advance(&self, glyph_id: u16, base_aw: u16, css_axes: &[FontVariationSetting]) -> u16 {
+        let hvar = match &self.hvar {
+            Some(h) => h,
+            None => return base_aw,
+        };
+        // Build normalized coords in fvar axis order.
+        let coords: Vec<f32> = self.axes.iter().map(|axis| {
+            let val = css_axes.iter()
+                .find(|s| s.tag == axis.tag)
+                .map_or(axis.default, |s| s.value);
+            Self::normalize(axis, val)
+        }).collect();
+        let idx = hvar.advance_width_index(glyph_id);
+        let delta = hvar.store.evaluate(idx.outer, idx.inner, &coords).unwrap_or(0.0);
+        (base_aw as f32 + delta).round().clamp(0.0, f32::from(u16::MAX)) as u16
+    }
+}
+
 /// Owned метрики одного шрифта, извлечённые при регистрации.
 ///
 /// Хранит `cmap_data` (байты cmap-таблицы) и `advance_widths` (из hmtx),
@@ -138,6 +185,8 @@ struct OwnedFontMetrics {
     /// `wdth` variation axis `(min, max)`, or `None` for non-variable fonts.
     /// Used by [`MultiFontMeasurer::resolve_font_stretch`] (CSS Fonts L4 §5.2).
     wdth_axis: Option<(f32, f32)>,
+    /// Variable-font data for HVAR advance adjustment. `None` for static fonts.
+    var_data: Option<OwnedVariableFont>,
 }
 
 impl OwnedFontMetrics {
@@ -153,15 +202,20 @@ impl OwnedFontMetrics {
         let num_glyphs = maxp.num_glyphs;
         let advance_widths: Vec<u16> =
             (0..num_glyphs).map(|id| hmtx.advance_width(id).unwrap_or(0)).collect();
-        let wdth_axis = font
-            .fvar()
-            .ok()
-            .and_then(|fvar| fvar.axis(b"wdth").map(|a| (a.min, a.max)));
+        let fvar = font.fvar().ok();
+        let wdth_axis = fvar.as_ref()
+            .and_then(|f| f.axis(b"wdth").map(|a| (a.min, a.max)));
+        // Extract variable-font data when fvar is present.
+        let var_data = fvar.map(|fvar| OwnedVariableFont {
+            axes: fvar.axes.clone(),
+            hvar: font.hvar().ok(),
+        });
         Ok(Self {
             cmap_data,
             advance_widths,
             units_per_em: head.units_per_em,
             wdth_axis,
+            var_data,
         })
     }
 
@@ -174,6 +228,22 @@ impl OwnedFontMetrics {
             return None; // .notdef — глиф не покрыт этим шрифтом
         }
         let aw = *self.advance_widths.get(glyph_id as usize)?;
+        Some(aw as f32 * font_size_px / self.units_per_em as f32)
+    }
+
+    /// Like [`try_char_width`] but applies HVAR advance width deltas for
+    /// variable fonts when `css_axes` is non-empty (CSS Fonts L4 §6.3).
+    fn try_char_width_varied(&self, ch: char, font_size_px: f32, css_axes: &[FontVariationSetting]) -> Option<f32> {
+        let cmap = Cmap::parse(&self.cmap_data).ok()?;
+        let glyph_id = cmap.glyph_index(ch as u32)?;
+        if glyph_id == 0 {
+            return None;
+        }
+        let base_aw = *self.advance_widths.get(glyph_id as usize)?;
+        let aw = match &self.var_data {
+            Some(var) if !css_axes.is_empty() => var.adjusted_advance(glyph_id, base_aw, css_axes),
+            _ => base_aw,
+        };
         Some(aw as f32 * font_size_px / self.units_per_em as f32)
     }
 }
@@ -249,6 +319,7 @@ impl MultiFontMeasurer {
             advance_widths: vec![],
             units_per_em: 1000,
             wdth_axis: Some((wdth_min, wdth_max)),
+            var_data: None,
         });
     }
 }
@@ -262,6 +333,23 @@ impl TextMeasurer for MultiFontMeasurer {
         for family in families {
             if let Some(metrics) = self.faces.get(&family.to_ascii_lowercase())
                 && let Some(w) = metrics.try_char_width(ch, font_size_px)
+            {
+                return w;
+            }
+        }
+        self.fallback.char_width(ch, font_size_px)
+    }
+
+    fn char_width_varied(
+        &self,
+        ch: char,
+        font_size_px: f32,
+        axes: &[FontVariationSetting],
+        families: &[String],
+    ) -> f32 {
+        for family in families {
+            if let Some(metrics) = self.faces.get(&family.to_ascii_lowercase())
+                && let Some(w) = metrics.try_char_width_varied(ch, font_size_px, axes)
             {
                 return w;
             }
@@ -400,5 +488,47 @@ mod multi_font_tests {
             Some(150.0),
             "значение выше max должно зажиматься к max"
         );
+    }
+
+    // ── char_width_varied (CSS Fonts L4 §6.3) ───────────────────────────────
+
+    #[test]
+    fn char_width_varied_empty_axes_matches_char_width_with_families() {
+        // Empty axes → same result as char_width_with_families (default impl).
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family("inter", INTER.to_vec());
+        let families = vec!["inter".to_string()];
+        let w_normal = m.char_width_with_families('A', 16.0, &families);
+        let w_varied = m.char_width_varied('A', 16.0, &[], &families);
+        assert!((w_normal - w_varied).abs() < 0.01,
+            "пустые axes должны давать тот же результат: {w_normal} vs {w_varied}");
+    }
+
+    #[test]
+    fn char_width_varied_static_font_ignores_axes() {
+        // Inter is a static font (no fvar). Variation axes should be ignored.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family("inter", INTER.to_vec());
+        let families = vec!["inter".to_string()];
+        let axes = vec![lumen_layout::FontVariationSetting { tag: *b"wght", value: 700.0 }];
+        let w_normal = m.char_width_with_families('B', 16.0, &families);
+        let w_varied = m.char_width_varied('B', 16.0, &axes, &families);
+        // Inter has no HVAR — delta is zero, so widths must be equal.
+        assert!((w_normal - w_varied).abs() < 0.01,
+            "статический шрифт без HVAR: axes не влияют на ширину");
+    }
+
+    #[test]
+    fn char_width_varied_unknown_family_falls_back_to_inter() {
+        let font = inter_font();
+        let m = MultiFontMeasurer::new(&font).unwrap();
+        let families = vec!["nonexistent-vf".to_string()];
+        let axes = vec![lumen_layout::FontVariationSetting { tag: *b"wght", value: 900.0 }];
+        let w = m.char_width_varied('C', 16.0, &axes, &families);
+        let w_fallback = m.char_width('C', 16.0);
+        assert!((w - w_fallback).abs() < 0.01,
+            "неизвестная семья → fallback Inter: {w} vs {w_fallback}");
     }
 }

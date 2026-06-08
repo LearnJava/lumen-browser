@@ -5981,8 +5981,6 @@ fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
 
 /// Measures text width (letter_spacing applied between each character).
 /// `tab_size` is used for `\t` characters; pass 0.0 when text contains no tabs.
-// CSS: font-variation-settings — P4 добавит `variation_axes` параметр когда
-// TextMeasurer получит char_width_varied; сейчас используется base advance width.
 pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size: f32, m: &dyn TextMeasurer) -> f32 {
     if text.is_empty() {
         return 0.0;
@@ -6020,6 +6018,37 @@ pub fn measure_text_w_families(
                 tab_size
             } else {
                 m.char_width_with_families(c, font_size, families)
+            };
+            cw + letter_spacing
+        })
+        .sum();
+    total - letter_spacing
+}
+
+/// Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`.
+///
+/// CSS Fonts L4 §6.3 — для variable fonts применяет HVAR advance width deltas.
+/// Для статических шрифтов (без fvar/HVAR) эквивалентен [`measure_text_w_families`].
+/// Используется в line wrapping когда `style.font_variation_settings` непустой.
+pub fn measure_text_w_varied(
+    text: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    tab_size: f32,
+    families: &[String],
+    axes: &[crate::style::FontVariationSetting],
+    m: &dyn TextMeasurer,
+) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = text
+        .chars()
+        .map(|c| {
+            let cw = if c == '\t' {
+                tab_size
+            } else {
+                m.char_width_varied(c, font_size, axes, families)
             };
             cw + letter_spacing
         })
@@ -6300,7 +6329,7 @@ fn wrap_inline_run(
             let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
             current_x += seg.pre_space;
             let frag_x = current_x;
-            let frag_w = measure_text_w_families(&seg.text, em, ls, tab_size, &seg.style.font_family, m);
+            let frag_w = measure_text_w_varied(&seg.text, em, ls, tab_size, &seg.style.font_family, &seg.style.font_variation_settings, m);
             current_line.push(InlineFrag {
                 x: frag_x,
                 y_offset: 0.0,
@@ -6390,7 +6419,7 @@ fn wrap_inline_run(
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
-            let word_w = measure_text_w_families(&display_word, style.font_size, ls, 0.0, &style.font_family, m);
+            let word_w = measure_text_w_varied(&display_word, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
             let gap = if current_line.is_empty() { 0.0 } else { inter_word };
 
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
@@ -6415,7 +6444,7 @@ fn wrap_inline_run(
 
                 if let Some((pfx, sfx)) = hyph_result {
                     // Emit prefix (with trailing '-') to current line, then wrap.
-                    let pfx_w = measure_text_w_families(&pfx, style.font_size, ls, 0.0, &style.font_family, m);
+                    let pfx_w = measure_text_w_varied(&pfx, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                     current_x += gap + pre;
                     current_line.push(InlineFrag {
                         x: current_x,
@@ -6434,7 +6463,7 @@ fn wrap_inline_run(
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
                     // Emit suffix as first fragment on new line.
-                    let sfx_w = measure_text_w_families(&sfx, style.font_size, ls, 0.0, &style.font_family, m);
+                    let sfx_w = measure_text_w_varied(&sfx, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                     current_line.push(InlineFrag {
                         x: 0.0,
                         y_offset: 0.0,
@@ -6466,7 +6495,7 @@ fn wrap_inline_run(
                         let head = &rest[..split];
                         let tail = &rest[split..];
                         if !head.is_empty() {
-                            let head_w = measure_text_w_families(head, style.font_size, ls, 0.0, &style.font_family, m);
+                            let head_w = measure_text_w_varied(head, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                             current_line.push(InlineFrag {
                                 x: current_x,
                                 y_offset: 0.0,
@@ -6516,7 +6545,7 @@ fn wrap_inline_run(
                     let head = &rest[..split];
                     let tail = &rest[split..];
                     if !head.is_empty() {
-                        let head_w = measure_text_w_families(head, style.font_size, ls, 0.0, &style.font_family, m);
+                        let head_w = measure_text_w_varied(head, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                         current_line.push(InlineFrag {
                             x: current_x,
                             y_offset: 0.0,
@@ -9538,6 +9567,47 @@ mod tests {
         let b = find_box(&root).expect("progress box");
         assert!((b.rect.width - 302.0).abs() < 1.0, "border-box width should be 302px, got {}", b.rect.width);
         assert!((b.rect.height - 18.0).abs() < 1.0, "border-box height should be 18px, got {}", b.rect.height);
+    }
+
+    // ── measure_text_w_varied (CSS Fonts L4 §6.3) ───────────────────────────
+
+    struct Fixed8Varied;
+    impl super::TextMeasurer for Fixed8Varied {
+        fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    }
+
+    #[test]
+    fn measure_text_w_varied_empty_axes_equals_families() {
+        let w_fam = super::measure_text_w_families("hello", 16.0, 0.0, 0.0, &[], &Fixed8Varied);
+        let w_var = super::measure_text_w_varied("hello", 16.0, 0.0, 0.0, &[], &[], &Fixed8Varied);
+        assert_eq!(w_fam, w_var);
+    }
+
+    #[test]
+    fn measure_text_w_varied_empty_text_is_zero() {
+        let w = super::measure_text_w_varied("", 16.0, 0.0, 0.0, &[], &[], &Fixed8Varied);
+        assert_eq!(w, 0.0);
+    }
+
+    #[test]
+    fn measure_text_w_varied_axes_use_char_width_varied() {
+        struct VariedMeasurer;
+        impl super::TextMeasurer for VariedMeasurer {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+            fn char_width_varied(
+                &self,
+                _ch: char,
+                _font_size_px: f32,
+                axes: &[crate::style::FontVariationSetting],
+                _families: &[String],
+            ) -> f32 {
+                if axes.is_empty() { 8.0 } else { 12.0 }
+            }
+        }
+        let axes = vec![crate::style::FontVariationSetting { tag: *b"wght", value: 700.0 }];
+        // 3 chars × 12px − 0 letter-spacing = 36px
+        let w = super::measure_text_w_varied("abc", 16.0, 0.0, 0.0, &[], &axes, &VariedMeasurer);
+        assert_eq!(w, 36.0, "non-empty axes должны вызывать char_width_varied");
     }
 
 }
