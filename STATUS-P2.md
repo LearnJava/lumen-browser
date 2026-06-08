@@ -6,8 +6,7 @@
 
 ## In progress
 
-**L-1 | `<details>`/`<summary>` interactive collapse/expand**  branch: p2-l1-details
-Next step: add `DetailsClick` action in `handle_click_at` → toggle `open` attr → relayout  `crates/shell/src/main.rs`
+(none)
 
 ---
 
@@ -17,7 +16,7 @@ Next step: add `DetailsClick` action in `handle_click_at` → toggle `open` attr
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| **L-1** | **`<details>`/`<summary>` interactive collapse/expand** — *в работе* | S | `lumen-shell`, `lumen-js` |
+| ~~L-1~~ | ~~**`<details>`/`<summary>` interactive collapse/expand**~~ — **выполнено** | S | `lumen-shell`, `lumen-js` |
 | L-2 | `<dialog>` modal overlay rendering + `::backdrop` | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
 | L-3 | `<input type="range">` slider visual rendering + drag | S | `lumen-shell`, `lumen-layout`, `lumen-paint` |
 | L-4 | `<meter>`/`<progress>` visual fill rendering | S | `lumen-layout`, `lumen-paint` |
@@ -36,6 +35,15 @@ Next step: add `DetailsClick` action in `handle_click_at` → toggle `open` attr
 ---
 
 ## Current / Recently Merged
+
+**L-1 | `<details>`/`<summary>` interactive collapse/expand** ✅ 2026-06-08 (merged)
+- `FormClickAction::ToggleDetails(NodeId)` — новый вариант в forms.rs для клика на `<summary>`
+- `find_parent_details(doc, node)` — ходит вверх по DOM, ищёт ближайший `<details>`
+- `toggle_details_open(doc, id)` — добавляет/убирает атрибут `open` у `<details>`
+- `classify_click("summary")` → `ToggleDetails(details_id)` — HTML5 §4.11.1
+- `handle_click_at`: `ToggleDetails` → toggle DOM + dispatch JS `toggle` event + relayout
+- 5 тестов: classify/toggle-on/toggle-off/non-summary/no-parent
+- Итого lumen-shell: 1092 тестов (+12 vs K-5), Clippy чист
 
 **K-5 | CSS `local()` system font matching** ✅ 2026-06-08 (merged)
 - `FontRegistry::resolve_local_bytes(name, weight, style)` — ищет в SystemFontIndex по family-имени (CSS Fonts L4 §4.3, case-insensitive), читает байты с диска
