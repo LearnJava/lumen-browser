@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+N-1: 8C: Native input injection  branch: p1-native-input
+Next step: создать native.rs + KeyDown/KeyUp в InputCommand  crates/shell/src/input/
 
 ---
 
