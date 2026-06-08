@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`attr()` with type (CSS Values L4) — branch: p4-attr-typed
-Next step: add expand_attr_val() in style.rs, wire into compute_style/apply_container_rules/compute_pseudo_element_style loops
+_(none)_
 
 ## Workflow
 
@@ -274,6 +273,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-08 | `attr()` typed | CSS Values L4 §7.7; find_attr_open() + expand_attr_val() in style.rs; unit-suffix/string/color types; fallback; 4 unit tests + graphic test 67 |
 | 2026-06-08 | `::selection` | CSS Pseudo-elements L4 §5.6; SelectionHighlight struct; build_display_list_with_selection(); frag_selection_highlight() byte-proportional; 4 unit tests in style.rs; graphic test 66 |
 | 2026-06-08 | `text-align-last` | CSS Text L3 §7.2; align_lines wired with 5th arg; 4 unit tests in box_tree.rs |
 | 2026-06-08 | `color-mix()` | CSS Color L5 §10.2; parse_color_mix() + parse_color_with_pct() in style.rs; 3 unit tests |
