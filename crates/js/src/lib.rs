@@ -64,6 +64,7 @@ pub mod permissions_policy;
 pub mod web_codecs;
 pub mod ua_client_hints;
 pub mod media_capabilities;
+pub mod web_locks;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -782,6 +783,13 @@ impl QuickJsRuntime {
             // return supported=true, smooth=true, powerEfficient=false.
             if let Err(e) = media_capabilities::install_media_capabilities_bindings(&ctx) {
                 eprintln!("Media Capabilities API init failed: {}", e);
+            }
+
+            // Install Web Locks API (W3C Web Locks Level 1) — after DOM/navigator.
+            // Phase 0: in-memory per-context FIFO lock queue; supports exclusive/shared modes,
+            // ifAvailable, steal, and AbortSignal. navigator.locks → LockManager.
+            if let Err(e) = web_locks::install_web_locks_bindings(&ctx) {
+                eprintln!("Web Locks API init failed: {}", e);
             }
 
             Ok(())
