@@ -3230,21 +3230,77 @@ fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
 /// P2 note: this renders a simple filled rectangle as indicator; a full
 /// vector checkmark / circle belongs to the renderer GPU primitive set.
 fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
-    let FormControlKind::Input { input_type, checked } = kind else { return };
-    if !checked { return; }
-    let inset = match input_type {
-        InputType::Checkbox => (b.rect.width * 0.2).clamp(2.0, 4.0),
-        InputType::Radio    => (b.rect.width * 0.27).clamp(2.0, 4.0),
-        _ => return,
-    };
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(
-            b.rect.x + inset,
-            b.rect.y + inset,
-            (b.rect.width  - inset * 2.0).max(1.0),
-            (b.rect.height - inset * 2.0).max(1.0),
-        ),
-        color: Color { r: 21, g: 90, b: 192, a: 255 },
+    match kind {
+        FormControlKind::Input { input_type, checked } => {
+            if !checked { return; }
+            let inset = match input_type {
+                InputType::Checkbox => (b.rect.width * 0.2).clamp(2.0, 4.0),
+                InputType::Radio    => (b.rect.width * 0.27).clamp(2.0, 4.0),
+                _ => return,
+            };
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(
+                    b.rect.x + inset,
+                    b.rect.y + inset,
+                    (b.rect.width  - inset * 2.0).max(1.0),
+                    (b.rect.height - inset * 2.0).max(1.0),
+                ),
+                color: Color { r: 21, g: 90, b: 192, a: 255 },
+            });
+        }
+        FormControlKind::Select { selected_text } => {
+            emit_select_indicator(b, selected_text, out);
+        }
+        FormControlKind::Button | FormControlKind::Textarea => {}
+    }
+}
+
+/// Draw the selected option label and a dropdown arrow (▼) inside a `<select>` box.
+fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+    let fg = s.color;
+    let font_size = s.font_size.clamp(10.0, 14.0);
+    let pad = 4.0;
+    // Arrow column width (enough for "▼" glyph).
+    let arrow_w = font_size + pad * 2.0;
+    let text_w = (b.rect.width - arrow_w - pad * 2.0).max(1.0);
+
+    // Selected label — clipped to available width.
+    if !selected_text.is_empty() {
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(b.rect.x + pad, b.rect.y + pad, text_w, b.rect.height - pad * 2.0),
+            text: selected_text.to_owned(),
+            font_size,
+            color: fg,
+            font_family: s.font_family.clone(),
+            font_weight: s.font_weight,
+            font_style: s.font_style,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+        });
+    }
+
+    // Separator line before the arrow.
+    let sep_x = b.rect.x + b.rect.width - arrow_w;
+    out.push(DisplayCommand::DrawBorder {
+        rect: Rect::new(sep_x, b.rect.y, 1.0, b.rect.height),
+        widths: [0.0, 0.0, 0.0, 1.0],
+        colors: [fg; 4],
+        styles: [lumen_layout::BorderStyle::Solid; 4],
+        radii: crate::CornerRadii::default(),
+    });
+
+    // Dropdown arrow "▼".
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
+        text: "\u{25BC}".to_owned(),
+        font_size: font_size * 0.75,
+        color: fg,
+        font_family: s.font_family.clone(),
+        font_weight: s.font_weight,
+        font_style: s.font_style,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
     });
 }
 

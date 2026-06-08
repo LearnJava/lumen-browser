@@ -229,7 +229,7 @@ fn collect_clickable_rec(
             let ck = match kind {
                 FormControlKind::Button => ClickableKind::Button,
                 FormControlKind::Input { .. }
-                | FormControlKind::Select
+                | FormControlKind::Select { .. }
                 | FormControlKind::Textarea => ClickableKind::Input,
             };
             out.push(ClickableElement {
