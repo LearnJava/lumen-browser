@@ -15603,10 +15603,11 @@ fn parse_hex_color(s: &str) -> Option<Color> {
 ///   - hsl: hue в градусах (число или `<n>deg`), saturation и lightness в %;
 ///   - alpha (4-й компонент): float 0..1 или процент 0–100%. По умолчанию 1.
 fn parse_function_color(s: &str) -> Option<Color> {
-    // CSS: color-mix() — P4 task: detect "color-mix(in <space>, ...)" here,
-    // call `lumen_layout::color_mix::mix_colors(space, c1, w1, c2, w2)`, return Color.
-    // Algorithm stub: crates/engine/layout/src/color_mix.rs.
     let lower = s.to_ascii_lowercase();
+    // CSS Color L5 §10.2 color-mix().
+    if lower.starts_with("color-mix(") && s.ends_with(')') {
+        return parse_color_mix(&s["color-mix(".len()..s.len() - 1]);
+    }
     let (kind, body) = if let Some(b) = lower.strip_prefix("rgba(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Rgb, b)
     } else if let Some(b) = lower.strip_prefix("rgb(").and_then(|t| t.strip_suffix(')')) {
@@ -15856,6 +15857,64 @@ fn oklch_to_srgb(l: f32, c: f32, h_deg: f32) -> (u8, u8, u8) {
         clamp_byte(v * 255.0)
     }
     (encode(lr), encode(lg), encode(lb))
+}
+
+/// CSS Color L5 §10.2 — parse `color-mix(in <space>, <c1> [pct]?, <c2> [pct]?)`
+/// from the inner body (without outer `color-mix(` and `)`).
+/// Returns `None` on any parse error; invalid inputs are silently ignored per spec.
+fn parse_color_mix(body: &str) -> Option<Color> {
+    let parts = split_top_level_commas(body);
+    if parts.len() != 3 {
+        return None;
+    }
+    // Part 0: "in <space>" — case-insensitive per CSS Values §3.
+    let part0 = parts[0].trim().to_ascii_lowercase();
+    let space_str = part0.strip_prefix("in ")?.trim();
+    let space = crate::color_mix::MixColorSpace::from_css(space_str)?;
+
+    let (c1, w1_raw) = parse_color_with_pct(parts[1].trim())?;
+    let (c2, w2_raw) = parse_color_with_pct(parts[2].trim())?;
+
+    // Normalize weights: CSS Color L5 §10.2 §3 weight normalization.
+    let (w1, w2) = match (w1_raw, w2_raw) {
+        (None, None) => (0.5, 0.5),
+        (Some(w), None) => (w, 1.0 - w),
+        (None, Some(w)) => (1.0 - w, w),
+        (Some(w1), Some(w2)) => (w1, w2),
+    };
+
+    let to_f = |c: Color| -> [f32; 4] {
+        [
+            c.r as f32 / 255.0,
+            c.g as f32 / 255.0,
+            c.b as f32 / 255.0,
+            c.a as f32 / 255.0,
+        ]
+    };
+    let out = crate::color_mix::mix_colors(space, to_f(c1), w1, to_f(c2), w2);
+    Some(Color {
+        r: (out[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+        g: (out[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+        b: (out[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+        a: (out[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+    })
+}
+
+/// Parse `"<color> [N%]?"` → `(Color, Option<fraction>)`.
+/// Fraction = percentage / 100. Returns `None` only when color itself is invalid.
+fn parse_color_with_pct(s: &str) -> Option<(Color, Option<f32>)> {
+    // Check if the last whitespace-separated token looks like "N%".
+    if let Some(sp_pos) = s.rfind(char::is_whitespace) {
+        let last = s[sp_pos + 1..].trim();
+        if let Some(digits) = last.strip_suffix('%')
+            && let Ok(v) = digits.parse::<f32>()
+        {
+            let color_str = s[..sp_pos].trim();
+            return Some((parse_color(color_str)?, Some(v / 100.0)));
+        }
+    }
+    // No percentage suffix; entire string is the color.
+    Some((parse_color(s)?, None))
 }
 
 /// Разбивает тело функции по запятой или whitespace (CSS4 разрешает оба),
@@ -23926,6 +23985,31 @@ mod tests {
         // `repeat(auto-fill, fit-content(200px))` should parse
         let parsed = GridTrackSize::parse_track_list("repeat(auto-fill, fit-content(200px))", false);
         assert!(!parsed.is_empty(), "auto-fill with fit-content should parse");
+    }
+
+    #[test]
+    fn color_mix_srgb_equal_weights() {
+        // color-mix(in srgb, red, blue) → 50% blend → rgb(128, 0, 128)
+        let c = parse_color("color-mix(in srgb, red, blue)").expect("should parse");
+        assert!(c.r >= 127 && c.r <= 128, "r={}", c.r);
+        assert_eq!(c.g, 0, "g");
+        assert!(c.b >= 127 && c.b <= 128, "b={}", c.b);
+    }
+
+    #[test]
+    fn color_mix_with_percentages() {
+        // color-mix(in srgb, red 100%, blue 0%) → pure red
+        let c = parse_color("color-mix(in srgb, red 100%, blue 0%)").expect("should parse");
+        assert_eq!(c.r, 255);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn color_mix_invalid_returns_none() {
+        // Missing "in" keyword → None
+        assert!(parse_color("color-mix(srgb, red, blue)").is_none());
+        // Only 2 comma-separated parts → None
+        assert!(parse_color("color-mix(in srgb, red)").is_none());
     }
 
 }
