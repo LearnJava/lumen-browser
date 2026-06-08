@@ -346,6 +346,7 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
                 font_style: FontStyle::Italic,
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
+                highlight_name: None,
             });
         }
 
@@ -363,6 +364,7 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
 
         // Tab title — truncated to fit between left edge and close button.
@@ -380,6 +382,7 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 
@@ -429,6 +432,7 @@ pub fn build_tab_tooltip(
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         },
     ])
 }

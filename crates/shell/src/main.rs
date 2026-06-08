@@ -11202,6 +11202,7 @@ fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
             font_style: FontStyle::Normal,
             font_variation_axes: vec![],
             tab_size: 0.0,
+            highlight_name: None,
         },
     ]
 }

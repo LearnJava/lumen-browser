@@ -276,6 +276,7 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Shield icon + status.
@@ -291,6 +292,7 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(px + 30.0, py + 8.0, 100.0, FONT_SZ * 1.3),
@@ -302,6 +304,7 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Domain row.
@@ -320,6 +323,7 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Blocked-count row.
@@ -338,6 +342,7 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Toggle button (bottom strip).
@@ -368,6 +373,7 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     out

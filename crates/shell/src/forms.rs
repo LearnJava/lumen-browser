@@ -463,6 +463,7 @@ pub fn build_validation_tooltip(
         font_style: FontStyle::Normal,
         font_variation_axes: vec![],
         tab_size: 0.0,
+        highlight_name: None,
     });
     out
 }
@@ -849,6 +850,7 @@ pub fn build_select_dropdown(
             font_style: FontStyle::Normal,
             font_variation_axes: vec![],
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 

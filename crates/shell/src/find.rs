@@ -407,6 +407,7 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     let label = "Найти:";
@@ -421,6 +422,7 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     let input_x = x + 8.0 + regex_label_w + 4.0 + label_w + 8.0;
@@ -441,6 +443,7 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     let status = if state.query().is_empty() {
@@ -463,6 +466,7 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 }
 
@@ -489,6 +493,7 @@ mod tests {
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         }
     }
 

@@ -320,6 +320,7 @@ fn txt(text: impl Into<String>, x: f32, y: f32, w: f32, font_size: f32,
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     }
 }
 
