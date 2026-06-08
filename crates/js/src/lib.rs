@@ -66,6 +66,7 @@ pub mod ua_client_hints;
 pub mod media_capabilities;
 pub mod virtual_keyboard;
 pub mod web_locks;
+pub mod reporting_api;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -797,6 +798,11 @@ impl QuickJsRuntime {
             // ifAvailable, steal, and AbortSignal. navigator.locks → LockManager.
             if let Err(e) = web_locks::install_web_locks_bindings(&ctx) {
                 eprintln!("Web Locks API init failed: {}", e);
+            }
+
+            // Install Reporting API (W3C Reporting API L1) — observer + _lumen_deliver_report.
+            if let Err(e) = reporting_api::install_reporting_api_bindings(&ctx) {
+                eprintln!("Reporting API init failed: {}", e);
             }
 
             Ok(())
