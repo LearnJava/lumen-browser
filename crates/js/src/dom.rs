@@ -1036,6 +1036,34 @@ fn install_primitives(
                 .map_or_else(Vec::new, |r| r.body.clone())
         });
 
+        // _lumen_fetch_body_length() → u32
+        // Returns the byte length of the most recent cached response body.
+        // Used by the pull()-based ReadableStream in Response.body to avoid
+        // copying the full body into JS memory at construction time.
+        let c = Arc::clone(&cache);
+        reg!("_lumen_fetch_body_length", move || -> u32 {
+            c.lock()
+                .unwrap()
+                .as_ref()
+                .map_or(0, |r| r.body.len() as u32)
+        });
+
+        // _lumen_fetch_body_chunk(offset: u32, size: u32) → Vec<u8>
+        // Returns bytes [offset .. offset+size] of the cached response body.
+        // Called repeatedly by Response.body.pull() to stream large responses
+        // without loading the entire body into JS at once (Fetch Standard §2.2).
+        let c = Arc::clone(&cache);
+        reg!(
+            "_lumen_fetch_body_chunk",
+            move |offset: u32, size: u32| -> Vec<u8> {
+                let guard = c.lock().unwrap();
+                let body = guard.as_ref().map_or(&[] as &[u8], |r| r.body.as_slice());
+                let start = (offset as usize).min(body.len());
+                let end = (start + size as usize).min(body.len());
+                body[start..end].to_vec()
+            }
+        );
+
         // _lumen_check_sri_integrity(integrity) → bool
         // Verifies the cached response body against the SRI `integrity` string
         // (W3C SRI §3.3.5). Must be called after _lumen_fetch_sync / _lumen_fetch_sync_with_body
@@ -5224,14 +5252,16 @@ function ReadableStream(source, strategy) {
     this._rs_error = undefined;
     this._rs_reader = null;
     this._rs_cancel_fn = typeof source.cancel === 'function' ? source.cancel : null;
+    // Store pull fn for demand-driven invocation (Streams §3.6.3).
+    this._rs_pull_fn = typeof source.pull === 'function' ? source.pull : null;
     this._rs_ctrl = new ReadableStreamDefaultController(this);
     if (typeof source.start === 'function') {
         try { source.start(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
     }
-    // Simplified pull: call once after start if queue empty and stream still readable.
-    if (typeof source.pull === 'function' && this._rs_state === 'readable'
+    // Eagerly fill: call pull once after start if queue empty and stream still readable.
+    if (this._rs_pull_fn && this._rs_state === 'readable'
             && this._rs_ctrl._queue.length === 0 && !this._rs_ctrl._closeRequested) {
-        try { source.pull(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
+        try { this._rs_pull_fn(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
     }
 }
 Object.defineProperty(ReadableStream.prototype, 'locked', {
@@ -5321,11 +5351,18 @@ ReadableStreamDefaultReader.prototype.read = function() {
     }
     if (stream._rs_state === 'closed') return Promise.resolve({ value: undefined, done: true });
     var self = this;
-    return new Promise(function(resolve, reject) {
+    var p = new Promise(function(resolve, reject) {
         self._readRequests.push(function(result, err) {
             if (err !== undefined) reject(err); else resolve(result);
         });
     });
+    // Demand-driven pull: when queue is empty and a read is pending, ask source for more data.
+    // pull() either enqueues a chunk (resolving the pending request via enqueue()) or
+    // calls c.close() (resolving via _rs_do_close()). Mirrors Streams spec ReadableStreamFill.
+    if (stream._rs_pull_fn && stream._rs_state === 'readable' && !ctrl._closeRequested) {
+        try { stream._rs_pull_fn(ctrl); } catch(e) { ctrl.error(e); }
+    }
+    return p;
 };
 ReadableStreamDefaultReader.prototype.cancel = function(reason) {
     var stream = this._stream;
@@ -5623,6 +5660,30 @@ Headers.prototype.entries = function() { return this._map.map(function(p) { retu
 Headers.prototype.keys   = function() { return this._map.map(function(p) { return p[0]; }); };
 Headers.prototype.values = function() { return this._map.map(function(p) { return p[1]; }); };
 
+// _rs_make_body_stream(bodyBytes, respRef) — builds a pull()-based ReadableStream
+// that delivers bodyBytes in 64 KiB chunks (Fetch Standard §2.2, WHATWG Streams §3.4.4).
+// Intercepting getReader() marks respRef.bodyUsed = true so subsequent .text() etc. reject.
+var _RS_CHUNK = 65536;
+function _rs_make_body_stream(bodyBytes, respRef) {
+    var pos = 0;
+    var stream = new ReadableStream({
+        pull: function(c) {
+            if (pos >= bodyBytes.length) { c.close(); return; }
+            var end = Math.min(pos + _RS_CHUNK, bodyBytes.length);
+            c.enqueue(bodyBytes.subarray(pos, end));
+            pos = end;
+        },
+        cancel: function() { pos = bodyBytes.length; }
+    });
+    var _orig = stream.getReader.bind(stream);
+    stream.getReader = function(opts) {
+        if (respRef.bodyUsed) throw new TypeError('body already consumed');
+        respRef.bodyUsed = true;
+        return _orig(opts);
+    };
+    return stream;
+}
+
 // Response (Fetch Standard §2.5)
 function Response(body, init) {
     init = init || {};
@@ -5634,24 +5695,66 @@ function Response(body, init) {
     this.type = 'default';
     this.url = '';
     this.bodyUsed = false;
-    this._body = body;
-    // Expose body as ReadableStream (Fetch Standard §2.2 + WHATWG Streams §3).
-    // For Lumen's sync fetch, the entire response is already buffered; the stream
-    // delivers it as a single Uint8Array chunk and immediately closes.
     var bodyBytes = (body instanceof Uint8Array) ? body
                   : (body == null ? new Uint8Array(0) : new TextEncoder().encode(String(body)));
-    this.body = new ReadableStream({
-        start: function(c) { if (bodyBytes.length > 0) c.enqueue(bodyBytes); c.close(); }
-    });
+    this._body = bodyBytes;
+    this.body = _rs_make_body_stream(bodyBytes, this);
 }
+// _fromFetchCache — factory used by fetch() to build a Response that reads
+// the response body lazily from the Rust-side FetchCache via _lumen_fetch_body_chunk().
+// This avoids a full copy of large bodies into JS memory at response construction time.
+Response._fromFetchCache = function(status, statusText, headers) {
+    var r = Object.create(Response.prototype);
+    r.status = status;
+    r.statusText = statusText;
+    r.ok = status >= 200 && status < 300;
+    r.headers = new Headers(headers);
+    r.redirected = false;
+    r.type = 'default';
+    r.url = '';
+    r.bodyUsed = false;
+    r._body = null; // loaded on demand
+    var totalLen = _lumen_fetch_body_length();
+    var pos = 0;
+    var stream = new ReadableStream({
+        pull: function(c) {
+            if (pos >= totalLen) { c.close(); return; }
+            var size = Math.min(_RS_CHUNK, totalLen - pos);
+            var chunk = _lumen_fetch_body_chunk(pos, size);
+            c.enqueue(new Uint8Array(chunk));
+            pos += size;
+        },
+        cancel: function() { pos = totalLen; }
+    });
+    var _orig = stream.getReader.bind(stream);
+    stream.getReader = function(opts) {
+        if (r.bodyUsed) throw new TypeError('body already consumed');
+        r.bodyUsed = true;
+        return _orig(opts);
+    };
+    r.body = stream;
+    return r;
+};
 Response.prototype._consumeBody = function() {
     if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
     this.bodyUsed = true;
+    // When body was loaded via _fromFetchCache, _body is null — read all from Rust side.
+    if (this._body === null) {
+        var len = _lumen_fetch_body_length();
+        return Promise.resolve(len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0));
+    }
     return Promise.resolve(this._body);
 };
 Response.prototype.text = function() {
     if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
     this.bodyUsed = true;
+    if (this._body === null) {
+        var len = _lumen_fetch_body_length();
+        var bytes = len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0);
+        return Promise.resolve(new TextDecoder().decode(bytes));
+    }
     var b = this._body;
     if (b instanceof Uint8Array) return Promise.resolve(new TextDecoder().decode(b));
     return Promise.resolve(b == null ? '' : String(b));
@@ -5661,7 +5764,13 @@ Response.prototype.json = function() {
 };
 Response.prototype.arrayBuffer = function() {
     if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
     this.bodyUsed = true;
+    if (this._body === null) {
+        var len = _lumen_fetch_body_length();
+        var arr = len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0);
+        return Promise.resolve(arr.buffer.slice(0));
+    }
     var b = this._body;
     if (b instanceof Uint8Array) return Promise.resolve(b.buffer.slice(0));
     return Promise.resolve(new Uint8Array(0).buffer);
@@ -5988,8 +6097,8 @@ function fetch(input, init) {
         var status = _lumen_fetch_get_status();
         var statusText = _lumen_fetch_get_status_text();
         var rawHeaders = _lumen_fetch_get_headers();
-        var body = _lumen_fetch_get_body();
         // SRI integrity check (W3C SRI §3.3.5): verify body hash before exposing response.
+        // _lumen_check_sri_integrity reads directly from Rust FetchCache — no JS copy needed.
         var integrity = (init && init.integrity) ? String(init.integrity)
                       : (typeof input === 'object' && input && input.integrity ? String(input.integrity) : '');
         if (integrity && !_lumen_check_sri_integrity(integrity)) {
@@ -5999,7 +6108,9 @@ function fetch(input, init) {
         for (var i = 0; i + 1 < rawHeaders.length; i += 2) {
             hdrs.push([rawHeaders[i], rawHeaders[i + 1]]);
         }
-        var resp = new Response(body, { status: status, statusText: statusText, headers: hdrs });
+        // Use lazy Rust-side chunk reading: body stays in Rust FetchCache until consumed.
+        // This avoids copying large response bodies into JS memory at response construction.
+        var resp = Response._fromFetchCache(status, statusText, hdrs);
         resp.url = url;
         return Promise.resolve(resp);
     } catch(e) {
@@ -16598,6 +16709,83 @@ mod tests {
             "var resp = new Response('x'); \
              resp.text().then(function() {}); \
              resp.bodyUsed === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── K-3: Fetch streaming body tests ──────────────────────────────────────
+
+    #[test]
+    fn response_body_reader_reads_first_chunk() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var out = null; \
+             var reader = new Response('hello').body.getReader(); \
+             reader.read().then(function(r) { out = r; }); \
+             _lumen_drain_microtasks(); \
+             out !== null && !out.done && out.value instanceof Uint8Array && out.value.length === 5"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_reader_done_after_all_chunks() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var done = false; \
+             var reader = new Response('hi').body.getReader(); \
+             reader.read().then(function() { return reader.read(); }) \
+                   .then(function(r) { done = r.done; }); \
+             _lumen_drain_microtasks(); \
+             done === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_getreader_marks_body_used() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var resp = new Response('data'); \
+             resp.body.getReader(); \
+             resp.bodyUsed === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_text_rejects_after_getreader() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var resp = new Response('abc'); \
+             resp.body.getReader(); \
+             var rejected = false; \
+             resp.text().then(null, function() { rejected = true; }); \
+             _lumen_drain_microtasks(); \
+             rejected === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_getreader_rejects_if_already_used() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var resp = new Response('x'); \
+             resp.text().then(function() {}); \
+             var threw = false; \
+             try { resp.body.getReader(); } catch(e) { threw = true; } \
+             threw === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_body_chunk_binding_returns_slice() {
+        // _lumen_fetch_body_length / _lumen_fetch_body_chunk work when no cache is set.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "_lumen_fetch_body_length() === 0 && _lumen_fetch_body_chunk(0, 10).length === 0"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
