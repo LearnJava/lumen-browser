@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`::selection` pseudo-element  branch: p4-selection-pseudo
-Next step: fix compute_pseudo_element_style + SelectionHighlight + display list wiring  style.rs:5455, lib.rs, display_list.rs
+_(none)_
 
 ## Workflow
 
@@ -35,7 +34,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 | ~~1~~ | ~~`:fullscreen` + `:popover-open` sentinel pseudo-classes~~ — **выполнено** | XS | none | — |
 | ~~2~~ | ~~`color-mix()` CSS parsing~~ — **выполнено** (p4-color-mix-parsing, 2026-06-08) | S | none | → [`docs/tasks/p4-color-mix-parsing.md`](docs/tasks/p4-color-mix-parsing.md) |
 | ~~3~~ | ~~`text-align-last` wiring в align_lines~~ — **выполнено** (p4-text-align-last, 2026-06-08) | S | none | → [`docs/tasks/p4-text-align-last.md`](docs/tasks/p4-text-align-last.md) |
-| 4 | `::selection` pseudo-element | S | none | — |
+| ~~4~~ | ~~`::selection` pseudo-element~~ — **выполнено** (p4-selection-pseudo, 2026-06-08) | S | none | — |
 | 5 | `attr()` with type (CSS Values L4) | M | none | — |
 | 6 | `font-variation-settings` TextMeasurer wiring | M | none (P1 face.rs stub готов) | — |
 | 7 | `overflow: scroll` scrollable containers | L | P3 shell scroll event | — |
@@ -274,6 +273,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-08 | `::selection` | CSS Pseudo-elements L4 §5.6; SelectionHighlight struct; build_display_list_with_selection(); frag_selection_highlight() byte-proportional; 4 unit tests in style.rs; graphic test 66 |
 | 2026-06-08 | `text-align-last` | CSS Text L3 §7.2; align_lines wired with 5th arg; 4 unit tests in box_tree.rs |
 | 2026-06-08 | `color-mix()` | CSS Color L5 §10.2; parse_color_mix() + parse_color_with_pct() in style.rs; 3 unit tests |
 | 2026-06-02 | `image-set()` / `cross-fade()` | CSS Images L4 §5/§4; BackgroundImage::CrossFade; 5 unit tests + graphic test 59; CPU snapshot 58+59 |
