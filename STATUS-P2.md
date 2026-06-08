@@ -6,12 +6,23 @@
 
 ## In progress
 
-**G-5 | CSS Grid Table border-collapse Phase 2**  branch: p2-g5-table-border-collapse
-Next step: add BorderCollapse/BorderPrecedence/CollapsedBorder to table.rs, wire border-spacing into lay_out_table/compute_table_col_widths in box_tree.rs, declare table mod in lib.rs
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**G-5 | CSS Table border-collapse Phase 2** ✅ 2026-06-08 (merged)
+- `BorderCollapse` / `BorderPrecedence` / `CollapsedBorder` — новые публичные типы в `table.rs`
+- `CollapsedBorder::resolve_conflict` — CSS Tables L2 §17.6.2: высший precedence побеждает, при равном — более широкая граница
+- `TableContext.border_spacing: (f32, f32)` и `.border_collapse: BorderCollapse` поля
+- `compute_table_col_widths` учитывает `h_spacing`: вычитает `(n+1)*h_spacing` из доступной ширины
+- `lay_out_table`: строки начинаются с `content_y + v_spacing`, gap после каждой строки
+- `lay_out_table_row`: ячейки начинаются с `content_x + h_spacing`
+- `box_tree.rs`: `h_spacing/v_spacing = 0.0` с `// CSS: border-spacing` handoff для P4
+- `pub mod table` объявлен в `lib.rs`
+- 4 новых теста: `collapsed_border_cell_beats_row_precedence`, `collapsed_border_wider_wins_at_equal_precedence`, `border_spacing_reduces_col_widths`, `border_spacing_vertical_row_offset`
+- Итого: 2398 тестов lumen-layout ✅, Clippy чист
 
 **G-4 | Web Notifications API stub** ✅ 2026-06-08 (merged)
 - `ServiceWorkerRegistration.prototype.showNotification(title, opts)` — делегирует в `new Notification()`, тем самым проходит permission check и OS queue; возвращает `Promise<undefined>`
@@ -306,7 +317,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~G-2~~ | ~~**BiDi дополнительные gaps (8H.3)**~~ — **выполнено** | S | `lumen-shell` |
 | ~~G-3~~ | ~~**Memory pressure shell integration**~~ — **выполнено** | XS | `lumen-shell` |
 | ~~G-4~~ | ~~**Web Notifications API stub**~~ — **выполнено** | S | `lumen-js` |
-| G-5 | **CSS Grid Table border-collapse Phase 2** — `layout/src/table.rs` и `box_tree.rs`: border-spacing layout (col_widths + row_heights учитывают border-spacing), collapsed border merging (применить `CollapsedBorder::resolve_conflict`). 4 теста. | S | `lumen-layout` |
+| ~~G-5~~ | ~~**CSS Grid Table border-collapse Phase 2**~~ — **выполнено** | S | `lumen-layout` |
 
 ### A — Рендеринг / GPU
 
