@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`border-spacing`  branch: p4-border-spacing
+Next step: add fields to ComputedStyle, parse in apply_declaration, wire in box_tree.rs  style.rs:2052 / box_tree.rs:4584
 
 ## Workflow
 
@@ -35,7 +36,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 | ~~2~~ | ~~`color-mix()` CSS parsing~~ — **выполнено** (p4-color-mix-parsing, 2026-06-08) | S | none | → [`docs/tasks/p4-color-mix-parsing.md`](docs/tasks/p4-color-mix-parsing.md) |
 | ~~3~~ | ~~`text-align-last` wiring в align_lines~~ — **выполнено** (p4-text-align-last, 2026-06-08) | S | none | → [`docs/tasks/p4-text-align-last.md`](docs/tasks/p4-text-align-last.md) |
 | ~~4~~ | ~~`::selection` pseudo-element~~ — **выполнено** (p4-selection-pseudo, 2026-06-08) | S | none | — |
-| 5 | `attr()` with type (CSS Values L4) | M | none | — |
+| ~~5~~ | ~~`attr()` with type (CSS Values L4)~~ — **выполнено** (p4-attr-typed, 2026-06-08) | M | none | — |
 | ~~6~~ | ~~`font-variation-settings` TextMeasurer wiring~~ — **выполнено** (p4-font-variation-settings, 2026-06-08) | M | — | — |
 | 7 | `overflow: scroll` scrollable containers | L | P3 shell scroll event | — |
 | 8 | `:host` / `::slotted` (Shadow DOM) | M | none | — |
