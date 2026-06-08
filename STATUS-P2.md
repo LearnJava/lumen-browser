@@ -6,8 +6,7 @@
 
 ## In progress
 
-O-1 (продолжение) — BiDi remaining gaps  branch: p2-o1-bidi-remaining
-Next step: preload per-context + download lifecycle + cookie-change events + per-origin clear  crates/shell/src/bidi/protocol.rs
+None
 
 ---
 
@@ -24,7 +23,7 @@ Next step: preload per-context + download lifecycle + cookie-change events + per
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| O-1 | **8H.3: BiDi gaps (продолжение)** — из оставшихся: viewport-before-popup, preload per-context, download lifecycle, cookie-change events, per-origin clear. Locale/timezone/offline/response-body уже выполнены. `shell/src/bidi/` | M | `lumen-shell` (`bidi/`) |
+| ~~O-1~~ | ~~**8H.3: BiDi gaps (продолжение)**~~ — **выполнено** (коммит b0cfabda) | M | `lumen-shell` (`bidi/`) |
 | O-2 | **10I: T2 → SQLite JS heap persistence** — schema `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll, form_state, ts)` + async-save при T1→T2 + async-load при T2→T0 с UI hint при >100 ms. `storage/src/tab_snapshot.rs` | M | `lumen-storage`, `lumen-shell` |
 | O-3 | **10K: UI tier indication** — иконка "Z"/fade-opacity на T2/T3 вкладках + tooltip "Вкладка спит — клик восстановит" + loading-spinner при restore >200 ms. `shell/src/tabs/strip_ui.rs` | S | `lumen-shell` |
 | O-4 | **10M: `samples/heavy.html`** — Habr-style тестовая страница (50+ элементов, много текста, изображения) для T0-heavy бенчей. `samples/heavy.html` | XS | — |
@@ -54,6 +53,17 @@ Next step: preload per-context + download lifecycle + cookie-change events + per
 ---
 
 ## Current / Recently Merged
+
+**O-1 | BiDi remaining gaps (8H.3 финал)** ✅ 2026-06-08 (merged)
+- preload per-context: `browsingContext.create` возвращает `preloadScripts` (IDs применимых скриптов)
+- download lifecycle: `browser.getDownloads` — список загрузок с текущим состоянием
+- cookie-change events: `storage.setCookie` эмитит `cookieAdded`/`cookieChanged`; `deleteCookies` эмитит `cookieRemoved`
+- per-origin clear: `partition.sourceOrigin` в `getCookies`/`deleteCookies` (BiDi §13)
+- `origin_to_domain` helper: strips scheme+port
+- Исправлены pre-existing clippy ошибки: 12×`map_or`→`is_some_and`/`is_none_or`, `BidiCookie` pub(super), `UserPrompt` dead_code, forms.rs range check
+- Исправлен тест `script_remove_preload_acks` (удалял несуществующий скрипт)
+- 13 новых тестов: 3 preload + 3 downloads + 4 cookie-events + 3 per-origin
+- Итого lumen-shell: 1158 тестов (+33 vs O-1 viewport baseline), Clippy чист
 
 **O-1 | BiDi viewport-before-popup** ✅ 2026-06-08 (merged)
 - `viewport: Option<(u32, u32)>` поле в `BidiContext` — CSS-пиксели (w, h)
