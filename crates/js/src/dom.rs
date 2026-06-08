@@ -542,6 +542,20 @@ fn install_primitives(
         });
         let d = Arc::clone(&doc);
         reg!(
+            "_lumen_get_attr_names",
+            move |node_id: u32| -> Vec<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                match &doc.get(nid).data {
+                    NodeData::Element { attrs, .. } => {
+                        attrs.iter().map(|a| a.name.local.to_string()).collect()
+                    }
+                    _ => Vec::new(),
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
             "_lumen_get_text_content",
             move |node_id: u32| -> String {
                 let doc = d.lock().unwrap();
