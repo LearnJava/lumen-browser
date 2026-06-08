@@ -6,7 +6,13 @@
 
 ## In progress
 
-(none)
+**I-5 | W3C Scheduler API Level 1**  branch: p2-i5-scheduler
+- `crates/js/src/scheduler.rs` — JS-шим + Rust install fn
+- `scheduler.postTask(cb, opts)` → Promise; приоритеты user-blocking/user-visible/background
+- `scheduler.yield()` → Promise (отдаёт управление; spec §8.5)
+- `TaskController` + `TaskSignal`: setPriority → prioritychange, abort → AbortError reject
+- Phase 0: user-blocking → queueMicrotask, user-visible → setTimeout(0), background → setTimeout(200)
+- 5 unit-тестов в scheduler::tests ✅
 
 ---
 
