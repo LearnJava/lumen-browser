@@ -10109,7 +10109,9 @@ function _lumen_apply_resize(nid, delta_x, delta_y) {
 // Provides enough surface so existing extension content-scripts don't throw on import.
 // Phase 0: sendMessage is fire-and-forget (message goes to native no-op binding).
 // Phase 1: shell wires up a real message bus between content scripts and extension background.
+// Guard: only install when _LUMEN_EXTENSION_ACTIVE is set (avoids CDP automation detection markers).
 (function() {
+    if (typeof globalThis === 'undefined' || !globalThis._LUMEN_EXTENSION_ACTIVE) { return; }
     var _rt = {
         id: 'lumen-extension',
         sendMessage: function(msg, callback) {
@@ -10182,6 +10184,8 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
+        // Enable extension API (chrome.runtime) for unit tests that verify its behaviour.
+        rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
         rt.install_dom(doc, "", None, None, None, None, None, None).unwrap();
         rt
     }
