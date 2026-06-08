@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+I-5: ElementInternals + Custom State Pseudo-class  branch: p1-i5-element-internals
+Next step: clippy + tests  crates/js/src/element_internals.rs:1
 
 ---
 
