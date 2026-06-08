@@ -6,8 +6,7 @@
 
 ## In progress
 
-K-3 **Fetch streaming body (ReadableStream)**  branch: p2-k3-fetch-streaming
-Next step: Rust bindings _lumen_fetch_body_length/_lumen_fetch_body_chunk  crates/js/src/dom.rs:1031
+(none)
 
 ---
 
@@ -19,13 +18,24 @@ Next step: Rust bindings _lumen_fetch_body_length/_lumen_fetch_body_chunk  crate
 |---|--------|--------|--------|
 | ~~K-1~~ | ~~**WebAssembly Phase 0 stub**~~ — **выполнено** | S | `lumen-js` |
 | ~~K-2~~ | ~~**`<select>` interactive dropdown**~~ — **выполнено** | M | `lumen-shell`, `lumen-layout` |
-| ~~K-3~~ | ~~**Fetch streaming body (ReadableStream)**~~ — **в работе** | M | `lumen-js`, `lumen-network` |
+| ~~K-3~~ | ~~**Fetch streaming body (ReadableStream)**~~ — **выполнено** | M | `lumen-js`, `lumen-network` |
 | K-4 | **`<form>` multipart/form-data encoding** | S | `lumen-js`, `lumen-core` |
 | K-5 | **CSS `local()` system font matching** | S | `lumen-shell`, `lumen-font` |
 
 ---
 
 ## Current / Recently Merged
+
+**K-3 | Fetch streaming body (ReadableStream)** ✅ 2026-06-08 (merged)
+- ReadableStream сохраняет `_rs_pull_fn`; `read()` при пустой очереди вызывает `pull()` повторно (demand-driven, Streams spec §3.6.3)
+- `_rs_make_body_stream(bodyBytes, respRef)` — pull-based поток в 64 KiB чанках; `getReader()` перехвачен → `bodyUsed = true`
+- `Response._fromFetchCache(status, statusText, headers)` — фабрика для fetch()-ответов; тело читается лениво через `_lumen_fetch_body_chunk()`, не копируется в JS при создании Response
+- `fetch()` заменяет `_lumen_fetch_get_body()` на `Response._fromFetchCache()` — нет полного клонирования тела
+- `text()/arrayBuffer()` на `_fromFetchCache` читают через `_lumen_fetch_body_chunk(0, len)`
+- `bodyUsed` семантика исправлена: `getReader()` → `bodyUsed = true`; повторный `getReader()` бросает `TypeError`; `text()` после `getReader()` → `Promise.reject`
+- Rust биндинги: `_lumen_fetch_body_length() → u32`, `_lumen_fetch_body_chunk(offset, size) → Vec<u8>`
+- 6 тестов: first_chunk / done_after_all_chunks / getreader_marks_body_used / text_rejects_after_getreader / getreader_rejects_if_already_used / chunk_binding_returns_slice
+- Итого lumen-js: 1555 тестов (+6), Clippy чист
 
 **K-2 | `<select>` interactive dropdown** ✅ 2026-06-08 (merged)
 - `FormControlKind::Select { selected_text: String }` — несёт метку выбранной опции для paint
