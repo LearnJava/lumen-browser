@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BUG-074: height:100% на flex-item  branch: p3-bug074-flex-height
+Next step: fix box_tree.rs lay_out_flex — передать explicit_cross как available_height в финальном lay_out()  crates/engine/layout/src/box_tree.rs:5174
 
 ## Next
 

@@ -5166,12 +5166,14 @@ fn lay_out_flex(
             } else {
                 let inner_main = (outer_main - m_l - m_r).max(0.0);
                 children[i].style.width = Some(Length::Px(inner_main));
+                // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
+                // against the flex container's definite cross size.
                 lay_out(
                     &mut children[i],
                     content_x + main_cursor + m_l,
                     content_y + cross_cursor + m_t,
                     inner_main,
-                    None,
+                    explicit_cross,
                     measurer,
                     viewport,
                     pcb,
@@ -8896,6 +8898,31 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let a = find_by_id_all(&root, &doc, "a").expect("a");
         assert_eq!(a.rect.y, 75.0, "a.y with single-line center {}", a.rect.y);
+    }
+
+    #[test]
+    fn flex_item_height_percentage_resolves_against_container() {
+        // BUG-074: height:100% on a row flex item must resolve against the container's
+        // definite cross size, not fall back to auto (height=0).
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;height:60px;width:400px} #item{height:100%;width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.height, 60.0, "height:100% flex item should be container height, got {}", item.rect.height);
+    }
+
+    #[test]
+    fn flex_item_half_height_percentage_resolves_against_container() {
+        // CSS Flexbox §9.8: percentage cross sizes resolve against definite container cross size.
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;height:80px;width:400px} #item{height:50%;width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.height, 40.0, "height:50% flex item should be 40px, got {}", item.rect.height);
     }
 
     #[test]
