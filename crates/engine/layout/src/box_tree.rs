@@ -259,6 +259,34 @@ pub enum FormControlKind {
         /// Maximum bound (HTML `max` attribute; default 100).
         max: f32,
     },
+    /// `<progress>` — determinate or indeterminate progress bar.
+    ///
+    /// `value` is `None` when the `value` attribute is absent (indeterminate).
+    /// Paint draws a filled bar (blue) proportional to `value / max`, or a
+    /// static partial fill for indeterminate.
+    Progress {
+        /// Current value clamped to [0, max]; `None` = indeterminate.
+        value: Option<f32>,
+        /// Maximum value (HTML `max` attribute; default 1.0).
+        max: f32,
+    },
+    /// `<meter>` — gauge bar whose fill color reflects optimality (HTML5 §4.10.14).
+    ///
+    /// Color: green = optimal zone, yellow = sub-optimal, red = bad.
+    Meter {
+        /// Current value clamped to [min, max].
+        value: f32,
+        /// Minimum bound (HTML `min` attribute; default 0.0).
+        min: f32,
+        /// Maximum bound (HTML `max` attribute; default 1.0).
+        max: f32,
+        /// Low threshold: below `low` is the "low" segment (default = min).
+        low: f32,
+        /// High threshold: above `high` is the "high" segment (default = max).
+        high: f32,
+        /// Optimal value — determines which segment is colored green (default = midpoint).
+        optimum: f32,
+    },
 }
 
 /// Collect the text label of the currently selected `<option>` inside a
@@ -309,7 +337,7 @@ fn is_form_control_element(doc: &Document, id: NodeId) -> bool {
     matches!(
         &doc.get(id).data,
         NodeData::Element { name, .. }
-            if matches!(name.local.as_str(), "input" | "button" | "select" | "textarea")
+            if matches!(name.local.as_str(), "input" | "button" | "select" | "textarea" | "meter" | "progress")
     )
 }
 
@@ -2443,6 +2471,47 @@ fn build_box(
                             FormControlKind::Select { selected_text }
                         }
                         "textarea" => FormControlKind::Textarea,
+                        "progress" => {
+                            let max = node.get_attr("max")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(1.0)
+                                .max(f32::EPSILON);
+                            let value = node.get_attr("value")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .map(|v| v.clamp(0.0, max));
+                            FormControlKind::Progress { value, max }
+                        }
+                        "meter" => {
+                            let raw_min = node.get_attr("min")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(0.0);
+                            let raw_max = node.get_attr("max")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(1.0);
+                            // Spec §4.10.14: if min ≥ max, reset to defaults 0/1.
+                            let (min, max) = if raw_min < raw_max {
+                                (raw_min, raw_max)
+                            } else {
+                                (0.0, 1.0)
+                            };
+                            let low = node.get_attr("low")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(min)
+                                .clamp(min, max);
+                            let high = node.get_attr("high")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(max)
+                                .clamp(min, max);
+                            let optimum = node.get_attr("optimum")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or((min + max) / 2.0)
+                                .clamp(min, max);
+                            let value = node.get_attr("value")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(0.0)
+                                .clamp(min, max);
+                            FormControlKind::Meter { value, min, max, low, high, optimum }
+                        }
                         _ => {
                             let input_type = node.input_type()
                                 .unwrap_or(lumen_dom::InputType::Text);
@@ -9344,6 +9413,131 @@ mod tests {
         super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::End, Direction::Ltr);
         assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
         assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line end→right, got {}", lines[1][0].x);
+    }
+
+    // ── <progress> / <meter> ────────────────────────────────────────────────
+
+    fn find_form_kind(root: &super::LayoutBox) -> Option<super::FormControlKind> {
+        if let super::BoxKind::FormControl { kind } = &root.kind {
+            return Some(kind.clone());
+        }
+        for child in &root.children {
+            if let Some(k) = find_form_kind(child) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn progress_determinate_creates_kind() {
+        let html = r#"<progress value="0.5" max="1.0"></progress>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("progress FormControl box");
+        assert!(
+            matches!(kind, super::FormControlKind::Progress { value: Some(v), max: m }
+                if (v - 0.5).abs() < 0.001 && (m - 1.0).abs() < 0.001),
+            "expected Progress{{value:Some(0.5), max:1.0}}, got {kind:?}"
+        );
+    }
+
+    #[test]
+    fn progress_indeterminate_when_no_value_attr() {
+        let html = r#"<progress max="10"></progress>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("progress FormControl box");
+        assert!(
+            matches!(kind, super::FormControlKind::Progress { value: None, .. }),
+            "absent value attribute should produce indeterminate Progress, got {kind:?}"
+        );
+    }
+
+    #[test]
+    fn progress_value_clamped_to_max() {
+        let html = r#"<progress value="200" max="100"></progress>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("progress FormControl box");
+        if let super::FormControlKind::Progress { value: Some(v), max: m } = kind {
+            assert!((v - 100.0).abs() < 0.001, "value should be clamped to max={m}, got {v}");
+        } else {
+            panic!("expected determinate Progress, got {kind:?}");
+        }
+    }
+
+    #[test]
+    fn meter_creates_kind_with_defaults() {
+        // No attributes → min=0, max=1, value=0, low=0, high=1, optimum=0.5
+        let html = r#"<meter></meter>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("meter FormControl box");
+        assert!(
+            matches!(kind, super::FormControlKind::Meter { min: m, max: mx, .. }
+                if m.abs() < 0.001 && (mx - 1.0).abs() < 0.001),
+            "default meter min=0/max=1, got {kind:?}"
+        );
+    }
+
+    #[test]
+    fn meter_parses_all_attributes() {
+        let html = r#"<meter min="0" max="10" value="7" low="3" high="8" optimum="6"></meter>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("meter FormControl box");
+        if let super::FormControlKind::Meter { value, min, max, low, high, optimum } = kind {
+            assert!((min - 0.0).abs() < 0.001, "min");
+            assert!((max - 10.0).abs() < 0.001, "max");
+            assert!((value - 7.0).abs() < 0.001, "value");
+            assert!((low - 3.0).abs() < 0.001, "low");
+            assert!((high - 8.0).abs() < 0.001, "high");
+            assert!((optimum - 6.0).abs() < 0.001, "optimum");
+        } else {
+            panic!("expected Meter kind, got {kind:?}");
+        }
+    }
+
+    #[test]
+    fn meter_min_ge_max_resets_to_defaults() {
+        // Spec §4.10.14: when min >= max, reset to 0..1
+        let html = r#"<meter min="5" max="3" value="4"></meter>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("meter FormControl box");
+        if let super::FormControlKind::Meter { min, max, .. } = kind {
+            assert!(min.abs() < 0.001, "min should reset to 0, got {min}");
+            assert!((max - 1.0).abs() < 0.001, "max should reset to 1, got {max}");
+        } else {
+            panic!("expected Meter kind");
+        }
+    }
+
+    #[test]
+    fn progress_ua_style_300x16() {
+        let html = r#"<progress value="0.5" max="1"></progress>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(600.0, 400.0));
+        // Find the FormControl box and check its size matches UA defaults.
+        // `rect` is the border-box: content(300) + 2×border(1) = 302 wide;
+        //                           content(16)  + 2×border(1) = 18 tall.
+        fn find_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::FormControl { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_box)
+        }
+        let b = find_box(&root).expect("progress box");
+        assert!((b.rect.width - 302.0).abs() < 1.0, "border-box width should be 302px, got {}", b.rect.width);
+        assert!((b.rect.height - 18.0).abs() < 1.0, "border-box height should be 18px, got {}", b.rect.height);
     }
 
 }
