@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**I-2 | Screen Wake Lock API**  branch: p2-i2-wake-lock
+Next step: задача завершена — clippy ✅, 9 тестов ✅  crates/js/src/wake_lock.rs:1
 
 ---
 

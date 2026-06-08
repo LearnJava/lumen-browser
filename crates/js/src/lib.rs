@@ -65,6 +65,7 @@ pub mod web_codecs;
 pub mod ua_client_hints;
 pub mod media_capabilities;
 pub mod virtual_keyboard;
+pub mod wake_lock;
 pub mod web_locks;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
@@ -797,6 +798,12 @@ impl QuickJsRuntime {
             // ifAvailable, steal, and AbortSignal. navigator.locks → LockManager.
             if let Err(e) = web_locks::install_web_locks_bindings(&ctx) {
                 eprintln!("Web Locks API init failed: {}", e);
+            }
+
+            // Install Screen Wake Lock API (W3C Screen Wake Lock Level 1) — after DOM/navigator.
+            // Phase 0: in-memory sentinel with auto-release on visibilitychange → hidden.
+            if let Err(e) = wake_lock::install_wake_lock_bindings(&ctx) {
+                eprintln!("Screen Wake Lock API init failed: {}", e);
             }
 
             Ok(())
