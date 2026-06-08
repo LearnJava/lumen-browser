@@ -1,5 +1,6 @@
 pub mod audio_bindings;
 pub mod audio_element;
+pub mod background_fetch;
 pub mod background_sync;
 pub mod badging;
 pub mod periodic_sync;
@@ -627,6 +628,13 @@ impl QuickJsRuntime {
                 false,
             ) {
                 eprintln!("Notifications bindings init failed: {}", e);
+            }
+
+            // Install Background Fetch API stub (W3C Background Fetch L1, Phase 0) — after DOM
+            // so Promise is available. Provides registration.backgroundFetch.fetch(id, reqs, opts)
+            // / get(id) / getIds(). Phase 0: in-memory; shell _lumen_bg_fetch_* wiring is Phase 1.
+            if let Err(e) = background_fetch::init_background_fetch(&ctx) {
+                eprintln!("Background Fetch API init failed: {}", e);
             }
 
             // Install Background Sync API stub (W3C Background Sync L2, Phase 0) — after DOM
