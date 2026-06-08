@@ -2662,6 +2662,11 @@ fn emit_background_layer(
     b: &LayoutBox,
     layer: &BackgroundLayer,
     dpr: f32,
+    // CSS Compositing L1 §8.3: the bottom-most background layer blends with transparent
+    // background-color. For premultiplied alpha, multiply(src, 0) = src (identity), so
+    // blend mode has no visible effect — skip PushBlendMode to avoid blending against the
+    // stacking context instead of an isolated background canvas.
+    suppress_blend: bool,
 ) {
     let clip = background_clip_rect(b, layer.clip);
     if clip.width <= 0.0 || clip.height <= 0.0 {
@@ -2670,7 +2675,7 @@ fn emit_background_layer(
     // CSS Backgrounds L3 §3.5: positioning area (background-origin) is independent of
     // the painting/clip area (background-clip). size/position calculations use origin_rect.
     let origin = background_origin_rect(b, layer.origin);
-    let use_blend = layer.blend_mode != LayoutBlendMode::Normal;
+    let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
     if use_blend {
         out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode) });
     }
@@ -2778,10 +2783,16 @@ fn emit_background_layer(
 /// CSS Backgrounds L3 §3: слои рисуются снизу вверх — последний в списке (Vec)
 /// рисуется первым (самый нижний), первый в списке — последним (самый верхний).
 /// Пустых layers → no-op.
+///
+/// CSS Compositing L1 §8.3: background creates an isolated compositing group.
+/// The bottom-most layer blends against transparent background-color; for common
+/// blend modes (multiply, screen etc.) this is identity for premultiplied alpha,
+/// so we suppress PushBlendMode for that layer.
 fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32) {
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
-    for layer in b.style.background_layers.iter().rev() {
-        emit_background_layer(out, b, layer, dpr);
+    for (i, layer) in b.style.background_layers.iter().rev().enumerate() {
+        // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).
+        emit_background_layer(out, b, layer, dpr, i == 0);
     }
 }
 
@@ -9174,21 +9185,20 @@ mod tests {
         assert!(blend_cmds.is_empty(), "normal blend mode must not emit any blend commands");
     }
 
-    /// Non-normal blend mode → PushBlendMode emitted before the gradient, PopBlendMode after.
+    /// Single layer with non-normal blend mode: it is the bottom-most layer, so
+    /// CSS Compositing L1 §8.3 says it blends against transparent background-color.
+    /// For premultiplied alpha, multiply(src, transparent) = src — no visual effect.
+    /// We suppress PushBlendMode to avoid incorrect blending against the stacking context.
     #[test]
-    fn background_blend_mode_multiply_wraps_gradient() {
+    fn background_blend_mode_single_layer_bottom_suppressed() {
         let dl = build(
             r#"<div style="background-image:linear-gradient(red,blue);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
             "",
         );
-        let idx_push = dl.iter().position(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply }));
+        let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { .. })).count();
         let idx_grad = dl.iter().position(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }));
-        let idx_pop  = dl.iter().position(|c| matches!(c, DisplayCommand::PopBlendMode));
-        assert!(idx_push.is_some(), "PushBlendMode(Multiply) expected");
-        assert!(idx_grad.is_some(), "DrawLinearGradient expected");
-        assert!(idx_pop.is_some(),  "PopBlendMode expected");
-        assert!(idx_push.unwrap() < idx_grad.unwrap(), "PushBlendMode must precede DrawLinearGradient");
-        assert!(idx_grad.unwrap() < idx_pop.unwrap(),  "DrawLinearGradient must precede PopBlendMode");
+        assert_eq!(push_count, 0, "single bottom layer: blend suppressed (identity against transparent)");
+        assert!(idx_grad.is_some(), "DrawLinearGradient still emitted");
     }
 
     /// Two layers: first has multiply, second normal → one blend pair for first layer only.
@@ -9205,16 +9215,43 @@ mod tests {
         assert_eq!(pop_count,  1, "matching PopBlendMode count");
     }
 
+    /// Two layers with same blend mode: bottom suppressed, top blended.
+    /// This is the most common pattern in background-blend-mode CSS.
+    #[test]
+    fn background_blend_mode_two_same_mode_only_top_blended() {
+        let dl = build(
+            r#"<div style="background-image:linear-gradient(red,blue),linear-gradient(green,yellow);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
+            "",
+        );
+        // Bottom layer suppressed, top layer wrapped → exactly 1 PushBlendMode.
+        let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { .. })).count();
+        let pop_count  = dl.iter().filter(|c| matches!(c, DisplayCommand::PopBlendMode)).count();
+        assert_eq!(push_count, 1, "two layers same blend: bottom suppressed, top wrapped → 1 PushBlendMode");
+        assert_eq!(pop_count,  1, "matching PopBlendMode");
+        // Verify order: bottom gradient → PushBlendMode → top gradient → PopBlendMode
+        let positions: Vec<usize> = dl.iter().enumerate().filter_map(|(i, c)| {
+            if matches!(c, DisplayCommand::DrawLinearGradient { .. } | DisplayCommand::PushBlendMode { .. } | DisplayCommand::PopBlendMode) {
+                Some(i)
+            } else { None }
+        }).collect();
+        assert!(positions.len() == 4, "expecting: grad(bottom), PushBlend, grad(top), PopBlend");
+        assert!(matches!(&dl[positions[0]], DisplayCommand::DrawLinearGradient { .. }), "first: bottom gradient");
+        assert!(matches!(&dl[positions[1]], DisplayCommand::PushBlendMode { .. }), "second: PushBlendMode");
+        assert!(matches!(&dl[positions[2]], DisplayCommand::DrawLinearGradient { .. }), "third: top gradient");
+        assert!(matches!(&dl[positions[3]], DisplayCommand::PopBlendMode), "fourth: PopBlendMode");
+    }
+
     /// background-blend-mode cycles when fewer values than layers.
+    /// Bottom layer blend is suppressed (CSS Compositing L1 §8.3 isolated group).
     #[test]
     fn background_blend_mode_cycling() {
-        // 3 layers, 1 value → all three get multiply.
+        // 3 layers, 1 value → all three have multiply, but bottom-most is suppressed.
         let dl = build(
             r#"<div style="background-image:linear-gradient(red,blue),linear-gradient(green,yellow),linear-gradient(cyan,magenta);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
             "",
         );
         let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply })).count();
-        assert_eq!(push_count, 3, "cycling: 1 value for 3 layers → all 3 get multiply");
+        assert_eq!(push_count, 2, "cycling: 3 layers but bottom-most suppressed → 2 PushBlendMode");
     }
 
     // ── BoxModelOverlay ──────────────────────────────────────────────────────

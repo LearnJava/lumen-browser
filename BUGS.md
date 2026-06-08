@@ -103,7 +103,7 @@ BUG-087 | OPEN   | paint/layout   | multiple CSS background layers not rendered 
 BUG-088 | OPEN   | css-parser/layout | individual CSS transform properties (translate/rotate/scale) not applied — TEST-46: 9.57%; CSS Transforms L2 § | crates/engine/layout/src/style.rs
 BUG-089 | OPEN   | paint          | SVG basic shapes not rendered (rect/circle/ellipse/line) — TEST-47: 21.71%; Phase 1 | crates/engine/paint/src/display_list.rs
 BUG-090 | OPEN   | layout         | -webkit-line-clamp multi-line truncation not working — TEST-48: 23.89%; CSS Overflow L4 §3.2 | crates/engine/layout/src/box_tree.rs
-BUG-091 | OPEN   | paint          | background-blend-mode: multiply/screen/overlay etc. not applied — TEST-49: 30.62%; CSS Compositing L1 §8.3 | crates/engine/paint/src/display_list.rs
+BUG-091 | FIXED 2026-06-08 | paint | background-blend-mode: bottom layer wrapped in PushBlendMode (should be suppressed per CSS Compositing L1 §8.3) — TEST-49: 30.62% | crates/engine/paint/src/display_list.rs
 BUG-092 | OPEN   | css-parser/layout | CSS variables var() not propagating correctly through cascade — TEST-50: 17.26%; values appear resolved but rendering wrong | crates/engine/layout/src/style.rs
 BUG-093 | OPEN   | paint          | scrollbar rendering: DrawScrollbar track+thumb deviation — TEST-51: 1.39% | crates/engine/paint/src/display_list.rs
 BUG-094 | OPEN   | paint          | text-shadow with blur PushFilter wrapper ~7% deviation — TEST-52: 6.82% (thr 4.0%) | crates/engine/paint/src/display_list.rs
