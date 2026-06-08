@@ -73,6 +73,7 @@ pub mod reporting_api;
 pub mod web_audio;
 pub mod webgpu;
 pub mod webxr;
+pub mod form_validation;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -847,6 +848,10 @@ impl QuickJsRuntime {
             // XRSession/XRFrame/XRReferenceSpace/XRView stubs exported on window.
             if let Err(e) = webxr::install_webxr_bindings(&ctx) {
                 eprintln!("WebXR Device API init failed: {}", e);
+            }
+
+            if let Err(e) = form_validation::install_form_validation_bindings(&ctx) {
+                eprintln!("Form Constraint Validation API init failed: {}", e);
             }
 
             Ok(())
