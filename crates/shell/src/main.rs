@@ -7693,8 +7693,16 @@ impl Lumen {
                     if let Some(submit_event) = forms::build_form_submit_event(&doc, submit_node) {
                         match submit_event {
                             lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
-                                // Form passed validation — collect fields and submit.
-                                let body = forms::encode_form_fields(&fields);
+                                // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
+                                let enctype = forms::get_form_enctype(&doc, submit_node);
+                                let body = if enctype == "multipart/form-data" {
+                                    // Multipart: deterministic boundary for Phase 0.
+                                    let boundary = "----LumenFormBoundary0000000000000000";
+                                    let (_ct, bytes) = forms::encode_form_fields_multipart(&fields, boundary);
+                                    String::from_utf8_lossy(&bytes).into_owned()
+                                } else {
+                                    forms::encode_form_fields(&fields)
+                                };
                                 use lumen_core::event::{Event, TabId};
                                 self.event_sink.emit(&Event::FormSubmit {
                                     tab_id: TabId(0),
@@ -7705,15 +7713,20 @@ impl Lumen {
                                 match method.as_str() {
                                     "get" => {
                                         // HTML LS §form-submission step 23: navigate
-                                        // to action + query-string.
-                                        let get_url = forms::make_get_url(&action, &body);
+                                        // to action + query-string (only urlencoded for GET).
+                                        let url_body = if enctype == "multipart/form-data" {
+                                            forms::encode_form_fields(&fields)
+                                        } else {
+                                            body.clone()
+                                        };
+                                        let get_url = forms::make_get_url(&action, &url_body);
                                         let resolved = self.source.resolve_href(&get_url);
                                         drop(doc);
                                         self.navigate_to(PageSource::from_arg(Some(&resolved)));
                                     }
                                     _ => {
                                         // POST: emit event; real network send is P3 task.
-                                        eprintln!("[forms] POST {} body={}", action, body);
+                                        eprintln!("[forms] POST {} enctype={} body-len={}", action, enctype, body.len());
                                     }
                                 }
                             }

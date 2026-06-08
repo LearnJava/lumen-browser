@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use lumen_core::form::{encode_form_urlencoded, FormEntry, FormValue};
+use lumen_core::form::{encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue};
 use lumen_core::geom::Rect;
 use lumen_dom::{
     check_validity_form, collect_dom_form_fields, element_validity, find_ancestor_form,
@@ -407,6 +407,40 @@ pub fn encode_form_fields(fields: &[(String, String)]) -> String {
         .map(|(name, value)| FormEntry { name: name.clone(), value: FormValue::Text(value.clone()) })
         .collect();
     encode_form_urlencoded(&entries)
+}
+
+/// Encode form fields as `multipart/form-data` (RFC 7578).
+///
+/// Returns `(content_type, body_bytes)` where `content_type` is
+/// `multipart/form-data; boundary=<boundary>`.
+/// Boundary is deterministic for Phase 0; callers may supply their own.
+pub fn encode_form_fields_multipart(fields: &[(String, String)], boundary: &str) -> (String, Vec<u8>) {
+    let entries: Vec<FormEntry> = fields
+        .iter()
+        .map(|(name, value)| FormEntry { name: name.clone(), value: FormValue::Text(value.clone()) })
+        .collect();
+    let body = encode_form_multipart(&entries, boundary);
+    let ct = format!("multipart/form-data; boundary={boundary}");
+    (ct, body)
+}
+
+/// Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
+/// normalised to lower-case. Default: `"application/x-www-form-urlencoded"`.
+pub fn get_form_enctype(doc: &Document, submit_node: NodeId) -> String {
+    if let Some(form_id) = find_ancestor_form(doc, submit_node) {
+        let enctype = doc
+            .get(form_id)
+            .get_attr("enctype")
+            .unwrap_or("application/x-www-form-urlencoded")
+            .to_ascii_lowercase();
+        // HTML LS §4.10.18.6: valid enctype values.
+        match enctype.as_str() {
+            "multipart/form-data" | "text/plain" => enctype,
+            _ => "application/x-www-form-urlencoded".to_string(),
+        }
+    } else {
+        "application/x-www-form-urlencoded".to_string()
+    }
 }
 
 #[allow(dead_code)]
@@ -988,6 +1022,96 @@ mod tests {
         // This would need a proper LayoutBox tree to test. For now just verify
         // that find_all_validation_errors function exists and compiles.
         let _ = find_all_validation_errors;
+    }
+
+    // ──── multipart encoding + enctype tests ────────────────────────────────
+
+    fn make_enctype_doc(enctype: &str) -> (Document, NodeId) {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(form).data {
+            attrs.push(Attribute { name: QualName::html("action"), value: "/upload".into() });
+            attrs.push(Attribute { name: QualName::html("method"), value: "post".into() });
+            attrs.push(Attribute { name: QualName::html("enctype"), value: enctype.into() });
+        }
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "file".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "data".into() });
+        }
+        let submit = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(submit).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "submit".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+        doc.append_child(form, submit);
+        (doc, submit)
+    }
+
+    #[test]
+    fn encode_form_fields_multipart_contains_boundary() {
+        let fields = vec![("name".to_string(), "alice".to_string())];
+        let (ct, body) = encode_form_fields_multipart(&fields, "testboundary");
+        assert_eq!(ct, "multipart/form-data; boundary=testboundary");
+        let s = String::from_utf8(body).unwrap();
+        assert!(s.contains("--testboundary"), "body must contain boundary");
+        assert!(s.contains("name=\"name\""), "body must contain field name");
+        assert!(s.contains("alice"), "body must contain field value");
+        assert!(s.ends_with("--testboundary--\r\n"), "body must end with closing boundary");
+    }
+
+    #[test]
+    fn encode_form_fields_multipart_two_fields() {
+        let fields = vec![
+            ("a".to_string(), "1".to_string()),
+            ("b".to_string(), "2".to_string()),
+        ];
+        let (_ct, body) = encode_form_fields_multipart(&fields, "B");
+        let s = String::from_utf8(body).unwrap();
+        let a_pos = s.find("name=\"a\"").unwrap();
+        let b_pos = s.find("name=\"b\"").unwrap();
+        assert!(a_pos < b_pos, "fields must appear in order");
+    }
+
+    #[test]
+    fn get_form_enctype_default_urlencoded() {
+        let (doc, submit) = make_submit_doc(); // no enctype attr
+        let enctype = get_form_enctype(&doc, submit);
+        assert_eq!(enctype, "application/x-www-form-urlencoded");
+    }
+
+    #[test]
+    fn get_form_enctype_multipart() {
+        let (doc, submit) = make_enctype_doc("multipart/form-data");
+        let enctype = get_form_enctype(&doc, submit);
+        assert_eq!(enctype, "multipart/form-data");
+    }
+
+    #[test]
+    fn get_form_enctype_text_plain() {
+        let (doc, submit) = make_enctype_doc("text/plain");
+        let enctype = get_form_enctype(&doc, submit);
+        assert_eq!(enctype, "text/plain");
+    }
+
+    #[test]
+    fn get_form_enctype_unknown_falls_back_to_urlencoded() {
+        let (doc, submit) = make_enctype_doc("application/json");
+        let enctype = get_form_enctype(&doc, submit);
+        assert_eq!(enctype, "application/x-www-form-urlencoded");
+    }
+
+    #[test]
+    fn get_form_enctype_no_ancestor_form_defaults() {
+        let mut doc = Document::new();
+        let orphan = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(orphan).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "submit".into() });
+        }
+        doc.append_child(doc.root(), orphan);
+        let enctype = get_form_enctype(&doc, orphan);
+        assert_eq!(enctype, "application/x-www-form-urlencoded");
     }
 
     // ──── <select> dropdown tests ────────────────────────────────────────────
