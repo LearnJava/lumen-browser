@@ -1,19 +1,35 @@
 #!/usr/bin/env python3
 """Lumen graphic tests — блокирующий пайплайн.
 
-Workflow:
-  1. Капчуем Edge headless + Lumen (gdigrab) для каждого теста по порядку.
-  2. 00-calibration: ищем магента-маркеры -> определяем crop offset.
-  3. Каждый следующий тест: cropаем Lumen по offset из калибровки, считаем diff с Edge.
-  4. Первый тест с diff% > threshold останавливает пайплайн.
+Запуск:
+    python graphic_tests/run.py                     # все тесты, стоп на первом провале
+    python graphic_tests/run.py --continue-on-fail  # все тесты, собрать все результаты
+    python graphic_tests/run.py --only 03           # один тест по id
+    python graphic_tests/run.py --recheck           # перезапустить только FAIL из latest.json
+    python graphic_tests/run.py --build             # cargo build --release перед запуском
+    python graphic_tests/run.py --no-cache          # принудительная пересъёмка Edge-скриншотов
 
-Запуск из корня репо: `python graphic_tests/run.py`
+Workflow:
+  1. Снимаем Edge headless + Lumen (gdigrab) для каждого теста по порядку.
+  2. TEST-00 calibration: ищем магента-маркеры → определяем crop offset.
+  3. Каждый следующий тест: кропаем Lumen по offset из калибровки, считаем diff с Edge.
+  4. Первый тест с diff% > threshold останавливает пайплайн (если не --continue-on-fail).
+
+Результаты:
+  graphic_tests/results/YYYYMMDD-HHMMSS.json — полные результаты прогона
+  graphic_tests/results/YYYYMMDD-HHMMSS.html — визуальный отчёт (edge|lumen|diff для FAIL)
+  graphic_tests/results/latest.json          — всегда указывает на последний прогон
+
+Edge-скриншоты кэшируются: пересъёмка только если HTML новее PNG или передан --no-cache.
+--recheck загружает список FAIL из latest.json и перегоняет только их + TEST-00.
 """
 from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.wintypes
+import datetime
 import io
+import json
 import os
 import struct
 import subprocess
@@ -32,6 +48,7 @@ FFMPEG = os.path.join(REPO, 'utils', 'ffmpeg.exe')
 EDGE = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 LUMEN = os.path.join(REPO, 'target', 'release', 'lumen.exe')
 SHOTS = os.path.join(REPO, 'graphic_tests', 'screenshots')
+RESULTS_DIR = os.path.join(REPO, 'graphic_tests', 'results')
 TESTS_DIR = os.path.join(REPO, 'graphic_tests')
 
 VIEWPORT_W = 1024
@@ -39,7 +56,7 @@ VIEWPORT_H = 720
 LUMEN_WAIT_SEC = 5
 
 # (id, html, threshold_pct, label).
-# threshold — % пикселей с заметной разницей; выше = FAIL -> стоп.
+# threshold — % пикселей с заметной разницей; выше = FAIL → стоп.
 TESTS: list[tuple[str, str, float, str]] = [
     ('00', '00-calibration.html',        0.5, 'calibration'),
     ('01', '01-sanity.html',             0.5, 'sanity'),
@@ -196,7 +213,15 @@ def _bring_pid_to_front(pid: int) -> None:
 
 # --- Capture helpers ---
 
-def capture_edge(html_path: str, out_png: str) -> None:
+def capture_edge(html_path: str, out_png: str, force: bool = False) -> None:
+    """Снимает страницу в Edge headless.
+
+    Кэш: если out_png существует и новее html_path — пропускает захват.
+    force=True принудительно пересоздаёт PNG.
+    """
+    if not force and os.path.exists(out_png):
+        if os.path.getmtime(out_png) >= os.path.getmtime(html_path):
+            return  # cache hit
     url = 'file:///' + os.path.abspath(html_path).replace('\\', '/')
     subprocess.run(
         [EDGE, '--headless', f'--screenshot={out_png}',
@@ -302,17 +327,36 @@ def find_marker_origin(png_path: str) -> tuple[int, int] | None:
 
     return None
 
-# --- Diff metric ---
+# --- Diff metric + bounding box ---
 
-def diff_percent(png_path: str, channel_threshold: int = 16) -> float:
-    """Возвращает % пикселей, у которых хотя бы один канал > channel_threshold в diff-изображении."""
+def diff_stats(png_path: str, channel_threshold: int = 16) -> tuple[float, dict | None]:
+    """Считает diff-пиксели в изображении.
+
+    Возвращает:
+        pct        — % пикселей, у которых хотя бы один канал > channel_threshold
+        diff_region — {top, left, bottom, right} bounding box плохих пикселей,
+                      или None если diff == 0
+    """
     w, h, bpp, p = read_png(png_path)
     total = w * h
     bad = 0
-    for i in range(0, len(p), bpp):
-        if p[i] > channel_threshold or p[i+1] > channel_threshold or p[i+2] > channel_threshold:
-            bad += 1
-    return 100.0 * bad / total
+    min_x = w;  max_x = -1
+    min_y = h;  max_y = -1
+    for yi in range(h):
+        row_has_bad = False
+        for xi in range(w):
+            i = (yi * w + xi) * bpp
+            if p[i] > channel_threshold or p[i+1] > channel_threshold or p[i+2] > channel_threshold:
+                bad += 1
+                row_has_bad = True
+                if xi < min_x: min_x = xi
+                if xi > max_x: max_x = xi
+        if row_has_bad:
+            if yi < min_y: min_y = yi
+            if yi > max_y: max_y = yi
+    pct = 100.0 * bad / total
+    region = {'top': min_y, 'left': min_x, 'bottom': max_y, 'right': max_x} if bad > 0 else None
+    return pct, region
 
 # --- Crop offset persistence ---
 
@@ -337,47 +381,61 @@ def _load_crop_offset() -> tuple[int, int] | None:
 
 # --- Pipeline ---
 
-def ensure_lumen() -> None:
-    if os.path.exists(LUMEN):
-        return
-    print('Lumen release-бинарь не найден. Билдим...')
+def _build_lumen() -> bool:
+    """Собирает lumen-shell --release. Возвращает True при успехе."""
+    print('Сборка lumen-shell --release...')
     env = os.environ.copy()
     env['PATH'] = r'C:\Users\konstantin\.cargo\bin' + os.pathsep + env.get('PATH', '')
     res = subprocess.run(['cargo', 'build', '-p', 'lumen-shell', '--release'],
                          cwd=REPO, env=env)
     if res.returncode != 0:
         print('Сборка Lumen упала.')
-        sys.exit(2)
+        return False
+    print('Сборка завершена.')
+    return True
+
+
+def ensure_lumen(force_build: bool = False) -> None:
+    """Гарантирует наличие release-бинаря. force_build=True — пересобрать в любом случае."""
+    if force_build or not os.path.exists(LUMEN):
+        if not _build_lumen():
+            sys.exit(2)
+
 
 def run_one(tid: str, html: str, threshold: float, label: str,
-            crop_offset: tuple[int, int] | None) -> tuple[bool, tuple[int, int] | None, float]:
-    """Возвращает (passed, new_crop_offset, diff_pct)."""
+            crop_offset: tuple[int, int] | None,
+            no_cache: bool = False) -> tuple[bool, tuple[int, int] | None, float, dict | None]:
+    """Запускает один тест.
+
+    Возвращает (passed, new_crop_offset, diff_pct, diff_region).
+    diff_pct < 0 и diff_region = None означают ошибку (ERROR).
+    """
     test_path = os.path.join(TESTS_DIR, html)
     if not os.path.exists(test_path):
         print(f'TEST-{tid}: FAIL (no HTML: {test_path})')
-        return False, crop_offset, -1.0
+        return False, crop_offset, -1.0, None
 
     edge_png   = os.path.join(SHOTS, f'{tid}-edge.png')
     lumen_raw  = os.path.join(SHOTS, f'{tid}-lumen.png')
     lumen_crop = os.path.join(SHOTS, f'{tid}-lumen-cropped.png')
     diff_png   = os.path.join(SHOTS, f'{tid}-diff.png')
 
-    capture_edge(test_path, edge_png)
+    capture_edge(test_path, edge_png, force=no_cache)
     if not os.path.exists(edge_png):
         print(f'TEST-{tid}: FAIL (Edge screenshot missing)')
-        return False, crop_offset, -1.0
+        return False, crop_offset, -1.0, None
 
     rel_html = os.path.relpath(test_path, REPO).replace('\\', '/')
     capture_lumen(rel_html, lumen_raw)
     if not os.path.exists(lumen_raw):
         print(f'TEST-{tid}: FAIL (gdigrab screenshot missing)')
-        return False, crop_offset, -1.0
+        return False, crop_offset, -1.0, None
 
     if tid == '00':
         origin = find_marker_origin(lumen_raw)
         if origin is None:
             print(f'TEST-{tid}: FAIL (magenta marker not found)')
-            return False, None, -1.0
+            return False, None, -1.0, None
         crop_offset = origin
         _save_crop_offset(crop_offset)
 
@@ -385,56 +443,359 @@ def run_one(tid: str, html: str, threshold: float, label: str,
         crop_offset = _load_crop_offset()
     if crop_offset is None:
         print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
-        return False, None, -1.0
+        return False, None, -1.0, None
 
     ffmpeg_crop(lumen_raw, lumen_crop, crop_offset[0], crop_offset[1])
     if os.path.exists(lumen_raw):
         os.remove(lumen_raw)
     if not os.path.exists(lumen_crop):
         print(f'TEST-{tid}: FAIL (ffmpeg crop failed)')
-        return False, crop_offset, -1.0
+        return False, crop_offset, -1.0, None
     ffmpeg_diff(edge_png, lumen_crop, diff_png)
     if not os.path.exists(diff_png):
         print(f'TEST-{tid}: FAIL (ffmpeg diff failed)')
-        return False, crop_offset, -1.0
+        return False, crop_offset, -1.0, None
 
-    pct = diff_percent(diff_png)
+    pct, region = diff_stats(diff_png)
     passed = pct <= threshold
-    print(f'TEST-{tid}: {"PASS" if passed else "FAIL"} ({pct:.2f}%)', flush=True)
-    return passed, crop_offset, pct
+    region_str = _fmt_region(region) if region else ''
+    suffix = f'  [{region_str}]' if region_str and not passed else ''
+    print(f'TEST-{tid}: {"PASS" if passed else "FAIL"} ({pct:.2f}%){suffix}', flush=True)
+    return passed, crop_offset, pct, region
+
+
+def _fmt_region(r: dict) -> str:
+    """Форматирует bounding box для вывода: 'x:10–50 y:683–720'."""
+    return f'x:{r["left"]}–{r["right"]} y:{r["top"]}–{r["bottom"]}'
+
+# --- Result persistence ---
+
+def _git_info() -> dict[str, str]:
+    def _run(cmd: list[str]) -> str:
+        try:
+            return subprocess.check_output(cmd, cwd=REPO, stderr=subprocess.DEVNULL,
+                                           text=True).strip()
+        except Exception:
+            return ''
+    return {
+        'commit': _run(['git', 'rev-parse', '--short', 'HEAD']),
+        'branch': _run(['git', 'rev-parse', '--abbrev-ref', 'HEAD']),
+        'subject': _run(['git', 'log', '-1', '--format=%s']),
+    }
+
+
+def save_results(results: list[dict], crop_offset: tuple[int, int] | None,
+                 halted_at: str | None) -> str:
+    """Сохраняет results в RESULTS_DIR/<timestamp>.json и latest.json.
+    Генерирует HTML-отчёт рядом. Возвращает путь к JSON-файлу."""
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    ts = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    ts_iso = datetime.datetime.now().isoformat(timespec='seconds')
+    git = _git_info()
+    passed  = sum(1 for r in results if r['status'] == 'PASS')
+    failed  = sum(1 for r in results if r['status'] == 'FAIL')
+    errors  = sum(1 for r in results if r['status'] == 'ERROR')
+    skipped = len(TESTS) - len(results)
+    data = {
+        'timestamp': ts_iso,
+        'git': git,
+        'crop_offset': list(crop_offset) if crop_offset else None,
+        'halted_at': halted_at,
+        'summary': {
+            'total': len(TESTS),
+            'passed': passed,
+            'failed': failed,
+            'errors': errors,
+            'skipped': skipped,
+        },
+        'tests': results,
+    }
+    json_path = os.path.join(RESULTS_DIR, f'{ts}.json')
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    latest = os.path.join(RESULTS_DIR, 'latest.json')
+    with open(latest, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    html_path = os.path.join(RESULTS_DIR, f'{ts}.html')
+    _write_html_report(html_path, data)
+
+    return json_path
+
+
+def _write_html_report(path: str, data: dict) -> None:
+    """Генерирует HTML-отчёт с edge|lumen|diff изображениями для каждого FAIL."""
+    git = data.get('git', {})
+    s = data.get('summary', {})
+    ts = data.get('timestamp', '')
+
+    rows_html: list[str] = []
+    for r in data.get('tests', []):
+        tid     = r['id']
+        status  = r['status']
+        pct     = r.get('diff_pct', -1.0)
+        thr     = r.get('threshold', 0.5)
+        label   = r.get('label', '')
+        region  = r.get('diff_region')
+
+        css_cls = {'PASS': 'pass', 'FAIL': 'fail', 'ERROR': 'error'}.get(status, 'skip')
+        pct_str = f'{pct:.2f}%' if pct >= 0 else '—'
+        region_str = _fmt_region(region) if region else '—'
+
+        # показываем скриншоты только для FAIL и ERROR
+        if status in ('FAIL', 'ERROR'):
+            ep = f'../screenshots/{tid}-edge.png'
+            lp = f'../screenshots/{tid}-lumen-cropped.png'
+            dp = f'../screenshots/{tid}-diff.png'
+            imgs = (
+                f'<div class="imgs">'
+                f'<figure><img src="{ep}" loading="lazy"><figcaption>Edge</figcaption></figure>'
+                f'<figure><img src="{lp}" loading="lazy"><figcaption>Lumen</figcaption></figure>'
+                f'<figure><img src="{dp}" loading="lazy"><figcaption>Diff</figcaption></figure>'
+                f'</div>'
+            )
+        else:
+            imgs = ''
+
+        rows_html.append(
+            f'<tr class="{css_cls}">'
+            f'<td class="tid">TEST-{tid}</td>'
+            f'<td class="status-{status}">{status}</td>'
+            f'<td class="pct">{pct_str}</td>'
+            f'<td class="thr">{thr}%</td>'
+            f'<td class="region">{region_str}</td>'
+            f'<td class="label">{label}</td>'
+            f'<td>{imgs}</td>'
+            f'</tr>'
+        )
+
+    rows = '\n'.join(rows_html)
+    html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Lumen tests {ts}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font:13px/1.5 monospace;background:#111;color:#ccc;padding:20px}}
+h1{{font-size:15px;color:#fff;margin-bottom:6px}}
+.meta{{color:#666;font-size:11px;margin-bottom:4px}}
+.summary{{margin-bottom:20px;font-size:13px}}
+.summary .p{{color:#4b4}}
+.summary .f{{color:#c44}}
+.summary .s{{color:#666}}
+table{{width:100%;border-collapse:collapse;font-size:12px}}
+th{{text-align:left;padding:4px 8px;background:#1e1e1e;color:#888;position:sticky;top:0}}
+td{{padding:5px 8px;border-bottom:1px solid #1e1e1e;vertical-align:top}}
+tr.pass td{{background:#0b1a0b}}
+tr.fail td{{background:#1a0b0b}}
+tr.error td{{background:#1a150b}}
+.tid{{width:70px;color:#777}}
+.status-PASS{{color:#4b4;font-weight:bold}}
+.status-FAIL{{color:#c44;font-weight:bold}}
+.status-ERROR{{color:#c84;font-weight:bold}}
+.pct{{width:65px}}
+.thr{{width:55px;color:#666}}
+.region{{width:160px;color:#888;font-size:11px}}
+.label{{max-width:280px;color:#999;word-break:break-word}}
+.imgs{{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}}
+figure{{margin:0}}
+figcaption{{font-size:10px;color:#555;text-align:center;margin-top:2px}}
+img{{display:block;width:310px;border:1px solid #2a2a2a}}
+</style>
+</head>
+<body>
+<h1>Lumen graphic tests — {ts}</h1>
+<div class="meta">commit {git.get('commit','?')} · {git.get('branch','?')} · {git.get('subject','')}</div>
+<div class="summary">
+  <span class="p">✓ {s.get('passed',0)} passed</span> &nbsp;
+  <span class="f">✗ {s.get('failed',0)} failed</span> &nbsp;
+  <span class="s">{s.get('errors',0)} errors &nbsp; {s.get('skipped',0)} skipped</span>
+</div>
+<table>
+<tr>
+  <th>ID</th><th>Status</th><th>Diff%</th><th>Thr.</th>
+  <th>Diff region</th><th>Label</th><th>Screenshots (Edge | Lumen | Diff)</th>
+</tr>
+{rows}
+</table>
+</body>
+</html>"""
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(html)
+
+
+def _load_latest() -> dict | None:
+    """Загружает latest.json если существует."""
+    latest = os.path.join(RESULTS_DIR, 'latest.json')
+    if not os.path.exists(latest):
+        return None
+    try:
+        with open(latest, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _load_previous() -> dict | None:
+    """Загружает предыдущий результат (второй по дате файл, не latest.json)."""
+    try:
+        files = sorted(
+            [f for f in os.listdir(RESULTS_DIR)
+             if f.endswith('.json') and f != 'latest.json'],
+            reverse=True,
+        )
+        # files[0] — только что записанный, files[1] — предыдущий
+        if len(files) < 2:
+            return None
+        with open(os.path.join(RESULTS_DIR, files[1]), encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def print_diff_vs_previous(current: list[dict], prev_data: dict) -> None:
+    """Выводит регрессии и улучшения относительно предыдущего прогона."""
+    prev_by_id = {r['id']: r for r in prev_data.get('tests', [])}
+    regressions: list[str] = []
+    improvements: list[str] = []
+    for r in current:
+        tid = r['id']
+        prev = prev_by_id.get(tid)
+        if prev is None:
+            continue
+        cur_pass  = r['status'] == 'PASS'
+        prev_pass = prev['status'] == 'PASS'
+        if prev_pass and not cur_pass:
+            delta = r['diff_pct'] - prev['diff_pct']
+            regressions.append(
+                f'  TEST-{tid}  PASS→FAIL  {prev["diff_pct"]:.2f}% → {r["diff_pct"]:.2f}%'
+                f'  (+{delta:.2f}%)  {r["label"]}'
+            )
+        elif not prev_pass and cur_pass:
+            delta = prev['diff_pct'] - r['diff_pct']
+            improvements.append(
+                f'  TEST-{tid}  FAIL→PASS  {prev["diff_pct"]:.2f}% → {r["diff_pct"]:.2f}%'
+                f'  (-{delta:.2f}%)  {r["label"]}'
+            )
+
+    prev_ts     = prev_data.get('timestamp', '?')
+    prev_commit = prev_data.get('git', {}).get('commit', '?')
+    print(f'\nДельта vs предыдущий прогон ({prev_ts}  commit {prev_commit}):')
+    if regressions:
+        print(f'  Регрессии ({len(regressions)}):')
+        for line in regressions:
+            print(line)
+    if improvements:
+        print(f'  Улучшения ({len(improvements)}):')
+        for line in improvements:
+            print(line)
+    if not regressions and not improvements:
+        print('  Изменений нет.')
+
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description='Lumen graphic tests pipeline')
-    parser.add_argument('--only', help='Запустить только указанный тест-id (e.g. 03)')
+    parser = argparse.ArgumentParser(
+        description='Lumen graphic tests pipeline',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Примеры:
+  python run.py                          # полный прогон, стоп на первом провале
+  python run.py --continue-on-fail       # собрать все результаты
+  python run.py --only 22                # только TEST-22 (transform)
+  python run.py --recheck                # перезапустить только FAIL из latest.json
+  python run.py --build --continue-on-fail  # пересобрать + полный прогон
+  python run.py --no-cache --only 05     # пересъёмка Edge для TEST-05""",
+    )
+    parser.add_argument('--only',
+                        help='Запустить только указанный тест-id (e.g. 03)')
     parser.add_argument('--continue-on-fail', action='store_true',
-                        help='Не останавливаться при первом fail-е (для диагностики)')
+                        help='Не останавливаться при первом провале')
+    parser.add_argument('--recheck', action='store_true',
+                        help='Перезапустить только тесты, упавшие в последнем прогоне (latest.json)')
+    parser.add_argument('--build', action='store_true',
+                        help='Пересобрать lumen-shell --release перед запуском')
+    parser.add_argument('--no-cache', action='store_true',
+                        help='Принудительная пересъёмка Edge-скриншотов (игнорировать кэш)')
     args = parser.parse_args()
 
     os.makedirs(SHOTS, exist_ok=True)
-    ensure_lumen()
+    ensure_lumen(force_build=args.build)
 
     crop_offset: tuple[int, int] | None = None
-    results: list[tuple[str, str, bool, float]] = []
+    results: list[dict] = []
     halted_at: str | None = None
 
+    # --- Определяем набор тестов для запуска ---
+    run_filter: set[str] | None = None
+    if args.only:
+        run_filter = {args.only}
+    elif args.recheck:
+        latest = _load_latest()
+        if latest is None:
+            print('Нет предыдущих результатов в latest.json. Сначала запустите полный прогон.')
+            return 1
+        fail_ids = {r['id'] for r in latest.get('tests', []) if r['status'] != 'PASS'}
+        if not fail_ids:
+            print('В последнем прогоне нет провалившихся тестов — нечего перепроверять.')
+            return 0
+        # Включаем TEST-00 для определения crop_offset; если он не упал — берём
+        # сохранённый offset и не тратим время на перепрогон калибровки.
+        if '00' not in fail_ids:
+            crop_offset = _load_crop_offset()
+            if crop_offset:
+                print(f'Калибровка пропущена (crop_offset={crop_offset} из кэша).')
+            else:
+                fail_ids.add('00')  # нет кэша — нужно перекалибровать
+        run_filter = fail_ids
+        print(f'--recheck: {len(fail_ids)} тест(ов) из последнего прогона')
+
+    # --- Прогон ---
     for tid, html, threshold, label in TESTS:
-        if args.only and tid != args.only:
+        if run_filter is not None and tid not in run_filter:
             continue
-        passed, crop_offset, pct = run_one(tid, html, threshold, label, crop_offset)
-        results.append((tid, label, passed, pct))
+        passed, crop_offset, pct, region = run_one(
+            tid, html, threshold, label, crop_offset,
+            no_cache=args.no_cache,
+        )
+        if pct < 0:
+            status = 'ERROR'
+        elif passed:
+            status = 'PASS'
+        else:
+            status = 'FAIL'
+        results.append({
+            'id': tid,
+            'label': label,
+            'html': html,
+            'threshold': threshold,
+            'status': status,
+            'diff_pct': round(pct, 4),
+            'diff_region': region,
+        })
         if not passed and not args.continue_on_fail:
             halted_at = tid
             break
 
+    # --- Сохранение результатов ---
+    if not args.only:
+        json_path = save_results(results, crop_offset, halted_at)
+        html_path = json_path.replace('.json', '.html')
+        print(f'\nРезультаты: {os.path.relpath(json_path, REPO)}')
+        print(f'HTML-отчёт: {os.path.relpath(html_path, REPO)}')
+        prev = _load_previous()
+        if prev:
+            print_diff_vs_previous(results, prev)
+
+    # --- Итог ---
     if halted_at:
         skipped = len([t for t in TESTS if t[0] > halted_at])
-        print(f'Pipeline stopped at TEST-{halted_at}. {skipped} tests skipped.')
+        print(f'\nPipeline stopped at TEST-{halted_at}. {skipped} tests skipped.')
         return 1
-    failed = [r for r in results if not r[2]]
+    failed = [r for r in results if r['status'] != 'PASS']
     if failed:
-        print(f'{len(failed)}/{len(results)} tests FAILED: ' + ', '.join(r[0] for r in failed))
+        print(f'\n{len(failed)}/{len(results)} tests FAILED: ' + ', '.join(r['id'] for r in failed))
         return 1
-    print(f'All {len(results)} tests passed.')
+    print(f'\nAll {len(results)} tests passed.')
     return 0
 
 if __name__ == '__main__':
