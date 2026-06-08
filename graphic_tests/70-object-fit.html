@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<!-- TEST-70: object-fit / object-position — CSS Images L3 §5.5 -->
+<html>
+<head>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 20px; box-sizing: border-box; }
+
+  h3 { color: #e0e0e0; font-size: 13px; margin: 4px 0 2px; font-family: sans-serif; }
+
+  /* Shared: 160×120 box with dark border */
+  .box {
+    display: inline-block;
+    width: 160px;
+    height: 120px;
+    border: 2px solid #888;
+    margin: 8px;
+    background: #2a2a4a;
+    vertical-align: top;
+  }
+
+  /* A wide SVG (200×80 viewBox) stretched into a 160×120 box */
+  .fit-fill    { object-fit: fill; }
+  .fit-contain { object-fit: contain; }
+  .fit-cover   { object-fit: cover; }
+  .fit-none    { object-fit: none; }
+  .fit-down    { object-fit: scale-down; }
+
+  /* object-position variants (all use contain) */
+  .pos-tl { object-fit: contain; object-position: 0% 0%; }
+  .pos-br { object-fit: contain; object-position: 100% 100%; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- Row 1: object-fit modes on a wide SVG (200×80) in a 160×120 box -->
+  <div>
+    <h3>fill (stretch)</h3>
+    <div class="box">
+      <svg class="fit-fill" width="160" height="120" viewBox="0 0 200 80" preserveAspectRatio="xMidYMid meet"
+           xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;">
+        <rect width="200" height="80" fill="#16213e"/>
+        <ellipse cx="100" cy="40" rx="80" ry="30" fill="#e94560"/>
+        <rect x="80" y="20" width="40" height="40" fill="#0f3460" rx="4"/>
+      </svg>
+    </div>
+
+    <h3>contain</h3>
+    <div class="box">
+      <svg class="fit-contain" width="160" height="120" viewBox="0 0 200 80" preserveAspectRatio="xMidYMid meet"
+           xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;object-fit:contain;">
+        <rect width="200" height="80" fill="#16213e"/>
+        <ellipse cx="100" cy="40" rx="80" ry="30" fill="#4ecca3"/>
+        <rect x="80" y="20" width="40" height="40" fill="#0f3460" rx="4"/>
+      </svg>
+    </div>
+
+    <h3>cover</h3>
+    <div class="box">
+      <svg class="fit-cover" width="160" height="120" viewBox="0 0 200 80" preserveAspectRatio="xMidYMid meet"
+           xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;object-fit:cover;">
+        <rect width="200" height="80" fill="#16213e"/>
+        <ellipse cx="100" cy="40" rx="80" ry="30" fill="#f5a623"/>
+        <rect x="80" y="20" width="40" height="40" fill="#0f3460" rx="4"/>
+      </svg>
+    </div>
+
+    <h3>none</h3>
+    <div class="box">
+      <svg class="fit-none" width="160" height="120" viewBox="0 0 80 60" preserveAspectRatio="xMidYMid meet"
+           xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;object-fit:none;">
+        <rect width="80" height="60" fill="#16213e"/>
+        <ellipse cx="40" cy="30" rx="32" ry="20" fill="#7b2d8b"/>
+        <rect x="24" y="18" width="32" height="24" fill="#0f3460" rx="3"/>
+      </svg>
+    </div>
+
+    <h3>scale-down</h3>
+    <div class="box">
+      <svg class="fit-down" width="160" height="120" viewBox="0 0 80 60" preserveAspectRatio="xMidYMid meet"
+           xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;object-fit:scale-down;">
+        <rect width="80" height="60" fill="#16213e"/>
+        <ellipse cx="40" cy="30" rx="32" ry="20" fill="#2ecc71"/>
+        <rect x="24" y="18" width="32" height="24" fill="#0f3460" rx="3"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Row 2: object-position (top-left vs center vs bottom-right) -->
+  <div style="margin-top:16px;">
+    <h3>position: center (default)</h3>
+    <div class="box">
+      <svg style="width:100%;height:100%;object-fit:contain;" viewBox="0 0 60 60"
+           xmlns="http://www.w3.org/2000/svg">
+        <rect width="60" height="60" fill="#0d0d1a"/>
+        <circle cx="30" cy="30" r="25" fill="#e74c3c" stroke="#fff" stroke-width="2"/>
+      </svg>
+    </div>
+
+    <h3>position: 0% 0% (top-left)</h3>
+    <div class="box">
+      <svg class="pos-tl" style="width:100%;height:100%;" viewBox="0 0 60 60"
+           xmlns="http://www.w3.org/2000/svg">
+        <rect width="60" height="60" fill="#0d0d1a"/>
+        <circle cx="30" cy="30" r="25" fill="#3498db" stroke="#fff" stroke-width="2"/>
+      </svg>
+    </div>
+
+    <h3>position: 100% 100% (bottom-right)</h3>
+    <div class="box">
+      <svg class="pos-br" style="width:100%;height:100%;" viewBox="0 0 60 60"
+           xmlns="http://www.w3.org/2000/svg">
+        <rect width="60" height="60" fill="#0d0d1a"/>
+        <circle cx="30" cy="30" r="25" fill="#f39c12" stroke="#fff" stroke-width="2"/>
+      </svg>
+    </div>
+  </div>
+</div>
+</body>
+</html>

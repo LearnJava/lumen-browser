@@ -196,3 +196,6 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **attr() typed** — ✅ реализован (CSS Values L4 §7.7): expand_attr_val() в style.rs раскрывает attr(<name> <type>?) до применения декларации; unit-типы (px/em/%) конкатенируются с числом атрибута; string/default — оборачиваются в CSS-кавычки для content-парсера; color/integer/number — raw-значение атрибута; fallback при отсутствии атрибута; тест 67
 
 - **font-variation-settings** — ✅ реализован (CSS Fonts L4 §6.3): parse_font_variation_settings() в style.rs; field в ComputedStyle + cascade inheritance; OwnedVariableFont в lumen-paint хранит fvar axes + Hvar; MultiFontMeasurer::char_width_varied() применяет HVAR advance width deltas для variable fonts; measure_text_w_varied() в box_tree.rs используется при line wrapping; тест 68
+
+- **object-fit** — ✅ реализован (CSS Images L3 §5.5): compute_object_fit_transform() в box_tree.rs; объекты Fill/Contain/Cover/None/ScaleDown применяются к SVG viewBox; object-position (x/y PositionComponent) управляет выравниванием контента в свободном пространстве; при Fill (default) сохраняется поведение SVG preserveAspectRatio; тест 70
+- **object-position** — ✅ реализован (CSS Images L3 §5.5): PositionComponent::Px/Percent; resolve(free_space) → px offset; default 50% 50% (центр); парсинг keyword/length/percent; тест 70
