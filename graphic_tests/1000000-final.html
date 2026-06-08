@@ -201,11 +201,14 @@
     <div class="va-bot"></div>
   </div>
 
-  <!-- ── table layout demo ────────────────────────────────────────────────── -->
+  <!-- ── table layout demo (border-collapse + border-spacing) ──────────────── -->
   <style>
     .tbl-row { margin-top: 8px; margin-left: 24px; }
     .tbl-row table { border-collapse: collapse; border-spacing: 0; }
     .tbl-row td { padding: 0; border: 0; }
+    /* border-spacing demo: separate mode with 6px equal gaps */
+    .tbl-spacing { border-spacing: 6px; background: #444; margin-top: 6px; margin-left: 24px; }
+    .tbl-spacing td { width: 40px; height: 20px; }
   </style>
   <div class="tbl-row">
     <table>
@@ -223,6 +226,16 @@
       </tr>
     </table>
   </div>
+
+  <!-- border-spacing: 6px equal gap demo -->
+  <table class="tbl-spacing">
+    <tr>
+      <td style="background:#4a90d9"></td><td style="background:#e87d2e"></td><td style="background:#5cb85c"></td>
+    </tr>
+    <tr>
+      <td style="background:#9b59b6"></td><td style="background:#e74c3c"></td><td style="background:#f1c40f"></td>
+    </tr>
+  </table>
 
   <!-- mask-image / PushMaskLayer demo: gradient masks + mask-mode -->
   <div style="margin-top:8px;display:flex;gap:8px">

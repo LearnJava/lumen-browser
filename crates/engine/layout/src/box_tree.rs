@@ -4038,7 +4038,7 @@ fn lay_out(
             // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
             // col_widths=None → per-row auto-distribution (standalone <tr> outside <table>).
             let row_h = lay_out_table_row(
-                b, content_x, content_y, content_width, None, None, measurer, viewport, children_pcb, hp,
+                b, content_x, content_y, content_width, None, None, 0.0, measurer, viewport, children_pcb, hp,
             );
             b.rect.height = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -4168,6 +4168,8 @@ fn lay_out_table_row(
     col_widths: Option<&[f32]>,
     // None for standalone <tr> outside <table>; caller must call decrement_rowspan_map after return.
     rowspan_map: Option<&mut Vec<u32>>,
+    // Horizontal gap between adjacent cells (from table's border-spacing-h). 0.0 for standalone rows.
+    h_spacing: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -4246,9 +4248,6 @@ fn lay_out_table_row(
             .map(|j| (j, explicit_w[j].unwrap_or(auto_share)))
             .collect()
     };
-
-    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h once the field exists.
-    let h_spacing: f32 = 0.0;
 
     // Step 3: lay out each cell at its column x position.
     // When col_widths is present, the column width is authoritative — clear the cell's CSS
@@ -4349,9 +4348,8 @@ fn lay_out_table(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) -> f32 {
-    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h/v once fields exist.
-    let _h_spacing: f32 = 0.0; // reserved for P4 wiring
-    let v_spacing: f32 = 0.0;
+    let h_spacing = b.style.border_spacing_h;
+    let v_spacing = b.style.border_spacing_v;
 
     let col_widths = compute_table_col_widths(b, content_width, viewport);
 
@@ -4382,6 +4380,7 @@ fn lay_out_table(
                     content_x, row_y, content_width,
                     Some(&col_widths),
                     Some(&mut rowspan_map),
+                    h_spacing,
                     measurer, viewport, pcb, hp,
                 );
                 let row_style_h = {
@@ -4439,6 +4438,7 @@ fn lay_out_table(
                         content_x, row_y + r_mt, content_width,
                         Some(&col_widths),
                         Some(&mut rowspan_map),
+                        h_spacing,
                         measurer, viewport, pcb, hp,
                     );
                     let r_pt = b.children[i].children[r].style.padding_top.resolve_or_zero(r_em, content_width, viewport);
@@ -4581,8 +4581,7 @@ fn decrement_rowspan_map(map: &mut [u32]) {
 /// outer gaps before distributing the remaining width among auto-width columns.
 /// CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
 fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -> Vec<f32> {
-    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h once the field exists.
-    let h_spacing: f32 = 0.0;
+    let h_spacing = b.style.border_spacing_h;
 
     let mut col_explicit: Vec<Option<f32>> = Vec::new();
     let mut rowspan_map: Vec<u32> = Vec::new();
@@ -9608,6 +9607,111 @@ mod tests {
         // 3 chars × 12px − 0 letter-spacing = 36px
         let w = super::measure_text_w_varied("abc", 16.0, 0.0, 0.0, &[], &axes, &VariedMeasurer);
         assert_eq!(w, 36.0, "non-empty axes должны вызывать char_width_varied");
+    }
+
+    // ── border-spacing tests ──────────────────────────────────────────────────
+
+    fn layout_table(css: &str, html_body: &str, vw: f32, vh: f32) -> super::LayoutBox {
+        let html = format!("<html><head><style>{css}</style></head><body>{html_body}</body></html>");
+        let doc = lumen_html_parser::parse(&html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(vw, vh));
+        fn find_table(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::Table) {
+                return Some(b);
+            }
+            for child in &b.children {
+                if let Some(found) = find_table(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        find_table(&root).cloned().expect("Table not found in layout tree")
+    }
+
+    /// Returns the first TableRow found in `b`, searching children and TableRowGroup wrappers.
+    fn find_first_row(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        for child in &b.children {
+            if matches!(child.kind, super::BoxKind::TableRow) {
+                return Some(child);
+            }
+            if matches!(child.kind, super::BoxKind::TableRowGroup) {
+                for row_child in &child.children {
+                    if matches!(row_child.kind, super::BoxKind::TableRow) {
+                        return Some(row_child);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Returns all TableRows found in `b` (direct or inside TableRowGroup).
+    fn collect_rows(b: &super::LayoutBox) -> Vec<&super::LayoutBox> {
+        let mut rows = Vec::new();
+        for child in &b.children {
+            if matches!(child.kind, super::BoxKind::TableRow) {
+                rows.push(child);
+            } else if matches!(child.kind, super::BoxKind::TableRowGroup) {
+                for row_child in &child.children {
+                    if matches!(row_child.kind, super::BoxKind::TableRow) {
+                        rows.push(row_child);
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn border_spacing_zero_by_default() {
+        // Without border-spacing, gap between adjacent cells should be 0.
+        let t = layout_table(
+            "table { width: 200px; } td { width: 80px; }",
+            "<table><tr><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert!(cells.len() >= 2, "expected >= 2 cells");
+        // With 0 spacing the second cell starts right after the first.
+        let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
+        assert!(gap.abs() < 1.0, "expected gap=0, got {gap}");
+    }
+
+    #[test]
+    fn border_spacing_horizontal_separates_cells() {
+        // border-spacing: 10px should add 10px between cells.
+        let t = layout_table(
+            "table { border-spacing: 10px; } td { width: 80px; }",
+            "<table><tr><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert!(cells.len() >= 2, "expected >= 2 cells, got {}", cells.len());
+        let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
+        assert!((gap - 10.0).abs() < 1.0, "expected gap=10, got {gap}");
+    }
+
+    #[test]
+    fn border_spacing_two_values_h_v() {
+        // border-spacing: 8px 20px → h=8px, v=20px; rows should be separated by 20px.
+        let t = layout_table(
+            "table { border-spacing: 8px 20px; } td { width: 80px; height: 30px; }",
+            "<table><tr><td></td></tr><tr><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let rows = collect_rows(&t);
+        assert!(rows.len() >= 2, "expected >= 2 rows, got {}", rows.len());
+        // Vertical gap between rows should be 20px.
+        let v_gap = rows[1].rect.y - (rows[0].rect.y + rows[0].rect.height);
+        assert!((v_gap - 20.0).abs() < 1.0, "expected v_gap=20, got {v_gap}");
     }
 
 }

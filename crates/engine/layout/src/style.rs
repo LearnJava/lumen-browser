@@ -2050,6 +2050,13 @@ pub struct ComputedStyle {
     pub column_rule_style: BorderStyle,
     /// CSS Multi-column L1 §4.3 — `column-rule-color`. Initial = `CurrentColor`.
     pub column_rule_color: CssColor,
+    /// CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`. Inherited. Default 0.
+    /// Horizontal gap (px) between adjacent table cells in separate-border mode.
+    /// Only applies when `border-collapse: separate` (CSS 2.1 default).
+    pub border_spacing_h: f32,
+    /// CSS 2.1 §17.6 — `border-spacing` vertical component (px). Inherited.
+    /// Vertical gap between adjacent table rows in separate-border mode.
+    pub border_spacing_v: f32,
     /// CSS Multi-column L1 §6.1 — `column-span: none | all`. По умолчанию
     /// `None` (False), `Some(true)` = `all` (элемент растягивается через
     /// все колонки). Не наследуется. Phase 0: parse+store.
@@ -4330,6 +4337,8 @@ impl ComputedStyle {
             column_rule_width: 0.0,
             column_rule_style: BorderStyle::None,
             column_rule_color: CssColor::CurrentColor,
+            border_spacing_h: 0.0,
+            border_spacing_v: 0.0,
             column_span_all: false,
             column_fill_balance: false,
             break_before: BreakValue::Auto,
@@ -4646,6 +4655,9 @@ pub fn compute_style(
         scroll_padding_left: 0.0,
         overscroll_behavior_x: OverscrollBehavior::Auto,
         overscroll_behavior_y: OverscrollBehavior::Auto,
+        // CSS Table — border-spacing inherited (CSS 2.1 §17.6).
+        border_spacing_h: inherited.border_spacing_h,
+        border_spacing_v: inherited.border_spacing_v,
         // CSS Text typography — все inherited.
         tab_size: inherited.tab_size,
         caret_color: inherited.caret_color,
@@ -10471,6 +10483,27 @@ fn apply_declaration(
                     style.row_gap = clamp_gap(row);
                     style.column_gap = clamp_gap(c);
                 }
+            }
+        }
+        "border-spacing" => {
+            // CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`.
+            // One value: both h and v. Two values: h then v. Negatives invalid — skip.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(first) = parts.first()
+                && let Some(h) = parse_length_q(first, is_quirks)
+                && let Length::Px(hpx) = h
+                && hpx >= 0.0
+            {
+                let vpx = if parts.len() >= 2 {
+                    parse_length_q(parts[1], is_quirks)
+                        .and_then(|v| if let Length::Px(px) = v { Some(px) } else { None })
+                        .filter(|px| *px >= 0.0)
+                        .unwrap_or(hpx)
+                } else {
+                    hpx
+                };
+                style.border_spacing_h = hpx;
+                style.border_spacing_v = vpx;
             }
         }
         "column-count" => {
