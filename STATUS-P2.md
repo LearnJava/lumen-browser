@@ -6,12 +6,21 @@
 
 ## In progress
 
-**J-4 | Background Fetch API stub**  branch: p2-j4-bg-fetch
-Next step: clippy + tests pass → commit → merge  crates/js/src/background_fetch.rs
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**J-4 | Background Fetch API stub** ✅ 2026-06-08 (merged)
+- `BackgroundFetchManager` на `registration.backgroundFetch`: fetch(id, reqs, opts)/get(id)/getIds()
+- `BGFetchRegistration`: id/result/failureReason/recordsAvailable/downloaded/downloadTotal/uploaded/uploadTotal/activate()/abort()/addEventListener()
+- `fetch()` синхронно хранит registration в `_fetches` перед return Promise
+- `abort()` синхронно устанавливает result='failure'/failureReason='aborted'
+- дублирующий id → TypeError reject
+- `// _lumen_bg_fetch_register/activate/abort` биндинги-заглушки для shell Phase 1
+- 6 тестов: manager_exists, fetch_returns_promise, get_returns_registration, get_ids_returns_ids, abort_sets_failure_reason, duplicate_id_rejects
+- Итого lumen-js: 1490 тестов (+6), Clippy чист
 
 **J-3 | CSS Houdini Paint Worklet Phase 0** ✅ 2026-06-08 (merged)
 - Исправлен баг: `background-image: paint(name)` не парсился в `BackgroundImage::Paint` — обработчик `"background-image"` в `style.rs:10531` пропускал ветку для `paint()`; была только в шортхэнде (~14297)
@@ -467,7 +476,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~J-1~~ | ~~**Web Audio API Phase 0**~~ — **выполнено** | L | `lumen-js` |
 | ~~J-2~~ | ~~**WebGPU API Phase 0**~~ — **выполнено** | M | `lumen-js` |
 | ~~J-3~~ | ~~**CSS Houdini Paint Worklet Phase 0**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
-| J-4 | **Background Fetch API stub** — `registration.backgroundFetch.fetch(id, requests, opts)` → Promise<BGFetchRegistration>; `.get(id)` / `.getIds()` → Promise; `BGFetchRegistration` (id/result/failureReason/recordsAvailable/downloaded/downloadTotal/uploaded/uploadTotal/activate/abort/addEventListener). Phase 0: in-memory, no actual fetch. `// _lumen_bg_fetch_*` биндинги для shell Phase 1. 6 тестов. | XS | `lumen-js` |
+| ~~J-4~~ | ~~**Background Fetch API stub**~~ — **выполнено** | XS | `lumen-js` |
 | J-5 | **Presentation API stub** — `navigator.presentation` singleton; `PresentationRequest.new([urls])` → reject NotSupportedError; `navigator.presentation.defaultRequest` getter/setter; `PresentationAvailability` + `navigator.presentation.requestAvailability()` → Promise<{value:false}>; `PresentationConnection` class (id/url/state/send/close/terminate/addEventListener). Phase 0: no-op. 5 тестов. | XS | `lumen-js` |
 
 ---
