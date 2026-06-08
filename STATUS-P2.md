@@ -38,6 +38,16 @@ Next step: Implement `RegisteredPropertiesMap` registry + JS shim for `CSS.regis
 
 ## Current / Recently Merged
 
+**L-2 | `<dialog>` modal overlay rendering + `::backdrop`** ✅ 2026-06-08 (merged)
+- `data-lumen-modal` sentinel: `showModal()` ставит атрибут, `close()` и Escape-handler снимают
+- `:modal` псевдокласс исправлен: было `false`, теперь проверяет sentinel (CSS Selectors L4 §16.5.2)
+- `find_layout_box(root, node)` — DFS-поиск LayoutBox по NodeId в forms.rs
+- `collect_modal_dialogs(doc)` — обход DOM, возвращает NodeId с `data-lumen-modal` в порядке DOM
+- `build_dialog_overlay(lb, scroll_y, vp_w, vp_h)` — `::backdrop` FillRect + dialog через `build_display_list` + PushTransform/PopTransform для центрирования во viewport
+- Shell main.rs: overlay после select dropdown, до address bar
+- 7 тестов: 5 forms (backdrop, transform, collect×3) + 2 layout (:modal псевдо)
+- Итого lumen-shell: 1097 тестов (+5 vs L-1), lumen-layout: 2411 тестов (+2), Clippy чист
+
 **L-1 | `<details>`/`<summary>` interactive collapse/expand** ✅ 2026-06-08 (merged)
 - `FormClickAction::ToggleDetails(NodeId)` — новый вариант в forms.rs для клика на `<summary>`
 - `find_parent_details(doc, node)` — ходит вверх по DOM, ищёт ближайший `<details>`
