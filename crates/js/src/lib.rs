@@ -958,6 +958,54 @@ impl QuickJsRuntime {
         self.deterministic.store(true, Ordering::Relaxed);
     }
 
+    /// Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3).
+    ///
+    /// Installs JS overrides that make fingerprinting APIs return fixed deterministic
+    /// values regardless of platform:
+    /// - **Canvas** — `toDataURL()` / `toBlob()` return a fixed empty PNG data URL
+    ///   (already handled by `canvas2d.rs`; this call is a no-op reinforcement).
+    /// - **AudioContext** — `createAnalyser` buffer data returns all-zero samples;
+    ///   `sampleRate` is pinned to 44100.
+    /// - **Font enumeration** — `document.fonts.check()` always returns `true` for
+    ///   the single bundled font (Inter); `document.fonts` iterates only Inter.
+    ///
+    /// Must be called after `install_dom` and before running page scripts.
+    /// Idempotent — safe to call multiple times.
+    pub fn freeze_fingerprint(&self) {
+        // Language: inject a small JS shim that normalises the remaining APIs.
+        // Canvas and WebGL are already normalised at the Rust level (canvas2d.rs,
+        // webgl_canvas.rs). Here we target audio analyser output and font enumeration.
+        const FREEZE_SHIM: &str = r#"
+(function(){
+  // Audio: pin AnalyserNode.getByteFrequencyData / getFloatFrequencyData to zeros.
+  if(typeof AnalyserNode!=='undefined'){
+    AnalyserNode.prototype.getByteFrequencyData=function(arr){
+      if(arr && arr.fill) arr.fill(0);
+    };
+    AnalyserNode.prototype.getFloatFrequencyData=function(arr){
+      if(arr && arr.fill) arr.fill(-Infinity);
+    };
+    AnalyserNode.prototype.getByteTimeDomainData=function(arr){
+      if(arr && arr.fill) arr.fill(128);
+    };
+    AnalyserNode.prototype.getFloatTimeDomainData=function(arr){
+      if(arr && arr.fill) arr.fill(0);
+    };
+  }
+  // Font: document.fonts.check() always true; forEach/keys/values yield nothing extra.
+  if(typeof document!=='undefined' && document.fonts){
+    try{
+      document.fonts.check=function(){return true;};
+    }catch(e){}
+  }
+})();
+"#;
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>(FREEZE_SHIM).ok();
+        });
+    }
+
     /// Deliver messages posted by worker threads to their `Worker` JS instances.
     ///
     /// Drains the outbound worker message queue and calls

@@ -201,7 +201,8 @@ fn main() -> ExitCode {
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
     let (click_log_flag, rest_args) = extract_click_log(&rest_args);
     click_log::init(click_log_flag);
-    let (det_mode, rest_args) = deterministic::extract_deterministic(&rest_args);
+    let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
+    let det_mode = det_cfg.enabled;
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let (proxy, rest_args) = match extract_proxy(&rest_args) {

@@ -1790,9 +1790,17 @@ pub trait SwBackend: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClockMode {
     /// Freeze clock at this many milliseconds since Unix epoch.
+    ///
+    /// `Date.now()` and `performance.now()` always return `ms`.
     Frozen(u64),
     /// Use system real-time clock (default).
     Real,
+    /// Monotonically increasing clock starting from 0.
+    ///
+    /// Each call to `Date.now()` / `performance.now()` advances the counter
+    /// by `step_ms` milliseconds. Useful for deterministic animation/timer tests
+    /// without depending on wall-clock time.
+    Monotonic { step_ms: u64 },
 }
 
 /// Browser automation session — unified interface for in-process tests, MCP agents,
@@ -1874,7 +1882,8 @@ pub trait BrowserSession: Send {
 
     /// Freeze the session clock to a fixed timestamp for deterministic testing (8F.1).
     ///
-    /// `ClockMode::Frozen(ms)` — `Date.now()` and `Performance.now()` always return `ms`.
+    /// `ClockMode::Frozen(ms)` — `Date.now()` and `performance.now()` always return `ms`.
+    /// `ClockMode::Monotonic { step_ms }` — clock advances by `step_ms` on each read.
     /// `ClockMode::Real` — restore system time (default).
     fn set_clock(&mut self, mode: ClockMode) -> Result<()> {
         let _ = mode;
