@@ -3548,7 +3548,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<Displ
 /// relying on specific Unicode glyphs in the bundled font.
 /// Counter types (decimal/roman/alpha/greek) are rendered as text.
 fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
-    let BoxKind::Marker { ref text, list_style_type, .. } = b.kind else { return };
+    let BoxKind::Marker { ref text, ref list_style_type, .. } = b.kind else { return };
     if !is_paint_visible(b) {
         return;
     }

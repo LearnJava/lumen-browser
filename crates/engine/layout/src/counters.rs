@@ -783,8 +783,7 @@ pub fn build_list_marker_text(
         ListStyleType::LowerAlpha => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-alpha", registry)),
         ListStyleType::UpperAlpha => format!("{}. ", format_counter_with_registry(ordinal as i32, "upper-alpha", registry)),
         ListStyleType::LowerGreek => format!("{}. ", format_counter_with_registry(ordinal as i32, "lower-greek", registry)),
-        // CSS: list-style-type (custom counter-style) — P4 adds here:
-        // ListStyleType::Custom(ref name) => format_counter_with_registry(ordinal as i32, name, registry),
+        ListStyleType::Custom(ref name) => format_counter_with_registry(ordinal as i32, name, registry),
     }
 }
 
@@ -1156,6 +1155,46 @@ mod tests {
         assert_eq!(build_list_marker_text(ListStyleType::Disc, 1, &reg), "");
         assert_eq!(build_list_marker_text(ListStyleType::Circle, 2, &reg), "");
         assert_eq!(build_list_marker_text(ListStyleType::Square, 3, &reg), "");
+    }
+
+    #[test]
+    fn build_marker_custom_registered() {
+        let mut reg = CounterStyleRegistry::new();
+        let def = CounterStyleDef {
+            system: CounterSystem::Cyclic,
+            symbols: sym(&["★", "☆"]),
+            suffix: " ".to_string(),
+            ..CounterStyleDef::default()
+        };
+        reg.insert(s("stars"), def);
+        assert_eq!(
+            build_list_marker_text(ListStyleType::Custom("stars".into()), 1, &reg),
+            "★ "
+        );
+        assert_eq!(
+            build_list_marker_text(ListStyleType::Custom("stars".into()), 2, &reg),
+            "☆ "
+        );
+    }
+
+    #[test]
+    fn build_marker_custom_unknown_falls_back_to_decimal() {
+        let reg = CounterStyleRegistry::new();
+        // Unknown custom name falls back to decimal representation.
+        assert_eq!(
+            build_list_marker_text(ListStyleType::Custom("unknown-style".into()), 5, &reg),
+            "5"
+        );
+    }
+
+    #[test]
+    fn list_style_type_parse_custom() {
+        assert_eq!(
+            ListStyleType::parse("my-counter"),
+            Some(ListStyleType::Custom("my-counter".into()))
+        );
+        assert_eq!(ListStyleType::parse("decimal"), Some(ListStyleType::Decimal));
+        assert_eq!(ListStyleType::parse("none"), Some(ListStyleType::None));
     }
 
     // ── resolve_counter_value tests ──────────────────────────────────────────

@@ -2271,7 +2271,7 @@ fn inject_marker(
     let text = match &ms.content {
         Content::Items(items) => marker_content_text(items, doc, parent_id, counters, registry),
         // CSS: list-style-type (custom counter-style) — build_list_marker_text consults registry.
-        _ => build_list_marker_text(style.list_style_type, ordinal, registry),
+        _ => build_list_marker_text(style.list_style_type.clone(), ordinal, registry),
     };
     ms.display = Display::Inline;
     children.insert(0, LayoutBox {
@@ -2281,7 +2281,7 @@ fn inject_marker(
         kind:     BoxKind::Marker {
             text,
             position:        style.list_style_position,
-            list_style_type: style.list_style_type,
+            list_style_type: style.list_style_type.clone(),
         },
         children: vec![],
         col_span: 1,
