@@ -6,11 +6,22 @@
 
 ## In progress
 
-_(нет)_
+**K-1 | Generic Sensor API stub**  branch: p1-k1-generic-sensor
+Next step: создать crates/js/src/generic_sensor.rs с Accelerometer/Gyroscope/etc.
 
 ---
 
 ## Next
+
+### K — Web Platform APIs Phase 4
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| K-1 | **Generic Sensor API** — W3C Generic Sensor API: Accelerometer, Gyroscope, LinearAccelerationSensor, GravitySensor, AbsoluteOrientationSensor, RelativeOrientationSensor, Magnetometer | S | `lumen-js` |
+| K-2 | **Video Picture-in-Picture API** — W3C PiP L1 §3: `video.requestPictureInPicture()`, `document.pictureInPictureElement`, `document.exitPictureInPicture()`, `PictureInPictureWindow` | S | `lumen-js` |
+| K-3 | **Web MIDI API stub** — W3C Web MIDI L1: `navigator.requestMIDIAccess()`, `MIDIAccess`, `MIDIInput/Output`, `MIDIMessageEvent` | XS | `lumen-js` |
+| K-4 | **StorageManager API** — WHATWG Storage §9: `navigator.storage.estimate()`, `persist()`, `persisted()`, `getDirectory()` → OPFS root | S | `lumen-js` |
+| K-5 | **FedCM (Federated Credential Management) stub** — FedCM §5: `navigator.credentials.get({identity: {providers}})` → reject NotSupportedError, `IdentityCredential` class | XS | `lumen-js` |
 
 ### I — Web Platform APIs Phase 3
 

@@ -78,6 +78,7 @@ pub mod form_validation;
 pub mod element_internals;
 pub mod presentation_api;
 pub mod webassembly;
+pub mod generic_sensor;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -881,6 +882,13 @@ impl QuickJsRuntime {
             // Phase 1 (future): integrate wasmtime or wasmer for real WASM execution.
             if let Err(e) = webassembly::install_webassembly_bindings(&ctx) {
                 eprintln!("WebAssembly bindings init failed: {}", e);
+            }
+
+            // Phase 0: W3C Generic Sensor API — Accelerometer, Gyroscope, LinearAccelerationSensor,
+            // GravitySensor, AbsoluteOrientationSensor, RelativeOrientationSensor, Magnetometer,
+            // AmbientLightSensor. start() activates sensor; no readings until Phase 1 OS integration.
+            if let Err(e) = generic_sensor::install_generic_sensor_bindings(&ctx) {
+                eprintln!("Generic Sensor API init failed: {}", e);
             }
 
             Ok(())
