@@ -32,7 +32,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 | # | Property / Feature | Effort | Blocker | Task file |
 |---|-------------------|--------|---------|-----------|
 | ~~1~~ | ~~`:fullscreen` + `:popover-open` sentinel pseudo-classes~~ — **выполнено** | XS | none | — |
-| 2 | `color-mix()` CSS parsing | S | none | → [`docs/tasks/p4-color-mix-parsing.md`](docs/tasks/p4-color-mix-parsing.md) |
+| ~~2~~ | ~~`color-mix()` CSS parsing~~ — **выполнено** (p4-color-mix-parsing, 2026-06-08) | S | none | → [`docs/tasks/p4-color-mix-parsing.md`](docs/tasks/p4-color-mix-parsing.md) |
 | 3 | `text-align-last` wiring в align_lines | S | none | → [`docs/tasks/p4-text-align-last.md`](docs/tasks/p4-text-align-last.md) |
 | 4 | `::selection` pseudo-element | S | none | — |
 | 5 | `attr()` with type (CSS Values L4) | M | none | — |
@@ -273,6 +273,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-08 | `color-mix()` | CSS Color L5 §10.2; parse_color_mix() + parse_color_with_pct() in style.rs; 3 unit tests |
 | 2026-06-02 | `image-set()` / `cross-fade()` | CSS Images L4 §5/§4; BackgroundImage::CrossFade; 5 unit tests + graphic test 59; CPU snapshot 58+59 |
 | 2026-06-02 | `::first-letter` / `::first-line` | CSS Pseudo-elements L4 §5.3-5.4; segment split + first_line_style; 4 unit tests + graphic test 58 |
 | 2026-05-29 | `var()` full recursive substitution | expand_vars() recursive + @property + env(); 40 unit tests + graphic test 50 |

@@ -40,7 +40,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Text Decoration L3 | [css-text-decor-3](https://www.w3.org/TR/css-text-decor-3/) | ✅ | underline/overline/line-through; style/color/thickness |
 | Selectors L3 | [css3-selectors](https://www.w3.org/TR/css3-selectors/) | ✅ | type/class/id/attr; combinators; :nth-*; :not() |
 | CSS Logical Properties L1 | [css-logical-1](https://www.w3.org/TR/css-logical-1/) | ✅ | margin/padding/border/inset logical → physical (LTR) |
-| CSS Color L4 | [css-color-4](https://www.w3.org/TR/css-color-4/) | 🟡 | oklch ✅; color-mix() 🟡 (algorithm stub 2026-06-03); wide-gamut display ⬜ |
+| CSS Color L4 | [css-color-4](https://www.w3.org/TR/css-color-4/) | 🟡 | oklch ✅; color-mix() ✅ (p4-color-mix-parsing 2026-06-08); wide-gamut display ⬜ |
 
 ### Tier 1 — Critical gaps (break most web pages when missing)
 
@@ -106,7 +106,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | circle() ✅ 2026-06-03 (`FloatContext.shape_circles`, `parse_circle_px`); polygon/ellipse ⬜ | **#43** |
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | offset-path motion layout algorithm stub ready (P1); CSS wiring pending (P4) | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
-| CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | 🟡 | color-mix() algorithm stub (P1 2026-06-03, `color_mix.rs`); CSS wiring pending (P4); relative color syntax ⬜ | **#46** |
+| CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | 🟡 | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ⬜ | **#46** |
 | CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | ⬜ | font-palette; @font-palette-values | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
@@ -207,7 +207,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `forced-color-adjust` | 🟡 | parsed; Forced Colors Mode ⬜ |
 | `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
 | `accent-color` | 🟡 | parsed; UA default ⬜ |
-| `color-mix()` | 🟡 | algorithm stub (P1 2026-06-03); CSS parsing wiring pending P4 |
+| `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |
 
 ### [T0] Fonts
 
@@ -616,7 +616,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax` | ✅ | container query units 2026-05-25 |
 | `env()` | ⬜ | |
 | `attr()` | 🟡 | string ✅ 2026-05-25 in content; type casting ⬜ |
-| `color-mix()` | ⬜ | CSS Color L5 |
+| `color-mix()` | ✅ | CSS Color L5; parse_color_mix() 2026-06-08 |
 | `counter()`/`counters()` | ✅ | in content; resolution 2026-05-25 |
 | `linear()` | ⬜ | CSS Easing L2 |
 
@@ -663,7 +663,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `color-mix()` | ⬜ | |
+| `color-mix()` | ✅ | parse_color_mix() 2026-06-08 |
 | `color-contrast()` | ⬜ | |
 | Relative color syntax `oklch(from ...)` | ⬜ | |
 | `@color-profile` | ⬜ | |
