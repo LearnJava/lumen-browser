@@ -6,17 +6,20 @@
 
 ## In progress
 
-**I-5 | W3C Scheduler API Level 1**  branch: p2-i5-scheduler
+(none)
+
+---
+
+## Current / Recently Merged
+
+**I-5 | W3C Scheduler API Level 1** ✅ 2026-06-08 (merged)
 - `crates/js/src/scheduler.rs` — JS-шим + Rust install fn
 - `scheduler.postTask(cb, opts)` → Promise; приоритеты user-blocking/user-visible/background
 - `scheduler.yield()` → Promise (отдаёт управление; spec §8.5)
 - `TaskController` + `TaskSignal`: setPriority → prioritychange, abort → AbortError reject
 - Phase 0: user-blocking → queueMicrotask, user-visible → setTimeout(0), background → setTimeout(200)
-- 5 unit-тестов в scheduler::tests ✅
-
----
-
-## Current / Recently Merged
+- 5 unit-тестов в scheduler::tests + 2 pre-existing dom::tests ✅
+- Итого: 1427 тестов lumen-js ✅, Clippy чист
 
 **I-2 | Screen Wake Lock API** ✅ 2026-06-08 (merged)
 - `crates/js/src/wake_lock.rs` — JS-шим `WakeLockSentinel` + `navigator.wakeLock`
@@ -417,9 +420,9 @@ Ordered by priority. Сгруппированы по домену.
 |---|--------|--------|--------|
 | ~~I-1~~ | ~~**Web Locks API**~~ — **выполнено** | S | `lumen-js` |
 | ~~I-2~~ | ~~**Screen Wake Lock API**~~ — **выполнено** | XS | `lumen-js` |
-| I-3 | **Compression Streams API** — WHATWG Compression Streams: `new CompressionStream('gzip'|'deflate'|'deflate-raw')`, `new DecompressionStream(...)`. `.readable`/`.writable` (TransformStream). Phase 0: gzip/deflate через miniz_oxide в Rust, `_lumen_compress_bytes`/`_lumen_decompress_bytes` биндинги. 5 тестов. | S | `lumen-js`, `lumen-network` |
-| I-4 | **Web Share API** — W3C Web Share L2: `navigator.share({title?, text?, url?, files?})` → Promise, `navigator.canShare(data)` → bool. Phase 0: Windows → `ShellExecute` mailto, Linux/macOS → no-op. `_lumen_share_data(title,text,url)` биндинг. 4 теста. | XS | `lumen-js` |
-| I-5 | **Scheduler API** — W3C Scheduler API L1: `scheduler.postTask(callback, {priority?, delay?, signal?})` → Promise, `scheduler.yield()` → Promise. Приоритеты: `user-blocking`/`user-visible`/`background`. Phase 0: оборачивает `setTimeout`/`queueMicrotask`. `TaskController`/`TaskSignal`. 5 тестов. | S | `lumen-js` |
+| ~~I-3~~ | ~~**Compression Streams API**~~ — **выполнено (P1)** | S | `lumen-js`, `lumen-network` |
+| ~~I-4~~ | ~~**Web Share API**~~ — **выполнено (P1)** | XS | `lumen-js` |
+| ~~I-5~~ | ~~**Scheduler API**~~ — **выполнено** | S | `lumen-js` |
 
 ---
 
