@@ -2771,35 +2771,46 @@ fn load_font_faces(
             .unwrap_or(FontStyle::Normal);
 
         for src in &rule.sources {
-            if src.kind == FontFaceSourceKind::Local {
-                continue;
-            }
+            // CSS Fonts L4 §4.1: try each source in order; first successful wins.
+            let bytes = if src.kind == FontFaceSourceKind::Local {
+                // CSS §4.3: match by family name (case-insensitive) against system fonts.
+                // Phase 0: PostScript / full-name matching not yet implemented.
+                match registry.resolve_local_bytes(&src.value, weight, style) {
+                    Some(b) => b,
+                    None => continue, // not found locally — try next source
+                }
+            } else {
+                let raw = match fetch_image_bytes(&src.value, base, sink, cookie_jar.clone()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
+                        continue;
+                    }
+                };
 
-            let raw = match fetch_image_bytes(&src.value, base, sink, cookie_jar.clone()) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
+                let decoded = match lumen_font::maybe_decode_font(&raw) {
+                    Ok(Some(d)) => d,
+                    Ok(None) => raw,
+                    Err(e) => {
+                        eprintln!("@font-face «{}»: не декодирован WOFF: {e}", rule.family);
+                        continue;
+                    }
+                };
+
+                if lumen_font::Font::parse(&decoded).is_err() {
+                    eprintln!("@font-face «{}»: невалидный шрифт {}", rule.family, src.value);
                     continue;
                 }
-            };
 
-            let bytes = match lumen_font::maybe_decode_font(&raw) {
-                Ok(Some(decoded)) => decoded,
-                Ok(None) => raw,
-                Err(e) => {
-                    eprintln!("@font-face «{}»: не декодирован WOFF: {e}", rule.family);
-                    continue;
-                }
+                decoded
             };
-
-            if lumen_font::Font::parse(&bytes).is_err() {
-                eprintln!("@font-face «{}»: невалидный шрифт {}", rule.family, src.value);
-                continue;
-            }
 
             eprintln!(
-                "@font-face загружен: «{}» weight={} src={}",
-                rule.family, weight, src.value
+                "@font-face загружен: «{}» weight={} src={} ({})",
+                rule.family,
+                weight,
+                src.value,
+                if src.kind == FontFaceSourceKind::Local { "local" } else { "url" },
             );
             registry.register_from_bytes(&rule.family, weight, style, bytes);
             break;

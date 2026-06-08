@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+K-5 | **CSS `local()` system font matching** | branch: p2-k5-local-font
+Next step: add `resolve_local_bytes()` to FontRegistry, wire in load_font_faces() shell/src/main.rs:2773
 
 ---
 
