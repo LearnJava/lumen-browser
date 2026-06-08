@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**J-2 | WebGPU API Phase 0**  branch: p2-j2-webgpu
+Next step: clippy + tests green → commit → merge
 
 ---
 
