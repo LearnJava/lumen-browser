@@ -71,6 +71,7 @@ pub mod web_locks;
 pub mod scheduler;
 pub mod reporting_api;
 pub mod web_audio;
+pub mod webxr;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -832,6 +833,13 @@ impl QuickJsRuntime {
             // Phase 0: no DSP; graph operations in-memory only; decodeAudioData returns silent buffer.
             if let Err(e) = web_audio::install_web_audio_api(&ctx) {
                 eprintln!("Web Audio API init failed: {}", e);
+            }
+
+            // Install WebXR Device API (W3C WebXR Device API §5) — after DOM/navigator.
+            // Phase 0: isSessionSupported() → false, requestSession() → NotSupportedError.
+            // XRSession/XRFrame/XRReferenceSpace/XRView stubs exported on window.
+            if let Err(e) = webxr::install_webxr_bindings(&ctx) {
+                eprintln!("WebXR Device API init failed: {}", e);
             }
 
             Ok(())
