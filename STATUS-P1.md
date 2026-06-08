@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+M-2: DOMParser + XMLSerializer  branch: p1-m2-dom-parser
+Next step: create crates/js/src/dom_parser.rs + add _lumen_get_attr_names binding
 
 ---
 
