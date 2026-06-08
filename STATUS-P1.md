@@ -6,8 +6,7 @@
 
 ## In progress
 
-H-5: Periodic Background Sync API  branch: p1-h5-periodic-sync
-Next step: clippy + tests → merge  crates/js/src/periodic_sync.rs
+_(нет)_
 
 ---
 
@@ -21,7 +20,7 @@ Next step: clippy + tests → merge  crates/js/src/periodic_sync.rs
 | ~~H-2~~ | ~~**Badging API**~~ — **выполнено** | XS | `lumen-js` |
 | ~~H-3~~ | ~~**Virtual Keyboard API**~~ — **выполнено** | XS | `lumen-js` |
 | ~~H-4~~ | ~~**Reporting API**~~ — **выполнено** | S | `lumen-js` |
-| H-5 | **Periodic Background Sync API** — W3C PBSync: `registration.periodicSync.register(tag, {minInterval})`, `.unregister()`, `.getTags()` → Promise. 4 теста. | XS | `lumen-js` |
+| ~~H-5~~ | ~~**Periodic Background Sync API**~~ — **выполнено** | XS | `lumen-js` |
 
 ### F — Security & Media APIs
 
@@ -48,6 +47,7 @@ Next step: clippy + tests → merge  crates/js/src/periodic_sync.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | H-5: Periodic Background Sync API | W3C PBSync Phase 0: `registration.periodicSync.register(tag, {minInterval})` хранит тег в памяти, `.unregister(tag)` удаляет, `.getTags()` → Promise<string[]>. Lazy-getter через Object.defineProperty. Нативные биндинги `_lumen_periodic_sync_register` / `_lumen_periodic_sync_unregister` для shell Phase 1 (OS task scheduler). Новый модуль `crates/js/src/periodic_sync.rs`. lumen-js: clippy чист, 4 unit-теста (+4 vs 1415). |
 | 2026-06-08 | H-4: Reporting API | W3C Reporting API L1 Phase 0: `new ReportingObserver(callback, opts)` с opts `{types, buffered}`. `.observe()` — регистрирует наблюдатель, replays buffered reports при buffered=true. `.disconnect()` — снимает, очищает очередь. `.takeRecords()` → Report[]. `Report {type, url, body}` класс с `toJSON()`. Глобальный буфер последних 100 отчётов. `_lumen_deliver_report(type, url, body_json)` — биндинг для shell Phase 1 (CSP violations, deprecation, intervention, crash). Новый модуль `crates/js/src/reporting_api.rs`. lumen-js: clippy чист, 6 unit-тестов (+6 vs 1411). |
 | 2026-06-08 | H-3: Virtual Keyboard API | W3C Virtual Keyboard API Phase 0: `navigator.virtualKeyboard` singleton. `show()`/`hide()` — no-op запросы отображения VK. `boundingRect` → DOMRect(0,0,0,0) (Phase 0: нулевая геометрия, ленивая инициализация). `overlaysContent` — bool getter/setter. `geometrychange` event + `addEventListener`/`ongeometrychange`. `_lumen_fire_vk_geometry_change(x,y,w,h)` — биндинг для shell Phase 1. `_lumen_vk_show`/`_lumen_vk_hide` — no-op хуки. Новый модуль `crates/js/src/virtual_keyboard.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1406). |
 | 2026-06-08 | H-2: Badging API | W3C Badging API Phase 0: `navigator.setAppBadge(count?)` → Promise<undefined>, `navigator.clearAppBadge()` → Promise<undefined>. Phase 0: no-op стабы; `_lumen_set_app_badge(count)` биндинг для shell Phase 1 (OS badge — Win32 taskbar / Linux Unity / macOS dock). Новый модуль `crates/js/src/badging.rs`. lumen-js: clippy чист, 4 unit-теста (+4 vs 1401). |
