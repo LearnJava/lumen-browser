@@ -56,6 +56,8 @@ pub enum FormClickAction {
     /// Toggle the `open` attribute on a `<details>` element (HTML5 §4.11.1).
     /// NodeId is the `<details>` parent of the clicked `<summary>`.
     ToggleDetails(NodeId),
+    /// Slide a range input. Shell resolves the new value from click coords + box rect.
+    SlideRange(NodeId),
     Nothing,
 }
 
@@ -74,6 +76,7 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
                 }
                 InputType::Color => FormClickAction::OpenColorPicker(node),
                 InputType::Submit => FormClickAction::SubmitForm(node),
+                InputType::Range => FormClickAction::SlideRange(node),
                 _ => FormClickAction::Nothing,
             }
         }
@@ -147,6 +150,29 @@ pub fn set_value(doc: &mut Document, id: NodeId, value: &str) {
             attrs.push(Attribute { name: QualName::html("value"), value: value.to_owned() });
         }
     }
+}
+
+/// Update a range input's `value` attribute from a click at `click_x` within
+/// its bounding rect. Reads `min`/`max` from the DOM and clamps the result.
+///
+/// `slider_rect` is the content-box rect of the `<input type="range">` element.
+/// `click_x` is the page-space x coordinate.
+pub fn apply_range_value(doc: &mut Document, id: NodeId, slider_rect: lumen_core::geom::Rect, click_x: f32) {
+    let thumb_r = 8.0_f32;
+    let track_x = slider_rect.x + thumb_r / 2.0;
+    let track_w = (slider_rect.width - thumb_r).max(1.0);
+
+    let fraction = ((click_x - track_x) / track_w).clamp(0.0, 1.0);
+
+    let min: f32 = doc.get(id).get_attr("min")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0.0);
+    let max: f32 = doc.get(id).get_attr("max")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(100.0);
+
+    let value = min + fraction * (max - min);
+    set_value(doc, id, &format!("{:.6}", value));
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1488,5 +1514,62 @@ mod tests {
         let has_pop = overlay.iter().any(|c| matches!(c, DisplayCommand::PopTransform));
         assert!(has_push, "overlay must contain PushTransform");
         assert!(has_pop, "overlay must contain PopTransform");
+    }
+
+    // ── Range input tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn classify_click_range_input_returns_slide_range() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "range".to_owned() });
+        }
+        doc.append_child(doc.root(), input);
+        assert!(matches!(classify_click(&doc, input), FormClickAction::SlideRange(_)));
+    }
+
+    #[test]
+    fn apply_range_value_sets_correct_value() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "range".to_owned() });
+            attrs.push(Attribute { name: QualName::html("min"), value: "0".to_owned() });
+            attrs.push(Attribute { name: QualName::html("max"), value: "100".to_owned() });
+        }
+        doc.append_child(doc.root(), input);
+
+        // Click at exact midpoint of a 100px-wide slider rect.
+        let rect = lumen_core::geom::Rect::new(0.0, 0.0, 100.0, 20.0);
+        apply_range_value(&mut doc, input, rect, 50.0);
+
+        let val: f32 = doc.get(input)
+            .get_attr("value")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(-1.0);
+        assert!(val >= 40.0 && val <= 60.0, "expected ~50.0, got {val}");
+    }
+
+    #[test]
+    fn apply_range_value_clamps_to_bounds() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "range".to_owned() });
+            attrs.push(Attribute { name: QualName::html("min"), value: "0".to_owned() });
+            attrs.push(Attribute { name: QualName::html("max"), value: "100".to_owned() });
+        }
+        doc.append_child(doc.root(), input);
+
+        // Click far to the left of the track → value should be min (0).
+        let rect = lumen_core::geom::Rect::new(10.0, 0.0, 100.0, 20.0);
+        apply_range_value(&mut doc, input, rect, -1000.0);
+
+        let val: f32 = doc.get(input)
+            .get_attr("value")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(-1.0);
+        assert!(val >= 0.0, "value clamped below min should be >= 0, got {val}");
     }
 }

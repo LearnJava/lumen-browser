@@ -7700,6 +7700,13 @@ impl Lumen {
                         outcome: click_log::ClickOutcome::FormAction("ToggleDetails"),
                     });
                 }
+                forms::FormClickAction::SlideRange(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("SlideRange"),
+                    });
+                }
             }
         }
 
@@ -7742,6 +7749,20 @@ impl Lumen {
                         "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
                         id.index()
                     ));
+                }
+                self.relayout();
+            }
+            forms::FormClickAction::SlideRange(id) => {
+                if let (Some(src), Some(lb)) =
+                    (self.layout_source.as_mut(), self.layout_box.as_ref())
+                    && let Some(rect) = forms::find_box_rect(lb, id)
+                {
+                    forms::apply_range_value(
+                        &mut src.document.lock().unwrap(),
+                        id,
+                        rect,
+                        page_x,
+                    );
                 }
                 self.relayout();
             }
@@ -9202,6 +9223,8 @@ impl Lumen {
                 }
                 self.relayout();
             }
+            // Range slide via keyboard activation: no-op (no position known).
+            forms::FormClickAction::SlideRange(_) => {}
             forms::FormClickAction::SubmitForm(_) | forms::FormClickAction::Nothing => {
                 // Link navigation.
                 let href = self.layout_source.as_ref().and_then(|src| {

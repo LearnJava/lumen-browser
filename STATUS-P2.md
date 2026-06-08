@@ -6,9 +6,9 @@
 
 ## In progress
 
-**A-1: CSS Properties & Values API (Houdini)**  
-Branch: `p2-a1-css-properties-values`  
-Next step: Implement `RegisteredPropertiesMap` registry + JS shim for `CSS.registerProperty()` in lumen-js/src/css_properties_values_api.rs
+**L-3: `<input type="range">` slider visual rendering + drag**  
+Branch: `p2-l3-range-input`  
+Next step: Add `FormControlKind::Range { value, min, max }` in box_tree.rs, render track/thumb in display_list.rs, handle click in forms.rs
 
 ---
 

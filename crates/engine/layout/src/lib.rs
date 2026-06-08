@@ -230,7 +230,8 @@ fn collect_clickable_rec(
                 FormControlKind::Button => ClickableKind::Button,
                 FormControlKind::Input { .. }
                 | FormControlKind::Select { .. }
-                | FormControlKind::Textarea => ClickableKind::Input,
+                | FormControlKind::Textarea
+                | FormControlKind::Range { .. } => ClickableKind::Input,
             };
             out.push(ClickableElement {
                 node_id: b.node,
@@ -15352,6 +15353,73 @@ mod tests {
             twrap_last_end_x(&balanced) > 16.0,
             "last line must have more than one word after balance"
         );
+    }
+
+    #[test]
+    fn range_input_creates_range_kind() {
+        use box_tree::FormControlKind;
+        let doc = lumen_html_parser::parse(r#"<input type="range" min="10" max="90" value="50">"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let found = find_range_kind(&root);
+        assert!(found.is_some(), "range input should produce FormControlKind::Range");
+        if let Some(FormControlKind::Range { value, min, max }) = found {
+            assert!((value - 50.0).abs() < 0.001, "value should be 50, got {value}");
+            assert!((min - 10.0).abs() < 0.001, "min should be 10, got {min}");
+            assert!((max - 90.0).abs() < 0.001, "max should be 90, got {max}");
+        }
+    }
+
+    #[test]
+    fn range_input_defaults_min_max() {
+        use box_tree::FormControlKind;
+        let doc = lumen_html_parser::parse(r#"<input type="range">"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let found = find_range_kind(&root);
+        assert!(found.is_some(), "range input without min/max should produce FormControlKind::Range");
+        if let Some(FormControlKind::Range { value, min, max }) = found {
+            assert!((min - 0.0).abs() < 0.001, "default min should be 0");
+            assert!((max - 100.0).abs() < 0.001, "default max should be 100");
+            assert!((value - 50.0).abs() < 0.001, "default value should be midpoint 50");
+        }
+    }
+
+    #[test]
+    fn range_input_value_clamped_to_max() {
+        use box_tree::FormControlKind;
+        let doc = lumen_html_parser::parse(r#"<input type="range" min="0" max="10" value="999">"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        if let Some(FormControlKind::Range { value, max, .. }) = find_range_kind(&root) {
+            assert!(value <= max, "value {value} should be clamped to max {max}");
+        }
+    }
+
+    #[test]
+    fn range_input_is_clickable() {
+        let doc = lumen_html_parser::parse(r#"<input type="range">"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            elems.iter().any(|e| matches!(e.kind, ClickableKind::Input)),
+            "range input should be collected as clickable Input"
+        );
+    }
+
+    fn find_range_kind(root: &LayoutBox) -> Option<box_tree::FormControlKind> {
+        if let BoxKind::FormControl { kind } = &root.kind {
+            if matches!(kind, box_tree::FormControlKind::Range { .. }) {
+                return Some(kind.clone());
+            }
+        }
+        for child in &root.children {
+            if let Some(k) = find_range_kind(child) {
+                return Some(k);
+            }
+        }
+        None
     }
 
 }

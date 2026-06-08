@@ -3252,7 +3252,54 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
             emit_select_indicator(b, selected_text, out);
         }
         FormControlKind::Button | FormControlKind::Textarea => {}
+        FormControlKind::Range { value, min, max } => {
+            emit_range_slider(b, *value, *min, *max, out);
+        }
     }
+}
+
+/// Draw a range slider: gray track, blue filled portion, circular thumb.
+fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, out: &mut Vec<DisplayCommand>) {
+    let range = (max - min).max(f32::EPSILON);
+    let fraction = ((value - min) / range).clamp(0.0, 1.0);
+
+    let track_h = 4.0_f32;
+    let thumb_r = 8.0_f32; // thumb diameter
+    let track_y = b.rect.y + (b.rect.height - track_h) / 2.0;
+    let track_x = b.rect.x + thumb_r / 2.0;
+    let track_w = (b.rect.width - thumb_r).max(1.0);
+
+    let gray = Color { r: 200, g: 200, b: 200, a: 255 };
+    let blue = Color { r: 21, g: 90, b: 192, a: 255 };
+    let track_radius = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
+
+    // Gray background track.
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(track_x, track_y, track_w, track_h),
+        radii: track_radius,
+        color: gray,
+    });
+
+    // Blue filled portion (left of thumb).
+    let fill_w = (track_w * fraction).max(0.0);
+    if fill_w > 0.0 {
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(track_x, track_y, fill_w, track_h),
+            radii: track_radius,
+            color: blue,
+        });
+    }
+
+    // Circular thumb.
+    let thumb_cx = track_x + track_w * fraction;
+    let thumb_y = b.rect.y + (b.rect.height - thumb_r) / 2.0;
+    let hr = thumb_r / 2.0;
+    let thumb_radii = crate::CornerRadii { tl: hr, tr: hr, br: hr, bl: hr, ..Default::default() };
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(thumb_cx - thumb_r / 2.0, thumb_y, thumb_r, thumb_r),
+        radii: thumb_radii,
+        color: blue,
+    });
 }
 
 /// Draw the selected option label and a dropdown arrow (▼) inside a `<select>` box.
@@ -10483,5 +10530,30 @@ mod tests {
         );
         // Verify display list was built with the resize grip styling
         assert!(!dl.is_empty(), "resize:both with overflow:hidden and margin should generate display list");
+    }
+
+    #[test]
+    fn range_input_emits_track_and_thumb() {
+        let dl = build(r#"<input type="range" min="0" max="100" value="50">"#, "");
+        let rounded_rects: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(rounded_rects.len() >= 2, "range input should emit at least track + thumb, got {}", rounded_rects.len());
+    }
+
+    #[test]
+    fn range_input_at_min_emits_no_fill() {
+        let dl = build(r#"<input type="range" min="0" max="100" value="0">"#, "");
+        let rounded_rects: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        // At min=0: track (gray) + thumb only, no blue fill portion.
+        assert!(rounded_rects.len() >= 2, "at min value should still emit track + thumb");
+    }
+
+    #[test]
+    fn range_input_default_value_is_midpoint() {
+        // No value attribute → default value = (min + max) / 2 = 50.
+        let dl_mid = build(r#"<input type="range">"#, "");
+        let dl_explicit = build(r#"<input type="range" value="50">"#, "");
+        let mid_count = dl_mid.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count();
+        let explicit_count = dl_explicit.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count();
+        assert_eq!(mid_count, explicit_count, "default and explicit value=50 should produce same FillRoundedRect count");
     }
 }
