@@ -6,8 +6,7 @@
 
 ## In progress
 
-H-4: Reporting API  branch: p1-h4-reporting-api
-Next step: реализовать `reporting_api.rs`, подключить в `lib.rs`  crates/js/src/reporting_api.rs:1
+_(нет)_
 
 ---
 
@@ -20,7 +19,7 @@ Next step: реализовать `reporting_api.rs`, подключить в `l
 | ~~H-1~~ | ~~**Cookie Store API**~~ — **выполнено** | S | `lumen-js` |
 | ~~H-2~~ | ~~**Badging API**~~ — **выполнено** | XS | `lumen-js` |
 | ~~H-3~~ | ~~**Virtual Keyboard API**~~ — **выполнено** | XS | `lumen-js` |
-| H-4 | **Reporting API** — W3C Reporting API L1: `ReportingObserver(callback, opts)`, `.observe()/.disconnect()/.takeRecords()`, `Report {type, url, body}`, `_lumen_deliver_report` binding. 5 тестов. | S | `lumen-js` |
+| ~~H-4~~ | ~~**Reporting API**~~ — **выполнено** | S | `lumen-js` |
 | H-5 | **Periodic Background Sync API** — W3C PBSync: `registration.periodicSync.register(tag, {minInterval})`, `.unregister()`, `.getTags()` → Promise. 4 теста. | XS | `lumen-js` |
 
 ### F — Security & Media APIs
@@ -48,6 +47,7 @@ Next step: реализовать `reporting_api.rs`, подключить в `l
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | H-4: Reporting API | W3C Reporting API L1 Phase 0: `new ReportingObserver(callback, opts)` с opts `{types, buffered}`. `.observe()` — регистрирует наблюдатель, replays buffered reports при buffered=true. `.disconnect()` — снимает, очищает очередь. `.takeRecords()` → Report[]. `Report {type, url, body}` класс с `toJSON()`. Глобальный буфер последних 100 отчётов. `_lumen_deliver_report(type, url, body_json)` — биндинг для shell Phase 1 (CSP violations, deprecation, intervention, crash). Новый модуль `crates/js/src/reporting_api.rs`. lumen-js: clippy чист, 6 unit-тестов (+6 vs 1411). |
 | 2026-06-08 | H-3: Virtual Keyboard API | W3C Virtual Keyboard API Phase 0: `navigator.virtualKeyboard` singleton. `show()`/`hide()` — no-op запросы отображения VK. `boundingRect` → DOMRect(0,0,0,0) (Phase 0: нулевая геометрия, ленивая инициализация). `overlaysContent` — bool getter/setter. `geometrychange` event + `addEventListener`/`ongeometrychange`. `_lumen_fire_vk_geometry_change(x,y,w,h)` — биндинг для shell Phase 1. `_lumen_vk_show`/`_lumen_vk_hide` — no-op хуки. Новый модуль `crates/js/src/virtual_keyboard.rs`. lumen-js: clippy чист, 5 unit-тестов (+5 vs 1406). |
 | 2026-06-08 | H-2: Badging API | W3C Badging API Phase 0: `navigator.setAppBadge(count?)` → Promise<undefined>, `navigator.clearAppBadge()` → Promise<undefined>. Phase 0: no-op стабы; `_lumen_set_app_badge(count)` биндинг для shell Phase 1 (OS badge — Win32 taskbar / Linux Unity / macOS dock). Новый модуль `crates/js/src/badging.rs`. lumen-js: clippy чист, 4 unit-теста (+4 vs 1401). |
 | 2026-06-08 | H-1: Cookie Store API | WHATWG Cookie Store API Phase 0: глобальный `cookieStore` — `get(name|opts)` → Promise<CookieListItem\|null>, `getAll(opts?)` → Promise<CookieListItem[]>, `set(name, value|CookieInit)` → Promise, `delete(name|opts)` → Promise. `CookieChangeEvent {changed, deleted}` + `onchange`/`addEventListener('change')`. `CookieStoreManager` на `ServiceWorkerRegistration.prototype.cookies` (stub: subscribe/unsubscribe/getSubscriptions). Phase 0: in-memory хранилище `_cookies`, one-way sync в `document.cookie` при set. `_lumen_cookie_store_set`/`_lumen_cookie_store_delete` биндинги для shell Phase 1. Новый модуль `crates/js/src/cookie_store.rs`. lumen-js: clippy чист, 8 unit-тестов (+8 vs 1393). |
