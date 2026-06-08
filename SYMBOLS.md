@@ -2226,7 +2226,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (710 symbols)
+## lumen-shell  (713 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2255,16 +2255,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
 `crates/shell/src/animation_scheduler.rs:75` **fn** `clear` — Удалить все записи для элементов, которых больше нет в дереве
 `crates/shell/src/backend_factory.rs:39` **fn** `create_backend` — Создаёт windowed рендер-бэкенд для окна `window`
-`crates/shell/src/bidi/protocol.rs:62` **struct** `BidiState` — Состояние одного BiDi-соединения
-`crates/shell/src/bidi/protocol.rs:98` **fn** `new` — Новое пустое состояние соединения
-`crates/shell/src/bidi/protocol.rs:137` **fn** `locale`
-`crates/shell/src/bidi/protocol.rs:146` **fn** `timezone`
-`crates/shell/src/bidi/protocol.rs:153` **fn** `is_offline`
-`crates/shell/src/bidi/protocol.rs:160` **fn** `user_agent_for`
-`crates/shell/src/bidi/protocol.rs:176` **fn** `record_response_body`
-`crates/shell/src/bidi/protocol.rs:190` **struct** `DispatchResult` — Результат обработки одной команды
-`crates/shell/src/bidi/protocol.rs:205` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
-`crates/shell/src/bidi/server.rs:21` **fn** `spawn` — Запустить BiDi-сервер на `127.0.0.1:port`. Не блокирует — поток в фоне
+`crates/shell/src/bidi/protocol.rs:61` **struct** `BidiState` — Connection-level BiDi state
+`crates/shell/src/bidi/protocol.rs:103` **fn** `new` — Новое пустое состояние соединения
+`crates/shell/src/bidi/protocol.rs:142` **fn** `locale`
+`crates/shell/src/bidi/protocol.rs:151` **fn** `timezone`
+`crates/shell/src/bidi/protocol.rs:158` **fn** `is_offline`
+`crates/shell/src/bidi/protocol.rs:165` **fn** `user_agent_for`
+`crates/shell/src/bidi/protocol.rs:178` **fn** `cache_behavior`
+`crates/shell/src/bidi/protocol.rs:185` **fn** `intercept_count`
+`crates/shell/src/bidi/protocol.rs:197` **fn** `record_response_body`
+`crates/shell/src/bidi/protocol.rs:211` **struct** `DispatchResult` — Результат обработки одной команды
+`crates/shell/src/bidi/protocol.rs:226` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
+`crates/shell/src/bidi/server.rs:14` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
+`crates/shell/src/bidi/transport.rs:18` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
 `crates/shell/src/click_log.rs:27` **fn** `init` — Вызвать один раз при старте с результатом разбора флага --activity-log
 `crates/shell/src/click_log.rs:43` **fn** `is_enabled`
 `crates/shell/src/click_log.rs:97` **struct** `ClickInfo` — Клик мышью: window-координаты и что под курсором
@@ -3395,4 +3398,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3330 symbols in 20 crates*
+*Total: 3333 symbols in 20 crates*
