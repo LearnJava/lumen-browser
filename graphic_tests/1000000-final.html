@@ -819,5 +819,29 @@
 <div class="sel-swatch sel-custom"></div>
 </div><!-- /::selection card -->
 
+<!-- attr() typed demo card -->
+<style>
+  .attr-card { margin: 8px; padding: 12px; background: #fff; border: 1px solid #ddd; border-radius: 4px; }
+  .attr-card h4 { margin: 0 0 8px; font-size: 11px; font-family: sans-serif; color: #555; }
+  .attr-bar {
+    height: 28px; margin-bottom: 6px; border-radius: 3px; background: #3498db;
+    display: flex; align-items: center;
+  }
+  .attr-bar::before {
+    content: attr(data-label);
+    font-family: monospace; font-size: 11px; color: #fff;
+    padding: 0 8px;
+  }
+  .ab1 { width: 120px; background: #3498db; }
+  .ab2 { width: 220px; background: #27ae60; }
+  .ab3 { width: 80px;  background: #e74c3c; }
+</style>
+<div class="attr-card">
+  <h4>attr() — content:attr(data-label)</h4>
+  <div class="attr-bar ab1" data-label="A: 120px"></div>
+  <div class="attr-bar ab2" data-label="B: 220px"></div>
+  <div class="attr-bar ab3" data-label="C: 80px"></div>
+</div><!-- /attr() card -->
+
 </body>
 </html>

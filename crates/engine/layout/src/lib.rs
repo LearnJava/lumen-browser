@@ -15433,10 +15433,10 @@ mod tests {
     }
 
     fn find_range_kind(root: &LayoutBox) -> Option<box_tree::FormControlKind> {
-        if let BoxKind::FormControl { kind } = &root.kind {
-            if matches!(kind, box_tree::FormControlKind::Range { .. }) {
-                return Some(kind.clone());
-            }
+        if let BoxKind::FormControl { kind } = &root.kind
+            && matches!(kind, box_tree::FormControlKind::Range { .. })
+        {
+            return Some(kind.clone());
         }
         for child in &root.children {
             if let Some(k) = find_range_kind(child) {

@@ -2904,7 +2904,15 @@ pub fn apply_container_rules(
                 let pw = style.font_weight;
                 let inherited = style.clone();
                 for decl in &rule.declarations {
-                    apply_declaration(style, decl, em, viewport, pw, &inherited, is_quirks);
+                    let attr_buf;
+                    let effective_decl: &Declaration = if decl.value.contains("attr(") {
+                        let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
+                        attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+                        &attr_buf
+                    } else {
+                        decl
+                    };
+                    apply_declaration(style, effective_decl, em, viewport, pw, &inherited, is_quirks);
                 }
             }
         }
@@ -5122,7 +5130,16 @@ pub fn compute_style(
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
     for (_, _, _, _, _, _, decl) in &matched {
-        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited, is_quirks);
+        // CSS Values L4 §7.7: expand attr() typed references before applying.
+        let attr_buf;
+        let effective_decl: &Declaration = if decl.value.contains("attr(") {
+            let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
+            attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+            &attr_buf
+        } else {
+            decl
+        };
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, is_quirks);
     }
 
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
@@ -5447,7 +5464,15 @@ pub fn compute_pseudo_element_style(
     let em_basis = style.font_size;
     let parent_weight = parent.font_weight;
     for (_, _, _, _, decl) in &matched {
-        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, parent, is_quirks);
+        let attr_buf;
+        let effective_decl: &Declaration = if decl.value.contains("attr(") {
+            let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
+            attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+            &attr_buf
+        } else {
+            decl
+        };
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, parent, is_quirks);
     }
 
     // ::before/::after require content: to render; ::first-letter/::first-line do not.
@@ -9305,6 +9330,112 @@ fn find_env_open(s: &str) -> Option<usize> {
 /// из реального viewport state (safe-area, виртуальная клавиатура).
 fn empty_env_registry() -> HashMap<String, String> {
     HashMap::new()
+}
+
+/// CSS dimension units recognised in `attr(<name> <unit>)` substitution.
+/// When the type annotation matches one of these, the attribute value (a
+/// numeric string) gets the unit appended: `attr(data-w px)` with
+/// `data-w="100"` → `"100px"`.
+const ATTR_UNIT_SUFFIXES: &[&str] = &[
+    "px", "em", "rem", "ex", "ch", "vw", "vh", "vmin", "vmax",
+    "cm", "mm", "in", "pt", "pc", "q",
+    "%",
+    "deg", "rad", "grad", "turn",
+    "s", "ms",
+    "hz", "khz",
+    "dpi", "dpcm", "dppx",
+    "fr",
+];
+
+/// Finds the byte offset of the first `attr(` token in `s` that is
+/// outside string literals (single or double quotes).
+fn find_attr_open(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_string: Option<u8> = None;
+    while i + 5 <= bytes.len() {
+        let b = bytes[i];
+        match (in_string, b) {
+            (Some(q), c) if c == q => {
+                in_string = None;
+                i += 1;
+            }
+            (None, b'"') | (None, b'\'') => {
+                in_string = Some(b);
+                i += 1;
+            }
+            (None, b'a') if bytes[i..].starts_with(b"attr(") => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// CSS Values L4 §7.7 — `attr()` typed substitution.
+///
+/// Expands the first `attr(...)` occurrence in `value` using the DOM
+/// attribute values of `node`. Supports the full L4 typed form:
+///
+/// ```text
+/// attr( <attr-name> [ <type> ]? [ , <fallback> ]? )
+/// ```
+///
+/// * If `<type>` is a CSS dimension unit (`px`, `em`, `%`, …), the
+///   attribute value is concatenated with the unit: `attr(data-w px)` with
+///   `data-w="100"` → `"100px"`.
+/// * Otherwise (`color`, `string`, `integer`, `number`, …) the attribute
+///   value is used verbatim as a CSS token.
+/// * If the attribute is absent: use `<fallback>` when present, else
+///   `None` (declaration treated as invalid per CSS Values L4 §7.7.1).
+fn expand_attr_val(value: &str, doc: &Document, node: NodeId) -> Option<String> {
+    let start = find_attr_open(value)?;
+    let prefix = &value[..start];
+    let after_open = &value[start + 5..]; // skip "attr("
+    let (args, after_close) = parse_balanced_to_close(after_open)?;
+
+    // Split by the first top-level comma to separate spec from fallback.
+    let (attr_spec, fallback_opt) = split_var_args(args);
+
+    // attr_spec: "<name>" or "<name> <type>".
+    let mut parts = attr_spec.splitn(2, |c: char| c.is_ascii_whitespace());
+    let attr_name = parts.next().unwrap_or("").trim();
+    let attr_type = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+
+    if attr_name.is_empty() {
+        return None;
+    }
+
+    let node_ref = doc.get(node);
+    let resolved: String = if let Some(raw_val) = node_ref.get_attr(attr_name) {
+        let raw = raw_val.trim();
+        if attr_type.is_empty() || attr_type == "string" {
+            // CSS Values L4 §7.7.1: default type is `string` — return a CSS
+            // string literal so downstream parsers (e.g. `content`) treat the
+            // value as a quoted string token rather than an identifier.
+            // Escape embedded double-quotes and backslashes per CSS §9.
+            let escaped = raw.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{escaped}\"")
+        } else if ATTR_UNIT_SUFFIXES.contains(&attr_type.as_str()) {
+            // Numeric attribute value + CSS unit.
+            format!("{raw}{attr_type}")
+        } else {
+            // color, integer, number, length, angle, time, frequency, url …
+            // Treat as a raw CSS token; the property-specific parser handles it.
+            raw.to_string()
+        }
+    } else {
+        // Attribute absent — use fallback or signal invalid.
+        let fb = fallback_opt?;
+        fb.to_string()
+    };
+
+    let combined = format!("{prefix}{resolved}{after_close}");
+    // There may be more attr() in the combined result.
+    if combined.contains("attr(") {
+        expand_attr_val(&combined, doc, node)
+    } else {
+        Some(combined)
+    }
 }
 
 /// Находит позицию первого `var(` в `s` вне строковых литералов. Возвращает
@@ -24113,6 +24244,64 @@ mod tests {
         assert!(result.is_some());
         let s = result.unwrap();
         assert!((s.font_size - 24.0).abs() < 0.01, "font-size should inherit: got {}", s.font_size);
+    }
+
+    // === CSS Values L4 §7.7 attr() typed substitution ===
+
+    fn make_doc_with_div(html: &str) -> (lumen_dom::Document, lumen_dom::NodeId) {
+        let doc = lumen_html_parser::parse(html);
+        let body = doc.body().expect("body");
+        let node = doc.get(body).children[0];
+        (doc, node)
+    }
+
+    #[test]
+    fn attr_typed_width_px() {
+        // attr(data-w px) with data-w="200" should set width to 200px.
+        let (doc, node) = make_doc_with_div(r#"<div data-w="200"></div>"#);
+        let sheet = lumen_css_parser::parse("div { width: attr(data-w px); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        assert_eq!(style.width, Some(Length::Px(200.0)), "width should be 200px via attr(data-w px)");
+    }
+
+    #[test]
+    fn attr_typed_fallback_when_absent() {
+        // attr(data-missing px, 50px) — attribute absent, fallback 50px used.
+        let (doc, node) = make_doc_with_div("<div></div>");
+        let sheet = lumen_css_parser::parse("div { width: attr(data-missing px, 50px); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        assert_eq!(style.width, Some(Length::Px(50.0)), "fallback 50px should apply when attr absent");
+    }
+
+    #[test]
+    fn attr_typed_absent_no_fallback_skipped() {
+        // attr(data-missing px) with no fallback — declaration invalid, width stays None.
+        let (doc, node) = make_doc_with_div("<div></div>");
+        let sheet = lumen_css_parser::parse("div { width: attr(data-missing px); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        assert_eq!(style.width, None, "absent attr without fallback should leave width at None");
+    }
+
+    #[test]
+    fn attr_typed_color() {
+        // attr(data-bg color) — attribute value used as CSS color for background-color.
+        let (doc, node) = make_doc_with_div(r#"<div data-bg="red"></div>"#);
+        let sheet = lumen_css_parser::parse("div { background-color: attr(data-bg color); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        // red = rgb(255, 0, 0)
+        let bg = style.background_color.expect("background-color should be set via attr(data-bg color)");
+        let CssColor::Rgba(c) = bg else { panic!("expected Rgba, got {:?}", bg) };
+        assert_eq!(c.r, 255, "red component");
+        assert_eq!(c.g, 0,   "green component");
+        assert_eq!(c.b, 0,   "blue component");
     }
 
 }
