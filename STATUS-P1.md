@@ -6,11 +6,22 @@
 
 ## In progress
 
-_(нет)_
+M-1: XMLHttpRequest (XHR) API  branch: p1-xhr
+Next step: commit реализация, тесты, обновить lumen-plan.md  crates/js/src/xhr.rs:1
 
 ---
 
 ## Next
+
+### M — Web Platform Completeness Phase 5
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| M-1 | **XMLHttpRequest (XHR)** — WHATWG XHR §4: open/send/abort/readystatechange/load/error/progress | M | `lumen-js` |
+| M-2 | **DOMParser + XMLSerializer** — `new DOMParser().parseFromString(html, mime)` / `serializer.serializeToString(node)` | M | `lumen-js`, `lumen-html-parser` |
+| M-3 | **SVG DOM API stubs** — SVGElement, SVGSVGElement, getBBox(), createElementNS SVG | M | `lumen-js` |
+| M-4 | **`<input type=file>` file picker** — OS dialog + FileList, связь с shell | S | `lumen-js`, `lumen-shell` |
+| M-5 | **`structuredClone()` improvements** — поддержка Map/Set/Date/RegExp в клонировании | XS | `lumen-js` |
 
 ### K — Web Platform APIs Phase 4
 
