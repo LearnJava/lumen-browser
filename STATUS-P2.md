@@ -6,12 +6,19 @@
 
 ## In progress
 
-**J-3 | CSS Houdini Paint Worklet Phase 0**  branch: p2-j3-paint-worklet
-Next step: add JS integration tests + display_list test for BackgroundImage::Paint  paint_worklet.rs:60
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**J-3 | CSS Houdini Paint Worklet Phase 0** ✅ 2026-06-08 (merged)
+- Исправлен баг: `background-image: paint(name)` не парсился в `BackgroundImage::Paint` — обработчик `"background-image"` в `style.rs:10531` пропускал ветку для `paint()`; была только в шортхэнде (~14297)
+- 5 JS-интеграционных тестов (addModule возвращает Promise, registerPaint хранит worklet, inputProperties, TypeError при не-строковом имени)
+- 2 теста layout: `paint(name)` и `paint("quoted")` → `BackgroundImage::Paint` end-to-end
+- 1 тест display_list: `background-image: paint(x)` → `DrawBackgroundImage { src: "paint:x", .. }`
+- `// CSS: paint()` handoff → Phase 1 (future): реальный вызов worklet `paint()` callback
+- Итого 8 новых тестов: lumen-js 1467 ✅ (+5), lumen-layout 2401 ✅ (+2), lumen-paint 557 ✅ (+1), Clippy чист
 
 **J-2 | WebGPU API Phase 0** ✅ 2026-06-08 (merged)
 - `crates/js/src/webgpu.rs` — JS-шим без native GPU bindings
@@ -458,7 +465,7 @@ Ordered by priority. Сгруппированы по домену.
 |---|--------|--------|--------|
 | ~~J-1~~ | ~~**Web Audio API Phase 0**~~ — **выполнено** | L | `lumen-js` |
 | ~~J-2~~ | ~~**WebGPU API Phase 0**~~ — **выполнено** | M | `lumen-js` |
-| J-3 | **CSS Houdini Paint Worklet Phase 0** — `CSS.paintWorklet.addModule(url)` → Promise (нет fetch, url сохраняется в реестре); `registerPaint(name, class)` в worklet context; CSS `paint(name)` значение для `background-image` парсируется css-parser → `BackgroundImage::Paint(name)` вариант; paint output = placeholder FillRect в display_list. `// CSS: paint()`. 6+ тестов. | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
+| ~~J-3~~ | ~~**CSS Houdini Paint Worklet Phase 0**~~ — **выполнено** | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
 | J-4 | **Background Fetch API stub** — `registration.backgroundFetch.fetch(id, requests, opts)` → Promise<BGFetchRegistration>; `.get(id)` / `.getIds()` → Promise; `BGFetchRegistration` (id/result/failureReason/recordsAvailable/downloaded/downloadTotal/uploaded/uploadTotal/activate/abort/addEventListener). Phase 0: in-memory, no actual fetch. `// _lumen_bg_fetch_*` биндинги для shell Phase 1. 6 тестов. | XS | `lumen-js` |
 | J-5 | **Presentation API stub** — `navigator.presentation` singleton; `PresentationRequest.new([urls])` → reject NotSupportedError; `navigator.presentation.defaultRequest` getter/setter; `PresentationAvailability` + `navigator.presentation.requestAvailability()` → Promise<{value:false}>; `PresentationConnection` class (id/url/state/send/close/terminate/addEventListener). Phase 0: no-op. 5 тестов. | XS | `lumen-js` |
 
