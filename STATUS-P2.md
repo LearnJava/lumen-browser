@@ -6,9 +6,7 @@
 
 ## In progress
 
-**L-3: `<input type="range">` slider visual rendering + drag**  
-Branch: `p2-l3-range-input`  
-Next step: Add `FormControlKind::Range { value, min, max }` in box_tree.rs, render track/thumb in display_list.rs, handle click in forms.rs
+None
 
 ---
 
@@ -38,7 +36,7 @@ Next step: Add `FormControlKind::Range { value, min, max }` in box_tree.rs, rend
 |---|--------|--------|--------|
 | ~~L-1~~ | ~~**`<details>`/`<summary>` interactive collapse/expand**~~ — **выполнено** | S | `lumen-shell`, `lumen-js` |
 | ~~L-2~~ | ~~**`<dialog>` modal overlay rendering + `::backdrop`**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
-| L-3 | `<input type="range">` slider visual rendering + drag | S | `lumen-shell`, `lumen-layout`, `lumen-paint` |
+| ~~L-3~~ | ~~**`<input type="range">` slider visual rendering + drag**~~ — **выполнено** | S | `lumen-shell`, `lumen-layout`, `lumen-paint` |
 | L-4 | `<meter>`/`<progress>` visual fill rendering | S | `lumen-layout`, `lumen-paint` |
 | L-5 | CSS Scroll-Driven Animations Phase 1 shell wiring | M | `lumen-shell`, `lumen-layout` |
 
@@ -55,6 +53,15 @@ Next step: Add `FormControlKind::Range { value, min, max }` in box_tree.rs, rend
 ---
 
 ## Current / Recently Merged
+
+**L-3 | `<input type="range">` slider visual rendering + drag** ✅ 2026-06-08 (merged)
+- `FormControlKind::Range { value, min, max }` в `box_tree.rs` — парсит value/min/max из DOM (defaults: 0/100/midpoint), зажимает в [min, max]
+- UA стиль: 129×20px, без рамки (Range-специфичный early-return в `apply_ua_form_controls`)
+- `emit_range_slider()` в `display_list.rs`: серый трек (FillRoundedRect 4px), синяя заливка (fraction), синий thumb-круг (8px)
+- `FormClickAction::SlideRange(NodeId)` в `forms.rs` + `apply_range_value()`: fraction из page_x/rect → новое value → relayout
+- Shell: `handle_click_at` обрабатывает SlideRange через `find_box_rect` + `apply_range_value`; activate_node: no-op для range
+- 10 новых тестов: 4 layout (creates_kind/defaults/clamped/clickable) + 3 paint (track+thumb/at_min/default_value) + 3 shell (classify/apply/clamps)
+- Итого lumen-layout: 2415 тестов (+4), lumen-paint: 560 (+3), lumen-shell: 1125 (+28), Clippy чист
 
 **L-2 | `<dialog>` modal overlay rendering + `::backdrop`** ✅ 2026-06-08 (merged)
 - `data-lumen-modal` sentinel: `showModal()` ставит атрибут, `close()` и Escape-handler снимают
