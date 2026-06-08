@@ -6,12 +6,18 @@
 
 ## In progress
 
-**I-1 | Web Locks API** — branch: `p2-i1-web-locks`
-Next step: реализовать `crates/js/src/web_locks.rs` — JS-шим + native биндинги
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**I-1 | Web Locks API** ✅ 2026-06-08 (merged)
+- `crates/js/src/web_locks.rs` — JS-шим `LockManager` с FIFO-очередью
+- `navigator.locks` → `LockManager`; `exclusive`/`shared` modes; `ifAvailable`, `steal`, `AbortSignal`
+- Имя stringify: `String(name)`; невалидный mode → TypeError
+- 6 unit-тестов в web_locks::tests + 22 интеграционных в dom::tests ✅
+- Итого: 1396 тестов lumen-js ✅, Clippy чист
 
 **G-5 | CSS Table border-collapse Phase 2** ✅ 2026-06-08 (merged)
 - `BorderCollapse` / `BorderPrecedence` / `CollapsedBorder` — новые публичные типы в `table.rs`
