@@ -50,6 +50,8 @@ pub enum FormClickAction {
     ToggleCheckbox(NodeId),
     ToggleRadio { clicked: NodeId, _group_name: String },
     OpenColorPicker(NodeId),
+    /// Open a dropdown overlay showing the `<option>` children of the `<select>`.
+    OpenSelectDropdown(NodeId),
     SubmitForm(NodeId),
     Nothing,
 }
@@ -80,6 +82,7 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
                 FormClickAction::Nothing
             }
         }
+        "select" => FormClickAction::OpenSelectDropdown(node),
         _ => FormClickAction::Nothing,
     }
 }
@@ -541,6 +544,206 @@ pub fn swatch_to_css_color(c: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// <select> dropdown overlay
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// One entry in a `<select>` dropdown list.
+#[derive(Debug, Clone)]
+pub struct SelectOption {
+    /// Visible label text.
+    pub label: String,
+    /// `value` attribute, or `label` if absent.
+    pub value: String,
+    /// Whether this option carries the `selected` attribute.
+    pub selected: bool,
+    /// Whether this option is `disabled`.
+    pub disabled: bool,
+    /// NodeId of the `<option>` element.
+    pub node_id: NodeId,
+}
+
+/// Row height for each option row in the dropdown.
+pub const DROPDOWN_ROW_H: f32 = 22.0;
+const DROPDOWN_FONT: f32 = 13.0;
+const DROPDOWN_PAD_X: f32 = 8.0;
+const DROPDOWN_PAD_Y: f32 = 4.0;
+const DROPDOWN_MIN_W: f32 = 120.0;
+const DROPDOWN_MAX_ROWS_VISIBLE: usize = 8;
+
+/// Collect all direct `<option>` children of a `<select>` DOM node.
+/// `<optgroup>` children are flattened (their `<option>` children are included).
+pub fn collect_select_options(doc: &Document, select_id: NodeId) -> Vec<SelectOption> {
+    let mut opts = Vec::new();
+    collect_options_from(doc, select_id, &mut opts);
+    opts
+}
+
+fn collect_options_from(doc: &Document, parent_id: NodeId, out: &mut Vec<SelectOption>) {
+    let children = doc.get(parent_id).children.clone();
+    for child_id in children {
+        let child = doc.get(child_id);
+        let NodeData::Element { name, attrs, .. } = &child.data else { continue };
+        match name.local.as_str() {
+            "option" => {
+                let disabled = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("disabled"));
+                let selected = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("selected"));
+                let label = if let Some(a) = attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case("label")) {
+                    a.value.trim().to_owned()
+                } else {
+                    // text content of children
+                    child.children.iter().filter_map(|&c| {
+                        if let NodeData::Text(t) = &doc.get(c).data { Some(t.as_str()) } else { None }
+                    }).collect::<Vec<_>>().join("").trim().to_owned()
+                };
+                let value = attrs.iter()
+                    .find(|a| a.name.local.eq_ignore_ascii_case("value"))
+                    .map(|a| a.value.clone())
+                    .unwrap_or_else(|| label.clone());
+                out.push(SelectOption { label, value, selected, disabled, node_id: child_id });
+            }
+            "optgroup" => collect_options_from(doc, child_id, out),
+            _ => {}
+        }
+    }
+}
+
+/// Build a dropdown overlay anchored below (or above if near the bottom of the
+/// viewport) `anchor`. `scroll_y` converts document-space anchor to viewport-space.
+pub fn build_select_dropdown(
+    anchor: Rect,
+    options: &[SelectOption],
+    scroll_y: f32,
+    viewport_w: f32,
+    viewport_h: f32,
+) -> DisplayList {
+    let mut out: DisplayList = Vec::new();
+    if options.is_empty() {
+        return out;
+    }
+
+    let rows = options.len().min(DROPDOWN_MAX_ROWS_VISIBLE);
+    let w = (anchor.width).max(DROPDOWN_MIN_W).min(viewport_w);
+    let h = rows as f32 * DROPDOWN_ROW_H + DROPDOWN_PAD_Y * 2.0;
+
+    // Position: below anchor, flip above if it would overflow viewport bottom.
+    let anchor_bottom_vp = anchor.y - scroll_y + anchor.height;
+    let vp_y = if anchor_bottom_vp + h > viewport_h && anchor.y - scroll_y >= h {
+        anchor.y - scroll_y - h
+    } else {
+        anchor_bottom_vp + 1.0
+    };
+    let vp_x = anchor.x.min(viewport_w - w).max(0.0);
+
+    let bg = Rect::new(vp_x, vp_y, w, h);
+
+    // Background + shadow border.
+    out.push(DisplayCommand::FillRect {
+        rect: bg,
+        color: Color { r: 255, g: 255, b: 255, a: 255 },
+    });
+    out.push(DisplayCommand::DrawBorder {
+        rect: bg,
+        widths: [1.0; 4],
+        colors: [Color { r: 180, g: 180, b: 180, a: 255 }; 4],
+        styles: [BorderStyle::Solid; 4],
+        radii: lumen_paint::CornerRadii::default(),
+    });
+
+    for (i, opt) in options.iter().take(DROPDOWN_MAX_ROWS_VISIBLE).enumerate() {
+        let row_y = vp_y + DROPDOWN_PAD_Y + i as f32 * DROPDOWN_ROW_H;
+        let row_rect = Rect::new(vp_x, row_y, w, DROPDOWN_ROW_H);
+
+        // Highlight selected option.
+        if opt.selected {
+            out.push(DisplayCommand::FillRect {
+                rect: row_rect,
+                color: Color { r: 0, g: 120, b: 215, a: 255 },
+            });
+        }
+
+        let text_color = if opt.disabled {
+            Color { r: 150, g: 150, b: 150, a: 255 }
+        } else if opt.selected {
+            Color { r: 255, g: 255, b: 255, a: 255 }
+        } else {
+            Color { r: 20, g: 20, b: 20, a: 255 }
+        };
+
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(
+                vp_x + DROPDOWN_PAD_X,
+                row_y + (DROPDOWN_ROW_H - DROPDOWN_FONT) * 0.5,
+                w - DROPDOWN_PAD_X * 2.0,
+                DROPDOWN_FONT,
+            ),
+            text: opt.label.clone(),
+            font_size: DROPDOWN_FONT,
+            color: text_color,
+            font_family: vec![],
+            font_weight: FontWeight(400),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+        });
+    }
+
+    out
+}
+
+/// If viewport-space point `(px, py)` lands on an option row, return its index.
+pub fn hit_select_option(
+    anchor: Rect,
+    options_count: usize,
+    scroll_y: f32,
+    viewport_w: f32,
+    viewport_h: f32,
+    px: f32,
+    py: f32,
+) -> Option<usize> {
+    if options_count == 0 {
+        return None;
+    }
+    let rows = options_count.min(DROPDOWN_MAX_ROWS_VISIBLE);
+    let w = anchor.width.max(DROPDOWN_MIN_W).min(viewport_w);
+    let h = rows as f32 * DROPDOWN_ROW_H + DROPDOWN_PAD_Y * 2.0;
+
+    let anchor_bottom_vp = anchor.y - scroll_y + anchor.height;
+    let vp_y = if anchor_bottom_vp + h > viewport_h && anchor.y - scroll_y >= h {
+        anchor.y - scroll_y - h
+    } else {
+        anchor_bottom_vp + 1.0
+    };
+    let vp_x = anchor.x.min(viewport_w - w).max(0.0);
+
+    if px < vp_x || px > vp_x + w || py < vp_y || py > vp_y + h {
+        return None;
+    }
+    let rel_y = py - vp_y - DROPDOWN_PAD_Y;
+    if rel_y < 0.0 {
+        return None;
+    }
+    let row = (rel_y / DROPDOWN_ROW_H) as usize;
+    if row < rows { Some(row) } else { None }
+}
+
+/// Apply the selection of option at `opt_idx` to the `<select>` DOM node:
+/// removes all `selected` attributes, then sets `selected` on the chosen option.
+pub fn apply_select_choice(doc: &mut Document, options: &[SelectOption], opt_idx: usize) {
+    for opt in options {
+        let node = doc.get_mut(opt.node_id);
+        if let NodeData::Element { ref mut attrs, .. } = node.data {
+            attrs.retain(|a| !a.name.local.eq_ignore_ascii_case("selected"));
+        }
+    }
+    if let Some(chosen) = options.get(opt_idx) {
+        let node = doc.get_mut(chosen.node_id);
+        if let NodeData::Element { ref mut attrs, .. } = node.data {
+            attrs.push(Attribute { name: QualName::html("selected"), value: String::new() });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,5 +988,126 @@ mod tests {
         // This would need a proper LayoutBox tree to test. For now just verify
         // that find_all_validation_errors function exists and compiles.
         let _ = find_all_validation_errors;
+    }
+
+    // ──── <select> dropdown tests ────────────────────────────────────────────
+
+    fn make_select_doc() -> (Document, NodeId) {
+        // <select>
+        //   <option value="a">Apple</option>
+        //   <option value="b" selected>Banana</option>
+        //   <option value="c" disabled>Cherry</option>
+        // </select>
+        let mut doc = Document::new();
+        let sel = doc.create_element(QualName::html("select"));
+
+        let opt_a = doc.create_element(QualName::html("option"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(opt_a).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "a".into() });
+        }
+        let txt_a = doc.create_text(String::from("Apple"));
+
+        let opt_b = doc.create_element(QualName::html("option"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(opt_b).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "b".into() });
+            attrs.push(Attribute { name: QualName::html("selected"), value: String::new() });
+        }
+        let txt_b = doc.create_text(String::from("Banana"));
+
+        let opt_c = doc.create_element(QualName::html("option"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(opt_c).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "c".into() });
+            attrs.push(Attribute { name: QualName::html("disabled"), value: String::new() });
+        }
+        let txt_c = doc.create_text(String::from("Cherry"));
+
+        doc.append_child(doc.root(), sel);
+        doc.append_child(sel, opt_a);
+        doc.append_child(opt_a, txt_a);
+        doc.append_child(sel, opt_b);
+        doc.append_child(opt_b, txt_b);
+        doc.append_child(sel, opt_c);
+        doc.append_child(opt_c, txt_c);
+        (doc, sel)
+    }
+
+    #[test]
+    fn collect_select_options_labels_and_values() {
+        let (doc, sel) = make_select_doc();
+        let opts = collect_select_options(&doc, sel);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].label, "Apple");
+        assert_eq!(opts[0].value, "a");
+        assert!(!opts[0].selected);
+        assert!(!opts[0].disabled);
+        assert_eq!(opts[1].label, "Banana");
+        assert_eq!(opts[1].value, "b");
+        assert!(opts[1].selected);
+        assert!(!opts[1].disabled);
+        assert!(opts[2].disabled);
+    }
+
+    #[test]
+    fn classify_click_select_returns_open_dropdown() {
+        let (doc, sel) = make_select_doc();
+        let action = classify_click(&doc, sel);
+        assert!(matches!(action, FormClickAction::OpenSelectDropdown(_)));
+    }
+
+    #[test]
+    fn hit_select_option_returns_correct_row() {
+        let anchor = Rect::new(100.0, 200.0, 120.0, 22.0);
+        // dropdown appears below anchor (no flip needed for default viewport)
+        let vp_w = 1024.0;
+        let vp_h = 720.0;
+        let scroll_y = 0.0;
+        // Click on first row: just below the anchor + border + PAD_Y
+        let anchor_bottom_vp = 200.0 + 22.0;
+        let dd_y = anchor_bottom_vp + 1.0;
+        let click_y = dd_y + DROPDOWN_PAD_Y + DROPDOWN_ROW_H * 0.5;
+        let result = hit_select_option(anchor, 3, scroll_y, vp_w, vp_h, 110.0, click_y);
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn hit_select_option_second_row() {
+        let anchor = Rect::new(100.0, 200.0, 120.0, 22.0);
+        let vp_w = 1024.0;
+        let vp_h = 720.0;
+        let scroll_y = 0.0;
+        let anchor_bottom_vp = 200.0 + 22.0;
+        let dd_y = anchor_bottom_vp + 1.0;
+        let click_y = dd_y + DROPDOWN_PAD_Y + DROPDOWN_ROW_H * 1.5;
+        let result = hit_select_option(anchor, 3, scroll_y, vp_w, vp_h, 110.0, click_y);
+        assert_eq!(result, Some(1));
+    }
+
+    #[test]
+    fn hit_select_option_outside_returns_none() {
+        let anchor = Rect::new(100.0, 200.0, 120.0, 22.0);
+        // Click far outside the dropdown area.
+        let result = hit_select_option(anchor, 3, 0.0, 1024.0, 720.0, 500.0, 500.0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn apply_select_choice_moves_selected_attr() {
+        let (mut doc, sel) = make_select_doc();
+        let opts = collect_select_options(&doc, sel);
+        // Initially "b" (idx=1) is selected. Pick idx=0.
+        apply_select_choice(&mut doc, &opts, 0);
+        let updated = collect_select_options(&doc, sel);
+        assert!(updated[0].selected);
+        assert!(!updated[1].selected);
+        assert!(!updated[2].selected);
+    }
+
+    #[test]
+    fn build_select_dropdown_non_empty() {
+        let (doc, sel) = make_select_doc();
+        let opts = collect_select_options(&doc, sel);
+        let anchor = Rect::new(10.0, 10.0, 100.0, 22.0);
+        let dl = build_select_dropdown(anchor, &opts, 0.0, 1024.0, 720.0);
+        assert!(!dl.is_empty(), "dropdown display list should not be empty");
     }
 }

@@ -365,6 +365,7 @@ fn run_window_mode(
         form_state: HashMap::new(),
         validation_tooltip: None,
         color_picker_node: None,
+        select_dropdown_node: None,
         ls_storage: HashMap::new(),
         idb_dir: lumen_idb_dir(),
         sw_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
@@ -2452,6 +2453,8 @@ struct PageSnapshot {
     form_state: forms::FormState,
     validation_tooltip: Option<(Rect, String)>,
     color_picker_node: Option<NodeId>,
+    /// NodeId of the `<select>` whose dropdown is open in this tab snapshot.
+    select_dropdown_node: Option<NodeId>,
     ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
     /// Directory for per-origin IndexedDB SQLite files. Cloned from the active
     /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
@@ -3688,6 +3691,9 @@ struct Lumen {
     /// NodeId of the `<input type="color">` whose picker is currently open.
     /// The picker overlay is viewport-locked; clicking a swatch closes it.
     color_picker_node: Option<NodeId>,
+    /// NodeId of the `<select>` whose dropdown is currently open.
+    /// The dropdown overlay is viewport-locked; clicking an option closes it.
+    select_dropdown_node: Option<NodeId>,
     /// Persistent `localStorage` partitions keyed by origin (scheme+host+port).
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.
@@ -4664,6 +4670,7 @@ impl Lumen {
         self.form_state.clear();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        self.select_dropdown_node = None;
         // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
@@ -6785,6 +6792,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     picker.append(&mut overlay_buf);
                     overlay_buf = picker;
                 }
+                if let (Some(sel_node), Some(lb)) =
+                    (self.select_dropdown_node, &self.layout_box)
+                    && let Some(anchor) = forms::find_box_rect(lb, sel_node)
+                {
+                    let doc = self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
+                    if let Some(doc) = doc {
+                        let opts = forms::collect_select_options(&doc, sel_node);
+                        let vp_h = self.viewport_height_css();
+                        let mut dd = forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h);
+                        dd.append(&mut overlay_buf);
+                        overlay_buf = dd;
+                    }
+                }
 
                 // Адресная строка (Ctrl+L) — рисуется поверх всего остального.
                 if self.address_bar.is_open() {
@@ -7452,6 +7472,41 @@ impl Lumen {
         // Any click outside the picker closes it.
         self.color_picker_node = None;
 
+        // ── Select dropdown option hit ───────────────────
+        // Check if click lands on an open <select> dropdown.
+        let select_hit: Option<(NodeId, usize)> = {
+            let sel_node = self.select_dropdown_node;
+            sel_node.and_then(|sn| {
+                let anchor = forms::find_box_rect(self.layout_box.as_ref()?, sn)?;
+                let opts_count = self.layout_source.as_ref()
+                    .map(|src| forms::collect_select_options(&src.document.lock().unwrap(), sn).len())
+                    .unwrap_or(0);
+                let vp_h = self.viewport_height_css();
+                let vp_w2 = self.viewport_width_css();
+                let idx = forms::hit_select_option(anchor, opts_count, scroll_y, vp_w2, vp_h, x_css, y_css)?;
+                Some((sn, idx))
+            })
+        };
+        if let Some((sn, idx)) = select_hit {
+            self.select_dropdown_node = None;
+            if let Some(src) = self.layout_source.as_mut() {
+                let mut doc = src.document.lock().unwrap();
+                let opts = forms::collect_select_options(&doc, sn);
+                if !opts.get(idx).is_some_and(|o| o.disabled) {
+                    forms::apply_select_choice(&mut doc, &opts, idx);
+                    // Update form_state value so form submission includes the chosen value.
+                    if let Some(chosen) = opts.get(idx) {
+                        self.form_state.entry(sn).or_default().value = chosen.value.clone();
+                    }
+                    drop(doc);
+                    self.relayout();
+                }
+            }
+            return;
+        }
+        // Any click outside the dropdown closes it.
+        self.select_dropdown_node = None;
+
         // ── Form control + link click ────────────────────
         // Single hit test shared by form dispatch and link navigation.
         // When the vertical/tree tabs panel is visible, page content is shifted
@@ -7585,6 +7640,13 @@ impl Lumen {
                         outcome: click_log::ClickOutcome::FormAction("OpenColorPicker"),
                     });
                 }
+                forms::FormClickAction::OpenSelectDropdown(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenSelectDropdown"),
+                    });
+                }
                 forms::FormClickAction::SubmitForm(_) => {
                     click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
@@ -7613,6 +7675,12 @@ impl Lumen {
             }
             forms::FormClickAction::OpenColorPicker(id) => {
                 self.color_picker_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::OpenSelectDropdown(id) => {
+                self.select_dropdown_node = Some(id);
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -9020,6 +9088,12 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
+            forms::FormClickAction::OpenSelectDropdown(id) => {
+                self.select_dropdown_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
             forms::FormClickAction::SubmitForm(_) | forms::FormClickAction::Nothing => {
                 // Link navigation.
                 let href = self.layout_source.as_ref().and_then(|src| {
@@ -10355,6 +10429,7 @@ impl Lumen {
             form_state: std::mem::take(&mut self.form_state),
             validation_tooltip: self.validation_tooltip.take(),
             color_picker_node: self.color_picker_node.take(),
+            select_dropdown_node: self.select_dropdown_node.take(),
             ls_storage: std::mem::take(&mut self.ls_storage),
             idb_dir: self.idb_dir.clone(),
             sw_backend: std::mem::replace(
@@ -10417,6 +10492,7 @@ impl Lumen {
         self.form_state = snap.form_state;
         self.validation_tooltip = snap.validation_tooltip;
         self.color_picker_node = snap.color_picker_node;
+        self.select_dropdown_node = snap.select_dropdown_node;
         self.ls_storage = snap.ls_storage;
         self.idb_dir = snap.idb_dir;
         self.sw_backend = snap.sw_backend;
@@ -10468,6 +10544,7 @@ impl Lumen {
         self.form_state = HashMap::new();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        self.select_dropdown_node = None;
         self.ls_storage = HashMap::new();
         // idb_dir is session-level — intentionally not reset here.
         self.sw_backend = Arc::new(std::sync::Mutex::new(

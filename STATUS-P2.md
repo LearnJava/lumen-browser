@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**K-2 | `<select>` interactive dropdown** — branch: p2-k2-select-dropdown
+Next step: add `FormControlKind::Select { selected_text }` + shell dropdown overlay  `crates/engine/layout/src/box_tree.rs:247`
 
 ---
 

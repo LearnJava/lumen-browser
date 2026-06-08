@@ -244,8 +244,53 @@ pub enum FormControlKind {
     /// this to draw checkbox/radio indicators without re-querying the DOM.
     Input { input_type: lumen_dom::InputType, checked: bool },
     Button,
-    Select,
+    /// `<select>` — `selected_text` is the label of the currently selected
+    /// `<option>` (first option if none is explicitly selected). Paint uses this
+    /// to draw the visible label without re-querying the DOM.
+    Select { selected_text: String },
     Textarea,
+}
+
+/// Collect the text label of the currently selected `<option>` inside a
+/// `<select>` element. Returns the text of the first `<option selected>` child,
+/// falling back to the first `<option>` child, then an empty string.
+fn collect_select_label(doc: &Document, select_id: NodeId) -> String {
+    let children = doc.get(select_id).children.clone();
+    let mut first_label: Option<String> = None;
+    for child_id in children {
+        let child = doc.get(child_id);
+        let NodeData::Element { name, attrs, .. } = &child.data else { continue };
+        if name.local.as_str() != "option" { continue }
+        let label = option_text(doc, child_id);
+        let is_selected = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("selected"));
+        if is_selected {
+            return label;
+        }
+        if first_label.is_none() {
+            first_label = Some(label);
+        }
+    }
+    first_label.unwrap_or_default()
+}
+
+/// Returns the display text for an `<option>` element: `label` attribute if
+/// present, otherwise the concatenated text content of its child text nodes.
+fn option_text(doc: &Document, option_id: NodeId) -> String {
+    let node = doc.get(option_id);
+    if let NodeData::Element { attrs, .. } = &node.data
+        && let Some(label) = attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case("label"))
+    {
+        return label.value.trim().to_owned();
+    }
+    node.children
+        .iter()
+        .filter_map(|&c| {
+            if let NodeData::Text(t) = &doc.get(c).data { Some(t.as_str()) } else { None }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+        .trim()
+        .to_owned()
 }
 
 /// Является ли DOM-узел HTML form control-ом.
@@ -2383,7 +2428,10 @@ fn build_box(
                         .to_owned();
                     match tag.as_str() {
                         "button"   => FormControlKind::Button,
-                        "select"   => FormControlKind::Select,
+                        "select"   => {
+                            let selected_text = collect_select_label(doc, id);
+                            FormControlKind::Select { selected_text }
+                        }
                         "textarea" => FormControlKind::Textarea,
                         _ => {
                             let input_type = node.input_type()
