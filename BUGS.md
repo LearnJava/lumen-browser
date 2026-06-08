@@ -88,7 +88,125 @@ BUG-072 | FIXED 2026-06-08 | js     | Form Constraint Validation API init failed
 BUG-073 | FIXED 2026-06-08 | js     | chrome_runtime_absent (no_automation_markers.rs) падает: D-6 extension-stub в WEB_API_SHIM безусловно ставит window.chrome.runtime, ломая anti-CDP-detection маркер. Fix: IIFE гардировано флагом `_LUMEN_EXTENSION_ACTIVE`; тесты dom.rs выставляют флаг перед install_dom | crates/js/src/dom.rs:10131
 BUG-074 | OPEN   | layout | height:100% на flex-item не резолвится — available_height=None передаётся в lay_out() при шаге 1 flex-алгоритма, percentage height от definite flex-container height игнорируется. TEST-67 (attr-typed) failing 20.19% — bar/::before с height:100% рендерятся h=0 | crates/engine/layout/src/box_tree.rs:4953
 BUG-075 | OPEN   | layout | display:table без явной ширины растягивается до ширины контейнера вместо shrink-to-fit. TEST-69 (border-spacing) failing 42.62% — таблица должна быть ~228px, рендерится 982px | crates/engine/layout/src/box_tree.rs:4103
+BUG-076 | OPEN   | paint          | box-shadow blur spread ~1% deviation — TEST-15: 1.06% (thr 0.5%) | crates/engine/paint/src/display_list.rs
+BUG-077 | OPEN   | image/paint    | image downscale quality ~26% deviation — area averaging not applied for large downscale ratios; TEST-18: 25.73% | crates/engine/image/src/lib.rs
+BUG-078 | OPEN   | layout/paint   | object-fit contain/cover image quality ~13% deviation — same scaling issue as BUG-077; TEST-19: 12.68%
+BUG-079 | OPEN   | html-parser    | quirks-bgcolor: TEST-20 still 8.79% after BUG-021+022 fix — bgcolor on table cells with named/legacy colors not applied; garbage-color legacy parsing missing
+BUG-080 | OPEN   | paint          | border-style: residual dotted/dashed 3% deviation vs Edge — TEST-21: 3.02% | crates/engine/paint/src/display_list.rs
+BUG-081 | OPEN   | layout         | vertical-align: sub-pixel 0.99% deviation exceeds 0.5% threshold — TEST-24: 0.99% | crates/engine/layout/src/box_tree.rs
+BUG-082 | OPEN   | paint          | css-filter 33% deviation — TEST-30: 33.07%; backdrop + filter rendering incorrect after BUG-037 fix; linear-gradient inside filter layers | crates/engine/paint/src/renderer.rs
+BUG-083 | OPEN   | layout/paint   | list-markers residual 3.4% deviation — TEST-32: 3.40%; marker sub-pixel positioning or size mismatch | crates/engine/layout/src/box_tree.rs
+BUG-084 | OPEN   | paint          | border-radius residual 1.5% deviation after BUG-036 fix — TEST-36: 1.50%; AA on %-based corners | crates/engine/paint/src/cpu_raster.rs
+BUG-085 | OPEN   | paint          | linear/radial gradient 12% deviation — TEST-39: 12.05%; stop interpolation or AA mismatch with Edge | crates/engine/paint/src/display_list.rs
+BUG-086 | OPEN   | paint          | conic-gradient 57% deviation — TEST-40: 56.53%; DrawConicGradient rendering error | crates/engine/paint/src/display_list.rs
+BUG-087 | OPEN   | paint/layout   | multiple CSS background layers not rendered — TEST-45: 17.29%; CSS Backgrounds L3 §3 layer stack | crates/engine/paint/src/renderer.rs
+BUG-088 | OPEN   | css-parser/layout | individual CSS transform properties (translate/rotate/scale) not applied — TEST-46: 9.57%; CSS Transforms L2 § | crates/engine/layout/src/style.rs
+BUG-089 | OPEN   | paint          | SVG basic shapes not rendered (rect/circle/ellipse/line) — TEST-47: 21.71%; Phase 1 | crates/engine/paint/src/display_list.rs
+BUG-090 | OPEN   | layout         | -webkit-line-clamp multi-line truncation not working — TEST-48: 23.89%; CSS Overflow L4 §3.2 | crates/engine/layout/src/box_tree.rs
+BUG-091 | OPEN   | paint          | background-blend-mode: multiply/screen/overlay etc. not applied — TEST-49: 30.62%; CSS Compositing L1 §8.3 | crates/engine/paint/src/display_list.rs
+BUG-092 | OPEN   | css-parser/layout | CSS variables var() not propagating correctly through cascade — TEST-50: 17.26%; values appear resolved but rendering wrong | crates/engine/layout/src/style.rs
+BUG-093 | OPEN   | paint          | scrollbar rendering: DrawScrollbar track+thumb deviation — TEST-51: 1.39% | crates/engine/paint/src/display_list.rs
+BUG-094 | OPEN   | paint          | text-shadow with blur PushFilter wrapper ~7% deviation — TEST-52: 6.82% (thr 4.0%) | crates/engine/paint/src/display_list.rs
+BUG-095 | OPEN   | layout/paint   | background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78%; border-box/padding-box/content-box not respected | crates/engine/layout/src/style.rs
+BUG-096 | OPEN   | paint          | SVG <path> stroke tessellation not rendered — TEST-54: 9.50%; Phase 1 | crates/engine/paint/src/display_list.rs
+BUG-097 | OPEN   | layout/paint   | <video> element: no grey placeholder rendered — TEST-55: 26.65%; replaced element box exists but no DrawImage emitted | crates/engine/layout/src/box_tree.rs
+BUG-098 | OPEN   | paint          | mix-blend-mode: PushBlendMode/PopBlendMode layers ~14% deviation — TEST-56: 14.12%; compositing order or blending formula | crates/engine/paint/src/renderer.rs
+BUG-099 | OPEN   | js/paint       | <canvas> 2D context not implemented — TEST-57: 28.66%; getContext("2d") stub; Phase 2 | crates/js/src/dom.rs
+BUG-100 | OPEN   | layout         | ::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04% (thr 2.0%); CSS Pseudo-elements L4 §5.3-5.4 | crates/engine/layout/src/box_tree.rs
+BUG-101 | OPEN   | css-parser/paint | image-set() DPR selection / cross-fade() blend not implemented — TEST-59: 27.63% (thr 2.0%); CSS Images L4 §5/§4 | crates/engine/css-parser/src/lib.rs
+BUG-102 | OPEN   | paint          | SVG stroke-linecap/linejoin/dasharray advanced attributes not rendered — TEST-60: 11.51% (thr 1.0%); Phase 1 | crates/engine/paint/src/display_list.rs
+BUG-103 | OPEN   | js             | View Transitions API not implemented — TEST-61: 99.53% (thr 1.0%); document.startViewTransition(); Phase 2 | crates/js/src/dom.rs
+BUG-104 | OPEN   | layout         | CSS Scroll Snap not implemented — TEST-62: 63.70% (thr 1.0%); scroll-snap-type/align/stop; Phase 1 | crates/engine/layout/src/style.rs
+BUG-105 | OPEN   | layout         | CSS Masonry layout not implemented — TEST-63: 26.13% (thr 1.0%); waterfall grid; Phase 2 | crates/engine/layout/src/box_tree.rs
+BUG-106 | OPEN   | layout         | CSS 2.1 §17 table: col/rowspan + border-spacing cells ~25% deviation — TEST-64: 24.85% (thr 1.0%) | crates/engine/layout/src/box_tree.rs
+BUG-107 | OPEN   | layout         | flex align-content multi-line: space-between/around/evenly/stretch ~24% deviation — TEST-65: 23.52%; single-line case fixed (BUG merge), multi-line still wrong | crates/engine/layout/src/box_tree.rs
+BUG-108 | OPEN   | paint          | ::selection pseudo-element: background-color/color override not applied — TEST-66: 6.18% | crates/engine/paint/src/display_list.rs
+BUG-109 | OPEN   | css-parser/font | font-variation-settings: wght/wdth/slnt axis values not forwarded to rasterizer — TEST-68: 3.21% | crates/engine/layout/src/style.rs
+BUG-110 | OPEN   | layout/paint   | object-fit: SVG viewBox scaling (fill/contain/cover/none/scale-down) ~8% deviation — TEST-70: 8.03% | crates/engine/layout/src/box_tree.rs
 ```
+
+---
+
+## Прогон 2026-06-08 (graphic_tests, --continue-on-fail, порог 0.5%) — 71 тест
+
+Полный прогон после серии P4-мержей (align-content, flex). Тесты 45–70 добавлены впервые.
+Добавлены баги BUG-076 — BUG-110.
+
+```
+TEST-00: PASS  0.00%   calibration
+TEST-01: PASS  0.00%   sanity
+TEST-02: PASS  0.00%   color-named
+TEST-03: PASS  0.00%   color-formats
+TEST-04: PASS  0.00%   color-alpha
+TEST-05: PASS  0.00%   border-width
+TEST-06: PASS  0.02%   border-sides
+TEST-07: PASS  0.00%   box-sizing
+TEST-08: PASS  0.00%   padding
+TEST-09: PASS  0.00%   margin
+TEST-10: PASS  0.00%   min-max-width
+TEST-11: PASS  0.43%   min-max-height
+TEST-12: PASS  0.24%   display
+TEST-13: PASS  0.12%   visibility-opacity
+TEST-14: PASS  0.00%   overflow
+TEST-15: FAIL  1.06%   box-shadow              ← BUG-076
+TEST-16: PASS  0.00%   outline
+TEST-17: PASS  0.00%   calc
+TEST-18: FAIL 25.73%   images                  ← BUG-077
+TEST-19: FAIL 12.68%   object-fit              ← BUG-078
+TEST-20: FAIL  8.79%   quirks-bgcolor          ← BUG-079
+TEST-21: FAIL  3.02%   border-style            ← BUG-080
+TEST-22: PASS  0.00%   transform
+TEST-23: PASS  0.48%   pseudo-elements
+TEST-24: FAIL  0.99%   vertical-align          ← BUG-081
+TEST-25: PASS  0.00%   table-layout
+TEST-26: FAIL 20.26%   mask-image              ← Phase 1
+TEST-27: PASS  0.38%   direction-rtl           ← FIXED (был Phase 1)
+TEST-28: FAIL  1.82%   css-containment         ← Phase 1
+TEST-29: PASS  0.00%   container-queries       ← FIXED (был Phase 1)
+TEST-30: FAIL 33.07%   css-filter              ← BUG-082
+TEST-31: FAIL  8.85%   clip-path               ← Phase 1 (bbox OK)
+TEST-32: FAIL  3.40%   list-markers            ← BUG-083
+TEST-33: FAIL 16.14%   multi-column            ← Phase 1
+TEST-34: FAIL  4.78%   forms                   ← Phase 1
+TEST-35: PASS  0.03%   grid-named-areas        ← FIXED (был Phase 2)
+TEST-36: FAIL  1.50%   border-radius           ← BUG-084
+TEST-37: PASS  0.00%   float-clear             ← FIXED (был Phase 1)
+TEST-38: PASS  0.00%   z-index
+TEST-39: FAIL 12.05%   gradients               ← BUG-085
+TEST-40: FAIL 56.53%   conic-gradients         ← BUG-086
+TEST-41: PASS  0.00%   table
+TEST-42: PASS  0.27%   position-sticky
+TEST-43: PASS  0.00%   intrinsic-sizing
+TEST-44: PASS  0.00%   media-queries
+TEST-45: FAIL 17.29%   multiple-backgrounds    ← BUG-087
+TEST-46: FAIL  9.57%   individual-transforms   ← BUG-088
+TEST-47: FAIL 21.71%   svg-basic               ← BUG-089 (Phase 1)
+TEST-48: FAIL 23.89%   line-clamp              ← BUG-090
+TEST-49: FAIL 30.62%   background-blend-mode   ← BUG-091
+TEST-50: FAIL 17.26%   css-variables           ← BUG-092
+TEST-51: FAIL  1.39%   scrollbar-rendering     ← BUG-093
+TEST-52: FAIL  6.82%   text-shadow-blur        ← BUG-094 (thr 4.0%)
+TEST-53: FAIL 31.78%   background-origin       ← BUG-095
+TEST-54: FAIL  9.50%   svg-path-stroke         ← BUG-096 (Phase 1)
+TEST-55: FAIL 26.65%   video-placeholder       ← BUG-097
+TEST-56: FAIL 14.12%   mix-blend-mode          ← BUG-098
+TEST-57: FAIL 28.66%   canvas-2d               ← BUG-099 (Phase 2)
+TEST-58: FAIL  6.04%   first-letter-line       ← BUG-100 (thr 2.0%)
+TEST-59: FAIL 27.63%   image-set-cross-fade    ← BUG-101 (thr 2.0%)
+TEST-60: FAIL 11.51%   svg-stroke-advanced     ← BUG-102 (thr 1.0%, Phase 1)
+TEST-61: FAIL 99.53%   view-transitions        ← BUG-103 (thr 1.0%, Phase 2)
+TEST-62: FAIL 63.70%   scroll-snap             ← BUG-104 (thr 1.0%, Phase 1)
+TEST-63: FAIL 26.13%   masonry                 ← BUG-105 (thr 1.0%, Phase 2)
+TEST-64: FAIL 24.85%   table                   ← BUG-106 (thr 1.0%)
+TEST-65: FAIL 23.52%   flex-align-content      ← BUG-107
+TEST-66: FAIL  6.18%   selection-pseudo        ← BUG-108
+TEST-67: FAIL 20.19%   attr-typed              ← BUG-074 (OPEN)
+TEST-68: FAIL  3.21%   font-variation-settings ← BUG-109
+TEST-69: FAIL 42.62%   border-spacing          ← BUG-075 (OPEN)
+TEST-70: FAIL  8.03%   object-fit (SVG)        ← BUG-110
+```
+
+Итог: 30 PASS / 41 FAIL из 71 теста.
 
 ---
 
@@ -623,18 +741,22 @@ CSS-фильтры `grayscale`, `sepia`, `brightness`, `invert`, `contrast`, `sa
 
 ## Ограничения Phase 0 (не баги — запланировано позже)
 
-| Фича | Фаза | TEST |
+Тесты, перешедшие в PASS: TEST-27 (direction-rtl), TEST-29 (@container), TEST-35 (grid), TEST-37 (float).
+
+| Фича | Фаза | TEST (последний прогон) |
 |---|---|---|
-| `float: left/right` | Phase 1 | TEST-37: 41.83% |
 | `position:absolute/fixed/relative` | Phase 1 | — |
-| `flexbox` (`display:flex`) | Phase 1 | — |
-| `grid` / `grid-template-areas` | Phase 2 | TEST-35: 83.20% |
 | CSS-анимации / transitions | Phase 2 | — |
 | HiDPI / DPR-масштабирование | Phase 1 | — |
-| `column-count` / `column-width` (multi-column) | Phase 1 | TEST-33: 32.88% |
-| `@container` container queries | Phase 1 | TEST-29: 11.04% |
-| `mask-image` | Phase 1 | TEST-26: 8.82% |
-| `contain:` CSS containment | Phase 1 | TEST-28: 14.81% |
-| Form controls UA styles | Phase 1 | TEST-34: 6.89% |
-| `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 20.57% (bbox работает) |
-| `direction: rtl` alignment | Phase 1 | TEST-27: 9.76% |
+| `column-count` / `column-width` (multi-column) | Phase 1 | TEST-33: 16.14% → BUG-083 |
+| `mask-image` | Phase 1 | TEST-26: 20.26% → BUG (Phase 1) |
+| `contain:` CSS containment | Phase 1 | TEST-28: 1.82% → BUG (Phase 1) |
+| Form controls UA styles | Phase 1 | TEST-34: 4.78% → BUG (Phase 1) |
+| `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 8.85% (bbox работает) |
+| SVG rendering | Phase 1 | TEST-47: 21.71% → BUG-089 |
+| SVG `<path>` stroke | Phase 1 | TEST-54: 9.50% → BUG-096 |
+| SVG stroke advanced | Phase 1 | TEST-60: 11.51% → BUG-102 |
+| `<canvas>` 2D context | Phase 2 | TEST-57: 28.66% → BUG-099 |
+| View Transitions API | Phase 2 | TEST-61: 99.53% → BUG-103 |
+| CSS Scroll Snap | Phase 1 | TEST-62: 63.70% → BUG-104 |
+| CSS Masonry | Phase 2 | TEST-63: 26.13% → BUG-105 |
