@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+K-5: FedCM stub  branch: p1-k5-fedcm
+Next step: реализация завершена, коммит и мерж  crates/js/src/credentials.rs:280
 
 ---
 

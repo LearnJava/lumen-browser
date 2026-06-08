@@ -1,7 +1,8 @@
-//! `navigator.credentials` (WebAuthn / passkeys + WebOTP) bridge.
+//! `navigator.credentials` (WebAuthn / passkeys + WebOTP + FedCM) bridge.
 //!
 //! The JS shim ([`CREDENTIALS_SHIM`]) implements `navigator.credentials.create()`
-//! and `.get()` plus `PublicKeyCredential` and `OTPCredential` classes.
+//! and `.get()` plus `PublicKeyCredential`, `OTPCredential`, and `IdentityCredential`
+//! classes.
 //! WebAuthn operations marshal requests to the native bindings `_lumen_webauthn_create` /
 //! `_lumen_webauthn_get` (registered in [`crate::dom::install_dom_api`]), which forward
 //! to the process-global [`CredentialProvider`] installed by the shell via
@@ -12,6 +13,12 @@
 //! WebOTP API (`navigator.credentials.get({otp: {...}})`) is Phase 0: always rejects with
 //! `NotSupportedError` since SMS-based OTP requires platform integration outside the scope
 //! of this browser prototype.
+//!
+//! FedCM API (`navigator.credentials.get({identity: {providers: [...]}})`) is Phase 0:
+//! always rejects with `NotSupportedError`. `IdentityCredential` and `IdentityProvider`
+//! are exposed on `window` for spec-conformant feature detection (FedCM §5).
+//! Phase 1: real IDP flow requires browser-mediated UI + network fetch to
+//! `configURL/.well-known/web-identity` — deferred to shell integration.
 //!
 //! Marshalling avoids JSON parsing in Rust (no `serde_json` in `lumen-js`): the
 //! request is packed into a single `|`-separated string whose fields are all
@@ -279,6 +286,14 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
   PublicKeyCredential.prototype = Object.create(Credential.prototype);
   function OTPCredential(){ throw new TypeError('Illegal constructor'); }
   OTPCredential.prototype = Object.create(Credential.prototype);
+  // FedCM §5 — token is populated by IDP redirect in Phase 1 (shell integration).
+  function IdentityCredential(){ throw new TypeError('Illegal constructor'); }
+  IdentityCredential.prototype = Object.create(Credential.prototype);
+  // FedCM §5.1 — getUserInfo() fetches accounts from IDP accounts endpoint.
+  function IdentityProvider(){}
+  IdentityProvider.getUserInfo = function(){
+    return Promise.reject(mkErr('NotSupportedError', 'FedCM IdentityProvider.getUserInfo() is not supported'));
+  };
   function CredentialsContainer(){}
 
   function makeAttestation(o){
@@ -368,6 +383,8 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
       try {
         if (!options) { reject(mkErr('NotSupportedError', 'options required')); return; }
         if (options.otp) { reject(mkErr('NotSupportedError', 'WebOTP API not supported')); return; }
+        // FedCM §5 Phase 0: IDP flow not yet implemented; reject immediately.
+        if (options.identity) { reject(mkErr('NotSupportedError', 'FedCM (identity) is not supported')); return; }
         if (!options.publicKey) { reject(mkErr('NotSupportedError', 'publicKey options required')); return; }
         if (typeof _lumen_webauthn_get !== 'function') { reject(mkErr('NotAllowedError', 'no authenticator')); return; }
         var pk = options.publicKey;
@@ -403,6 +420,8 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
   var g = (typeof globalThis !== 'undefined') ? globalThis : this;
   g.PublicKeyCredential = PublicKeyCredential;
   g.OTPCredential = OTPCredential;
+  g.IdentityCredential = IdentityCredential;
+  g.IdentityProvider = IdentityProvider;
   g.CredentialsContainer = CredentialsContainer;
   g.Credential = Credential;
   g.AuthenticatorResponse = AuthenticatorResponse;
@@ -448,6 +467,78 @@ mod tests {
         // WebOTP API rejection is tested in JS integration tests in lumen-shell.
         // This test documents that the behavior is intentional: navigator.credentials.get({otp: ...})
         // always rejects with NotSupportedError since SMS-based OTP requires platform integration.
+    }
+
+    // ── FedCM tests ─────────────────────────────────────────────────────────────
+
+    fn with_credentials_shim(f: impl FnOnce(&rquickjs::Ctx)) {
+        use rquickjs::{Context, Runtime};
+        let rt = Runtime::new().unwrap();
+        let ctx = Context::full(&rt).unwrap();
+        ctx.with(|ctx| {
+            // Minimal globals required by CREDENTIALS_SHIM; atob/btoa stubs let
+            // the shim install without triggering WebAuthn code paths.
+            ctx.eval::<(), _>(r#"
+                var window = globalThis;
+                var navigator = {};
+                function atob(s) { return s; }
+                function btoa(s) { return s; }
+                function TextEncoder() {}
+                TextEncoder.prototype.encode = function(s) { return new Uint8Array(0); };
+            "#).unwrap();
+            ctx.eval::<(), _>(CREDENTIALS_SHIM).unwrap();
+            f(&ctx);
+        });
+    }
+
+    #[test]
+    fn fedcm_identity_credential_class_exists() {
+        with_credentials_shim(|ctx| {
+            let ok: bool = ctx
+                .eval("typeof window.IdentityCredential === 'function'")
+                .unwrap();
+            assert!(ok, "IdentityCredential should be exported on window");
+        });
+    }
+
+    #[test]
+    fn fedcm_identity_provider_class_exists() {
+        with_credentials_shim(|ctx| {
+            let ok: bool = ctx
+                .eval("typeof window.IdentityProvider === 'function'")
+                .unwrap();
+            assert!(ok, "IdentityProvider should be exported on window");
+        });
+    }
+
+    #[test]
+    fn fedcm_identity_provider_get_user_info_returns_promise() {
+        with_credentials_shim(|ctx| {
+            let ok: bool = ctx
+                .eval("IdentityProvider.getUserInfo({configURL:'https://idp.test', clientId:'c'}) instanceof Promise")
+                .unwrap();
+            assert!(ok, "IdentityProvider.getUserInfo() should return a Promise");
+        });
+    }
+
+    #[test]
+    fn fedcm_credentials_get_identity_returns_promise() {
+        with_credentials_shim(|ctx| {
+            let ok: bool = ctx
+                .eval("navigator.credentials.get({identity:{providers:[{configURL:'https://idp.test',clientId:'c'}]}}) instanceof Promise")
+                .unwrap();
+            assert!(ok, "credentials.get({{identity:...}}) should return a Promise");
+        });
+    }
+
+    #[test]
+    fn fedcm_identity_credential_constructor_throws() {
+        with_credentials_shim(|ctx| {
+            let throws: bool = ctx
+                .eval("(function(){ try { new IdentityCredential(); return false; } catch(e) { return e instanceof TypeError; } })()")
+                .unwrap();
+            assert!(throws, "IdentityCredential constructor should throw TypeError");
+        });
     }
 
     #[test]
