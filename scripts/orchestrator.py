@@ -423,7 +423,9 @@ def format_event(event: dict) -> list[str]:
     return lines
 
 
-RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:am|pm)?)", re.IGNORECASE)
+RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:\s*[ap]m)?)", re.IGNORECASE)
+# Фраза "hit your limit" не покрывает "hit your session limit" — используем широкий паттерн
+RATE_LIMIT_TEXT_RE = re.compile(r"hit your\b.*\blimit|rate.?limit|session limit", re.IGNORECASE)
 
 # Короткие алиасы. Принимаются в CLI (`--model`, `--fallback-model`),
 # env-переменных и в интерактивном prompt. Разворачиваются в полный
@@ -539,9 +541,10 @@ def run_claude(
     task_number: int = 0,
     resume_session_id: str | None = None,
     model: str | None = None,
-) -> tuple[int, bool, bool]:
-    """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited, auth_error).
+) -> tuple[int, bool, bool, str | None]:
+    """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited, auth_error, reset_time).
 
+    reset_time — строка вида "6:50pm" из сообщения "resets 6:50pm", или None.
     При resume_session_id использует --resume <id> для продолжения прерванной сессии.
     При model передаёт `--model <id>` в CLI (используется для fallback на Haiku).
     """
@@ -590,6 +593,7 @@ def run_claude(
     try:
         rate_limited = False
         auth_error = False
+        reset_time: str | None = None
         _session_id_saved = resume_session_id is not None  # уже знаем id при resume
         for line in process.stdout:
             line = line.strip()
@@ -597,8 +601,11 @@ def run_claude(
                 continue
 
             # Детект rate limit в сыром выводе
-            if "hit your limit" in line.lower() or "rate limit" in line.lower():
+            if RATE_LIMIT_TEXT_RE.search(line):
                 rate_limited = True
+                m = RATE_LIMIT_RE.search(line)
+                if m and reset_time is None:
+                    reset_time = m.group(1)
                 log(developer, f"  Rate limit: {line[:500]}")
                 continue
 
@@ -612,7 +619,7 @@ def run_claude(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 # Не-JSON строка — может быть сообщение от CLI
-                if "hit your limit" in line.lower() or "rate limit" in line.lower():
+                if RATE_LIMIT_TEXT_RE.search(line):
                     rate_limited = True
                     log(developer, f"  Rate limit: {line[:500]}")
                 elif "403" in line and ("forbidden" in line.lower() or "authenticate" in line.lower()):
@@ -633,6 +640,17 @@ def run_claude(
                 if info.get("status", "").startswith("blocked"):
                     rate_limited = True
                     log(developer, "  Rate limit (blocked)")
+            # Детект через текст ассистента ("You've hit your session limit …")
+            if not rate_limited and event.get("type") == "assistant":
+                for block in event.get("message", {}).get("content", []):
+                    if block.get("type") == "text":
+                        text = block.get("text", "")
+                        if RATE_LIMIT_TEXT_RE.search(text):
+                            rate_limited = True
+                            m = RATE_LIMIT_RE.search(text)
+                            if m and reset_time is None:
+                                reset_time = m.group(1)
+                            break
 
             for display_line in format_event(event):
                 log(developer, display_line)
@@ -641,10 +659,12 @@ def run_claude(
         stderr_output = process.stderr.read()
         if stderr_output:
             sl = stderr_output.lower()
-            if "hit your limit" in sl or "rate limit" in sl:
+            if RATE_LIMIT_TEXT_RE.search(stderr_output):
                 rate_limited = True
                 match = RATE_LIMIT_RE.search(stderr_output)
                 if match:
+                    if reset_time is None:
+                        reset_time = match.group(1)
                     log(developer, f"  Rate limit до {match.group(1)}")
                 else:
                     log(developer, "  Rate limit обнаружен")
@@ -653,7 +673,7 @@ def run_claude(
                 log(developer, "  Auth error (403) в stderr")
 
         process.wait()
-        return process.returncode, rate_limited, auth_error
+        return process.returncode, rate_limited, auth_error, reset_time
     finally:
         _stop_tracker.set()
         tracker.join(timeout=3.0)
@@ -667,13 +687,33 @@ def run_claude(
             log(developer, f"  Завершено {killed} дочерних процессов после сессии")
 
 
-def wait_for_rate_limit(developer: str):
-    """Подождать 5 минут при rate limit."""
-    wait_minutes = 5
-    log(developer, f"Rate limit — пауза {wait_minutes} мин...")
-    set_jobstatus(developer, "rate limit",
-                  f"ждёт до {(datetime.now() + timedelta(minutes=wait_minutes)).strftime('%H:%M')}")
-    time.sleep(wait_minutes * 60)
+def wait_for_rate_limit(developer: str, reset_time_str: str | None = None):
+    """Подождать до сброса лимита.
+
+    Если передан reset_time_str (например "6:50pm"), ждёт до этого времени +1 мин запас.
+    Иначе — фиксированные 5 минут.
+    """
+    wait_seconds = 5 * 60  # fallback
+    reset_label = (datetime.now() + timedelta(seconds=wait_seconds)).strftime("%H:%M")
+
+    if reset_time_str:
+        try:
+            # Парсим "6:50pm", "18:50", "6:50 pm" и т.п.
+            t_str = reset_time_str.replace(" ", "").lower()
+            fmt = "%I:%M%p" if ("am" in t_str or "pm" in t_str) else "%H:%M"
+            parsed = datetime.strptime(t_str, fmt)
+            now = datetime.now()
+            reset_dt = now.replace(hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0)
+            if reset_dt <= now:
+                reset_dt += timedelta(days=1)
+            wait_seconds = max(60, int((reset_dt - now).total_seconds()) + 60)
+            reset_label = reset_dt.strftime("%H:%M")
+        except ValueError:
+            pass  # не распарсилось — используем fallback 5 мин
+
+    log(developer, f"Rate limit — пауза до {reset_label} ({wait_seconds // 60} мин {wait_seconds % 60} сек)...")
+    set_jobstatus(developer, "rate limit", f"ждёт до {reset_label}")
+    time.sleep(wait_seconds)
     log(developer, "Пауза завершена, продолжаю.")
 
 
@@ -751,7 +791,7 @@ def run_task_loop(
                 f"Когда задача завершена — вызови /lumen-task-finish."
             )
             try:
-                exit_code, rate_limited, auth_error = run_claude(
+                exit_code, rate_limited, auth_error, reset_time = run_claude(
                     developer, resume_prompt, task_count,
                     resume_session_id=session_id,
                     model=fallback_model or initial_model,
@@ -777,7 +817,7 @@ def run_task_loop(
                 else:
                     log(developer, f"Резервная модель {fallback_model} тоже исчерпана.")
                     # Оставить файл состояния — попробуем снова после паузы
-                    wait_for_rate_limit(developer)
+                    wait_for_rate_limit(developer, reset_time)
             elif auth_error:
                 log(developer, "Auth error при возобновлении. Пауза 60 сек...")
                 time.sleep(60)
@@ -828,7 +868,7 @@ def run_task_loop(
 
         log(developer, "Запуск claude...")
         try:
-            exit_code, rate_limited, auth_error = run_claude(
+            exit_code, rate_limited, auth_error, reset_time = run_claude(
                 developer, prompt, task_number=task_count,
                 model=fallback_model or initial_model,
             )
@@ -849,10 +889,10 @@ def run_task_loop(
                 announce_fallback(developer, f"задача #{task_count + 1}", fallback_model)
                 set_jobstatus(developer, "fallback model", fallback_model)
             else:
-                # И резервная модель уже исчерпана — стандартная пауза 5 минут
+                # И резервная модель уже исчерпана — ждём до реального времени сброса
                 log(developer, f"Резервная модель {fallback_model} тоже исчерпана.")
                 # Оставить файл состояния с session_id — пригодится при возобновлении после паузы
-                wait_for_rate_limit(developer)
+                wait_for_rate_limit(developer, reset_time)
         elif auth_error and exit_code != 0:
             task_count -= 1
             clear_session_state(developer)
