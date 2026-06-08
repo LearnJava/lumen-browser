@@ -97,7 +97,7 @@ pub use session_export::{active_tab, from_json as session_from_json, to_json as 
     ExportedTab, SessionFile};
 pub use session_store::{PersistedTab, SessionStore};
 pub use tab_sessions::{SessionSnapshot, TabSession, TabSessions};
-pub use tab_snapshot::{HibernatedTabData, TabSnapshotStore};
+pub use tab_snapshot::{HibernatedTabData, TabSnapshotStore, SleepingTabStore, T2SleepData};
 pub use web_manifest::{WebManifest, WebManifests};
 pub use workspaces::{Workspace, Workspaces};
 pub use omnibox_aliases::{OmniboxAlias, OmniboxAliases};

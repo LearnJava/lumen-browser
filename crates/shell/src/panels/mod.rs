@@ -15,6 +15,7 @@ pub mod pip_window;
 pub mod privacy_panel;
 pub mod read_later_panel;
 pub mod restore_spinner;
+pub mod sleep_hint;
 pub mod shields_panel;
 pub mod sidebar_panel;
 pub mod split_view;

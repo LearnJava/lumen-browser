@@ -394,6 +394,9 @@ fn run_window_mode(
         hibernated_tabs: HashMap::new(),
         tab_snapshots: lumen_storage::TabSnapshotStore::open_in_memory()
             .expect("tab_snapshots in-memory"),
+        t2_store: lumen_storage::SleepingTabStore::open_in_memory()
+            .expect("t2_store in-memory"),
+        t2_restore_start_ms: None,
         session_store: session_persist::open_store(),
         lifecycle_mgr: {
             let mut mgr = tab_lifecycle::TabLifecycleManager::new(
@@ -3804,6 +3807,16 @@ struct Lumen {
     hibernated_tabs: HashMap<usize, tab_lifecycle::TabMetadata>,
     /// SQLite-backed blob store for T3 DOM snapshots (ADR-008 §10J).
     tab_snapshots: lumen_storage::TabSnapshotStore,
+    /// SQLite-backed checkpoint store for T2 (BackgroundOld) tabs (ADR-008 §10I).
+    ///
+    /// Written on every T1→T2 transition so scroll + form state survive a crash.
+    /// Restored on T2→T0 when `bg_tabs` is empty (crash-recovery path).
+    t2_store: lumen_storage::SleepingTabStore,
+    /// Monotonic timestamp (ms since epoch) when a T2 SQLite restore started.
+    ///
+    /// `None` when no restore is in progress.  The `sleep_hint` overlay is shown
+    /// once this exceeds 100 ms.
+    t2_restore_start_ms: Option<f64>,
     /// SQLite-backed store for the last session — all open tabs at window close
     /// (§10I). Overwritten wholesale on `CloseRequested`, read back on launch to
     /// reopen the previous set of tabs. On-disk at `session_persist::SESSION_DB_PATH`.
@@ -7246,6 +7259,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
+                // Sleep hint for T2 SQLite restore >100 ms (10I).
+                if let Some(start_ms) = self.t2_restore_start_ms {
+                    let elapsed_ms = now_ms - start_ms;
+                    let win_w = self.viewport_width_css();
+                    if let Some(mut hint) =
+                        panels::sleep_hint::build_sleep_hint(elapsed_ms, win_w)
+                    {
+                        overlay_buf.append(&mut hint);
+                        self.request_redraw();
+                    }
+                }
+
                 // Build the split-view combined DL before borrowing renderer,
                 // so the immutable borrow of self.split_view ends first.
                 let split_combined: Option<lumen_paint::DisplayList> = {
@@ -10312,6 +10337,31 @@ impl Lumen {
         }
     }
 
+    /// Restore a T2 (BackgroundOld) tab from SQLite crash-recovery checkpoint.
+    ///
+    /// Used only when `bg_tabs` is empty for this tab (process-restart path).
+    /// Reads scroll + form state from `t2_store` and applies them to the current
+    /// (blank-reset) active slot.  The page URL is not stored in `t2_store`, so
+    /// the tab will appear blank; a future enhancement may store the URL to
+    /// trigger a background reload (10I Phase 2).
+    ///
+    /// Shows `sleep_hint` overlay if restore takes >100 ms.
+    fn restore_t2_tab(&mut self, tab_id: usize) {
+        self.t2_restore_start_ms = Some(self.epoch.elapsed().as_secs_f64() * 1000.0);
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+
+        if let Ok(Some(data)) = self.t2_store.fetch(tab_id as i64) {
+            self.scroll_x = data.scroll_x;
+            self.scroll_y = data.scroll_y;
+            self.form_state = tab_lifecycle::deserialize_form_state(&data.form_state_json);
+            let _ = self.t2_store.delete(tab_id as i64);
+        }
+
+        self.t2_restore_start_ms = None;
+    }
+
     /// Restore a T3-hibernated tab into the active slot.
     ///
     /// Fetches the DOM blob from SQLite, reconstructs the `Document` via
@@ -10459,6 +10509,23 @@ impl Lumen {
                     self.hibernate_bg_tab(tab_id);
                 }
                 continue;
+            }
+
+            // T1 → T2: checkpoint scroll + form state to SQLite for crash recovery.
+            if tr.to == tab_lifecycle::TabState::BackgroundOld
+                && let Some(snap) = self.bg_tabs.get(&tab_id)
+            {
+                let data = lumen_storage::T2SleepData {
+                    js_heap_blob: vec![],
+                    dom_blob: vec![],
+                    scroll_x: snap.scroll_x,
+                    scroll_y: snap.scroll_y,
+                    form_state_json: tab_lifecycle::serialize_form_state(&snap.form_state),
+                    ts: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs() as i64),
+                };
+                let _ = self.t2_store.store(tab_id as i64, &data);
             }
 
             // Update strip badge for BackgroundOld (amber) or other tier changes.
@@ -10790,10 +10857,11 @@ impl Lumen {
                 self.restore_hibernated_tab(new_id);
             }
         } else {
-            // Closing a background tab: drop snapshot and any hibernated data.
+            // Closing a background tab: drop snapshot and any hibernated/sleeping data.
             self.bg_tabs.remove(&closing_id);
             self.hibernated_tabs.remove(&closing_id);
             let _ = self.tab_snapshots.delete(closing_id as i64);
+            let _ = self.t2_store.delete(closing_id as i64);
             self.tab_strip.remove(idx);
         }
         self.request_redraw();
@@ -10854,6 +10922,10 @@ impl Lumen {
         if let Some(snap) = self.bg_tabs.remove(&new_id) {
             // T1/T2: fast in-memory restore.
             self.restore_page_snapshot(snap);
+        } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
+            // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite
+            // checkpoint exists — restore scroll + form state from it.
+            self.restore_t2_tab(new_id);
         } else if self.hibernated_tabs.contains_key(&new_id) {
             // T3: restore from SQLite — Document::from_bytes() + relayout.
             self.restore_hibernated_tab(new_id);

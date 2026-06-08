@@ -13,8 +13,10 @@
 pub mod hibernate;
 pub mod manager;
 pub mod restore;
+pub mod sleep;
 pub mod state;
 
 pub use manager::{TabId, TabLifecycleManager, TierTransition};
 pub use restore::TabMetadata;
+pub use sleep::{deserialize_form_state, serialize_form_state};
 pub use state::{MemoryPressure, TabLifecycle, TabState, TierTimeouts, TransitionReason};
