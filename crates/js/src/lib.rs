@@ -77,6 +77,7 @@ pub mod webxr;
 pub mod form_validation;
 pub mod element_internals;
 pub mod presentation_api;
+pub mod webassembly;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -872,6 +873,14 @@ impl QuickJsRuntime {
             // Phase 0: navigator.presentation + PresentationRequest/Connection stubs.
             if let Err(e) = presentation_api::install_presentation_api(&ctx) {
                 eprintln!("Presentation API init failed: {}", e);
+            }
+
+            // Install WebAssembly API (W3C WebAssembly JavaScript Interface §7) — after DOM.
+            // Phase 0: compile/instantiate return resolved Promises with empty Module/Instance;
+            // validate() checks the 4-byte WASM magic header. No actual WASM execution.
+            // Phase 1 (future): integrate wasmtime or wasmer for real WASM execution.
+            if let Err(e) = webassembly::install_webassembly_bindings(&ctx) {
+                eprintln!("WebAssembly bindings init failed: {}", e);
             }
 
             Ok(())
