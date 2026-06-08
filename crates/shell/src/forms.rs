@@ -1548,7 +1548,7 @@ mod tests {
             .get_attr("value")
             .and_then(|v| v.trim().parse().ok())
             .unwrap_or(-1.0);
-        assert!(val >= 40.0 && val <= 60.0, "expected ~50.0, got {val}");
+        assert!((40.0..=60.0).contains(&val), "expected ~50.0, got {val}");
     }
 
     #[test]

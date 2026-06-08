@@ -18,7 +18,7 @@
 //!   continueRequest/continueResponse/continueWithAuth/failRequest/setCacheBehavior
 //! - `storage.*`          — getCookies/setCookie/deleteCookies(+domain filter)
 //! - `input.*`            — performActions/releaseActions/setFiles
-//! - `browser.*`          — setTimezoneOverride
+//! - `browser.*`          — setTimezoneOverride/getDownloads
 //! - `emulation.*`        — setUserAgentOverride
 //!
 //! Public BiDi event emitters (shell integration):
@@ -28,6 +28,7 @@
 //! - [`BidiState::complete_download`]   — emit `browser.downloadItemCompleted`
 //! - [`BidiState::abort_download`]      — emit `browser.downloadItemAborted`
 //! - [`BidiState::record_cookie_change`]— emit `storage.cookieAdded/Changed/Removed`
+//!   (also auto-emitted by `storage.setCookie` / `storage.deleteCookies`)
 //!
 //! Live wiring to the actual engine (real navigation, `domContentLoaded`, cookie events)
 //! is a P3 handoff — roadmap 8H.3.
@@ -104,7 +105,7 @@ struct DownloadItem {
 
 /// A cookie stored in the BiDi session (mirrors `storage.Cookie`, BiDi §13).
 #[derive(Clone, Debug, PartialEq)]
-struct BidiCookie {
+pub(super) struct BidiCookie {
     /// Cookie name.
     name: String,
     /// Cookie string value.
@@ -126,14 +127,17 @@ struct BidiCookie {
 /// An open user-prompt dialog (alert / confirm / prompt / beforeUnload).
 struct UserPrompt {
     /// Opaque prompt identifier.
+    #[allow(dead_code)]
     id: String,
     /// ID of the browsing context that opened the prompt.
     context: String,
     /// Prompt type: `"alert"`, `"confirm"`, `"prompt"`, or `"beforeUnload"`.
     type_: String,
     /// Default value for `"prompt"` dialogs; empty for alert/confirm.
+    #[allow(dead_code)]
     default_value: String,
     /// Prompt message text shown to the user.
+    #[allow(dead_code)]
     message: String,
 }
 
@@ -618,6 +622,7 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "input.setFiles" => input_set_files(id, &params, state),
         "session.setDefaultUserContextLocale" => session_set_locale(id, &params, state),
         "browser.setTimezoneOverride" => browser_set_timezone(id, &params, state),
+        "browser.getDownloads" => browser_get_downloads(id, state),
         "emulation.setUserAgentOverride" => emulation_set_ua_override(id, &params, state),
         "browsingContext.handleUserPrompt" => bc_handle_user_prompt(id, &params, state),
         "browsingContext.setViewport" => bc_set_viewport(id, &params, state),
@@ -738,8 +743,17 @@ fn bc_create(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResu
         viewport: None,
     });
 
+    // Collect applicable preload script IDs for this context (BiDi §10.2.1).
+    let script_ids: Vec<JsonValue> = state
+        .preload_scripts
+        .iter()
+        .filter(|s| s.contexts.is_empty() || s.contexts.iter().any(|c| c == &context_id))
+        .map(|s| JsonValue::String(s.id.clone()))
+        .collect();
+
     let mut result = BTreeMap::new();
     result.insert("context".into(), JsonValue::String(context_id.clone()));
+    result.insert("preloadScripts".into(), JsonValue::Array(script_ids));
     let mut frames = vec![make_success(id, JsonValue::Object(result))];
 
     if state.is_subscribed("browsingContext.created") {
@@ -1195,6 +1209,48 @@ fn emulation_set_ua_override(
     DispatchResult::single(make_success(id, empty_obj()))
 }
 
+/// `browser.getDownloads` — list all tracked download items (BiDi §7).
+///
+/// Returns `{downloads: [{downloadId, url, fileName, receivedBytes, totalBytes, state}]}`.
+fn browser_get_downloads(id: i64, state: &BidiState) -> DispatchResult {
+    let downloads: Vec<JsonValue> = state
+        .download_items
+        .values()
+        .map(|item| {
+            download_event_params(
+                &item.id,
+                &item.url,
+                &item.file_name,
+                item.received_bytes,
+                item.total_bytes,
+                match item.state {
+                    DownloadState::InProgress => "inProgress",
+                    DownloadState::Completed => "completed",
+                    DownloadState::Aborted => "aborted",
+                },
+            )
+        })
+        .collect();
+    let mut result = BTreeMap::new();
+    result.insert("downloads".into(), JsonValue::Array(downloads));
+    DispatchResult::single(make_success(id, JsonValue::Object(result)))
+}
+
+/// Extract the effective domain from an origin URL (e.g. `"https://example.com"` → `"example.com"`).
+///
+/// Strips scheme and port; used for `partition.sourceOrigin` cookie filtering.
+fn origin_to_domain(origin: &str) -> String {
+    let host = origin
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("//");
+    // Drop port if present.
+    let host = host.split(':').next().unwrap_or(host);
+    // Drop trailing slash or path.
+    let host = host.split('/').next().unwrap_or(host);
+    host.to_owned()
+}
+
 // ──────────────────────────────────────────
 // script.disown / script.getRealms (BiDi §10)
 // ──────────────────────────────────────────
@@ -1419,19 +1475,27 @@ fn viewport_json(vp: Option<(u32, u32)>) -> JsonValue {
 /// `storage.getCookies` — retrieve cookies matching an optional filter (BiDi §13.2.1).
 ///
 /// Params: `filter` (optional) with `name`, `domain`, `path` string matchers.
+/// Also accepts `partition.sourceOrigin` as an origin-based domain filter (BiDi §13).
 fn storage_get_cookies(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
     let filter = params.get("filter");
     let filter_name = filter.and_then(|f| f.get("name")).and_then(|v| v.as_str());
     let filter_domain = filter.and_then(|f| f.get("domain")).and_then(|v| v.as_str());
     let filter_path = filter.and_then(|f| f.get("path")).and_then(|v| v.as_str());
+    // `partition.sourceOrigin` strips the scheme+port to extract the effective domain.
+    let filter_origin_domain =
+        params.get("partition").and_then(|p| p.get("sourceOrigin")).and_then(|v| v.as_str()).map(origin_to_domain);
 
     let cookies: Vec<JsonValue> = state
         .cookies
         .iter()
         .filter(|c| {
-            filter_name.map_or(true, |n| c.name == n)
-                && filter_domain.map_or(true, |d| c.domain == d || c.domain.ends_with(&format!(".{d}")))
-                && filter_path.map_or(true, |p| c.path == p)
+            filter_name.is_none_or(|n| c.name == n)
+                && filter_domain
+                    .is_none_or(|d| c.domain == d || c.domain.ends_with(&format!(".{d}")))
+                && filter_path.is_none_or(|p| c.path == p)
+                && filter_origin_domain.as_deref().is_none_or(|d| {
+                    c.domain == d || c.domain.ends_with(&format!(".{d}"))
+                })
         })
         .map(cookie_to_json)
         .collect();
@@ -1444,6 +1508,7 @@ fn storage_get_cookies(id: i64, params: &JsonValue, state: &BidiState) -> Dispat
 /// `storage.setCookie` — add or replace a cookie (BiDi §13.2.2).
 ///
 /// Params: `cookie { name, value, domain, path?, secure?, httpOnly?, sameSite?, expiry? }`.
+/// Auto-emits `storage.cookieAdded` or `storage.cookieChanged` when subscribed.
 fn storage_set_cookie(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let Some(cookie_params) = params.get("cookie") else {
         return DispatchResult::single(make_error(
@@ -1490,45 +1555,75 @@ fn storage_set_cookie(id: i64, params: &JsonValue, state: &mut BidiState) -> Dis
         expiry: cookie_params.get("expiry").and_then(|v| v.as_number()).unwrap_or(0.0) as u64,
     };
 
-    // Replace existing or append.
-    let existing = state.cookies.iter_mut().find(|c| {
+    // Replace existing or append; track whether this is an add or update.
+    let is_update = state.cookies.iter().any(|c| {
         c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path
     });
-    if let Some(slot) = existing {
-        *slot = cookie;
+    if is_update {
+        for slot in &mut state.cookies {
+            if slot.name == cookie.name && slot.domain == cookie.domain && slot.path == cookie.path
+            {
+                *slot = cookie.clone();
+                break;
+            }
+        }
     } else {
-        state.cookies.push(cookie);
+        state.cookies.push(cookie.clone());
     }
 
-    DispatchResult::single(make_success(id, empty_obj()))
+    let mut frames = vec![make_success(id, empty_obj())];
+    let event_name = if is_update { "storage.cookieChanged" } else { "storage.cookieAdded" };
+    if state.is_subscribed(event_name) {
+        frames.push(make_event(event_name, cookie_event_params(&cookie)));
+    }
+    DispatchResult { frames, close: false }
 }
 
 /// `storage.deleteCookies` — remove cookies matching filter (BiDi §13.2.3).
 ///
 /// Params: `filter` with optional `name`, `domain`, `path`.
-/// Supports per-origin deletion via `filter.domain`.
+/// Also accepts `partition.sourceOrigin` for per-origin deletion (BiDi §13).
+/// Auto-emits `storage.cookieRemoved` for each deleted cookie when subscribed.
 fn storage_delete_cookies(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let filter = params.get("filter");
     let filter_name = filter.and_then(|f| f.get("name")).and_then(|v| v.as_str()).map(str::to_owned);
     let filter_domain =
         filter.and_then(|f| f.get("domain")).and_then(|v| v.as_str()).map(str::to_owned);
     let filter_path = filter.and_then(|f| f.get("path")).and_then(|v| v.as_str()).map(str::to_owned);
+    let filter_origin_domain = params
+        .get("partition")
+        .and_then(|p| p.get("sourceOrigin"))
+        .and_then(|v| v.as_str())
+        .map(origin_to_domain);
 
-    state.cookies.retain(|c| {
-        let name_match = filter_name.as_deref().map_or(false, |n| c.name == n);
-        let domain_match = filter_domain.as_deref().map_or(false, |d| {
+    let matches_filter = |c: &BidiCookie| -> bool {
+        let name_match = filter_name.as_deref().is_some_and(|n| c.name == n);
+        let domain_match = filter_domain.as_deref().is_some_and(|d| {
             c.domain == d || c.domain.ends_with(&format!(".{d}"))
         });
-        let path_match = filter_path.as_deref().map_or(false, |p| c.path == p);
+        let path_match = filter_path.as_deref().is_some_and(|p| c.path == p);
+        let origin_match = filter_origin_domain.as_deref().is_some_and(|d| {
+            c.domain == d || c.domain.ends_with(&format!(".{d}"))
+        });
 
-        // Retain if none of the non-None filters match.
-        let should_delete = filter_name.as_ref().map_or(true, |_| name_match)
-            && filter_domain.as_ref().map_or(true, |_| domain_match)
-            && filter_path.as_ref().map_or(true, |_| path_match);
-        !should_delete
-    });
+        filter_name.as_ref().is_none_or(|_| name_match)
+            && filter_domain.as_ref().is_none_or(|_| domain_match)
+            && filter_path.as_ref().is_none_or(|_| path_match)
+            && filter_origin_domain.as_ref().is_none_or(|_| origin_match)
+    };
 
-    DispatchResult::single(make_success(id, empty_obj()))
+    // Collect deleted cookies before removal so we can emit events.
+    let deleted: Vec<BidiCookie> =
+        state.cookies.iter().filter(|c| matches_filter(c)).cloned().collect();
+    state.cookies.retain(|c| !matches_filter(c));
+
+    let mut frames = vec![make_success(id, empty_obj())];
+    if state.is_subscribed("storage.cookieRemoved") {
+        for c in &deleted {
+            frames.push(make_event("storage.cookieRemoved", cookie_event_params(c)));
+        }
+    }
+    DispatchResult { frames, close: false }
 }
 
 // ──────────────────────────────────────────
@@ -2074,11 +2169,25 @@ mod tests {
     #[test]
     fn script_remove_preload_acks() {
         let mut state = BidiState::new();
-        let result = dispatch(
-            r#"{"id":4,"method":"script.removePreloadScript","params":{"script":"stub-id"}}"#,
+        // Add a preload script first to get a valid ID.
+        let add_result = dispatch(
+            r#"{"id":3,"method":"script.addPreloadScript","params":{"functionDeclaration":"()=>{}"}}"#,
             &mut state,
         );
+        let script_id = parse(&add_result.frames[0])
+            .get("result")
+            .unwrap()
+            .get("script")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let cmd = format!(
+            r#"{{"id":4,"method":"script.removePreloadScript","params":{{"script":"{script_id}"}}}}"#
+        );
+        let result = dispatch(&cmd, &mut state);
         assert!(result.frames[0].contains("success"), "got: {}", result.frames[0]);
+        assert_eq!(state.preload_script_count(), 0);
     }
 
     // --- network.* tests ---
@@ -2820,5 +2929,257 @@ mod tests {
         let vp = ctx.get("viewport").unwrap();
         assert_eq!(vp.get("width").and_then(|x| x.as_number()), Some(1920.0));
         assert_eq!(vp.get("height").and_then(|x| x.as_number()), Some(1080.0));
+    }
+
+    // ── preload per-context ──
+
+    #[test]
+    fn create_context_preload_scripts_empty_when_none() {
+        let mut state = BidiState::new();
+        new_session_ctx(&mut state);
+        let r = dispatch(
+            r#"{"id":10,"method":"browsingContext.create","params":{"type":"tab"}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        let scripts = v
+            .get("result")
+            .unwrap()
+            .get("preloadScripts")
+            .and_then(|x| x.as_array())
+            .unwrap();
+        assert!(scripts.is_empty());
+    }
+
+    #[test]
+    fn create_context_preload_scripts_global_script_included() {
+        let mut state = BidiState::new();
+        new_session_ctx(&mut state);
+        // Register a global preload script (no specific contexts).
+        let r = dispatch(
+            r#"{"id":5,"method":"script.addPreloadScript","params":{"functionDeclaration":"()=>{}"}}"#,
+            &mut state,
+        );
+        let script_id = parse(&r.frames[0])
+            .get("result")
+            .unwrap()
+            .get("script")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let r2 = dispatch(
+            r#"{"id":10,"method":"browsingContext.create","params":{"type":"tab"}}"#,
+            &mut state,
+        );
+        let v = parse(&r2.frames[0]);
+        let scripts = v
+            .get("result")
+            .unwrap()
+            .get("preloadScripts")
+            .and_then(|x| x.as_array())
+            .unwrap();
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].as_str(), Some(script_id.as_str()));
+    }
+
+    #[test]
+    fn create_context_targeted_preload_not_included_for_different_context() {
+        let mut state = BidiState::new();
+        let root_ctx = new_session_ctx(&mut state);
+        // Preload script targeting only the root context.
+        let cmd = format!(
+            r#"{{"id":5,"method":"script.addPreloadScript","params":{{"functionDeclaration":"()=>{{}}","contexts":["{root_ctx}"]}}}}"#
+        );
+        dispatch(&cmd, &mut state);
+
+        // New context should NOT get the script (it targets root, not new_ctx).
+        let r = dispatch(
+            r#"{"id":10,"method":"browsingContext.create","params":{"type":"tab"}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        let scripts = v
+            .get("result")
+            .unwrap()
+            .get("preloadScripts")
+            .and_then(|x| x.as_array())
+            .unwrap();
+        assert!(scripts.is_empty());
+    }
+
+    // ── download lifecycle: browser.getDownloads ──
+
+    #[test]
+    fn get_downloads_empty_initially() {
+        let mut state = BidiState::new();
+        dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+        let r = dispatch(r#"{"id":2,"method":"browser.getDownloads","params":{}}"#, &mut state);
+        let v = parse(&r.frames[0]);
+        let downloads = v
+            .get("result")
+            .unwrap()
+            .get("downloads")
+            .and_then(|x| x.as_array())
+            .unwrap();
+        assert!(downloads.is_empty());
+    }
+
+    #[test]
+    fn get_downloads_returns_in_progress_item() {
+        let mut state = BidiState::new();
+        dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+        let (item_id, _) =
+            state.begin_download("https://ex.com/file.zip".into(), "file.zip".into());
+
+        let r = dispatch(r#"{"id":2,"method":"browser.getDownloads","params":{}}"#, &mut state);
+        let v = parse(&r.frames[0]);
+        let downloads = v
+            .get("result")
+            .unwrap()
+            .get("downloads")
+            .and_then(|x| x.as_array())
+            .unwrap();
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].get("downloadId").and_then(|x| x.as_str()), Some(item_id.as_str()));
+        assert_eq!(downloads[0].get("state").and_then(|x| x.as_str()), Some("inProgress"));
+    }
+
+    #[test]
+    fn get_downloads_reflects_completed_state() {
+        let mut state = BidiState::new();
+        dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+        let (item_id, _) = state.begin_download("https://ex.com/a.zip".into(), "a.zip".into());
+        state.complete_download(&item_id);
+
+        let r = dispatch(r#"{"id":2,"method":"browser.getDownloads","params":{}}"#, &mut state);
+        let v = parse(&r.frames[0]);
+        let dl = &v.get("result").unwrap().get("downloads").unwrap().as_array().unwrap()[0];
+        assert_eq!(dl.get("state").and_then(|x| x.as_str()), Some("completed"));
+    }
+
+    // ── cookie-change events from storage commands ──
+
+    #[test]
+    fn set_cookie_emits_added_event_when_subscribed() {
+        let mut state = BidiState::new();
+        dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+        dispatch(
+            r#"{"id":2,"method":"session.subscribe","params":{"events":["storage.cookieAdded"]}}"#,
+            &mut state,
+        );
+        let r = dispatch(
+            r#"{"id":3,"method":"storage.setCookie","params":{"cookie":{"name":"a","value":"1","domain":"ex.com"}}}"#,
+            &mut state,
+        );
+        assert_eq!(r.frames.len(), 2); // success + event
+        let ev = parse(&r.frames[1]);
+        assert_eq!(ev.get("method").and_then(|x| x.as_str()), Some("storage.cookieAdded"));
+        let c = ev.get("params").unwrap().get("cookie").unwrap();
+        assert_eq!(c.get("name").and_then(|x| x.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn set_cookie_emits_changed_event_on_replace() {
+        let mut state = BidiState::new();
+        dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+        dispatch(
+            r#"{"id":2,"method":"storage.setCookie","params":{"cookie":{"name":"x","value":"1","domain":"ex.com"}}}"#,
+            &mut state,
+        );
+        dispatch(
+            r#"{"id":3,"method":"session.subscribe","params":{"events":["storage.cookieChanged"]}}"#,
+            &mut state,
+        );
+        // Replace same name+domain+path → should emit cookieChanged.
+        let r = dispatch(
+            r#"{"id":4,"method":"storage.setCookie","params":{"cookie":{"name":"x","value":"2","domain":"ex.com"}}}"#,
+            &mut state,
+        );
+        assert_eq!(r.frames.len(), 2);
+        let ev = parse(&r.frames[1]);
+        assert_eq!(ev.get("method").and_then(|x| x.as_str()), Some("storage.cookieChanged"));
+    }
+
+    #[test]
+    fn delete_cookies_emits_removed_events_when_subscribed() {
+        let mut state = BidiState::new();
+        dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+        dispatch(
+            r#"{"id":2,"method":"storage.setCookie","params":{"cookie":{"name":"a","value":"1","domain":"ex.com"}}}"#,
+            &mut state,
+        );
+        dispatch(
+            r#"{"id":3,"method":"storage.setCookie","params":{"cookie":{"name":"b","value":"2","domain":"ex.com"}}}"#,
+            &mut state,
+        );
+        dispatch(
+            r#"{"id":4,"method":"session.subscribe","params":{"events":["storage.cookieRemoved"]}}"#,
+            &mut state,
+        );
+        let r = dispatch(
+            r#"{"id":5,"method":"storage.deleteCookies","params":{"filter":{"domain":"ex.com"}}}"#,
+            &mut state,
+        );
+        // success + 2 removed events (one per cookie).
+        assert_eq!(r.frames.len(), 3);
+        let ev0 = parse(&r.frames[1]);
+        let ev1 = parse(&r.frames[2]);
+        assert_eq!(ev0.get("method").and_then(|x| x.as_str()), Some("storage.cookieRemoved"));
+        assert_eq!(ev1.get("method").and_then(|x| x.as_str()), Some("storage.cookieRemoved"));
+        assert_eq!(state.cookie_count(), 0);
+    }
+
+    // ── per-origin clear: partition.sourceOrigin ──
+
+    #[test]
+    fn get_cookies_filters_by_partition_source_origin() {
+        let mut state = BidiState::new();
+        dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+        dispatch(
+            r#"{"id":2,"method":"storage.setCookie","params":{"cookie":{"name":"a","value":"1","domain":"example.com"}}}"#,
+            &mut state,
+        );
+        dispatch(
+            r#"{"id":3,"method":"storage.setCookie","params":{"cookie":{"name":"b","value":"2","domain":"other.com"}}}"#,
+            &mut state,
+        );
+        let r = dispatch(
+            r#"{"id":4,"method":"storage.getCookies","params":{"partition":{"sourceOrigin":"https://example.com"}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        let cookies = v.get("result").unwrap().get("cookies").unwrap().as_array().unwrap();
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0].get("name").and_then(|x| x.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn delete_cookies_by_partition_source_origin() {
+        let mut state = BidiState::new();
+        dispatch(r#"{"id":1,"method":"session.new","params":{}}"#, &mut state);
+        dispatch(
+            r#"{"id":2,"method":"storage.setCookie","params":{"cookie":{"name":"a","value":"1","domain":"example.com"}}}"#,
+            &mut state,
+        );
+        dispatch(
+            r#"{"id":3,"method":"storage.setCookie","params":{"cookie":{"name":"b","value":"2","domain":"other.com"}}}"#,
+            &mut state,
+        );
+        assert_eq!(state.cookie_count(), 2);
+        let r = dispatch(
+            r#"{"id":4,"method":"storage.deleteCookies","params":{"partition":{"sourceOrigin":"https://example.com"}}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("success"));
+        assert_eq!(state.cookie_count(), 1);
+    }
+
+    #[test]
+    fn origin_to_domain_strips_scheme_and_port() {
+        assert_eq!(origin_to_domain("https://example.com"), "example.com");
+        assert_eq!(origin_to_domain("http://sub.example.com:8080"), "sub.example.com");
+        assert_eq!(origin_to_domain("//example.com/path"), "example.com");
     }
 }

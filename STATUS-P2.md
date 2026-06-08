@@ -6,7 +6,8 @@
 
 ## In progress
 
-None
+O-1 (продолжение) — BiDi remaining gaps  branch: p2-o1-bidi-remaining
+Next step: preload per-context + download lifecycle + cookie-change events + per-origin clear  crates/shell/src/bidi/protocol.rs
 
 ---
 
