@@ -6,8 +6,7 @@
 
 ## In progress
 
-BUG-074: height:100% на flex-item  branch: p3-bug074-flex-height
-Next step: fix box_tree.rs lay_out_flex — передать explicit_cross как available_height в финальном lay_out()  crates/engine/layout/src/box_tree.rs:5174
+_(нет)_
 
 ## Next
 
@@ -63,6 +62,7 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 ## Recent fixes
 
+- **BUG-074 height:100% на flex-item** (2026-06-08) — `lay_out_flex` передавал `available_height=None` в финальный `lay_out()` для row-элементов → `height:100%` и другие процентные высоты резолвировались как auto (высота=0). CSS Flexbox §9.8 требует резолвировать процентные cross-размеры относительно definite cross size контейнера. Fix: передаём `explicit_cross` вместо `None`. 2 регресс-теста: `height:100% → 60px`, `height:50% → 40px`. layout --lib 2463/2463. Влито `p3-bug074-flex-height`.
 - **BUG-075 display:table shrink-to-fit** (2026-06-08) — таблицы без явной CSS width растягивались до ширины контейнера (982px). CSS 2.1 §17.5.2 требует shrink-to-fit: table width = sum(col_widths) + (n+1)*border_spacing. Fix: `table_intrinsic_content_width()` + обновление `b.rect.width`/`content_width` в `BoxKind::Table`. .t1: 982→228px, .t2: 982→272px, .t3: 982→180px. layout --lib 2461/2461, clippy чист. Влито `p3-bug075-table-width`.
 - **snapshot_cpu регрессии 32/33/34** (2026-06-08) — CPU-эталоны устарели после мержа P4/P2/P1: 32-list-markers (P4 @counter-style +6 li), 33-multi-column (C8 column-span/fill), 34-forms (forms-ui). Регенерированы через `SAVE_CPU_SNAPSHOTS=1`, все 57 snapshot_cpu тестов проходят. Влито `p3-snapshot-regen`.
 - **BUG-112 test_32_list_markers регрессия** (2026-06-08) — P4 добавил 2 `@counter-style` списка по 3 items → 32 li (было 26), 30 маркеров (было 24); тест не обновлён. 1/1. Влито `p3-test32-update`.
