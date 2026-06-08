@@ -65,6 +65,7 @@ pub mod web_codecs;
 pub mod ua_client_hints;
 pub mod media_capabilities;
 pub mod virtual_keyboard;
+pub mod reporting_api;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -789,6 +790,11 @@ impl QuickJsRuntime {
             // Phase 0: geometry stubs + geometrychange event infrastructure.
             if let Err(e) = virtual_keyboard::install_virtual_keyboard_bindings(&ctx) {
                 eprintln!("Virtual Keyboard API init failed: {}", e);
+            }
+
+            // Install Reporting API (W3C Reporting API L1) — observer + _lumen_deliver_report.
+            if let Err(e) = reporting_api::install_reporting_api_bindings(&ctx) {
+                eprintln!("Reporting API init failed: {}", e);
             }
 
             Ok(())
