@@ -6,8 +6,7 @@
 
 ## In progress
 
-**O-1: 8H.1/8H.2 BiDi transport + модули**  branch: p1-o1-bidi-modules
-Next step: создать `bidi/src/transport.rs`, добавить `input.*` / `script.disown` / `script.getRealms` / network intercept  `crates/shell/src/bidi/`
+_(нет)_
 
 ---
 
@@ -24,7 +23,7 @@ Next step: создать `bidi/src/transport.rs`, добавить `input.*` / 
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| O-1 | **8H.1/8H.2: BiDi transport + модули** — вынести WS-transport из shell-stub в `bidi/src/transport.rs`; реализовать BiDi-модули `script.*` / `network.*` / `input.*` (session.* и browsingContext.* уже готовы) | M | `lumen-bidi-server`, `lumen-shell` |
+| ~~O-1~~ | ~~**8H.1/8H.2: BiDi transport + модули**~~ — **выполнено** | M | `lumen-shell` |
 | O-2 | **6.9: Performance-observer JS binding** — `PerformanceObserver` callback delivery + JS binding `_lumen_deliver_perf_entry`; DOM-типы и mark/measure уже есть, нужен observer callback. `js/src/performance.rs` | S | `lumen-js` |
 | O-3 | **7D.1: Passkeys CTAP2-over-USB** — roaming authenticator transport (CTAP2 over HID); software `VirtualAuthenticator` уже готов, нужен реальный USB-транспорт. `network/src/webauthn.rs` | M | `lumen-network`, `lumen-js` |
 | O-4 | **10L: JS heap GC tuning per tier** — активная вкладка: мягкий GC (`gc_level=0`), idle: агрессивный (`gc_level=2`). `js/src/gc_policy.rs` | S | `lumen-js` |
@@ -96,6 +95,7 @@ Next step: создать `bidi/src/transport.rs`, добавить `input.*` / 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | O-1: 8H.1/8H.2 BiDi transport + модули | lumen-shell bidi/: transport.rs (новый) — WS-framing выделен из server.rs. Новые команды: script.disown/getRealms, network.addIntercept/removeIntercept/continueRequest/continueResponse/continueWithAuth/failRequest/setCacheBehavior, input.performActions/releaseActions/setFiles. BidiState: intercepts + cache_behavior. +15 тестов (56 BiDi итого). Clippy чист. |
 | 2026-06-08 | N-2: 8F Deterministic mode | lumen-core: ClockMode::Monotonic { step_ms }. lumen-driver: driver/src/determinism.rs (DeterministicConfig, seed_from_url), SessionContext::set_clock_mode/read_clock_ms (monotonic counter), BrowserSession trait +set_clock/+set_rng_seed/+freeze_fingerprint, InProcessSession + WinitSession реализуют, 7 новых тестов (66 total). lumen-js: QuickJsRuntime::freeze_fingerprint() — JS шим: AnalyserNode zeros + document.fonts.check=true. lumen-shell: DetConfig struct, --rng-seed/--monotonic-clock CLI флаги. lumen-plan.md: 8F/8F.1/8F.2/8F.3 ⬜→✅. |
 | 2026-06-08 | N-1: 8C Native input injection | shell/src/input/native.rs: константы W3C key codes (ENTER/BACKSPACE/TAB/ESCAPE/ARROW_*/HOME/END/PAGE_*/DELETE/SPACE) + code_to_key(). InputCommand::KeyDown { code } — новый вариант для специальных клавиш через about_to_wait путь. InputSender: key_down/enter/backspace/tab/escape convenience. Lumen::inject_special_key: keydown→keyup через _lumen_dispatch_key_event (isTrusted=true). 4 unit-теста (+4). lumen-shell: clippy чист, 85 input-тестов. |
 | 2026-06-08 | M-2: DOMParser + XMLSerializer | W3C DOM Parsing and Serialization §2.4+§11.4 Phase 0. DOMParser.parseFromString(str, mimeType) → VDocument: встроенный HTML-токенизатор (открыв/закрыв/void/self-close теги, атрибуты, комментарии, CDATA, raw-text mode, 70+ entities). VDocument — независимый документ на plain JS объектах (не Rust native): querySelector/querySelectorAll (tag, .class, #id, [attr=val/^/$/*~/|], >, ' ', ',', :not()), getElementsByTagName/ClassName, getElementById, createElement, innerHTML (read+write), outerHTML, textContent, cloneNode, appendChild/insertBefore/removeChild. XMLSerializer.serializeToString(node): virtual nodes — full round-trip; native nodes (__nid__) — через новый биндинг `_lumen_get_attr_names`. Новый биндинг `_lumen_get_attr_names(nid) → Vec<String>` в dom.rs. Новый модуль `crates/js/src/dom_parser.rs`. lumen-js: clippy чист, 19 unit-тестов (+19 vs 1593). |
