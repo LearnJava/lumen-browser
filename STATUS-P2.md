@@ -6,8 +6,7 @@
 
 ## In progress
 
-**O-2 | T2 → SQLite JS heap persistence**  branch: p2-tab-snapshot
-Next step: SleepingTabStore in lumen-storage  crates/storage/src/tab_snapshot.rs
+None
 
 ---
 
@@ -54,6 +53,13 @@ Next step: SleepingTabStore in lumen-storage  crates/storage/src/tab_snapshot.rs
 ---
 
 ## Current / Recently Merged
+
+**O-2 | T2 → SQLite JS heap persistence (ADR-008 §10I)** ✅ 2026-06-08 (merged)
+- `SleepingTabStore` + `T2SleepData` в `lumen-storage`: таблица `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll_x, scroll_y, form_state_json, ts)`
+- `tab_lifecycle::sleep`: `serialize_form_state` / `deserialize_form_state` — JSON с RFC 8259 escaping
+- `panels::sleep_hint`: UI-баннер при T2 restore >100ms
+- Shell wiring: checkpoint при T1→T2 в `tick_lifecycle`, `restore_t2_tab` crash-recovery path, очистка при close
+- 9 тестов storage + 10 тестов sleep + 4 теста hint; lumen-storage 551 ✅, lumen-shell 1172 ✅, Clippy чист
 
 **O-1 | BiDi remaining gaps (8H.3 финал)** ✅ 2026-06-08 (merged)
 - preload per-context: `browsingContext.create` возвращает `preloadScripts` (IDs применимых скриптов)
