@@ -1,6 +1,7 @@
 pub mod audio_bindings;
 pub mod audio_element;
 pub mod background_sync;
+pub mod badging;
 pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
@@ -510,6 +511,13 @@ impl QuickJsRuntime {
             // Phase 0: PressureObserver registers callback but never fires; knownSources()=['cpu'].
             if let Err(e) = compute_pressure::install_compute_pressure_bindings(&ctx) {
                 eprintln!("Compute Pressure API init failed: {}", e);
+            }
+
+            // Install Badging API (W3C Badging API) — after DOM/navigator.
+            // Phase 0: navigator.setAppBadge/clearAppBadge are no-ops; _lumen_set_app_badge hook
+            // prepared for OS integration in shell Phase 1.
+            if let Err(e) = badging::install_badging_bindings(&ctx) {
+                eprintln!("Badging API init failed: {}", e);
             }
 
             // Install CSP violation event class (W3C CSP Level 3 §7.8) — after DOM/document.
