@@ -6,12 +6,27 @@
 
 ## In progress
 
-**J-2 | WebGPU API Phase 0**  branch: p2-j2-webgpu
-Next step: clippy + tests green → commit → merge
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**J-2 | WebGPU API Phase 0** ✅ 2026-06-08 (merged)
+- `crates/js/src/webgpu.rs` — JS-шим без native GPU bindings
+- `navigator.gpu.requestAdapter()` → `Promise<GPUAdapter>`; `adapter.requestDevice()` → `Promise<GPUDevice>`
+- `GPUDevice`: `createBuffer/Texture/Sampler/ShaderModule/BindGroup/BindGroupLayout/PipelineLayout/RenderPipeline/ComputePipeline/CommandEncoder` + async pipeline variants
+- `GPUBuffer`: `mapAsync/getMappedRange/unmap/destroy` (Phase 0: zero ArrayBuffer)
+- `GPUTexture`: `createView/destroy`; `GPUTextureView` — opaque stub
+- `GPURenderPipeline` / `GPUComputePipeline` — opaque stubs с `getBindGroupLayout`
+- `GPUCommandEncoder`: `beginRenderPass/beginComputePass/copy*/finish`
+- `GPURenderPassEncoder`: `setPipeline/setVertexBuffer/setIndexBuffer/draw/drawIndexed/setViewport/setScissorRect/end` (+ legacy `endPass`)
+- `GPUComputePassEncoder`: `setPipeline/setBindGroup/dispatchWorkgroups/end`
+- `GPUQueue`: `submit` (no-op) / `writeBuffer` / `writeTexture` / `onSubmittedWorkDone`
+- `GPUCanvasContext`: `configure/getCurrentTexture/unconfigure`
+- Константы: `GPUBufferUsage` / `GPUTextureUsage` / `GPUShaderStage` / `GPUMapMode` / `GPUColorWrite`
+- Phase 0: no GPU — все операции in-memory only; Phase 1 (future) → wgpu backend
+- 12 unit-тестов в webgpu::tests, Clippy чист
 
 **J-1 | Web Audio API Phase 0** ✅ 2026-06-08 (merged)
 - `crates/js/src/web_audio.rs` — JS-шим без native bindings
@@ -441,7 +456,7 @@ Ordered by priority. Сгруппированы по домену.
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~J-1~~ | ~~**Web Audio API Phase 0**~~ — **выполнено** | L | `lumen-js` |
-| J-2 | **WebGPU API Phase 0** — `navigator.gpu.requestAdapter()` → stub `GPUAdapter`; `adapter.requestDevice()` → stub `GPUDevice`; `GPUBuffer`/`GPUTexture`/`GPURenderPipeline`/`GPUCommandEncoder`/`GPURenderPassEncoder` стабы (create* → объект-заглушка, submit/draw → no-op); `GPUCanvasContext.configure()`/`getCurrentTexture()`; Phase 0: no GPU, Phase 1 (future) → wgpu backend. 8+ тестов. | M | `lumen-js` |
+| ~~J-2~~ | ~~**WebGPU API Phase 0**~~ — **выполнено** | M | `lumen-js` |
 | J-3 | **CSS Houdini Paint Worklet Phase 0** — `CSS.paintWorklet.addModule(url)` → Promise (нет fetch, url сохраняется в реестре); `registerPaint(name, class)` в worklet context; CSS `paint(name)` значение для `background-image` парсируется css-parser → `BackgroundImage::Paint(name)` вариант; paint output = placeholder FillRect в display_list. `// CSS: paint()`. 6+ тестов. | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
 | J-4 | **Background Fetch API stub** — `registration.backgroundFetch.fetch(id, requests, opts)` → Promise<BGFetchRegistration>; `.get(id)` / `.getIds()` → Promise; `BGFetchRegistration` (id/result/failureReason/recordsAvailable/downloaded/downloadTotal/uploaded/uploadTotal/activate/abort/addEventListener). Phase 0: in-memory, no actual fetch. `// _lumen_bg_fetch_*` биндинги для shell Phase 1. 6 тестов. | XS | `lumen-js` |
 | J-5 | **Presentation API stub** — `navigator.presentation` singleton; `PresentationRequest.new([urls])` → reject NotSupportedError; `navigator.presentation.defaultRequest` getter/setter; `PresentationAvailability` + `navigator.presentation.requestAvailability()` → Promise<{value:false}>; `PresentationConnection` class (id/url/state/send/close/terminate/addEventListener). Phase 0: no-op. 5 тестов. | XS | `lumen-js` |
