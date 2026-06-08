@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**J-1 | Web Audio API Phase 0**  branch: p2-j1-web-audio
+Next step: создать `crates/js/src/web_audio.rs` + JS-шим `AudioContext`/AudioNode иерархия  `crates/js/src/web_audio.rs:1`
 
 ---
 
@@ -396,21 +397,21 @@ Ordered by priority. Сгруппированы по домену.
 
 | # | Задача | Размер | Фаза | Крейты |
 |---|--------|--------|------|--------|
-| E-3 | **about:blank and about:srcdoc** — `navigate_to("about:blank")` → пустой `Document::new_empty()` без HTTP fetch, `about:blank` в адресной строке; `<iframe srcdoc="...">` → `build_iframe_document(srcdoc)` парсит HTML inline. 6 тестов. | S | **1** | `lumen-shell`, `lumen-layout` |
-| E-2 | **Accessibility settings panel** — `Ctrl+Shift+Q`: `panels/a11y_panel.rs` (300×260px), font-size multiplier (0.8/1.0/1.25/1.5/2.0), prefers-reduced-motion toggle → `_lumen_deliver_media_changes`, forced-colors toggle, cursor size. `lumen-storage::A11yPrefs`. 10 тестов. | M | 2 | `lumen-shell`, `lumen-storage` |
-| E-1 | **Print dialog UI** — `Ctrl+P`: `panels/print_panel.rs` modal 560×400px, paper size (A4/Letter/Legal), orientation, margins, page range, color mode. "Печать" → `do_print_to_pdf()` + OS save dialog. 12 тестов. | M | 2 | `lumen-shell` |
-| E-4 | **CSS font-palette rendering** — `@font-palette-values` парсинг в css-parser (base-palette/override-colors), `ComputedStyle.resolved_font_palette`, `DrawText` с palette override → OpenType COLR/CPAL цвет-подстановка в glyph atlas. `// CSS: font-palette`. 6 тестов. | M | 2 | `lumen-css-parser`, `lumen-layout`, `lumen-paint` |
-| E-5 | **CSS Gap Decorations L1 stub** — `layout/src/gap_decorations.rs`: `GapDecorationContext {rule_width, rule_style, rule_color}`, `emit_gap_rules(boxes, gaps, ctx)` → `Vec<DrawBorder>` между grid/flex/multicol cells. `// CSS: gap-rule-width/style/color`. 6 тестов. | S | 2 | `lumen-layout`, `lumen-paint` |
+| ~~E-3~~ | ~~**about:blank and about:srcdoc**~~ — **выполнено** | S | **1** | `lumen-shell`, `lumen-layout` |
+| ~~E-2~~ | ~~**Accessibility settings panel**~~ — **выполнено** | M | 2 | `lumen-shell`, `lumen-storage` |
+| ~~E-1~~ | ~~**Print dialog UI**~~ — **выполнено** | M | 2 | `lumen-shell` |
+| ~~E-4~~ | ~~**CSS font-palette rendering**~~ — **выполнено** | M | 2 | `lumen-css-parser`, `lumen-layout`, `lumen-paint` |
+| ~~E-5~~ | ~~**CSS Gap Decorations L1 stub**~~ — **выполнено** | S | 2 | `lumen-layout`, `lumen-paint` |
 
 ### F — Дополнительные
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| F-1 | **CSS text-align-last rendering** — `apply_text_align_last(line, style)` в `box_tree.rs`: для justify-блоков последняя строка выравнивается по `text-align-last: left/right/center/justify/start/end`. `// CSS: text-align-last` (поле в ComputedStyle уже есть). 4 теста. | S | `lumen-layout` |
-| F-2 | **CSS hyphens soft hyphen rendering** — U+00AD (SHY) в `wrap_inline_run`: при `hyphens: manual` SHY становится видимым дефисом только в точке переноса строки, не рендерится иначе. `// CSS: hyphens`. `HyphenationProvider` уже подключён. 4 теста. | S | `lumen-layout` |
-| F-3 | **CSS font-stretch axis matching** — `resolve_font_stretch(families, stretch_val)` в `MultiFontMeasurer`: для variable fonts находит ось `wdth` в fvar, выбирает наиближайшее значение из допустимого диапазона (CSS Fonts L4 §5.2). `// CSS: font-stretch`. 4 теста. | S | `lumen-paint` |
-| F-4 | **CSS color-scheme UA form elements** — `ua_form_element_colors(tag, dark_mode)` в `compute_style`: при `color-scheme: dark` применяет тёмную тему к UA стилям `<input>/<select>/<textarea>/<button>/<progress>/<meter>` (border/background/color). `// CSS: color-scheme`. 4 теста. | S | `lumen-layout` |
-| F-5 | **BiDi 8H.3: network response body** — `network.responseBodyReceived` событие (при подписке) + `network.getResponseBody(request: {requestId})` команда в `bidi/protocol.rs`: буферизация последнего тела ответа per-request в `BidiState.response_bodies: HashMap<u64, Vec<u8>>`. 6 тестов. | S | `lumen-shell` |
+| ~~F-1~~ | ~~**CSS text-align-last rendering**~~ — **выполнено** | S | `lumen-layout` |
+| ~~F-2~~ | ~~**CSS hyphens soft hyphen rendering**~~ — **выполнено** | S | `lumen-layout` |
+| ~~F-3~~ | ~~**CSS font-stretch axis matching**~~ — **выполнено** | S | `lumen-paint` |
+| ~~F-4~~ | ~~**CSS color-scheme UA form elements**~~ — **выполнено** | S | `lumen-layout` |
+| ~~F-5~~ | ~~**BiDi 8H.3: network response body**~~ — **выполнено** | S | `lumen-shell` |
 
 > **RB-10** `VelloBackend` полный — заблокирован (vello API нестабилен, Phase 3+). Взять после стабилизации vello 0.x API.
 
@@ -423,6 +424,16 @@ Ordered by priority. Сгруппированы по домену.
 | ~~I-3~~ | ~~**Compression Streams API**~~ — **выполнено (P1)** | S | `lumen-js`, `lumen-network` |
 | ~~I-4~~ | ~~**Web Share API**~~ — **выполнено (P1)** | XS | `lumen-js` |
 | ~~I-5~~ | ~~**Scheduler API**~~ — **выполнено** | S | `lumen-js` |
+
+### J — Новые Web Platform APIs (волна 2)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| J-1 | **Web Audio API Phase 0** — `AudioContext`/`OfflineAudioContext` state machine (running/suspended/closed/new); `AudioNode` база (connect/disconnect); узлы: `AudioDestinationNode`, `GainNode`, `OscillatorNode` (frequency/detune/type/start/stop), `AudioBufferSourceNode` (buffer/loop/start/stop), `BiquadFilterNode`, `AnalyserNode`, `DelayNode`, `DynamicsCompressorNode`, `StereoPannerNode`, `PannerNode`; `AudioBuffer` (sampleRate/length/duration/numberOfChannels/getChannelData/copyToChannel/copyFromChannel); `AudioParam` (value/automationRate/setValueAtTime/linearRampToValueAtTime/exponentialRampToValueAtTime/setTargetAtTime/cancelScheduledValues); Phase 0: no DSP, all graph ops in-memory, `currentTime` мерцает по `requestAnimationFrame`. 12+ тестов. | L | `lumen-js` |
+| J-2 | **WebGPU API Phase 0** — `navigator.gpu.requestAdapter()` → stub `GPUAdapter`; `adapter.requestDevice()` → stub `GPUDevice`; `GPUBuffer`/`GPUTexture`/`GPURenderPipeline`/`GPUCommandEncoder`/`GPURenderPassEncoder` стабы (create* → объект-заглушка, submit/draw → no-op); `GPUCanvasContext.configure()`/`getCurrentTexture()`; Phase 0: no GPU, Phase 1 (future) → wgpu backend. 8+ тестов. | M | `lumen-js` |
+| J-3 | **CSS Houdini Paint Worklet Phase 0** — `CSS.paintWorklet.addModule(url)` → Promise (нет fetch, url сохраняется в реестре); `registerPaint(name, class)` в worklet context; CSS `paint(name)` значение для `background-image` парсируется css-parser → `BackgroundImage::Paint(name)` вариант; paint output = placeholder FillRect в display_list. `// CSS: paint()`. 6+ тестов. | M | `lumen-js`, `lumen-css-parser`, `lumen-paint` |
+| J-4 | **Background Fetch API stub** — `registration.backgroundFetch.fetch(id, requests, opts)` → Promise<BGFetchRegistration>; `.get(id)` / `.getIds()` → Promise; `BGFetchRegistration` (id/result/failureReason/recordsAvailable/downloaded/downloadTotal/uploaded/uploadTotal/activate/abort/addEventListener). Phase 0: in-memory, no actual fetch. `// _lumen_bg_fetch_*` биндинги для shell Phase 1. 6 тестов. | XS | `lumen-js` |
+| J-5 | **Presentation API stub** — `navigator.presentation` singleton; `PresentationRequest.new([urls])` → reject NotSupportedError; `navigator.presentation.defaultRequest` getter/setter; `PresentationAvailability` + `navigator.presentation.requestAvailability()` → Promise<{value:false}>; `PresentationConnection` class (id/url/state/send/close/terminate/addEventListener). Phase 0: no-op. 5 тестов. | XS | `lumen-js` |
 
 ---
 
