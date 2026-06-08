@@ -2,6 +2,7 @@ pub mod audio_bindings;
 pub mod audio_element;
 pub mod background_sync;
 pub mod badging;
+pub mod periodic_sync;
 pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
@@ -626,6 +627,13 @@ impl QuickJsRuntime {
             // Phase 0: tags stored in-memory; actual sync-on-next-navigation wiring is P2/P3.
             if let Err(e) = background_sync::init_background_sync(&ctx) {
                 eprintln!("Background Sync API init failed: {}", e);
+            }
+
+            // Install Periodic Background Sync API stub (W3C PBSync, Phase 0) — after DOM so
+            // Promise is available. Provides registration.periodicSync.register(tag, {minInterval})
+            // / unregister(tag) / getTags(). Phase 0: in-memory; OS scheduler wiring is P2/P3.
+            if let Err(e) = periodic_sync::init_periodic_sync(&ctx) {
+                eprintln!("Periodic Background Sync API init failed: {}", e);
             }
 
             // Install Push API stub (W3C Push API L1, Phase 0) — after DOM so Promise is
