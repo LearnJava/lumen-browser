@@ -6,8 +6,7 @@
 
 ## In progress
 
-L-1 **9F.3 Tor circuit + screen pinning + no-persistent-state**  branch: p1-l1-tor-circuit
-Next step: SOCKS5 proxy struct + handshake  crates/network/src/socks5.rs
+_(нет)_
 
 ---
 
@@ -68,6 +67,7 @@ Next step: SOCKS5 proxy struct + handshake  crates/network/src/socks5.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | L-1: 9F.3 Tor circuit + screen pinning + no-persistent-state | RFC 1928 SOCKS5 клиент (`crates/network/src/socks5.rs`): `Socks5Proxy` struct, `socks5_connect()` — negotiation (no-auth + RFC 1929 user/pass), CONNECT с DOMAINNAME (DNS через прокси для Tor), 3 unit-теста. `HttpClient::with_socks5_proxy()`, поле `socks5_proxy`; SOCKS5 имеет приоритет над HTTP proxy; `connect()` принимает `Option<&Socks5Proxy>`, при SOCKS5: TCP → прокси, handshake → туннель, TLS поверх туннеля. `FingerprintProfile` (shell): поля `socks5_proxy` + `no_persistent_state`; `effective_socks5_proxy()` — при TorBrowser auto-wire 127.0.0.1:9050; `navigator_profile()` при TorBrowser пинит screen 1000×900, platform "Win32", language en-US, tz=0; `parse_socks5_proxy()` и ключи конфига. lumen-network: clippy чист, 706 тестов (+3). lumen-shell: clippy чист. lumen-plan.md: 9F.3 🟡 → ✅. |
 | 2026-06-08 | K-5: FedCM stub | W3C FedCM §5 Phase 0: `navigator.credentials.get({identity: {providers}})` → reject NotSupportedError. `IdentityCredential` класс (extends Credential, constructor throws TypeError) и `IdentityProvider` (static `getUserInfo()` → reject NotSupportedError) экспортированы на window/globalThis для spec-conformant feature detection. Интеграция в CREDENTIALS_SHIM: проверка options.identity в container.get() до publicKey. Нативный биндинг `_lumen_fedcm_get(providers_json)` — Phase 1 (browser-mediated IDP UI + network fetch к configURL/.well-known/web-identity, shell integration). lumen-js: clippy чист, 5 unit-тестов (+5 vs 1553). |
 | 2026-06-08 | K-4: StorageManager API | WHATWG Storage §9 Phase 0: `navigator.storage` singleton с `estimate()` → `{usage:0, quota:10GiB}`, `persist()` → `Promise<true>`, `persisted()` → `Promise<true>`, `getDirectory()` → OPFS stub `FileSystemDirectoryHandle`. `FileSystemDirectoryHandle` stub: name/kind, `getDirectoryHandle/getFileHandle/removeEntry/resolve` → Promise. Нативные биндинги `_lumen_storage_estimate/persist/persisted/get_directory` для Phase 1 (реальные метрики ОС + sandboxed FS). Новый модуль `crates/js/src/storage_manager.rs`. lumen-js: clippy чист, 10 unit-тестов (+10 vs 1543). |
 | 2026-06-08 | K-3: Web MIDI API stub | W3C Web MIDI L1 §4 Phase 0: `navigator.requestMIDIAccess(options?)` → `Promise<MIDIAccess>` с пустыми inputs/outputs. Классы `MIDIPort` / `MIDIInput` / `MIDIOutput` / `MIDIPortMap` / `MIDIAccess` / `MIDIMessageEvent` / `MIDIConnectionEvent` экспортированы на window. MIDIPort.open()/close() → Promise. MIDIOutput.send()/clear() — no-op Phase 0. Нативный биндинг `_lumen_midi_deliver_message(portId, data)` для Phase 1 (CoreMIDI/WinMM/ALSA). Новый модуль `crates/js/src/web_midi.rs`. lumen-js: clippy чист, 11 unit-тестов (+11 vs 1538). |
