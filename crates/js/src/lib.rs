@@ -82,6 +82,7 @@ pub mod generic_sensor;
 pub mod video_pip;
 pub mod web_midi;
 pub mod storage_manager;
+pub mod xhr;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -914,6 +915,15 @@ impl QuickJsRuntime {
             // Phase 1: _lumen_storage_estimate/persist/get_directory wire real OS metrics + sandboxed FS.
             if let Err(e) = storage_manager::install_storage_manager_bindings(&ctx) {
                 eprintln!("StorageManager API init failed: {}", e);
+            }
+
+            // Install XMLHttpRequest API (WHATWG XHR Standard §4) — after DOM so fetch(),
+            // FormData, Blob, TextDecoder/Encoder, ProgressEvent infra, and the
+            // _lumen_fetch_sync* native bindings are all present.
+            // Phase 0: open/send/abort/getResponseHeader/getAllResponseHeaders, readystatechange
+            // and load/error/progress/abort events.  Reuses the fetch HTTP stack.
+            if let Err(e) = xhr::install_xhr_bindings(&ctx) {
+                eprintln!("XMLHttpRequest API init failed: {}", e);
             }
 
             Ok(())
