@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**J-3 | CSS Houdini Paint Worklet Phase 0**  branch: p2-j3-paint-worklet
+Next step: add JS integration tests + display_list test for BackgroundImage::Paint  paint_worklet.rs:60
 
 ---
 
