@@ -863,7 +863,7 @@ mod tests {
 
         // bbox bitmap: 1 byte for up to 8 glyphs; bit for glyph 0 = 0 (no explicit bbox).
         let bbox_bitmap_size = num_glyphs.div_ceil(8).max(1) as usize;
-        let mut bbox_stream: Vec<u8> = vec![0u8; bbox_bitmap_size]; // all bits = 0
+        let bbox_stream: Vec<u8> = vec![0u8; bbox_bitmap_size]; // all bits = 0
         // No explicit bbox entries follow.
         // composite, instruction streams: empty.
         let composite_stream: Vec<u8> = Vec::new();
