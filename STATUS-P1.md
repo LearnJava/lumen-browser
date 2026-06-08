@@ -6,8 +6,7 @@
 
 ## In progress
 
-N-1: 8C: Native input injection  branch: p1-native-input
-Next step: создать native.rs + KeyDown/KeyUp в InputCommand  crates/shell/src/input/
+_(нет)_
 
 ---
 
@@ -17,7 +16,7 @@ Next step: создать native.rs + KeyDown/KeyUp в InputCommand  crates/shel
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| N-1 | **8C: Native input injection** — mouse/keyboard-события идут в event loop тем же путём что winit-сигналы от ОС; `event.isTrusted=true`; НЕ через JS `dispatchEvent`. `shell/src/input/native.rs` | S | `lumen-shell` |
+| ~~N-1~~ | ~~**8C: Native input injection**~~ — **выполнено** | S | `lumen-shell` |
 | N-2 | **8F: Deterministic mode** — `set_clock(ClockMode::Frozen/Real/Monotonic)`, `set_rng_seed(u64)` → `Math.random()`, `freeze_fingerprint(profile)` → canvas/WebGL/audio/font enum фиксированы. `driver/src/determinism.rs` | M | `lumen-driver`, `lumen-js`, `lumen-shell` |
 
 ### O — Закрытие Phase 2
@@ -96,6 +95,7 @@ Next step: создать native.rs + KeyDown/KeyUp в InputCommand  crates/shel
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-08 | N-1: 8C Native input injection | shell/src/input/native.rs: константы W3C key codes (ENTER/BACKSPACE/TAB/ESCAPE/ARROW_*/HOME/END/PAGE_*/DELETE/SPACE) + code_to_key(). InputCommand::KeyDown { code } — новый вариант для специальных клавиш через about_to_wait путь. InputSender: key_down/enter/backspace/tab/escape convenience. Lumen::inject_special_key: keydown→keyup через _lumen_dispatch_key_event (isTrusted=true). 4 unit-теста (+4). lumen-shell: clippy чист, 85 input-тестов. |
 | 2026-06-08 | M-2: DOMParser + XMLSerializer | W3C DOM Parsing and Serialization §2.4+§11.4 Phase 0. DOMParser.parseFromString(str, mimeType) → VDocument: встроенный HTML-токенизатор (открыв/закрыв/void/self-close теги, атрибуты, комментарии, CDATA, raw-text mode, 70+ entities). VDocument — независимый документ на plain JS объектах (не Rust native): querySelector/querySelectorAll (tag, .class, #id, [attr=val/^/$/*~/|], >, ' ', ',', :not()), getElementsByTagName/ClassName, getElementById, createElement, innerHTML (read+write), outerHTML, textContent, cloneNode, appendChild/insertBefore/removeChild. XMLSerializer.serializeToString(node): virtual nodes — full round-trip; native nodes (__nid__) — через новый биндинг `_lumen_get_attr_names`. Новый биндинг `_lumen_get_attr_names(nid) → Vec<String>` в dom.rs. Новый модуль `crates/js/src/dom_parser.rs`. lumen-js: clippy чист, 19 unit-тестов (+19 vs 1593). |
 | 2026-06-08 | M-1: XMLHttpRequest (XHR) API | WHATWG XHR §4 Phase 0: `new XMLHttpRequest()` с полной state-машиной (UNSENT/OPENED/HEADERS_RECEIVED/LOADING/DONE). `open(method, url)`, `setRequestHeader`, `send(body)`, `abort()`, `getResponseHeader`, `getAllResponseHeaders`, `overrideMimeType`. Реализация поверх `_lumen_fetch_sync*` биндингов — HTTP-стек переиспользуется, без новых зависимостей. `responseType`: text/json/arraybuffer/blob (document → null Phase 1). События: readystatechange, load, error, progress, abort, loadstart, loadend. Классы `ProgressEvent`, `XMLHttpRequestEventTarget`, `XMLHttpRequestUpload`. `globalThis.XMLHttpRequest` + `window.XMLHttpRequest` для page code и library compatibility. Новый модуль `crates/js/src/xhr.rs`. lumen-js: clippy чист, 17 unit-тестов (+17 vs 1586). |
 | 2026-06-08 | L-1: 9F.3 Tor circuit + screen pinning + no-persistent-state | RFC 1928 SOCKS5 клиент (`crates/network/src/socks5.rs`): `Socks5Proxy` struct, `socks5_connect()` — negotiation (no-auth + RFC 1929 user/pass), CONNECT с DOMAINNAME (DNS через прокси для Tor), 3 unit-теста. `HttpClient::with_socks5_proxy()`, поле `socks5_proxy`; SOCKS5 имеет приоритет над HTTP proxy; `connect()` принимает `Option<&Socks5Proxy>`, при SOCKS5: TCP → прокси, handshake → туннель, TLS поверх туннеля. `FingerprintProfile` (shell): поля `socks5_proxy` + `no_persistent_state`; `effective_socks5_proxy()` — при TorBrowser auto-wire 127.0.0.1:9050; `navigator_profile()` при TorBrowser пинит screen 1000×900, platform "Win32", language en-US, tz=0; `parse_socks5_proxy()` и ключи конфига. lumen-network: clippy чист, 706 тестов (+3). lumen-shell: clippy чист. lumen-plan.md: 9F.3 🟡 → ✅. |
