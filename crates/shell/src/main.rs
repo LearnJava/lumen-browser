@@ -7665,6 +7665,13 @@ impl Lumen {
                         outcome: click_log::ClickOutcome::FormAction("SubmitForm"),
                     });
                 }
+                forms::FormClickAction::ToggleDetails(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleDetails"),
+                    });
+                }
             }
         }
 
@@ -7695,6 +7702,20 @@ impl Lumen {
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
+            }
+            forms::FormClickAction::ToggleDetails(id) => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
+                }
+                // Fire HTML5 §4.11.1 `toggle` event on the <details> element.
+                #[cfg(feature = "quickjs")]
+                if let Some(ctx) = &self.js_ctx {
+                    ctx.eval_js(&format!(
+                        "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
+                        id.index()
+                    ));
+                }
+                self.relayout();
             }
             forms::FormClickAction::SubmitForm(submit_node) => {
                 // Phase 3: HTML5 form submission algorithm integration.
@@ -9117,6 +9138,19 @@ impl Lumen {
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
+            }
+            forms::FormClickAction::ToggleDetails(id) => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
+                }
+                #[cfg(feature = "quickjs")]
+                if let Some(ctx) = &self.js_ctx {
+                    ctx.eval_js(&format!(
+                        "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
+                        id.index()
+                    ));
+                }
+                self.relayout();
             }
             forms::FormClickAction::SubmitForm(_) | forms::FormClickAction::Nothing => {
                 // Link navigation.

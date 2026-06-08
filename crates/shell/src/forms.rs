@@ -53,6 +53,9 @@ pub enum FormClickAction {
     /// Open a dropdown overlay showing the `<option>` children of the `<select>`.
     OpenSelectDropdown(NodeId),
     SubmitForm(NodeId),
+    /// Toggle the `open` attribute on a `<details>` element (HTML5 §4.11.1).
+    /// NodeId is the `<details>` parent of the clicked `<summary>`.
+    ToggleDetails(NodeId),
     Nothing,
 }
 
@@ -83,13 +86,43 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
             }
         }
         "select" => FormClickAction::OpenSelectDropdown(node),
+        // HTML5 §4.11.1 — clicking <summary> toggles its parent <details>.
+        "summary" => find_parent_details(doc, node)
+            .map_or(FormClickAction::Nothing, FormClickAction::ToggleDetails),
         _ => FormClickAction::Nothing,
+    }
+}
+
+/// Walk up the DOM tree from `node` to find the nearest `<details>` ancestor.
+fn find_parent_details(doc: &Document, node: NodeId) -> Option<NodeId> {
+    let mut current = doc.get(node).parent?;
+    loop {
+        let n = doc.get(current);
+        if n.element_name().map(|q| q.local.as_str()) == Some("details") {
+            return Some(current);
+        }
+        current = n.parent?;
     }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // DOM mutation helpers
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// Toggle the `open` attribute on a `<details>` element in the live DOM.
+///
+/// Adds `open` when absent (expand), removes it when present (collapse).
+/// After calling this, relayout is needed so hidden children become visible.
+pub fn toggle_details_open(doc: &mut Document, id: NodeId) {
+    let node = doc.get_mut(id);
+    if let NodeData::Element { ref mut attrs, .. } = node.data {
+        if attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("open")) {
+            attrs.retain(|a| !a.name.local.eq_ignore_ascii_case("open"));
+        } else {
+            attrs.push(Attribute { name: QualName::html("open"), value: String::new() });
+        }
+    }
+}
 
 /// Toggle the `checked` attribute on a checkbox input in the live DOM.
 /// After calling this, relayout is needed to update `:checked` pseudo-class.
@@ -1233,5 +1266,65 @@ mod tests {
         let anchor = Rect::new(10.0, 10.0, 100.0, 22.0);
         let dl = build_select_dropdown(anchor, &opts, 0.0, 1024.0, 720.0);
         assert!(!dl.is_empty(), "dropdown display list should not be empty");
+    }
+
+    // ── <details>/<summary> tests ─────────────────────────────────────────────
+
+    /// Build <details><summary>S</summary><p>content</p></details>.
+    fn make_details_doc() -> (Document, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let details = doc.create_element(QualName::html("details"));
+        let summary = doc.create_element(QualName::html("summary"));
+        let p = doc.create_element(QualName::html("p"));
+        doc.append_child(doc.root(), details);
+        doc.append_child(details, summary);
+        doc.append_child(details, p);
+        (doc, details, summary)
+    }
+
+    #[test]
+    fn classify_click_summary_returns_toggle_details() {
+        let (doc, details, summary) = make_details_doc();
+        match classify_click(&doc, summary) {
+            FormClickAction::ToggleDetails(id) => assert_eq!(id, details),
+            other => panic!("expected ToggleDetails, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_details_open_adds_open_attr() {
+        let (mut doc, details, _) = make_details_doc();
+        // Initially no `open` attribute.
+        assert!(doc.get(details).get_attr("open").is_none());
+        toggle_details_open(&mut doc, details);
+        assert!(doc.get(details).get_attr("open").is_some());
+    }
+
+    #[test]
+    fn toggle_details_open_removes_open_attr() {
+        let (mut doc, details, _) = make_details_doc();
+        // Add `open` first.
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(details).data {
+            attrs.push(Attribute { name: QualName::html("open"), value: String::new() });
+        }
+        toggle_details_open(&mut doc, details);
+        assert!(doc.get(details).get_attr("open").is_none());
+    }
+
+    #[test]
+    fn classify_click_non_summary_returns_nothing_for_p() {
+        let mut doc = Document::new();
+        let p = doc.create_element(QualName::html("p"));
+        doc.append_child(doc.root(), p);
+        matches!(classify_click(&doc, p), FormClickAction::Nothing);
+    }
+
+    #[test]
+    fn summary_without_details_parent_returns_nothing() {
+        // <summary> that is NOT inside a <details> should return Nothing.
+        let mut doc = Document::new();
+        let summary = doc.create_element(QualName::html("summary"));
+        doc.append_child(doc.root(), summary);
+        matches!(classify_click(&doc, summary), FormClickAction::Nothing);
     }
 }

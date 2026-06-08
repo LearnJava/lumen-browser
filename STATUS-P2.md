@@ -6,11 +6,22 @@
 
 ## In progress
 
-(none)
+**L-1 | `<details>`/`<summary>` interactive collapse/expand**  branch: p2-l1-details
+Next step: add `DetailsClick` action in `handle_click_at` → toggle `open` attr → relayout  `crates/shell/src/main.rs`
 
 ---
 
 ## Next
+
+### L — Волна 4 HTML Interactive Elements + Rendering
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| **L-1** | **`<details>`/`<summary>` interactive collapse/expand** — *в работе* | S | `lumen-shell`, `lumen-js` |
+| L-2 | `<dialog>` modal overlay rendering + `::backdrop` | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
+| L-3 | `<input type="range">` slider visual rendering + drag | S | `lumen-shell`, `lumen-layout`, `lumen-paint` |
+| L-4 | `<meter>`/`<progress>` visual fill rendering | S | `lumen-layout`, `lumen-paint` |
+| L-5 | CSS Scroll-Driven Animations Phase 1 shell wiring | M | `lumen-shell`, `lumen-layout` |
 
 ### K — Волна 3 Web Platform APIs
 
