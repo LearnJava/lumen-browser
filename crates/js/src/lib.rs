@@ -68,6 +68,7 @@ pub mod media_capabilities;
 pub mod virtual_keyboard;
 pub mod wake_lock;
 pub mod web_locks;
+pub mod scheduler;
 pub mod reporting_api;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
@@ -818,6 +819,12 @@ impl QuickJsRuntime {
             // Phase 0: in-memory sentinel with auto-release on visibilitychange → hidden.
             if let Err(e) = wake_lock::install_wake_lock_bindings(&ctx) {
                 eprintln!("Screen Wake Lock API init failed: {}", e);
+            }
+
+            // Install W3C Scheduler API Level 1 — scheduler.postTask / yield, TaskController/Signal.
+            // Phase 0: user-blocking → queueMicrotask, user-visible → setTimeout(0), background → setTimeout(200).
+            if let Err(e) = scheduler::install_scheduler_api(&ctx) {
+                eprintln!("Scheduler API init failed: {}", e);
             }
 
             Ok(())
