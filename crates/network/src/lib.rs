@@ -36,6 +36,8 @@ use lumen_core::url::Url;
 
 mod auth;
 mod brotli;
+pub mod csp;
+pub mod permissions_policy;
 mod cors;
 mod dns;
 mod doh;
@@ -52,19 +54,21 @@ mod origin;
 mod pool;
 mod range;
 mod sandbox;
+pub mod socks5;
 pub mod sse;
 pub mod tls;
 pub mod webauthn;
 pub(crate) mod websocket;
 pub use auth::StaticCredentialProvider;
+pub use socks5::Socks5Proxy;
 pub use webauthn::VirtualAuthenticator;
 pub use brotli::BrotliContentDecoder;
 pub use filter::{EasyListFilter, HostsFilter, CompositeFilter};
-pub use http_cache::HttpCache;
+pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
 pub use tls::{
-    TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
+    CertInfo, TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
     ChromeJa3Snapshot, JA4ChromeSnapshot, http_to_tls_profile,
 };
 pub use cors::{
@@ -91,6 +95,14 @@ pub use range::{
     parse_multipart_byteranges,
 };
 pub use sandbox::{SandboxFlags, parse_sandbox_value};
+pub use csp::{
+    CspDirective, CspPolicy, CspSource, HashAlgorithm,
+    parse_csp_header, parse_csp_report_only_header,
+};
+pub use permissions_policy::{
+    PermissionsAllowlist, PermissionsPolicy,
+    parse_permissions_policy_header, parse_feature_policy_header,
+};
 
 use pool::PoolKey;
 
@@ -556,35 +568,71 @@ fn connect(
     is_tls: bool,
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
+    socks5: Option<&socks5::Socks5Proxy>,
 ) -> Result<Connection> {
-    // Префикс `resolve ` на всех DNS-ошибках (включая ошибку самого
-    // resolver-а) — чтобы `classify_failure_stage` надёжно отнёс их к
-    // `RequestStage::Dns` без знания внутреннего формата resolver-сообщения.
-    let addrs = resolver
-        .resolve(host, port)
-        .map_err(|e| Error::Network(format!("resolve {host}:{port}: {e}")))?;
-    if addrs.is_empty() {
-        return Err(Error::Network(format!(
-            "resolve {host}:{port}: no addresses"
-        )));
-    }
-
-    let mut last_err: Option<Error> = None;
-    let mut tcp_opt: Option<TcpStream> = None;
-    for addr in &addrs {
-        match TcpStream::connect(addr) {
-            Ok(s) => {
-                tcp_opt = Some(s);
-                break;
-            }
-            Err(e) => {
-                last_err = Some(Error::Network(format!("connect {addr}: {e}")));
+    let tcp = if let Some(s5) = socks5 {
+        // SOCKS5 path: connect TCP to proxy server, then SOCKS5-tunnel to target.
+        // DNS is resolved by the proxy (no local leak) — required for Tor.
+        let proxy_addrs = resolver
+            .resolve(&s5.host, s5.port)
+            .map_err(|e| Error::Network(format!("resolve SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
+        if proxy_addrs.is_empty() {
+            return Err(Error::Network(format!(
+                "resolve SOCKS5 proxy {}:{}: no addresses",
+                s5.host, s5.port
+            )));
+        }
+        let mut last_err: Option<Error> = None;
+        let mut tcp_opt: Option<TcpStream> = None;
+        for addr in &proxy_addrs {
+            match TcpStream::connect(addr) {
+                Ok(s) => {
+                    tcp_opt = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(Error::Network(format!("connect SOCKS5 proxy {addr}: {e}")));
+                }
             }
         }
-    }
-    let tcp = tcp_opt.ok_or_else(|| {
-        last_err.unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
-    })?;
+        let proxy_tcp = tcp_opt.ok_or_else(|| {
+            last_err.unwrap_or_else(|| {
+                Error::Network(format!("connect SOCKS5 proxy {}:{}: no addresses", s5.host, s5.port))
+            })
+        })?;
+        // Perform the SOCKS5 handshake to request a tunnel to (host, port).
+        socks5::socks5_connect(proxy_tcp, host, port, s5.auth.as_ref())?
+    } else {
+        // Direct path: resolve DNS locally and connect.
+        // Префикс `resolve ` на всех DNS-ошибках (включая ошибку самого
+        // resolver-а) — чтобы `classify_failure_stage` надёжно отнёс их к
+        // `RequestStage::Dns` без знания внутреннего формата resolver-сообщения.
+        let addrs = resolver
+            .resolve(host, port)
+            .map_err(|e| Error::Network(format!("resolve {host}:{port}: {e}")))?;
+        if addrs.is_empty() {
+            return Err(Error::Network(format!(
+                "resolve {host}:{port}: no addresses"
+            )));
+        }
+        let mut last_err: Option<Error> = None;
+        let mut tcp_opt: Option<TcpStream> = None;
+        for addr in &addrs {
+            match TcpStream::connect(addr) {
+                Ok(s) => {
+                    tcp_opt = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(Error::Network(format!("connect {addr}: {e}")));
+                }
+            }
+        }
+        tcp_opt.ok_or_else(|| {
+            last_err
+                .unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
+        })?
+    };
 
     if !is_tls {
         return Ok(Connection::new(RawStream::Plain(tcp)));
@@ -699,13 +747,20 @@ fn fetch_single(
     accept_encoding: Option<&str>,
     extra_headers: &str,
     proxy: Option<&HttpProxy>,
+    socks5_proxy: Option<&socks5::Socks5Proxy>,
 ) -> Result<Response> {
-    // Если proxy используется, определяем актуальный host:port для подключения.
-    let (connect_host, connect_port, connect_is_tls) = if let Some(proxy) = proxy {
-        // Прокси — подключаемся к прокси-серверу через незащищённое TCP.
-        (proxy.host.as_str(), proxy.port, false)
+    // SOCKS5 takes precedence over HTTP proxy when both are set.
+    // With SOCKS5 the tunnel is established by the proxy itself, so we
+    // connect to the target host:port directly (the pool key uses the
+    // real target, not the SOCKS5 server).
+    let effective_proxy = if socks5_proxy.is_some() { None } else { proxy };
+
+    // Если HTTP-proxy используется, определяем актуальный host:port для подключения.
+    let (connect_host, connect_port, connect_is_tls) = if let Some(p) = effective_proxy {
+        // HTTP proxy — подключаемся к прокси-серверу через незащищённое TCP.
+        (p.host.as_str(), p.port, false)
     } else {
-        // Нет прокси — подключаемся напрямую.
+        // Нет прокси (или SOCKS5) — подключаемся напрямую / через SOCKS5 туннель.
         (host, port, is_tls)
     };
 
@@ -764,11 +819,11 @@ fn fetch_single(
     }
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
-    let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile)?;
+    let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy)?;
 
-    // Если используется HTTPS-прокси: выполнить CONNECT-туннель.
+    // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
     #[allow(clippy::collapsible_if)]
-    if let Some(proxy) = proxy {
+    if let Some(proxy) = effective_proxy {
         if is_tls {
             // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту через прокси.
             let mut stream = conn.into_stream();
@@ -846,7 +901,8 @@ fn fetch_single(
     }
 
     // Для HTTP-прокси: отправляем абсолютный URL вместо относительного пути.
-    let request_path_to_use = if proxy.is_some() && !is_tls {
+    // SOCKS5 туннелирует до реального хоста, поэтому relative path.
+    let request_path_to_use = if effective_proxy.is_some() && !is_tls {
         format!("http://{host}:{port}{request_path}")
     } else {
         request_path.to_string()
@@ -1133,6 +1189,7 @@ fn fetch_with_redirect(
     cookie_jar: Option<&dyn CookieProvider>,
     top_level_site: Option<&str>,
     proxy: Option<&HttpProxy>,
+    socks5_proxy: Option<&socks5::Socks5Proxy>,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -1259,6 +1316,7 @@ fn fetch_with_redirect(
                 None,
                 &preflight_extra,
                 proxy,
+                socks5_proxy,
             ) {
                 Ok(r) => r,
                 Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1361,6 +1419,7 @@ fn fetch_with_redirect(
             accept_encoding,
             &actual_extra_headers,
             proxy,
+            socks5_proxy,
         ) {
             Ok(r) => r,
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1469,6 +1528,7 @@ fn fetch_with_redirect(
                     cookie_jar,
                     top_level_site,
                     proxy,
+                    socks5_proxy,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -1598,7 +1658,7 @@ pub struct HttpClient {
     mixed_content: Option<MixedContentPolicy>,
     cors_cache: Option<Arc<cors::PreflightCache>>,
     /// RFC 7234 response cache. Optional — without it every request goes to the network.
-    http_cache: Option<Arc<http_cache::HttpCache>>,
+    http_cache: Option<Arc<dyn http_cache::HttpCacheBackend>>,
     /// RFC 6265 cookie jar. Injects `Cookie:` headers and persists `Set-Cookie:` responses.
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     /// Registrable domain of the top-level page, used for Total Cookie Protection partitioning.
@@ -1614,6 +1674,12 @@ pub struct HttpClient {
     /// — HTTP: direct GET to proxy with absolute URL
     /// — HTTPS: CONNECT tunnel to proxy, then TLS over tunnel
     proxy: Option<Arc<HttpProxy>>,
+    /// SOCKS5 proxy (RFC 1928) for tunnelling all TCP connections.
+    /// When set, TCP is established to the SOCKS5 server first, then the
+    /// SOCKS5 CONNECT command is sent so the proxy opens the tunnel to the
+    /// real target.  DNS is resolved by the proxy (not leaked locally) —
+    /// required for Tor-mode operation.
+    socks5_proxy: Option<Arc<Socks5Proxy>>,
 }
 
 impl HttpClient {
@@ -1637,6 +1703,7 @@ impl HttpClient {
             fingerprint_profile: HttpProfile::Chrome,
             tls_profile: tls::TlsProfile::Standard,
             proxy: None,
+            socks5_proxy: None,
         }
     }
 
@@ -1863,7 +1930,7 @@ impl HttpClient {
     /// POST/PUT и запросы с явным `cors_ctx` кэш пропускают; `Vary` не
     /// поддерживается (unsafe Vary не помечается).
     #[must_use]
-    pub fn with_http_cache(mut self, cache: Arc<http_cache::HttpCache>) -> Self {
+    pub fn with_http_cache(mut self, cache: Arc<dyn http_cache::HttpCacheBackend>) -> Self {
         self.http_cache = Some(cache);
         self
     }
@@ -1876,6 +1943,19 @@ impl HttpClient {
     #[must_use]
     pub fn with_proxy(mut self, proxy: Arc<HttpProxy>) -> Self {
         self.proxy = Some(proxy);
+        self
+    }
+
+    /// Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений.
+    ///
+    /// Когда установлен, TCP открывается к SOCKS5-серверу, затем отправляется
+    /// команда CONNECT для создания туннеля к целевому хосту.  DNS разрешается
+    /// прокси (не утекает локально) — обязательно для работы через Tor.
+    ///
+    /// Типичная конфигурация Tor: `Socks5Proxy::new("127.0.0.1", 9050)`.
+    #[must_use]
+    pub fn with_socks5_proxy(mut self, proxy: Arc<Socks5Proxy>) -> Self {
+        self.socks5_proxy = Some(proxy);
         self
     }
 
@@ -1987,6 +2067,7 @@ impl HttpClient {
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )
         .map(|resp| resp.body)
     }
@@ -2024,6 +2105,7 @@ impl HttpClient {
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -2095,6 +2177,7 @@ impl HttpClient {
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -2183,6 +2266,7 @@ impl HttpClient {
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
                     self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2217,6 +2301,7 @@ impl HttpClient {
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2276,6 +2361,7 @@ impl NetworkTransport for HttpClient {
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
                     self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2310,6 +2396,7 @@ impl NetworkTransport for HttpClient {
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2384,6 +2471,7 @@ impl JsFetchProvider for HttpClient {
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
@@ -2421,12 +2509,12 @@ impl JsFetchProvider for HttpClient {
         let mut conn = if let Some(pooled) = self.pool.acquire(&key) {
             pooled
         } else {
-            connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile)?
+            connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref())?
         };
 
         // HTTP/2 connections don't support the body path yet — fall back to H1.
         if conn.is_h2 {
-            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile)?;
+            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref())?;
             conn = fresh;
         }
 
@@ -2569,12 +2657,15 @@ impl JsWebSocketProvider for HttpClient {
     fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
-        let ws = websocket::WebSocket::connect(
+        // Always offer permessage-deflate (RFC 7692) — browsers do this by default.
+        // compress=false: outgoing frames are uncompressed until JS sets WebSocket.compress.
+        let ws = websocket::WebSocket::connect_deflate(
             &parsed,
             self.resolver.as_ref(),
             self.hsts.as_deref(),
             Arc::new(NoopEventSink),
             lumen_core::event::TabId(0),
+            false,
         )?;
         let impl_ = JsWebSocketSessionImpl::new(ws);
         // Push the Open event immediately — handshake already completed.
@@ -5893,7 +5984,8 @@ mod http_cache_tests {
         // If the cache is used, the server never gets a request → test passes.
         // If cache is bypassed, the server closes after 1 response and the
         // second request would also go there (we only start 1 server accept).
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = "http://127.0.0.1:0/resource"; // port 0 → unused, never connected
         // Pre-populate cache with a fresh entry (max-age=3600).
         cache.store(
@@ -5923,7 +6015,8 @@ mod http_cache_tests {
                 .to_vec()
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let mem_cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> = Arc::clone(&mem_cache) as _;
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
 
@@ -5932,7 +6025,7 @@ mod http_cache_tests {
         // First fetch — goes to network.
         let body1 = client.fetch(&parsed).unwrap();
         assert_eq!(body1, b"body");
-        assert_eq!(cache.len(), 1, "should have stored the response");
+        assert_eq!(mem_cache.len(), 1, "should have stored the response");
 
         // Second fetch — served from cache (server thread has exited).
         let body2 = client.fetch(&parsed).unwrap();
@@ -5953,7 +6046,8 @@ mod http_cache_tests {
                 .to_vec(),
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
@@ -5980,7 +6074,8 @@ mod http_cache_tests {
                 .to_vec(),
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
@@ -6004,13 +6099,14 @@ mod http_cache_tests {
                 .to_vec()
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let mem_cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> = Arc::clone(&mem_cache) as _;
         let url = format!("http://127.0.0.1:{port}/secret");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
 
         client.fetch(&parsed).unwrap();
-        assert_eq!(cache.len(), 0, "no-store must not be cached");
+        assert_eq!(mem_cache.len(), 0, "no-store must not be cached");
 
         // Second fetch also goes to network (not cached).
         client.fetch(&parsed).unwrap();

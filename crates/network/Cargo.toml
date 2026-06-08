@@ -28,3 +28,10 @@ getrandom = "0.2"
 # HTTP Cache (RFC 7234): LRU cache with size-based eviction for HTTP responses.
 # Pure-Rust, no unsafe in logic. Trait-anchor: none (internal HTTP cache impl).
 lru = "0.12"
+# Persistent HTTP cache backend (C-2). Bundled SQLite — same rationale as lumen-storage.
+# Trait-anchor: DiskHttpCache (HttpCacheBackend impl). No graduation — disk I/O needs OS SQLite.
+rusqlite = { workspace = true }
+# Provisional accelerator (§5): DEFLATE for WebSocket permessage-deflate (RFC 7692, C-3).
+# Trait-anchor: none (internal WebSocket compression). Same crate used by lumen-image for
+# PNG ICC profiles. Graduation criterion: would need no-std DEFLATE for WASM target (not planned).
+flate2 = { workspace = true }

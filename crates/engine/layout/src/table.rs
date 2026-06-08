@@ -3,8 +3,76 @@
 // colspan/rowspan handling, and border-collapse/border-spacing computations.
 // // CSS: table-layout, border-collapse, border-spacing, caption-side, empty-cells
 
-use crate::box_tree::{BoxKind, LayoutBox, BoxSizing, Size, Rect};
-use crate::ext::{TextMeasurer, HyphenationProvider};
+use crate::box_tree::{BoxKind, LayoutBox};
+use crate::style::BoxSizing;
+use crate::TextMeasurer;
+use lumen_core::ext::HyphenationProvider;
+use lumen_core::geom::Size;
+
+// ──────────────── BorderCollapse / BorderPrecedence / CollapsedBorder ────────────────
+
+/// CSS Tables L2 §17.6 — border-collapse mode for table layout.
+/// `Separate`: each cell has independent borders separated by `border-spacing`.
+/// `Collapse`: adjacent cell borders are merged into a single shared border.
+///
+/// CSS: border-collapse — P4 wires from ComputedStyle.border_collapse once the field is added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderCollapse {
+    /// Each cell has its own borders; gaps between cells are controlled by `border-spacing`.
+    #[default]
+    Separate,
+    /// Borders between adjacent cells are merged; the winning border is chosen by precedence.
+    Collapse,
+}
+
+/// CSS Tables L2 §17.6.2 — precedence level used when two borders compete in collapsed mode.
+/// Higher variant = higher precedence (derives `Ord`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BorderPrecedence {
+    /// Table element border — lowest precedence.
+    Table,
+    /// Row group border (thead / tbody / tfoot).
+    RowGroup,
+    /// Row border (tr).
+    Row,
+    /// Column group border (colgroup).
+    ColumnGroup,
+    /// Column border (col).
+    Column,
+    /// Cell border (td / th) — highest precedence.
+    Cell,
+}
+
+/// Resolved border description for the collapsed border model (CSS Tables L2 §17.6.2).
+///
+/// When `border-collapse: collapse`, adjacent borders compete; `resolve_conflict` selects
+/// the winning border. Only `width` and `precedence` are needed for layout; paint reads
+/// `style`/`color` directly from `ComputedStyle` of the winning element.
+#[derive(Debug, Clone)]
+pub struct CollapsedBorder {
+    /// Resolved border width in CSS px.
+    pub width: f32,
+    /// Source element precedence (determines winner on equal width).
+    pub precedence: BorderPrecedence,
+}
+
+impl CollapsedBorder {
+    /// Resolves conflict between two competing borders per CSS Tables L2 §17.6.2:
+    /// 1. Higher `precedence` wins unconditionally.
+    /// 2. Equal precedence: wider border wins.
+    /// 3. Equal width: `a` wins (arbitrary stable choice; spec allows either).
+    pub fn resolve_conflict(a: &Self, b: &Self) -> Self {
+        if a.precedence != b.precedence {
+            return if a.precedence > b.precedence { a.clone() } else { b.clone() };
+        }
+        if (a.width - b.width).abs() > 0.001 {
+            return if a.width > b.width { a.clone() } else { b.clone() };
+        }
+        a.clone()
+    }
+}
+
+// ──────────────── TableContext ────────────────
 
 /// Table layout algorithm context.
 /// Holds table structure metadata (column count, row count, explicit widths),
@@ -19,7 +87,7 @@ pub struct TableContext {
     pub col_explicit_widths: Vec<Option<f32>>,
 
     /// Computed column widths after applying table-layout algorithm.
-    /// Index by column index; sum should equal table content-box width.
+    /// Index by column index; sum should equal table content-box width minus spacing.
     pub col_widths: Vec<f32>,
 
     /// Rowspan occupancy tracker: rowspan_map[col] = remaining span for this column.
@@ -31,6 +99,17 @@ pub struct TableContext {
 
     /// Total table height after layout (block-axis).
     pub total_height: f32,
+
+    /// CSS `border-spacing` (horizontal, vertical) in CSS px.
+    /// Used in `Separate` mode only; ignored when `border_collapse == Collapse`.
+    /// Initial value `(0.0, 0.0)`; P4 wires from `ComputedStyle.border_spacing_h/v`.
+    /// CSS: border-spacing
+    pub border_spacing: (f32, f32),
+
+    /// CSS `border-collapse` mode for this table.
+    /// Initial value `Separate`; P4 wires from `ComputedStyle.border_collapse`.
+    /// CSS: border-collapse
+    pub border_collapse: BorderCollapse,
 }
 
 impl Default for TableContext {
@@ -40,7 +119,7 @@ impl Default for TableContext {
 }
 
 impl TableContext {
-    /// Create a new empty table context.
+    /// Create a new empty table context with CSS-initial values.
     pub fn new() -> Self {
         Self {
             col_count: 0,
@@ -49,6 +128,8 @@ impl TableContext {
             rowspan_map: Vec::new(),
             row_count: 0,
             total_height: 0.0,
+            border_spacing: (0.0, 0.0),
+            border_collapse: BorderCollapse::default(),
         }
     }
 
@@ -134,7 +215,7 @@ impl TableContext {
             }
 
             // Track rowspan occupancy.
-            let rowspan = cell.row_span.max(1) as u32;
+            let rowspan = cell.row_span.max(1);
             if rowspan > 1 {
                 if self.rowspan_map.len() < end_col {
                     self.rowspan_map.resize(end_col, 0);
@@ -159,20 +240,21 @@ impl TableContext {
     }
 }
 
+// ──────────────── Column width computation ────────────────
+
 /// Compute table column widths using the table-layout algorithm.
-/// Implements fixed (explicit widths only) and auto (greedy fit with content wrapping) algorithms.
 ///
-/// # Parameters:
-/// - `table`: root table box
-/// - `content_width`: available width (table content-box width)
-/// - `viewport`: viewport dimensions (for length resolution)
+/// `h_spacing`: CSS `border-spacing` horizontal component in CSS px.
+/// In `Separate` border mode reserves `(n_cols + 1) * h_spacing` for inter-cell and outer
+/// gaps, distributing the remainder across columns.
+/// Pass `0.0` for `Collapse` mode or until P4 wires the value from `ComputedStyle`.
 ///
-/// # Returns:
-/// Vector of column widths (border-box) summing to content_width.
+/// Returns a `Vec<f32>` of column widths (border-box) that fit within the remaining space.
 pub fn compute_table_col_widths(
     table: &LayoutBox,
     content_width: f32,
     viewport: Size,
+    h_spacing: f32,
 ) -> Vec<f32> {
     let ctx = TableContext::collect_table_structure(table, content_width, viewport);
 
@@ -180,40 +262,45 @@ pub fn compute_table_col_widths(
         return Vec::new();
     }
 
-    // Phase 0: Distribute content_width evenly across columns.
+    // Separate border model: (n_cols+1) gap slots consume h_spacing each.
+    // CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
+    let total_spacing = (ctx.col_count + 1) as f32 * h_spacing;
+    let eff_width = (content_width - total_spacing).max(0.0);
+
+    // Phase 0: distribute effective width evenly across columns.
     // TODO (P4): Implement `table-layout: fixed` (respect explicit widths, distribute remainder).
     // TODO (P4): Implement `table-layout: auto` (wrap content, compute minimum cell widths).
     // // CSS: table-layout
-
-    let col_width = content_width / ctx.col_count as f32;
+    let col_width = eff_width / ctx.col_count as f32;
     vec![col_width; ctx.col_count]
 }
 
+// ──────────────── Table layout ────────────────
+
 /// Lay out table rows and cells.
-/// Distributes cells across computed columns, handles rowspan/colspan, and applies table-specific spacing rules.
 ///
-/// # Parameters:
-/// - `table`: mutable reference to table box
-/// - `content_x`, `content_y`: table content-box origin
-/// - `content_width`: available width
-/// - `measurer`: optional text measurer (for measuring cell content)
-/// - `viewport`: viewport dimensions
-/// - `hp`: hyphenation provider
+/// `border_spacing`: `(h_spacing, v_spacing)` in CSS px — horizontal gap between columns and
+/// vertical gap between rows in Separate mode. Pass `(0.0, 0.0)` for Collapse mode or until
+/// P4 wires from ComputedStyle.
 ///
-/// # Returns:
-/// Total table height (block-axis, from first to last row).
+/// Returns total table height including outer v_spacing slots.
+#[allow(clippy::too_many_arguments)]
 pub fn lay_out_table(
     table: &mut LayoutBox,
     content_x: f32,
     content_y: f32,
     content_width: f32,
+    border_spacing: (f32, f32),
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
 ) -> f32 {
-    let col_widths = compute_table_col_widths(table, content_width, viewport);
+    let (h_spacing, v_spacing) = border_spacing;
+    let col_widths = compute_table_col_widths(table, content_width, viewport, h_spacing);
 
-    let mut cur_y = content_y;
+    // First row starts after the top outer v_spacing slot.
+    // CSS: border-spacing — P4 wires v_spacing from ComputedStyle.border_spacing_v
+    let mut cur_y = content_y + v_spacing;
     let mut rowspan_map: Vec<u32> = Vec::new();
 
     // flat_row_rects[k] = (y, height) for the k-th row in DOM order (across all groups).
@@ -247,6 +334,7 @@ pub fn lay_out_table(
                     measurer,
                     viewport,
                     hp,
+                    h_spacing,
                 );
                 let row_style_h = {
                     let s = &table.children[i].style;
@@ -294,7 +382,9 @@ pub fn lay_out_table(
                     .style
                     .margin_bottom
                     .resolve_or_zero(table.children[i].style.font_size, content_width, viewport);
-                cur_y = table.children[i].rect.y + table.children[i].rect.height + c_mb;
+                // Add v_spacing gap after each row (the last row still gets the outer bottom slot).
+                // CSS: border-spacing
+                cur_y = table.children[i].rect.y + table.children[i].rect.height + c_mb + v_spacing;
                 decrement_rowspan_map(&mut rowspan_map);
             }
             BoxKind::TableRowGroup => {
@@ -332,6 +422,7 @@ pub fn lay_out_table(
                         measurer,
                         viewport,
                         hp,
+                        h_spacing,
                     );
                     let r_pt = table.children[i].children[r]
                         .style
@@ -356,8 +447,10 @@ pub fn lay_out_table(
                         .style
                         .margin_bottom
                         .resolve_or_zero(r_em, content_width, viewport);
-                    row_y =
-                        table.children[i].children[r].rect.y + table.children[i].children[r].rect.height + r_mb;
+                    row_y = table.children[i].children[r].rect.y
+                        + table.children[i].children[r].rect.height
+                        + r_mb
+                        + v_spacing;
                     decrement_rowspan_map(&mut rowspan_map);
                 }
                 let g_pt = table.children[i]
@@ -401,26 +494,33 @@ pub fn lay_out_table(
     (cur_y - content_y).max(0.0)
 }
 
+// ──────────────── Row layout ────────────────
+
 /// Lay out a single table row.
 /// Positions cells horizontally, applies colspan/rowspan logic, and measures cell content.
+/// In Separate border mode cells are offset by `h_spacing` between columns.
+#[allow(clippy::too_many_arguments)]
 fn lay_out_table_row(
     row: &mut LayoutBox,
     content_x: f32,
     content_y: f32,
-    content_width: f32,
+    _content_width: f32,
     col_widths: Option<&[f32]>,
-    rowspan_map: Option<&mut Vec<u32>>,
+    mut rowspan_map: Option<&mut Vec<u32>>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     hp: &dyn HyphenationProvider,
+    h_spacing: f32,
 ) -> f32 {
     if row.children.is_empty() {
         return 0.0;
     }
 
     let col_widths = col_widths.unwrap_or(&[]);
-    let mut cur_x = content_x;
-    let mut max_height = 0.0;
+    // First cell starts after the left outer h_spacing slot.
+    // CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
+    let mut cur_x = content_x + h_spacing;
+    let mut max_height = 0.0_f32;
     let mut col_pos = 0usize;
 
     for child in row.children.iter_mut() {
@@ -429,17 +529,20 @@ fn lay_out_table_row(
         }
 
         // Skip columns occupied by rowspan cells.
-        if let Some(rowspan_map) = rowspan_map {
-            while col_pos < rowspan_map.len() && rowspan_map[col_pos] > 0 {
+        if let Some(ref mut rsm) = rowspan_map {
+            while col_pos < rsm.len() && rsm[col_pos] > 0 {
                 if col_pos < col_widths.len() {
-                    cur_x += col_widths[col_pos];
+                    cur_x += col_widths[col_pos] + h_spacing;
                 }
                 col_pos += 1;
             }
         }
 
         let span = child.col_span.max(1) as usize;
-        let cell_width: f32 = col_widths.iter().skip(col_pos).take(span).sum();
+        // Width = sum of col_widths for spanned columns + inter-column h_spacing gaps.
+        let col_content_w: f32 = col_widths.iter().skip(col_pos).take(span).sum();
+        let inter_gaps = if span > 1 { (span - 1) as f32 * h_spacing } else { 0.0 };
+        let cell_width = col_content_w + inter_gaps;
 
         child.rect.x = cur_x;
         child.rect.y = content_y;
@@ -450,20 +553,21 @@ fn lay_out_table_row(
         child.rect.height = cell_h;
 
         max_height = max_height.max(cell_h);
-        cur_x += cell_width;
+        // Advance past this cell's width and the inter-cell h_spacing gap.
+        cur_x += cell_width + h_spacing;
         col_pos += span;
 
         // Register rowspan occupancy.
-        if let Some(rowspan_map) = rowspan_map {
-            let rowspan = child.row_span.max(1) as u32;
+        if let Some(ref mut rsm) = rowspan_map {
+            let rowspan = child.row_span.max(1);
             if rowspan > 1 {
                 let end_col = col_pos;
-                if rowspan_map.len() < end_col {
-                    rowspan_map.resize(end_col, 0);
+                if rsm.len() < end_col {
+                    rsm.resize(end_col, 0);
                 }
                 for col in (col_pos - span)..col_pos {
-                    if col < rowspan_map.len() {
-                        rowspan_map[col] = rowspan.saturating_sub(1);
+                    if col < rsm.len() {
+                        rsm[col] = rowspan.saturating_sub(1);
                     }
                 }
             }
@@ -473,10 +577,10 @@ fn lay_out_table_row(
     max_height
 }
 
+// ──────────────── Cell content measurement ────────────────
+
 /// Measure cell content height by recursively laying out descendant boxes.
 /// Phase 0: simple height query without full recursive layout.
-/// TODO (P2): Implement full recursive layout of cell content (text wrapping, inline/block flow).
-/// // CSS: border-collapse, border-spacing, empty-cells
 fn measure_cell_content(
     cell: &mut LayoutBox,
     content_width: f32,
@@ -485,7 +589,6 @@ fn measure_cell_content(
     _hp: &dyn HyphenationProvider,
 ) -> f32 {
     // Phase 0: assume cell content height = sum of child heights + padding/border.
-    // TODO: Implement text wrapping and block-level children layout.
     let mut content_h = 0.0;
     for child in cell.children.iter_mut() {
         content_h += child.rect.height;
@@ -503,15 +606,38 @@ fn measure_cell_content(
 }
 
 /// Decrement rowspan occupancy counters (call after each row).
-fn decrement_rowspan_map(rowspan_map: &mut Vec<u32>) {
+fn decrement_rowspan_map(rowspan_map: &mut [u32]) {
     for entry in rowspan_map.iter_mut() {
         *entry = entry.saturating_sub(1);
     }
 }
 
+// ──────────────── Tests ────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_core::ext::NullHyphenationProvider;
+
+    fn vp() -> Size {
+        Size { width: 1024.0, height: 720.0 }
+    }
+
+    /// Build a minimal LayoutBox with the given kind for unit testing.
+    fn make_box(kind: BoxKind) -> LayoutBox {
+        LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: lumen_core::geom::Rect::ZERO,
+            style: crate::style::ComputedStyle::root(),
+            kind,
+            children: Vec::new(),
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        }
+    }
 
     #[test]
     fn test_table_context_new() {
@@ -519,6 +645,8 @@ mod tests {
         assert_eq!(ctx.col_count, 0);
         assert_eq!(ctx.row_count, 0);
         assert!(ctx.col_explicit_widths.is_empty());
+        assert_eq!(ctx.border_spacing, (0.0, 0.0));
+        assert_eq!(ctx.border_collapse, BorderCollapse::Separate);
     }
 
     #[test]
@@ -540,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_table_context_rowspan_map_decrement() {
-        let mut map = vec![2, 1, 0];
+        let mut map: Vec<u32> = vec![2, 1, 0];
         for entry in map.iter_mut() {
             *entry = entry.saturating_sub(1);
         }
@@ -549,46 +677,45 @@ mod tests {
 
     #[test]
     fn test_decrement_rowspan_map() {
-        let mut map = vec![1, 2, 3];
+        let mut map: Vec<u32> = vec![1, 2, 3];
         decrement_rowspan_map(&mut map);
-        assert_eq!(map, vec![0, 1, 2]);
+        assert_eq!(map, vec![0u32, 1, 2]);
     }
 
     #[test]
     fn test_decrement_rowspan_map_at_zero() {
-        let mut map = vec![0, 0, 0];
+        let mut map: Vec<u32> = vec![0, 0, 0];
         decrement_rowspan_map(&mut map);
-        assert_eq!(map, vec![0, 0, 0]);
+        assert_eq!(map, vec![0u32, 0, 0]);
     }
 
     #[test]
     fn test_compute_table_col_widths_empty() {
-        let table = LayoutBox::default();
-        let widths = compute_table_col_widths(&table, 800.0, Size { width: 1024.0, height: 720.0 });
+        let table = make_box(BoxKind::Table);
+        let widths = compute_table_col_widths(&table, 800.0, vp(), 0.0);
         assert!(widths.is_empty());
     }
 
     #[test]
     fn test_compute_table_col_widths_single_column() {
-        let mut table = LayoutBox::default();
-        table.kind = BoxKind::Table;
+        let table = make_box(BoxKind::Table);
         // Phase 0: distribute evenly; without children, col_count = 0.
-        let widths = compute_table_col_widths(&table, 800.0, Size { width: 1024.0, height: 720.0 });
+        let widths = compute_table_col_widths(&table, 800.0, vp(), 0.0);
         assert!(widths.is_empty());
     }
 
     #[test]
     fn test_lay_out_table_empty() {
-        let mut table = LayoutBox::default();
-        table.kind = BoxKind::Table;
+        let mut table = make_box(BoxKind::Table);
         let height = lay_out_table(
             &mut table,
             0.0,
             0.0,
             800.0,
+            (0.0, 0.0),
             None,
-            Size { width: 1024.0, height: 720.0 },
-            &crate::box_tree::NullHyphenationProvider,
+            vp(),
+            &NullHyphenationProvider,
         );
         assert_eq!(height, 0.0);
     }
@@ -614,8 +741,7 @@ mod tests {
 
     #[test]
     fn test_lay_out_table_row_empty() {
-        let mut row = LayoutBox::default();
-        row.kind = BoxKind::TableRow;
+        let mut row = make_box(BoxKind::TableRow);
         let height = lay_out_table_row(
             &mut row,
             0.0,
@@ -624,9 +750,90 @@ mod tests {
             None,
             None,
             None,
-            Size { width: 1024.0, height: 720.0 },
-            &crate::box_tree::NullHyphenationProvider,
+            vp(),
+            &NullHyphenationProvider,
+            0.0,
         );
         assert_eq!(height, 0.0);
+    }
+
+    // ── G-5 Phase 2: CollapsedBorder tests ──────────────────────────────
+
+    /// Cell precedence beats Row precedence even if the row border is wider.
+    #[test]
+    fn collapsed_border_cell_beats_row_precedence() {
+        let cell = CollapsedBorder { width: 1.0, precedence: BorderPrecedence::Cell };
+        let row = CollapsedBorder { width: 4.0, precedence: BorderPrecedence::Row };
+        let resolved = CollapsedBorder::resolve_conflict(&row, &cell);
+        assert_eq!(resolved.precedence, BorderPrecedence::Cell, "Cell должен побеждать Row");
+        assert!((resolved.width - 1.0).abs() < 0.001);
+    }
+
+    /// At equal precedence the wider border wins.
+    #[test]
+    fn collapsed_border_wider_wins_at_equal_precedence() {
+        let thin = CollapsedBorder { width: 1.0, precedence: BorderPrecedence::Cell };
+        let thick = CollapsedBorder { width: 3.0, precedence: BorderPrecedence::Cell };
+        let resolved = CollapsedBorder::resolve_conflict(&thin, &thick);
+        assert!((resolved.width - 3.0).abs() < 0.001, "более широкая граница должна побеждать");
+    }
+
+    // ── G-5 Phase 2: border-spacing layout tests ────────────────────────
+
+    /// With h_spacing > 0, effective column width is reduced.
+    /// 2 columns, 200px wide, 10px h_spacing → eff = 200 - 3*10 = 170 → each col = 85px.
+    #[test]
+    fn border_spacing_reduces_col_widths() {
+        let mut table = make_box(BoxKind::Table);
+        let mut row = make_box(BoxKind::TableRow);
+        row.children.push(make_box(BoxKind::Block));
+        row.children.push(make_box(BoxKind::Block));
+        table.children.push(row);
+
+        let widths = compute_table_col_widths(&table, 200.0, vp(), 10.0);
+        assert_eq!(widths.len(), 2, "должно быть 2 колонки");
+        let expected = (200.0 - 3.0 * 10.0) / 2.0; // 85.0
+        for w in &widths {
+            assert!((w - expected).abs() < 0.01, "col width {w} != expected {expected}");
+        }
+    }
+
+    /// With v_spacing > 0, the first row starts at content_y + v_spacing.
+    /// Table: 1 row with a cell containing a 40px block, v_spacing=5.
+    /// Expected: row.y = 5 (top outer slot); total height = 5 + 40 + 5 = 50.
+    #[test]
+    fn border_spacing_vertical_row_offset() {
+        let mut table = make_box(BoxKind::Table);
+        let mut row = make_box(BoxKind::TableRow);
+        // Cell (Block child of row) contains an inner block with height 40px.
+        // measure_cell_content sums children heights, so cell height → 40.
+        let mut cell = make_box(BoxKind::Block);
+        let mut inner = make_box(BoxKind::Block);
+        inner.rect.height = 40.0;
+        cell.children.push(inner);
+        row.children.push(cell);
+        table.children.push(row);
+
+        let total_h = lay_out_table(
+            &mut table,
+            0.0,
+            0.0,
+            200.0,
+            (0.0, 5.0),
+            None,
+            vp(),
+            &NullHyphenationProvider,
+        );
+
+        let row_y = table.children[0].rect.y;
+        assert!(
+            (row_y - 5.0).abs() < 0.01,
+            "первая строка должна начинаться с v_spacing=5, получено {row_y}"
+        );
+        // Total: v_spacing_top(5) + row_height(40) + v_spacing_bottom(5) = 50
+        assert!(
+            (total_h - 50.0).abs() < 1.0,
+            "общая высота таблицы должна быть ~50px, получено {total_h}"
+        );
     }
 }

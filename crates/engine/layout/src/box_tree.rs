@@ -22,12 +22,13 @@ use crate::style::{
     BackgroundImage, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
-    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextOverflow, TextWrapMode,
-    TextWrapStyle,
+    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextAlignLast, TextOverflow,
+    TextWrapMode, TextWrapStyle,
     VerticalAlign, WordBreak,
 };
 use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
-                      build_counter_style_registry, format_counter_with_registry};
+                      build_counter_style_registry, format_counter_with_registry,
+                      build_list_marker_text};
 use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
 use crate::TextMeasurer;
 
@@ -243,8 +244,53 @@ pub enum FormControlKind {
     /// this to draw checkbox/radio indicators without re-querying the DOM.
     Input { input_type: lumen_dom::InputType, checked: bool },
     Button,
-    Select,
+    /// `<select>` — `selected_text` is the label of the currently selected
+    /// `<option>` (first option if none is explicitly selected). Paint uses this
+    /// to draw the visible label without re-querying the DOM.
+    Select { selected_text: String },
     Textarea,
+}
+
+/// Collect the text label of the currently selected `<option>` inside a
+/// `<select>` element. Returns the text of the first `<option selected>` child,
+/// falling back to the first `<option>` child, then an empty string.
+fn collect_select_label(doc: &Document, select_id: NodeId) -> String {
+    let children = doc.get(select_id).children.clone();
+    let mut first_label: Option<String> = None;
+    for child_id in children {
+        let child = doc.get(child_id);
+        let NodeData::Element { name, attrs, .. } = &child.data else { continue };
+        if name.local.as_str() != "option" { continue }
+        let label = option_text(doc, child_id);
+        let is_selected = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("selected"));
+        if is_selected {
+            return label;
+        }
+        if first_label.is_none() {
+            first_label = Some(label);
+        }
+    }
+    first_label.unwrap_or_default()
+}
+
+/// Returns the display text for an `<option>` element: `label` attribute if
+/// present, otherwise the concatenated text content of its child text nodes.
+fn option_text(doc: &Document, option_id: NodeId) -> String {
+    let node = doc.get(option_id);
+    if let NodeData::Element { attrs, .. } = &node.data
+        && let Some(label) = attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case("label"))
+    {
+        return label.value.trim().to_owned();
+    }
+    node.children
+        .iter()
+        .filter_map(|&c| {
+            if let NodeData::Text(t) = &doc.get(c).data { Some(t.as_str()) } else { None }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+        .trim()
+        .to_owned()
 }
 
 /// Является ли DOM-узел HTML form control-ом.
@@ -889,11 +935,11 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
         // Apply viewBox scaling to user unit coordinates.
         let text_x = ox + (x + dx) * sx;
         let text_y = oy + (y + dy) * sy;
-        // Phase 1: use a minimal bounding box at the text position.
+        // Apply only the translation of the composed transform to the text origin point.
+        // Cannot use apply_transform_to_bbox: it returns ZERO for zero-size bboxes.
         // Phase 2: measure text width and compute proper bbox based on text-anchor and dominant-baseline.
-        let bbox = Rect::new(text_x, text_y, 0.0, 0.0);
-        // Apply composed transform.
-        b.rect = apply_transform_to_bbox(&bbox, &composed);
+        let (tx, ty) = composed.transform_point(text_x, text_y);
+        b.rect = Rect::new(tx, ty, 0.0, 0.0);
     } else if matches!(b.kind, BoxKind::Block) {
         // <g> group: position its children with composed transform, then compute union bbox.
         lay_out_svg_children_positions(&mut b.children, ox, oy, sx, sy, &composed);
@@ -1292,10 +1338,15 @@ pub enum BoxKind {
     /// Phase 0: rendered as a grey `DrawImage` placeholder (no sub-document
     /// navigation). Intrinsic size comes from `width`/`height` HTML attributes;
     /// UA defaults are 300×150 CSS px (HTML spec §4.8.5). `src` is the URL
-    /// to display in paint-side label and in JS `src` property.
+    /// to display in paint-side label and in JS `src` property. When `srcdoc`
+    /// is `Some`, the inline HTML was parsed via [`build_iframe_document`] and
+    /// is available for future Phase 1 sub-document rendering.
     Iframe {
         /// Primary document URL (`src` attribute), may be empty.
         src: String,
+        /// Inline HTML content from `srcdoc` attribute (HTML spec §4.8.5).
+        /// `None` if the element has no `srcdoc` attribute.
+        srcdoc: Option<String>,
     },
     /// Replaced element: HTML form control (`<input>`, `<button>`, `<select>`,
     /// `<textarea>`). Phase 0: block-level replaced. Размеры берутся из
@@ -1555,6 +1606,16 @@ pub fn layout_measured_hyp(
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
     root
+}
+
+/// Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5).
+///
+/// Returns the parsed `Document` ready for sub-document layout. The document
+/// has no base URL — relative resource references inside `srcdoc` HTML are
+/// interpreted as `about:blank`-relative (effectively unresolvable until
+/// Phase 1 navigation wiring).
+pub fn build_iframe_document(srcdoc: &str) -> Document {
+    lumen_html_parser::parse(srcdoc)
 }
 
 /// CSS Backgrounds L3 §2.11.2 — «The Canvas Background and the Root Element»:
@@ -2141,65 +2202,6 @@ fn li_ordinal(doc: &Document, id: NodeId) -> u32 {
     1
 }
 
-fn to_roman(n: u32, upper: bool) -> String {
-    const VALS: &[(u32, &str, &str)] = &[
-        (1000, "M", "m"), (900, "CM", "cm"), (500, "D", "d"), (400, "CD", "cd"),
-        (100, "C", "c"), (90, "XC", "xc"), (50, "L", "l"), (40, "XL", "xl"),
-        (10, "X", "x"), (9, "IX", "ix"), (5, "V", "v"), (4, "IV", "iv"), (1, "I", "i"),
-    ];
-    if n == 0 { return "0".to_string(); }
-    let mut out = String::new();
-    let mut rem = n;
-    for &(val, up, lo) in VALS {
-        while rem >= val {
-            out.push_str(if upper { up } else { lo });
-            rem -= val;
-        }
-    }
-    out
-}
-
-fn to_alpha(n: u32, upper: bool) -> String {
-    if n == 0 { return "0".to_string(); }
-    let base = if upper { b'A' } else { b'a' };
-    let mut out = String::new();
-    let mut rem = n;
-    while rem > 0 {
-        rem -= 1;
-        out.insert(0, (base + (rem % 26) as u8) as char);
-        rem /= 26;
-    }
-    out
-}
-
-fn to_greek(n: u32) -> String {
-    const GREEK: &[char] = &['α','β','γ','δ','ε','ζ','η','θ','ι','κ','λ','μ',
-                              'ν','ξ','ο','π','ρ','σ','τ','υ','φ','χ','ψ','ω'];
-    if n == 0 { return "0".to_string(); }
-    let idx = ((n - 1) as usize) % GREEK.len();
-    GREEK[idx].to_string()
-}
-
-/// CSS Lists L3 §2.1 — builds the marker string from `list-style-type` + ordinal.
-/// Bullet types (Disc/Circle/Square) return "" — rendered as geometric shapes by
-/// the display-list emitter (FillRoundedRect / DrawBorder / FillRect).
-/// CSS: @counter-style — P4 extends with custom counter styles.
-fn marker_text(lst: ListStyleType, ordinal: u32) -> String {
-    match lst {
-        ListStyleType::None   => String::new(),
-        ListStyleType::Disc   => String::new(), // geometric: filled circle
-        ListStyleType::Circle => String::new(), // geometric: hollow circle
-        ListStyleType::Square => String::new(), // geometric: filled square
-        ListStyleType::Decimal            => format!("{}. ", ordinal),
-        ListStyleType::DecimalLeadingZero => format!("{:02}. ", ordinal),
-        ListStyleType::LowerRoman => format!("{}. ", to_roman(ordinal, false)),
-        ListStyleType::UpperRoman => format!("{}. ", to_roman(ordinal, true)),
-        ListStyleType::LowerAlpha => format!("{}. ", to_alpha(ordinal, false)),
-        ListStyleType::UpperAlpha => format!("{}. ", to_alpha(ordinal, true)),
-        ListStyleType::LowerGreek => format!("{}. ", to_greek(ordinal)),
-    }
-}
-
 /// CSS Lists L3 §2.1 — creates `BoxKind::Marker` and prepends to children.
 /// Calls `compute_pseudo_element_style("marker")` so CSS `::marker` rules (color,
 /// font, content) override the defaults. `content: none` on `::marker` suppresses
@@ -2230,7 +2232,8 @@ fn inject_marker(
     // CSS: list-style-image — P4 wires image markers.
     let text = match &ms.content {
         Content::Items(items) => marker_content_text(items, doc, parent_id, counters, registry),
-        _ => marker_text(style.list_style_type, ordinal),
+        // CSS: list-style-type (custom counter-style) — build_list_marker_text consults registry.
+        _ => build_list_marker_text(style.list_style_type, ordinal, registry),
     };
     ms.display = Display::Inline;
     children.insert(0, LayoutBox {
@@ -2405,6 +2408,7 @@ fn build_box(
             } else if is_iframe_element(doc, id) {
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
+                let srcdoc = node.get_attr("srcdoc").filter(|s| !s.is_empty()).map(str::to_owned);
                 // HTML spec §4.8.5: UA default intrinsic size is 300×150 CSS px.
                 // Explicit width/height attrs applied earlier as presentational hints;
                 // fill only if still unset.
@@ -2414,7 +2418,7 @@ fn build_box(
                 if style.height.is_none() {
                     style.height = Some(Length::Px(150.0));
                 }
-                BoxKind::Iframe { src }
+                BoxKind::Iframe { src, srcdoc }
             } else if is_form_control_element(doc, id) {
                 let kind = {
                     let node = doc.get(id);
@@ -2424,7 +2428,10 @@ fn build_box(
                         .to_owned();
                     match tag.as_str() {
                         "button"   => FormControlKind::Button,
-                        "select"   => FormControlKind::Select,
+                        "select"   => {
+                            let selected_text = collect_select_label(doc, id);
+                            FormControlKind::Select { selected_text }
+                        }
                         "textarea" => FormControlKind::Textarea,
                         _ => {
                             let input_type = node.input_type()
@@ -2936,6 +2943,83 @@ pub(crate) fn parse_circle_px(s: &str) -> Option<f32> {
     digits.parse::<f32>().ok().filter(|&r| r > 0.0)
 }
 
+/// CSS Shapes L1 §5.2 — parse `polygon([<fill-rule>,] x1 y1, x2 y2, ...)`.
+/// Returns vertex list in float-local (margin-box-relative) px coordinates.
+/// Accepts `Npx` or bare `N` (assumed px). Returns `None` for any unknown syntax.
+pub(crate) fn parse_shape_polygon_px(s: &str) -> Option<Vec<(f32, f32)>> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("polygon(")?.strip_suffix(')')?;
+    // Strip optional fill-rule keyword (nonzero | evenodd).
+    let coords_str = if inner.trim_start().starts_with("nonzero")
+        || inner.trim_start().starts_with("evenodd")
+    {
+        inner.split_once(',').map(|x| x.1).unwrap_or("")
+    } else {
+        inner
+    };
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    for pair in coords_str.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let mut it = pair.split_whitespace();
+        let xs = it.next()?;
+        let ys = it.next()?;
+        let x = xs.strip_suffix("px").unwrap_or(xs).parse::<f32>().ok()?;
+        let y = ys.strip_suffix("px").unwrap_or(ys).parse::<f32>().ok()?;
+        pts.push((x, y));
+    }
+    if pts.len() >= 3 { Some(pts) } else { None }
+}
+
+/// CSS Shapes L1 §5.2 — parse `ellipse(<rx> <ry> at <cx> <cy>)`.
+/// Returns `(rx, ry, cx, cy)` in float-local (margin-box-relative) px coords.
+/// Returns `None` for any unknown syntax or zero/negative radii.
+pub(crate) fn parse_shape_ellipse_px(s: &str) -> Option<(f32, f32, f32, f32)> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("ellipse(")?.strip_suffix(')')?;
+    // Expected: "rxpx rypx at cxpx cypx"
+    let at_pos = inner.find(" at ")?;
+    let radii_part = inner[..at_pos].trim();
+    let center_part = inner[at_pos + 4..].trim();
+    let mut ri = radii_part.split_whitespace();
+    let mut ci = center_part.split_whitespace();
+    let rxs = ri.next()?;
+    let rys = ri.next()?;
+    let cxs = ci.next()?;
+    let cys = ci.next()?;
+    let rx = rxs.strip_suffix("px").unwrap_or(rxs).parse::<f32>().ok()?;
+    let ry = rys.strip_suffix("px").unwrap_or(rys).parse::<f32>().ok()?;
+    let cx = cxs.strip_suffix("px").unwrap_or(cxs).parse::<f32>().ok()?;
+    let cy = cys.strip_suffix("px").unwrap_or(cys).parse::<f32>().ok()?;
+    if rx > 0.0 && ry > 0.0 { Some((rx, ry, cx, cy)) } else { None }
+}
+
+/// CSS Shapes L1 §5.2 — polygon shape for `shape-outside` on a float.
+/// Points are stored in content-area coordinates (same as FloatContext).
+struct ShapePolygon {
+    top_y: f32,
+    bottom_y: f32,
+    /// `true` = left float, `false` = right float.
+    is_left: bool,
+    /// Polygon vertices in content-area coordinates.
+    points: Vec<(f32, f32)>,
+}
+
+/// CSS Shapes L1 §5.2 — ellipse shape for `shape-outside` on a float.
+/// All coordinates are in content-area space (same as FloatContext).
+struct ShapeEllipse {
+    top_y: f32,
+    bottom_y: f32,
+    /// `true` = left float, `false` = right float.
+    is_left: bool,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+}
+
 /// CSS 2.1 §9.5 — tracks float placements within a single block formatting
 /// context.  Simplified Phase-0 implementation: only axis-aligned rectangles,
 /// no shape-outside wrapping.  All coordinates are in the same space as the
@@ -2951,11 +3035,21 @@ struct FloatContext {
     /// `(top_y, bottom_y, is_left, center_x, center_y, radius)`.
     /// `is_left=true` → left float, `false` → right float.
     shape_circles: Vec<(f32, f32, bool, f32, f32, f32)>,
+    /// CSS Shapes L1 — `shape-outside: polygon(...)` overrides.
+    shape_polygons: Vec<ShapePolygon>,
+    /// CSS Shapes L1 — `shape-outside: ellipse(...)` overrides.
+    shape_ellipses: Vec<ShapeEllipse>,
 }
 
 impl FloatContext {
     fn new() -> Self {
-        Self { left: Vec::new(), right: Vec::new(), shape_circles: Vec::new() }
+        Self {
+            left: Vec::new(),
+            right: Vec::new(),
+            shape_circles: Vec::new(),
+            shape_polygons: Vec::new(),
+            shape_ellipses: Vec::new(),
+        }
     }
 
     /// Left boundary of available inline space at `y` (= rightmost right-edge
@@ -2966,8 +3060,8 @@ impl FloatContext {
             .filter(|(bot, _)| *bot > y)
             .map(|(_, r)| *r)
             .fold(default_x, f32::max);
-        // CSS Shapes L1: override rectangular edge with circle boundary.
-        self.shape_circles
+        // CSS Shapes L1: circle boundary.
+        let after_circles = self.shape_circles
             .iter()
             .filter(|(top, bot, is_left, ..)| *is_left && *top <= y && *bot > y)
             .map(|(_, _, _, cx, cy, r)| {
@@ -2975,7 +3069,23 @@ impl FloatContext {
                 let hw = (r * r - dy * dy).max(0.0_f32).sqrt();
                 cx + hw
             })
-            .fold(rect_edge, f32::max)
+            .fold(rect_edge, f32::max);
+        // CSS Shapes L1: polygon boundary (rightmost edge at y).
+        let after_polygons = self.shape_polygons
+            .iter()
+            .filter(|p| p.is_left && p.top_y <= y && p.bottom_y > y)
+            .filter_map(|p| polygon_right_edge_at_y(&p.points, y))
+            .fold(after_circles, f32::max);
+        // CSS Shapes L1: ellipse boundary (right edge at y).
+        self.shape_ellipses
+            .iter()
+            .filter(|e| e.is_left && e.top_y <= y && e.bottom_y > y)
+            .filter_map(|e| {
+                let norm = (y - e.cy) / e.ry;
+                if norm.abs() > 1.0 { return None; }
+                Some(e.cx + e.rx * (1.0 - norm * norm).max(0.0).sqrt())
+            })
+            .fold(after_polygons, f32::max)
     }
 
     /// Right boundary of available inline space at `y` (= leftmost left-edge
@@ -2986,8 +3096,8 @@ impl FloatContext {
             .filter(|(bot, _)| *bot > y)
             .map(|(_, l)| *l)
             .fold(default_x, f32::min);
-        // CSS Shapes L1: override rectangular edge with circle boundary.
-        self.shape_circles
+        // CSS Shapes L1: circle boundary.
+        let after_circles = self.shape_circles
             .iter()
             .filter(|(top, bot, is_left, ..)| !is_left && *top <= y && *bot > y)
             .map(|(_, _, _, cx, cy, r)| {
@@ -2995,7 +3105,23 @@ impl FloatContext {
                 let hw = (r * r - dy * dy).max(0.0_f32).sqrt();
                 cx - hw
             })
-            .fold(rect_edge, f32::min)
+            .fold(rect_edge, f32::min);
+        // CSS Shapes L1: polygon boundary (leftmost edge at y).
+        let after_polygons = self.shape_polygons
+            .iter()
+            .filter(|p| !p.is_left && p.top_y <= y && p.bottom_y > y)
+            .filter_map(|p| polygon_left_edge_at_y(&p.points, y))
+            .fold(after_circles, f32::min);
+        // CSS Shapes L1: ellipse boundary (left edge at y).
+        self.shape_ellipses
+            .iter()
+            .filter(|e| !e.is_left && e.top_y <= y && e.bottom_y > y)
+            .filter_map(|e| {
+                let norm = (y - e.cy) / e.ry;
+                if norm.abs() > 1.0 { return None; }
+                Some(e.cx - e.rx * (1.0 - norm * norm).max(0.0).sqrt())
+            })
+            .fold(after_polygons, f32::min)
     }
 
     /// Record a left float occupying `[y_top, bottom_y)` with right margin
@@ -3024,6 +3150,41 @@ impl FloatContext {
     fn is_empty(&self) -> bool {
         self.left.is_empty() && self.right.is_empty()
     }
+}
+
+/// CSS Shapes L1 §4 — rightmost x of polygon boundary at scanline `y`.
+/// Scans all edges that cross `y`; returns `None` if no edge crosses.
+fn polygon_right_edge_at_y(pts: &[(f32, f32)], y: f32) -> Option<f32> {
+    polygon_edge_x_at_y(pts, y, true)
+}
+
+/// CSS Shapes L1 §4 — leftmost x of polygon boundary at scanline `y`.
+fn polygon_left_edge_at_y(pts: &[(f32, f32)], y: f32) -> Option<f32> {
+    polygon_edge_x_at_y(pts, y, false)
+}
+
+/// Shared kernel: iterate polygon edges, return rightmost (want_max=true) or
+/// leftmost (want_max=false) x intersection with horizontal scanline at `y`.
+fn polygon_edge_x_at_y(pts: &[(f32, f32)], y: f32, want_max: bool) -> Option<f32> {
+    let n = pts.len();
+    if n < 2 {
+        return None;
+    }
+    let mut best: Option<f32> = None;
+    for i in 0..n {
+        let (x0, y0) = pts[i];
+        let (x1, y1) = pts[(i + 1) % n];
+        // Edge crosses y iff exactly one endpoint is strictly below y.
+        // Use half-open interval [min, max) to avoid double-counting vertices.
+        if (y0 <= y && y < y1) || (y1 <= y && y < y0) {
+            let x_at_y = x0 + (y - y0) * (x1 - x0) / (y1 - y0);
+            best = Some(match best {
+                None => x_at_y,
+                Some(prev) => if want_max { prev.max(x_at_y) } else { prev.min(x_at_y) },
+            });
+        }
+    }
+    best
 }
 
 /// Crate-internal shim so `vertical.rs` can recursively invoke the main
@@ -3293,7 +3454,7 @@ fn lay_out(
             } else {
                 raw_lines
             };
-            align_lines(lines, content_width, s.text_align, s.direction);
+            align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp — multi-line truncation.
@@ -3334,9 +3495,25 @@ fn lay_out(
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
+                // For row flex, align-content needs the explicit container height (cross axis).
+                let flex_explicit_cross = if !matches!(
+                    s.flex_direction,
+                    FlexDirection::Column | FlexDirection::ColumnReverse
+                ) {
+                    s.height.as_ref()
+                        .and_then(|h| h.resolve(em, available_height, viewport))
+                        .map(|h| match s.box_sizing {
+                            BoxSizing::ContentBox => h,
+                            BoxSizing::BorderBox => (h - padding_top - padding_bottom
+                                - s.border_top_width - s.border_bottom_width)
+                                .max(0.0),
+                        })
+                } else {
+                    None
+                };
                 let content_height = lay_out_flex(
-                    &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
-                    children_pcb, hp,
+                    &mut b.children, &s, content_x, content_y, content_width,
+                    flex_explicit_cross, measurer, viewport, children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -3498,13 +3675,25 @@ fn lay_out(
                                 let bot_y  = top_y + fh + fmb;
                                 let right_edge = lx + fml + fw + fmr;
                                 fc.add_left(bot_y, right_edge);
-                                // CSS Shapes L1 — wire circle(r) shape-outside.
-                                #[allow(clippy::collapsible_if)]
+                                // CSS Shapes L1 — wire shape-outside for left float.
+                                // Margin-box origin: (lx, child_y). Points are float-local.
                                 if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
                                     if let Some(r) = parse_circle_px(sv) {
                                         let cx = child.rect.x + fw / 2.0;
                                         let cy = top_y + fh / 2.0;
                                         fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
+                                    } else if let Some(local_pts) = parse_shape_polygon_px(sv) {
+                                        let pts = local_pts.into_iter()
+                                            .map(|(px, py)| (px + lx, py + child_y))
+                                            .collect();
+                                        fc.shape_polygons.push(ShapePolygon {
+                                            top_y, bottom_y: bot_y, is_left: true, points: pts,
+                                        });
+                                    } else if let Some((rx, ry, ecx, ecy)) = parse_shape_ellipse_px(sv) {
+                                        fc.shape_ellipses.push(ShapeEllipse {
+                                            top_y, bottom_y: bot_y, is_left: true,
+                                            cx: ecx + lx, cy: ecy + child_y, rx, ry,
+                                        });
                                     }
                                 }
                             }
@@ -3516,13 +3705,25 @@ fn lay_out(
                                 let bot_y  = top_y + fh + fmb;
                                 let left_edge = rx - fmr - fw - fml;
                                 fc.add_right(bot_y, left_edge);
-                                // CSS Shapes L1 — wire circle(r) shape-outside.
-                                #[allow(clippy::collapsible_if)]
+                                // CSS Shapes L1 — wire shape-outside for right float.
+                                // Margin-box origin: (left_edge, child_y). Points are float-local.
                                 if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
                                     if let Some(r) = parse_circle_px(sv) {
                                         let cx = child.rect.x + fw / 2.0;
                                         let cy = top_y + fh / 2.0;
                                         fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
+                                    } else if let Some(local_pts) = parse_shape_polygon_px(sv) {
+                                        let pts = local_pts.into_iter()
+                                            .map(|(px, py)| (px + left_edge, py + child_y))
+                                            .collect();
+                                        fc.shape_polygons.push(ShapePolygon {
+                                            top_y, bottom_y: bot_y, is_left: false, points: pts,
+                                        });
+                                    } else if let Some((rx_e, ry_e, ecx, ecy)) = parse_shape_ellipse_px(sv) {
+                                        fc.shape_ellipses.push(ShapeEllipse {
+                                            top_y, bottom_y: bot_y, is_left: false,
+                                            cx: ecx + left_edge, cy: ecy + child_y, rx: rx_e, ry: ry_e,
+                                        });
                                     }
                                 }
                             }
@@ -3952,6 +4153,9 @@ fn lay_out_table_row(
             .collect()
     };
 
+    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h once the field exists.
+    let h_spacing: f32 = 0.0;
+
     // Step 3: lay out each cell at its column x position.
     // When col_widths is present, the column width is authoritative — clear the cell's CSS
     // `width` temporarily so lay_out uses `avail` as the final width.
@@ -3959,8 +4163,10 @@ fn lay_out_table_row(
     for (j, &i) in cell_idxs.iter().enumerate() {
         let (col_start, avail) = cell_cols[j];
         let cell_x = if use_global {
-            // Exact x from column positions.
+            // Exact x from column positions, accounting for h_spacing slots.
+            // Cell at col_start k: content_x + (k+1)*h_spacing + sum(col_widths[0..k]).
             content_x
+                + (col_start + 1) as f32 * h_spacing
                 + (0..col_start)
                     .map(|c| col_widths.and_then(|cw| cw.get(c)).copied().unwrap_or(0.0))
                     .sum::<f32>()
@@ -4049,9 +4255,14 @@ fn lay_out_table(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) -> f32 {
+    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h/v once fields exist.
+    let _h_spacing: f32 = 0.0; // reserved for P4 wiring
+    let v_spacing: f32 = 0.0;
+
     let col_widths = compute_table_col_widths(b, content_width, viewport);
 
-    let mut cur_y = content_y;
+    // First row starts after the top outer v_spacing slot.
+    let mut cur_y = content_y + v_spacing;
     let mut rowspan_map: Vec<u32> = Vec::new();
 
     // flat_row_rects[k] = (y, height) for the k-th row in DOM order (across all groups).
@@ -4105,7 +4316,9 @@ fn lay_out_table(
                     }
                 }
                 let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
-                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb;
+                // Add v_spacing gap after each row (outer bottom slot included).
+                // CSS: border-spacing
+                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb + v_spacing;
                 decrement_rowspan_map(&mut rowspan_map);
             }
             BoxKind::TableRowGroup => {
@@ -4147,7 +4360,8 @@ fn lay_out_table(
                         }
                     }
                     let r_mb = b.children[i].children[r].style.margin_bottom.resolve_or_zero(r_em, content_width, viewport);
-                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb;
+                    // CSS: border-spacing
+                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb + v_spacing;
                     decrement_rowspan_map(&mut rowspan_map);
                 }
                 let g_pt = b.children[i].style.padding_top.resolve_or_zero(group_em, content_width, viewport);
@@ -4268,7 +4482,14 @@ fn decrement_rowspan_map(map: &mut [u32]) {
 /// `colspan > 1` distribute their width across columns; `rowspan > 1` cells block
 /// subsequent rows from reusing those columns. Returns a `Vec<f32>` of border-box
 /// widths, one per column.
+///
+/// In Separate border mode, `(n_cols + 1) * h_spacing` is reserved for inter-cell and
+/// outer gaps before distributing the remaining width among auto-width columns.
+/// CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
 fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -> Vec<f32> {
+    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h once the field exists.
+    let h_spacing: f32 = 0.0;
+
     let mut col_explicit: Vec<Option<f32>> = Vec::new();
     let mut rowspan_map: Vec<u32> = Vec::new();
 
@@ -4295,10 +4516,12 @@ fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -
         return Vec::new();
     }
 
+    // Subtract spacing slots from available width before distributing to auto columns.
+    let total_h_spacing = (n_cols + 1) as f32 * h_spacing;
     let total_explicit: f32 = col_explicit.iter().filter_map(|w| *w).sum();
     let auto_count = col_explicit.iter().filter(|w| w.is_none()).count();
     let auto_share = if auto_count > 0 {
-        ((content_width - total_explicit) / auto_count as f32).max(0.0)
+        ((content_width - total_h_spacing - total_explicit) / auto_count as f32).max(0.0)
     } else {
         0.0
     };
@@ -4524,15 +4747,16 @@ fn lay_out_abs_children(
     }
 }
 
-/// CSS Flexbox L1 §9 — single-line flex layout (Phase 0).
+/// CSS Flexbox L1 §9 — multi-line flex layout.
 ///
 /// Алгоритм:
 /// 1. Для каждого flex-item вычисляем hypothetical main size из flex-basis.
 /// 2. Распределяем free space через flex-grow / flex-shrink.
 /// 3. Раскладываем items с учётом justify-content и align-items.
+/// 4. При flex-wrap: apply align-content across flex lines.
 ///
-/// Ограничения Phase 0: `nowrap` only (multi-line — задача 4B.5);
-/// column-direction: cross-axis = container width (auto stretch).
+/// `explicit_cross` — явная высота контейнера (content box) для row flex;
+/// используется в align-content для вычисления свободного пространства по cross axis.
 ///
 /// Возвращает `content_height` (вертикальный размер контентной зоны контейнера).
 #[allow(clippy::too_many_arguments)]
@@ -4542,6 +4766,7 @@ fn lay_out_flex(
     content_x: f32,
     content_y: f32,
     content_width: f32,
+    explicit_cross: Option<f32>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -4826,10 +5051,11 @@ fn lay_out_flex(
     };
 
     // Apply align-content to distribute remaining space between flex lines (row wrap only).
+    // Uses explicit_cross (container height) to compute free cross-axis space.
     if !is_column && n_lines > 1 && is_wrap {
         let line_gap_total = cross_gap * (n_lines.saturating_sub(1)) as f32;
         let used_cross: f32 = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
-        let free_cross = (content_width - used_cross).max(0.0);
+        let free_cross = explicit_cross.map_or(0.0, |h| (h - used_cross).max(0.0));
 
         if free_cross > 0.0 {
             let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
@@ -4953,13 +5179,32 @@ fn lay_out_grid(
         .map(|ctx| ctx.gap)
         .unwrap_or_else(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0));
 
+    // CSS Grid L1 §7.2.3.4 — Phase 2: expand repeat(auto-fill|auto-fit, ...) at layout time.
+    // If the style carried auto-repeat metadata, resolve the track count and build an expanded list.
+    let auto_fill_col_tracks: Vec<GridTrackSize> =
+        if let Some(ref rep) = s.grid_template_col_auto_repeat {
+            let n = resolve_auto_fill_fit_count(content_width, &rep.tracks, col_gap).max(1);
+            let mut tracks = Vec::with_capacity(n * rep.tracks.len());
+            for _ in 0..n {
+                tracks.extend_from_slice(&rep.tracks);
+            }
+            tracks
+        } else {
+            Vec::new()
+        };
+    let eff_col_template: &[GridTrackSize] = if s.grid_template_col_auto_repeat.is_some() {
+        &auto_fill_col_tracks
+    } else {
+        &s.grid_template_columns
+    };
+
     // Determine explicit track counts.
     // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
     // for placement purposes use the number of inherited tracks (or 1 for auto-placement).
-    let n_explicit_cols = if s.grid_template_columns.first() == Some(&GridTrackSize::Subgrid) {
+    let n_explicit_cols = if eff_col_template.first() == Some(&GridTrackSize::Subgrid) {
         inherited_cols.as_ref().map(|ctx| ctx.sizes.len()).unwrap_or(1).max(1)
     } else {
-        s.grid_template_columns.len().max(1)
+        eff_col_template.len().max(1)
     };
 
     // --- Step 1: Resolve placements for every item ---
@@ -5172,7 +5417,7 @@ fn lay_out_grid(
         // Normal grid: compute column widths from the style.
         let mut col_widths: Vec<f32> = (0..n_cols)
             .map(|c| {
-                let ts = grid_track(c, &s.grid_template_columns, &s.grid_auto_columns);
+                let ts = grid_track(c, eff_col_template, &s.grid_auto_columns);
                 match ts {
                     GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
                     GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
@@ -5190,11 +5435,11 @@ fn lay_out_grid(
 
         // Distribute fr among column tracks.
         let total_fr: f32 = (0..n_cols)
-            .map(|c| grid_track(c, &s.grid_template_columns, &s.grid_auto_columns).fr().unwrap_or(0.0))
+            .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).fr().unwrap_or(0.0))
             .sum();
         let auto_col_count = (0..n_cols)
             .filter(|&c| matches!(
-                grid_track(c, &s.grid_template_columns, &s.grid_auto_columns),
+                grid_track(c, eff_col_template, &s.grid_auto_columns),
                 GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
             ))
             .count();
@@ -5208,7 +5453,7 @@ fn lay_out_grid(
         };
 
         for c in 0..n_cols {
-            match grid_track(c, &s.grid_template_columns, &s.grid_auto_columns) {
+            match grid_track(c, eff_col_template, &s.grid_auto_columns) {
                 GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
                 GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
                     col_widths[c as usize] = auto_col_width;
@@ -6262,22 +6507,43 @@ fn wrap_inline_run(
 /// Сдвигает фрагменты каждой строки по text-align + direction.
 /// `Start`/`End` разрешаются в Left/Right по direction (CSS Text L3 §7.1).
 /// Для RTL фрагменты зеркалируются относительно content_width.
+/// Последняя строка выравнивается по `text_align_last` (CSS Text L3 §7.2):
+/// `Auto` на justify-блоке → Start; иначе → как text_align.
 fn align_lines(
     lines: &mut [Vec<InlineFrag>],
     content_width: f32,
     text_align: TextAlign,
+    text_align_last: TextAlignLast,
     direction: Direction,
 ) {
     let is_rtl = direction == Direction::Rtl;
-    // Resolve Start/End to physical Left/Right.
-    let physical = match text_align {
-        TextAlign::Start => if is_rtl { TextAlign::Right } else { TextAlign::Left },
-        TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
-        other => other,
-    };
-    for line in lines.iter_mut() {
-        let Some(last) = line.last() else { continue };
-        let line_width = last.x + last.width;
+    let total = lines.len();
+    for (idx, line) in lines.iter_mut().enumerate() {
+        let is_last = idx + 1 == total;
+        // CSS Text L3 §7.2: last line uses text-align-last.
+        // Auto → same as text-align (justify not yet in TextAlign, so no special case).
+        // TextAlignLast::Justify → Start (word-spacing justification not yet implemented).
+        let effective = if is_last {
+            match text_align_last {
+                TextAlignLast::Auto    => text_align,
+                TextAlignLast::Left    => TextAlign::Left,
+                TextAlignLast::Right   => TextAlign::Right,
+                TextAlignLast::Center  => TextAlign::Center,
+                TextAlignLast::Start   => TextAlign::Start,
+                TextAlignLast::End     => TextAlign::End,
+                TextAlignLast::Justify => TextAlign::Start,
+            }
+        } else {
+            text_align
+        };
+        // Resolve Start/End to physical Left/Right.
+        let physical = match effective {
+            TextAlign::Start => if is_rtl { TextAlign::Right } else { TextAlign::Left },
+            TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
+            other => other,
+        };
+        let Some(last_frag) = line.last() else { continue };
+        let line_width = last_frag.x + last_frag.width;
         if is_rtl {
             // Mirror positions within the line block, then align the block.
             // `right_gap` = space to the right of the mirrored line block.
@@ -6882,6 +7148,208 @@ mod tests {
         assert_eq!(lines[0][0].text, "hi");
         let line2_text = &lines[1][0].text;
         assert_eq!(line2_text, "hyphen", "soft-hyphen should be stripped: {line2_text}");
+    }
+
+    // ── F-2: CSS hyphens — soft hyphen (U+00AD) rendering ───────────────────
+
+    #[test]
+    fn shy_invisible_when_word_fits_on_line() {
+        // hyphens: manual, wide container — word with SHY fits; SHY must be stripped,
+        // no visible hyphen in the rendered fragment (CSS Text L3 §6).
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // "hy\u{AD}phen" → strip → "hyphen" = 6 chars × 10px = 60px; max_width=200 → fits.
+        let seg = InlineSegment {
+            text: "hy\u{00AD}phen".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 200.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 1, "single word must stay on one line");
+        let text = &lines[0][0].text;
+        assert_eq!(text, "hyphen", "SHY must be stripped when word fits: got {text}");
+        assert!(!text.contains('\u{00AD}'), "U+00AD must not appear in output");
+        assert!(!text.contains('-'), "no hyphen added when no line break occurs: {text}");
+    }
+
+    #[test]
+    fn shy_rightmost_fitting_break_selected() {
+        // hyphens: manual, word with two SHY positions — the rightmost that fits is used.
+        // CSS Text L3 §6 requires the typographically preferred (rightmost) break.
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Segment "xx su\u{AD}per\u{AD}man", max_width=90:
+        //   "xx"=20px occupies line;
+        //   "superman"=80px needs wrap (20+10+80=110 > 90);
+        //   avail = 90−20−10(gap) = 60;
+        //   SHY positions in "superman": [2]="su", [5]="super";
+        //   rightmost: "super"=50, 50+10(hyphen)=60 ≤ 60 → break → "super-" / "man".
+        let seg = InlineSegment {
+            text: "xx su\u{00AD}per\u{00AD}man".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 90.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
+        let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(line1_text.contains("super-"), "rightmost SHY break → 'super-', got: {line1_text}");
+        assert!(!line1_text.contains("su-"), "must NOT use leftmost SHY: {line1_text}");
+        assert_eq!(lines[1].len(), 1);
+        assert_eq!(lines[1][0].text, "man");
+    }
+
+    #[test]
+    fn shy_auto_mode_respects_shy_positions() {
+        // hyphens: auto with NullHyphenationProvider (no dict) falls back to SHY positions,
+        // identical to manual mode behaviour for words with explicit U+00AD.
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Same geometry as shy_rightmost_fitting_break_selected but with Hyphens::Auto.
+        let seg = InlineSegment {
+            text: "xx su\u{00AD}per\u{00AD}man".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 90.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Auto, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "auto mode: expected 2 lines, got {}", lines.len());
+        let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(
+            line1_text.contains("super-"),
+            "auto mode must honour SHY positions: {line1_text}",
+        );
+        assert_eq!(lines[1][0].text, "man");
+    }
+
+    #[test]
+    fn shy_manual_no_hyphen_when_no_shy_in_word() {
+        // hyphens: manual without U+00AD — word must wrap to the next line as-is,
+        // without any hyphen appended (no auto-hyphenation in manual mode).
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // "aa longword": "aa"=20px, "longword"=80px; max_width=50;
+        //   20+10+80=110 > 50 → needs_wrap; no SHY → try_hyp_break returns None
+        //   → normal wrap: "longword" moves to next line intact, no hyphen.
+        let seg = InlineSegment {
+            text: "aa longword".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 50.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "expected 2 lines");
+        assert_eq!(lines[0].len(), 1);
+        assert_eq!(lines[0][0].text, "aa");
+        assert_eq!(lines[1].len(), 1);
+        let word = &lines[1][0].text;
+        assert_eq!(word, "longword", "no hyphen without SHY: {word}");
+        assert!(!word.contains('-'), "manual mode must not add hyphens without SHY: {word}");
     }
 
     // ── char_break_offset ────────────────────────────────────────────────────
@@ -7972,6 +8440,104 @@ mod tests {
         assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
     }
 
+    // ── CSS Shapes L1 — shape-outside polygon() ───────────────────────────────
+
+    #[test]
+    fn parse_shape_polygon_valid() {
+        // Triangle with px values.
+        let pts = super::parse_shape_polygon_px("polygon(0px 0px, 100px 0px, 50px 100px)");
+        assert_eq!(pts, Some(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 100.0)]));
+        // Bare numbers (no "px" suffix).
+        let pts2 = super::parse_shape_polygon_px("polygon(0 0, 10 0, 10 10, 0 10)");
+        assert_eq!(pts2, Some(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]));
+        // With fill-rule prefix.
+        let pts3 = super::parse_shape_polygon_px("polygon(nonzero, 0 0, 50 0, 50 50)");
+        assert_eq!(pts3, Some(vec![(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)]));
+    }
+
+    #[test]
+    fn parse_shape_polygon_invalid() {
+        // Fewer than 3 points.
+        assert_eq!(super::parse_shape_polygon_px("polygon(0 0, 10 10)"), None);
+        // Not a polygon.
+        assert_eq!(super::parse_shape_polygon_px("circle(50px)"), None);
+        assert_eq!(super::parse_shape_polygon_px("none"), None);
+    }
+
+    #[test]
+    fn polygon_edge_at_y_triangle() {
+        // Right-triangle: (0,0)→(100,0)→(0,100)→(0,0).
+        // At y=50 the right edge is the hypotenuse at x = 100 - 50 = 50.
+        let pts = vec![(0.0_f32, 0.0), (100.0, 0.0), (0.0, 100.0)];
+        let right = super::polygon_right_edge_at_y(&pts, 50.0);
+        assert!(right.is_some());
+        assert!((right.unwrap() - 50.0).abs() < 0.01, "right edge at y=50 should be 50, got {:?}", right);
+        // Left edge at y=50: leftmost intersection = 0.0 (vertical left side).
+        let left = super::polygon_left_edge_at_y(&pts, 50.0);
+        assert!(left.is_some());
+        assert!((left.unwrap() - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_polygon_left_float() {
+        // Triangle left float: (0,0)→(100,0)→(0,100)→(0,0) in content-area coords.
+        // At y=50: rightmost edge = 50. Should narrow left boundary to 50.
+        let mut fc = super::FloatContext::new();
+        fc.shape_polygons.push(super::ShapePolygon {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            points: vec![(0.0, 0.0), (100.0, 0.0), (0.0, 100.0)],
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+        // Outside float range: falls back to default.
+        assert!((fc.left_edge_at(110.0, 0.0) - 0.0).abs() < 0.01);
+    }
+
+    // ── CSS Shapes L1 — shape-outside ellipse() ───────────────────────────────
+
+    #[test]
+    fn parse_shape_ellipse_valid() {
+        let r = super::parse_shape_ellipse_px("ellipse(50px 80px at 100px 150px)");
+        assert_eq!(r, Some((50.0, 80.0, 100.0, 150.0)));
+        // Bare numbers.
+        let r2 = super::parse_shape_ellipse_px("ellipse(30 40 at 60 70)");
+        assert_eq!(r2, Some((30.0, 40.0, 60.0, 70.0)));
+    }
+
+    #[test]
+    fn parse_shape_ellipse_invalid() {
+        // No "at" keyword.
+        assert_eq!(super::parse_shape_ellipse_px("ellipse(50px 80px)"), None);
+        // Zero radius.
+        assert_eq!(super::parse_shape_ellipse_px("ellipse(0px 40px at 50px 50px)"), None);
+        // Not an ellipse.
+        assert_eq!(super::parse_shape_ellipse_px("circle(50px)"), None);
+    }
+
+    #[test]
+    fn float_context_ellipse_left_float() {
+        // Ellipse: rx=50, ry=50, center (100,50). At y=50 (center): right edge = 150.
+        // At y=0 (top): norm=(0-50)/50=-1.0, hw=0, right edge=100.
+        let mut fc = super::FloatContext::new();
+        fc.shape_ellipses.push(super::ShapeEllipse {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            cx: 100.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
+        assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_ellipse_right_float() {
+        // Ellipse: rx=50, ry=50, center (200,50). Right float.
+        // At y=50 (center): left edge = 200 - 50 = 150.
+        let mut fc = super::FloatContext::new();
+        fc.shape_ellipses.push(super::ShapeEllipse {
+            top_y: 0.0, bottom_y: 100.0, is_left: false,
+            cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        });
+        assert!((fc.right_edge_at(50.0, 400.0) - 150.0).abs() < 0.01);
+    }
+
     #[test]
     fn content_visibility_hidden_produces_empty_children() {
         let html = r#"<div class="hidden"><span>should be skipped</span></div>"#;
@@ -8000,114 +8566,94 @@ mod tests {
     }
 
     // ── Flex align-content (multi-line flex wrap) ───────────────────────────
+    //
+    // Setup: 200px wide × 300px tall flex container with 3 × 90px wide items.
+    // Lines: [a, b] on line 1, [c] on line 2. Each line cross-size = 50px.
+    // used_cross = 100px; free_cross = 200px.
 
     #[test]
     fn flex_align_content_flex_start() {
-        // Multi-line flex with align-content: flex-start — lines at top
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: flex-start;
-            }
-        "#;
+        // flex-start: lines packed at cross-start → line1 y=0, line2 y=50.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:flex-start} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
-        // Basic sanity: align-content parses without error
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 50.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_flex_end() {
-        // Multi-line flex with align-content: flex-end — lines at bottom
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: flex-end;
-            }
-        "#;
+        // flex-end: offset=200 → line1 y=200, line2 y=250.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:flex-end} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 200.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 250.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_center() {
-        // Multi-line flex with align-content: center — lines centered vertically
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: center;
-            }
-        "#;
+        // center: offset=100 → line1 y=100, line2 y=150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:center} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 100.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_space_between() {
-        // Multi-line flex with align-content: space-between — max gap between lines
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: space-between;
-            }
-        "#;
+        // space-between (n=2): line1 offset=0, line2 offset=200 → y=0 and y=250.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-between} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 250.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_space_around() {
-        // Multi-line flex with align-content: space-around — equal space around each line
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: space-around;
-            }
-        "#;
+        // space-around (n=2): per=100; line1 offset=50, line2 offset=150 → y=50 and y=200.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-around} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 50.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 200.0, "c.y {}", c.rect.y);
     }
 
     #[test]
     fn flex_align_content_space_evenly() {
-        // Multi-line flex with align-content: space-evenly — equal space between all lines
-        let html = r#"<div id="flex"></div>"#;
-        let css = r#"
-            #flex {
-                display: flex;
-                flex-wrap: wrap;
-                width: 200px;
-                height: 300px;
-                align-content: space-evenly;
-            }
-        "#;
+        // space-evenly (n=2): per=200/3≈66.67; line1 offset=per, line2 offset=2*per.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-evenly} #a,#b,#c{width:90px;height:50px}";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        let per = 200.0_f32 / 3.0;
+        assert!((a.rect.y - per).abs() < 0.5, "a.y expected ≈{per:.2}, got {}", a.rect.y);
+        assert!((c.rect.y - (50.0 + 2.0 * per)).abs() < 0.5, "c.y expected ≈{:.2}, got {}", 50.0 + 2.0 * per, c.rect.y);
     }
 
     #[test]
@@ -8474,6 +9020,126 @@ mod tests {
         assert_eq!(count, 1, "empty track list should return 1");
     }
 
+    // CSS Grid auto-fill/auto-fit Phase 2 layout tests (G-1)
+
+    /// Collect (x, y, width) of all Block children of the first grid container found.
+    fn collect_grid_item_rects(root: &super::LayoutBox) -> Vec<(f32, f32, f32)> {
+        fn walk(b: &super::LayoutBox, out: &mut Vec<(f32, f32, f32)>, in_grid: bool) {
+            if in_grid && matches!(b.kind, super::BoxKind::Block) {
+                out.push((b.rect.x, b.rect.y, b.rect.width));
+            }
+            let next_in_grid = in_grid || matches!(b.kind, super::BoxKind::Block);
+            for c in &b.children {
+                walk(c, out, next_in_grid && !in_grid);
+            }
+        }
+        // Find the first grid container and collect its direct children.
+        fn find_grid(b: &super::LayoutBox) -> Option<Vec<(f32, f32, f32)>> {
+            if b.style.display == super::Display::Grid {
+                let items: Vec<_> = b.children.iter()
+                    .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+                    .map(|c| (c.rect.x, c.rect.y, c.rect.width))
+                    .collect();
+                return Some(items);
+            }
+            for c in &b.children {
+                if let Some(v) = find_grid(c) {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        let _ = walk; // suppress unused warning
+        find_grid(root).unwrap_or_default()
+    }
+
+    #[test]
+    fn grid_auto_fill_expands_columns_at_layout() {
+        // repeat(auto-fill, 100px) in a 500px container → 5 columns; items flow into columns
+        let html = "<div class='grid'>\
+                     <div>A</div><div>B</div><div>C</div><div>D</div><div>E</div>\
+                    </div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fill, 100px); \
+                           width: 500px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(500.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(items.len() >= 2, "should have at least 2 items placed");
+        // First item should be ~100px wide (one column)
+        let (_, _, w0) = items[0];
+        assert!(
+            (w0 - 100.0).abs() < 2.0,
+            "first item width should be ~100px (auto-fill expanded), got {}",
+            w0
+        );
+        // Second item should be in the second column (x ≈ 100)
+        let (x1, _, _) = items[1];
+        assert!(
+            (90.0..=110.0).contains(&x1),
+            "second item x should be ~100px (column 2), got {}",
+            x1
+        );
+    }
+
+    #[test]
+    fn grid_auto_fill_minimum_one_column() {
+        // Even when container is very small, at least 1 track must be produced (no crash)
+        let html = "<div class='grid'><div>X</div></div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fill, 200px); \
+                           width: 50px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(50.0, 300.0));
+        // Should not panic; grid should have content
+        assert!(!root.children.is_empty(), "grid should have content");
+        let items = collect_grid_item_rects(&root);
+        assert!(!items.is_empty(), "should have at least one item placed");
+    }
+
+    #[test]
+    fn grid_auto_fit_expands_columns_at_layout() {
+        // repeat(auto-fit, 100px) in a 300px container → 3 columns
+        let html = "<div class='grid'>\
+                     <div>P</div><div>Q</div><div>R</div>\
+                    </div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fit, 100px); \
+                           width: 300px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(items.len() >= 2, "should have at least 2 items placed");
+        let (_, _, w0) = items[0];
+        assert!(
+            (w0 - 100.0).abs() < 2.0,
+            "first item width ~100px for auto-fit, got {}",
+            w0
+        );
+        let (x1, _, _) = items[1];
+        assert!(
+            (90.0..=110.0).contains(&x1),
+            "second item x ~100px (column 2), got {}",
+            x1
+        );
+    }
+
+    #[test]
+    fn grid_auto_fill_with_minmax_tracks() {
+        // repeat(auto-fill, minmax(80px, 1fr)) in 400px → multiple tracks, no panic
+        let html = "<div class='grid'>\
+                     <div>M</div><div>N</div>\
+                    </div>";
+        let css = ".grid { display: grid; \
+                           grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); \
+                           width: 400px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(!items.is_empty(), "minmax auto-fill items should be laid out");
+    }
+
     // CSS Grid dense packing tests (B-4)
     #[test]
     fn grid_dense_fills_gaps() {
@@ -8578,6 +9244,81 @@ mod tests {
 
         // Verify layout was created without panics
         assert!(!root.children.is_empty(), "grid should be laid out");
+    }
+
+    // --- text-align-last layout ---
+
+    /// Helper: create a minimal InlineFrag at (x, width) for alignment tests.
+    fn make_frag(x: f32, width: f32) -> super::InlineFrag {
+        use crate::style::ComputedStyle;
+        use lumen_dom::NodeId;
+        super::InlineFrag {
+            x,
+            width,
+            y_offset: 0.0,
+            text: String::new(),
+            style: ComputedStyle::root(),
+            padding_left: 0.0,
+            padding_right: 0.0,
+            is_element_box: false,
+            img_src: None,
+            is_first_line: false,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        }
+    }
+
+    #[test]
+    fn text_align_last_center_shifts_last_line() {
+        // Non-last line: left (offset=0). Last line: center → (300-80)/2=110.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::Center, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 110.0).abs() < 0.5, "last line centered, got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_right_shifts_last_line() {
+        // Non-last line: left (offset=0). Last line: right → 300-80=220.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::Right, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line right, got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_auto_inherits_text_align() {
+        // Auto: last line uses same alignment as text_align (Right here).
+        // Both lines → right offset = 300-100=200 for first, 300-80=220 for last.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Right, TextAlignLast::Auto, Direction::Ltr);
+        assert!((lines[0][0].x - 200.0).abs() < 0.5, "non-last right-aligned, got {}", lines[0][0].x);
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line right (auto), got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_end_resolves_to_right_ltr() {
+        // End in LTR = Right → last line offset = 300-80=220; non-last Left = 0.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::End, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line end→right, got {}", lines[1][0].x);
     }
 
 }

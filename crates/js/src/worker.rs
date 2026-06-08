@@ -10,6 +10,7 @@
 //! `QuickJsRuntime::pump_workers()`, which delivers messages to the matching
 //! `Worker` instance in JS via `_lumen_deliver_worker_messages(msgs)`.
 
+use crate::offscreen_canvas::install_offscreen_canvas_bindings;
 use rquickjs::{Context, Function, Runtime};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -184,6 +185,12 @@ fn run_worker_thread(
     if let Err(e) = ctx.with(|ctx| install_worker_globals(&ctx, id, Arc::clone(&reply))) {
         eprintln!("[worker-{id}] globals install failed: {e:?}");
         return;
+    }
+
+    // OffscreenCanvas is available in dedicated workers (HTML LS §4.12.14).
+    // Each worker thread gets its own thread-local canvas registry.
+    if let Err(e) = ctx.with(|ctx| install_offscreen_canvas_bindings(&ctx)) {
+        eprintln!("[worker-{id}] OffscreenCanvas install failed: {e:?}");
     }
 
     if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(script.as_str())) {

@@ -144,6 +144,22 @@ impl RenderBackend for WgpuBackend {
         self.renderer.layer_cache_mut().on_memory_pressure(level);
     }
 
+    fn on_atlas_memory_pressure(&mut self, level: MemoryPressureLevel) {
+        self.renderer.atlas_on_memory_pressure(level);
+    }
+
+    fn promote_layer(&mut self, node_id: u32, width: u32, height: u32) {
+        self.renderer.promote_layer(node_id, width, height);
+    }
+
+    fn is_layer_promoted(&self, node_id: u32) -> bool {
+        self.renderer.is_layer_promoted(node_id)
+    }
+
+    fn demote_layer(&mut self, node_id: u32) {
+        self.renderer.demote_layer(node_id);
+    }
+
     // screenshot_rgba() → None (windowed; default impl)
 }
 

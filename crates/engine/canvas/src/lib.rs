@@ -91,6 +91,19 @@ impl Context2D {
         data
     }
 
+    /// Create a context pre-filled with the given RGBA8 pixel buffer.
+    ///
+    /// `pixels` must be exactly `width * height * 4` bytes (RGBA8, row-major).
+    /// If the length mismatches, the buffer is zero-filled instead.
+    pub fn from_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        let expected = (width * height * 4) as usize;
+        let mut ctx = Self::new(width, height);
+        if pixels.len() == expected {
+            ctx.pixels = pixels;
+        }
+        ctx
+    }
+
     pub fn width(&self) -> u32 { self.width }
     pub fn height(&self) -> u32 { self.height }
 

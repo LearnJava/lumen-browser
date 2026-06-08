@@ -2250,6 +2250,14 @@ pub struct ComputedStyle {
     /// CSS Grid Layout L1 §7.2 — `grid-template-rows`. Non-inherited.
     /// Default `[]` (no explicit tracks). Parsed track-list.
     pub grid_template_rows: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §7.2 — auto-fill/auto-fit repeat metadata for columns.
+    /// `Some` when `grid-template-columns` contains `repeat(auto-fill|auto-fit, ...)`.
+    /// Resolved at layout time via `resolve_auto_fill_fit_count`. Non-inherited. Default `None`.
+    pub grid_template_col_auto_repeat: Option<GridRepeat>,
+    /// CSS Grid Layout L1 §7.2 — auto-fill/auto-fit repeat metadata for rows.
+    /// `Some` when `grid-template-rows` contains `repeat(auto-fill|auto-fit, ...)`.
+    /// Resolved at layout time via `resolve_auto_fill_fit_count`. Non-inherited. Default `None`.
+    pub grid_template_row_auto_repeat: Option<GridRepeat>,
     /// CSS Grid Layout L1 §7.3 — `grid-template-areas`. Non-inherited.
     /// Default `[]` (none). Outer vec = rows (top-to-bottom), inner vec = columns
     /// (left-to-right). Each string is a cell name; `"."` means unnamed cell.
@@ -2538,6 +2546,8 @@ impl ListStyleType {
             "lower-alpha" | "lower-latin" => Some(Self::LowerAlpha),
             "upper-alpha" | "upper-latin" => Some(Self::UpperAlpha),
             "lower-greek" => Some(Self::LowerGreek),
+            // CSS: list-style-type (custom counter-style) — P4 adds `ListStyleType::Custom(name)`
+            // and returns `Some(Self::Custom(s.to_string()))` here for unrecognised idents.
             _ => None,
         }
     }
@@ -3702,6 +3712,32 @@ impl GridTrackSize {
     }
 }
 
+/// Extracts auto-fill/auto-fit repeat metadata from a track-list string.
+/// Returns `Some(GridRepeat)` when the string is exactly `repeat(auto-fill|auto-fit, ...)`.
+/// Used in Phase 2 of CSS Grid auto-repeat expansion (CSS Grid L1 §7.2.3.4).
+pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
+    let trimmed = s.trim();
+    // Must start with "repeat(" (case-insensitive) and end with ")"
+    let lc = trimmed.to_ascii_lowercase();
+    let inner = lc.strip_prefix("repeat(")?.strip_suffix(')')?;
+    let (count_s, rest) = split_paren_aware_comma(inner)?;
+    let count = match count_s.trim() {
+        "auto-fill" => RepeatCount::AutoFill,
+        "auto-fit" => RepeatCount::AutoFit,
+        _ => return None,
+    };
+    // Re-parse from original string to preserve case in track sizes
+    let orig_inner = trimmed
+        .get("repeat(".len()..trimmed.len() - 1)?;
+    let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
+    let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
+    if tracks.is_empty() {
+        return None;
+    }
+    let _ = rest; // suppress unused warning from lc version
+    Some(GridRepeat { count, tracks })
+}
+
 /// Split a comma inside a track-list token that may contain nested parens.
 fn split_paren_aware_comma(s: &str) -> Option<(&str, &str)> {
     let mut depth = 0i32;
@@ -4364,6 +4400,8 @@ impl ComputedStyle {
             order: 0,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            grid_template_col_auto_repeat: None,
+            grid_template_row_auto_repeat: None,
             grid_template_areas: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
             grid_auto_columns: GridTrackSize::Auto,
@@ -4656,6 +4694,8 @@ pub fn compute_style(
         // CSS Grid Layout L1 — grid properties не наследуются.
         grid_template_columns: Vec::new(),
         grid_template_rows: Vec::new(),
+        grid_template_col_auto_repeat: None,
+        grid_template_row_auto_repeat: None,
         grid_template_areas: Vec::new(),
         grid_auto_flow: GridAutoFlow::Row,
         grid_auto_columns: GridTrackSize::Auto,
@@ -4781,9 +4821,11 @@ pub fn compute_style(
         style.vertical_align = va;
     }
     apply_ua_hr_style(doc, node, &mut style);
-    // UA stylesheet: form controls — display, intrinsic dimensions, border.
-    // HTML5 §15.5. Author CSS поверх перекроет.
-    apply_ua_form_controls(doc, node, &mut style);
+    // UA stylesheet: form controls — display, intrinsic dimensions, border,
+    // background, and foreground color. HTML5 §15.5. Author CSS поверх перекроет.
+    // CSS: color-scheme — P4 wires ComputedStyle.color_scheme here for full
+    // system-color keyword support; for now dark_mode drives UA theming directly.
+    apply_ua_form_controls(doc, node, &mut style, dark_mode);
     // UA stylesheet: <dialog> without `open` → display:none. HTML5 §15.3.9.
     apply_ua_dialog_display(doc, node, &mut style);
 
@@ -5875,12 +5917,10 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // реализован (p1-fullscreen-api); sentinel — `data-lumen-fullscreen`.
         // CSS: :fullscreen — P4: check doc.get_attr(node.id,"data-lumen-fullscreen").is_some()
         PseudoClass::Fullscreen => doc.get(node).get_attr("data-lumen-fullscreen").is_some(),
-        // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` после
-        // `dialog.showModal()` (но не `dialog.show()` non-modal) или
-        // элемент в fullscreen top-layer. Runtime-only: атрибут `open`
-        // не разделяет modal vs non-modal dialog. Phase 0 без dialog
-        // runtime — всегда `false`.
-        PseudoClass::Modal => false,
+        // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` opened via
+        // `showModal()`. JS sets `data-lumen-modal` sentinel; `show()` / author
+        // attribute do not set it, so non-modal dialogs stay unmatched.
+        PseudoClass::Modal => doc.get(node).get_attr("data-lumen-modal").is_some(),
         // HTML LS §6.12.2 `:popover-open` — popover в открытом состоянии
         // после `element.showPopover()` / клика по `popovertarget`.
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
@@ -7707,6 +7747,39 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
 
 /// UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»).
 ///
+/// Returns UA colors `(border, background, foreground)` for form controls.
+///
+/// Approximates CSS Color 4 system-color keywords (`ButtonFace`, `Field`,
+/// `ButtonText`, `FieldText`) without a full system-color implementation.
+/// Used by `apply_ua_form_controls` to theme controls for light/dark mode.
+///
+/// - Light: border #767676 / bg white (inputs) or #efefef (button) / fg black
+/// - Dark:  border #616161 / bg #1e1e1e (inputs) or #3a3a3c (button) / fg white
+///
+/// `// CSS: color-scheme` — P4 wires this to `ComputedStyle.color_scheme`
+/// for full system-color keyword support.
+pub fn ua_form_element_colors(tag: &str, dark_mode: bool) -> (CssColor, CssColor, Color) {
+    if dark_mode {
+        let border = CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 });
+        let fg = Color { r: 255, g: 255, b: 255, a: 255 };
+        let bg = if tag == "button" {
+            CssColor::Rgba(Color { r: 58, g: 58, b: 60, a: 255 })
+        } else {
+            CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 })
+        };
+        (border, bg, fg)
+    } else {
+        let border = CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 });
+        let fg = Color { r: 0, g: 0, b: 0, a: 255 };
+        let bg = if tag == "button" {
+            CssColor::Rgba(Color { r: 239, g: 239, b: 239, a: 255 })
+        } else {
+            CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 })
+        };
+        (border, bg, fg)
+    }
+}
+
 /// Применяется ДО CSS-каскада — любой author-rule перекрывает.
 /// - `<input type=hidden>` → `display: none`
 /// - `<input type=checkbox|radio>` → 13×13 px
@@ -7714,10 +7787,13 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
 /// - `<button>` → height 21 px
 /// - `<textarea>` → 200×48 px
 /// - `<select>` → height 21 px
-/// - Все кроме hidden → border: 1px solid #767676
-fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+/// - `<progress>` → 300×16 px
+/// - `<meter>` → 300×16 px
+/// - Все кроме hidden → border, background, color по `ua_form_element_colors`
+fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyle, dark_mode: bool) {
     let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
-    match name.local.as_str() {
+    let tag = name.local.as_str();
+    match tag {
         "input" => {
             let ty = doc
                 .get(node)
@@ -7749,9 +7825,13 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
         "select" => {
             style.height = Some(Length::Px(21.0));
         }
+        "progress" | "meter" => {
+            style.width = Some(Length::Px(300.0));
+            style.height = Some(Length::Px(16.0));
+        }
         _ => return,
     }
-    let gray = CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 });
+    let (border, bg, fg) = ua_form_element_colors(tag, dark_mode);
     style.border_top_width = 1.0;
     style.border_right_width = 1.0;
     style.border_bottom_width = 1.0;
@@ -7760,10 +7840,12 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
     style.border_right_style = BorderStyle::Solid;
     style.border_bottom_style = BorderStyle::Solid;
     style.border_left_style = BorderStyle::Solid;
-    style.border_top_color = gray;
-    style.border_right_color = gray;
-    style.border_bottom_color = gray;
-    style.border_left_color = gray;
+    style.border_top_color = border;
+    style.border_right_color = border;
+    style.border_bottom_color = border;
+    style.border_left_color = border;
+    style.background_color = Some(bg);
+    style.color = fg;
 }
 
 /// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
@@ -9594,15 +9676,21 @@ fn apply_declaration(
         "grid-template-columns" => {
             if !val.trim().eq_ignore_ascii_case("none") {
                 style.grid_template_columns = GridTrackSize::parse_track_list(val, is_quirks);
+                // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
+                style.grid_template_col_auto_repeat = parse_auto_repeat(val.trim());
             } else {
                 style.grid_template_columns = Vec::new();
+                style.grid_template_col_auto_repeat = None;
             }
         }
         "grid-template-rows" => {
             if !val.trim().eq_ignore_ascii_case("none") {
                 style.grid_template_rows = GridTrackSize::parse_track_list(val, is_quirks);
+                // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
+                style.grid_template_row_auto_repeat = parse_auto_repeat(val.trim());
             } else {
                 style.grid_template_rows = Vec::new();
+                style.grid_template_row_auto_repeat = None;
             }
         }
         "grid-template-areas" => {
@@ -9634,13 +9722,18 @@ fn apply_declaration(
             if trimmed.eq_ignore_ascii_case("none") {
                 style.grid_template_columns = Vec::new();
                 style.grid_template_rows = Vec::new();
+                style.grid_template_col_auto_repeat = None;
+                style.grid_template_row_auto_repeat = None;
             } else if let Some(pos) = find_slash(trimmed) {
                 let rows_s = trimmed[..pos].trim();
                 let cols_s = trimmed[pos + 1..].trim();
                 style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
                 style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+                style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
             } else {
                 style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+                style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
             }
         }
         "grid" => {
@@ -9652,9 +9745,12 @@ fn apply_declaration(
                     let rows_s = trimmed[..pos].trim();
                     let cols_s = trimmed[pos + 1..].trim();
                     style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                    style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
                     style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+                    style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
                 } else {
                     style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+                    style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
                 }
             }
         }
@@ -10437,6 +10533,9 @@ fn apply_declaration(
                     BackgroundImage::Url(s.to_string())
                 } else if let Some((a, b, t)) = parse_cross_fade(s) {
                     BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }
+                } else if let Some(paint_name) = parse_paint_function(s) {
+                    // CSS Paint API (Houdini) — `paint(name)` invokes registered worklet.
+                    BackgroundImage::Paint(paint_name)
                 } else if let Some(url) = parse_url_value(s) {
                     BackgroundImage::Url(url)
                 } else if is_gradient_function(s) {
@@ -13154,6 +13253,8 @@ fn apply_css_wide_keyword(
                 // inherit: copy from parent (non-inherited → initial)
                 style.grid_template_columns = init.grid_template_columns.clone();
                 style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_template_col_auto_repeat = init.grid_template_col_auto_repeat.clone();
+                style.grid_template_row_auto_repeat = init.grid_template_row_auto_repeat.clone();
                 style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
@@ -13165,6 +13266,8 @@ fn apply_css_wide_keyword(
             } else {
                 style.grid_template_columns = init.grid_template_columns.clone();
                 style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_template_col_auto_repeat = init.grid_template_col_auto_repeat.clone();
+                style.grid_template_row_auto_repeat = init.grid_template_row_auto_repeat.clone();
                 style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
@@ -22592,6 +22695,48 @@ mod tests {
         assert_eq!(style.height, Some(Length::Px(40.0)));
     }
 
+    // CSS color-scheme UA form element colors — F-4
+
+    #[test]
+    fn ua_form_colors_light_mode_input() {
+        // Light mode: input gets white background and dark border.
+        let (border, bg, fg) = ua_form_element_colors("input", false);
+        assert_eq!(border, CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 }));
+        assert_eq!(bg, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }));
+        assert_eq!(fg, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn ua_form_colors_dark_mode_input() {
+        // Dark mode: input gets dark background, lighter border, white text.
+        let (border, bg, fg) = ua_form_element_colors("input", true);
+        assert_eq!(border, CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 }));
+        assert_eq!(bg, CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 }));
+        assert_eq!(fg, Color { r: 255, g: 255, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn ua_form_colors_dark_mode_button_distinct_bg() {
+        // Dark mode: button has a lighter background than text inputs.
+        let (_, input_bg, _) = ua_form_element_colors("input", true);
+        let (_, btn_bg, _) = ua_form_element_colors("button", true);
+        assert_ne!(input_bg, btn_bg, "button bg should differ from input bg in dark mode");
+        assert_eq!(btn_bg, CssColor::Rgba(Color { r: 58, g: 58, b: 60, a: 255 }));
+    }
+
+    #[test]
+    fn ua_form_colors_applied_to_computed_style_dark() {
+        // When dark_mode=true, compute_style applies dark UA colors to <input>.
+        let doc = lumen_html_parser::parse("<input type=\"text\">");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), true);
+        assert_eq!(style.background_color, Some(CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 })));
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 });
+        assert_eq!(style.border_top_color, CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 }));
+    }
+
     // CSS Shapes L1 — shape-outside
     #[test]
     fn shape_outside_none_initial() {
@@ -23549,6 +23694,32 @@ mod tests {
     }
 
     #[test]
+    fn modal_pseudo_matches_data_lumen_modal_attr() {
+        // :modal matches only when showModal() sets `data-lumen-modal` sentinel.
+        let html = r#"<dialog id="d" data-lumen-modal="" open>content</dialog>"#;
+        let css = r#":modal { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.color.r, 255, ":modal rule should apply when sentinel attr present");
+    }
+
+    #[test]
+    fn modal_pseudo_does_not_match_show_dialog() {
+        // Non-modal dialog (show() — no data-lumen-modal attr) must NOT match :modal.
+        let html = r#"<dialog id="d" open>content</dialog>"#;
+        let css = r#":modal { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_ne!(style.color.r, 255, ":modal rule must NOT apply without sentinel attr");
+    }
+
+    #[test]
     fn parse_paint_function_basic() {
         // CSS Paint API (Houdini) — parse paint(name) function.
         assert_eq!(parse_paint_function("paint(my-paint)"), Some("my-paint".to_string()));
@@ -23571,6 +23742,22 @@ mod tests {
         assert_eq!(parse_paint_function("gradient(test)"), None);
         assert_eq!(parse_paint_function("paint(test"), None);
         assert_eq!(parse_paint_function("paint(test))"), None);
+    }
+
+    #[test]
+    fn background_image_paint_function_parsed_to_paint_variant() {
+        // CSS Paint API (Houdini) — `background-image: paint(name)` must produce BackgroundImage::Paint.
+        let s = cascade_at("<div></div>", "div { background-image: paint(my-worklet); }", &[0]);
+        assert_eq!(s.background_layers.len(), 1);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("my-worklet".to_string()));
+    }
+
+    #[test]
+    fn background_image_paint_function_with_quotes_parsed() {
+        // paint("name") with double-quotes must strip quotes and produce Paint("name").
+        let s = cascade_at("<div></div>", r#"div { background-image: paint("checker"); }"#, &[0]);
+        assert_eq!(s.background_layers.len(), 1);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("checker".to_string()));
     }
 
     #[test]

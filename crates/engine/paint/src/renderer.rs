@@ -3441,6 +3441,13 @@ impl Renderer {
         }
     }
 
+    /// Forwards a memory-pressure signal to the glyph atlas so it can evict
+    /// cached entries (ADR-008 §10H).  Medium: evict ~50% LRU glyphs.
+    /// High: clear entirely.  Wire into the shell's `MemoryPressureSource` poll loop.
+    pub fn atlas_on_memory_pressure(&mut self, level: lumen_core::ext::MemoryPressureLevel) {
+        self.atlas.on_memory_pressure(level);
+    }
+
     /// Получить мutable ссылку для прямого управления кэшем (advanced usage).
     pub fn layer_cache_mut(&mut self) -> &mut crate::layer_cache::LayerCache {
         &mut self.layer_cache
@@ -3470,6 +3477,30 @@ impl Renderer {
             height: layer.height,
         };
         self.texture_pool.release(pooled);
+    }
+
+    /// Promote a node to its own GPU layer for `will-change: transform/opacity/filter`.
+    ///
+    /// Creates a `LayerCache` entry for the node so that subsequent animation ticks
+    /// can update only the layer's transform matrix without triggering a full relayout.
+    /// // CSS: will-change — P4 wires ComputedStyle.will_change to call this after relayout.
+    pub fn promote_layer(
+        &mut self,
+        node_id: u32,
+        width: u32,
+        height: u32,
+    ) -> crate::layer_cache::LayerKey {
+        self.layer_cache.promote_layer(node_id, width, height)
+    }
+
+    /// Returns `true` if the given node has a promoted GPU layer.
+    pub fn is_layer_promoted(&self, node_id: u32) -> bool {
+        self.layer_cache.is_layer_promoted(node_id)
+    }
+
+    /// Remove the promoted GPU layer for a node, freeing its cache entry.
+    pub fn demote_layer(&mut self, node_id: u32) {
+        self.layer_cache.demote_layer(node_id);
     }
 
     /// Очистить весь layer cache (полная эвикция) и очистить texture pool.
@@ -6342,6 +6373,49 @@ impl Renderer {
         scroll_y: f32,
     ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
         crate::cpu_raster::rasterize_cpu(width, height, commands, scroll_x, scroll_y)
+    }
+
+    /// Render a single `tile_size × tile_size` tile at tile coordinates
+    /// `(tile_x, tile_y)` using the CPU rasterizer.
+    ///
+    /// The display list is culled to only commands that intersect the tile
+    /// region before rasterization. Scroll offsets are applied so that the
+    /// rendered pixels match what the user would see at that scroll position.
+    ///
+    /// Tile coordinates are in tile space: CSS pixel `p` is in tile
+    /// `(p / tile_size).floor()`. The returned `Image` has dimensions
+    /// `tile_size × tile_size` (RGBA8).
+    ///
+    /// # Errors
+    /// Propagates errors from the CPU rasterizer (e.g., invalid display commands).
+    // BUG-066: guard was missing; render_tile uses cpu_raster which requires cpu-render.
+    #[cfg(feature = "cpu-render")]
+    pub fn render_tile(
+        content: &[crate::DisplayCommand],
+        overlay: &[crate::DisplayCommand],
+        scroll_x: f32,
+        scroll_y: f32,
+        tile_x: i32,
+        tile_y: i32,
+        tile_size: u32,
+    ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
+        let ts = tile_size as f32;
+
+        // Cull both lanes to commands that touch this tile.
+        let culled_content = crate::display_list::cull_display_list(content, tile_x, tile_y, ts);
+        let culled_overlay = crate::display_list::cull_display_list(overlay, tile_x, tile_y, ts);
+
+        // Merge both lanes (overlay on top).
+        let mut all = culled_content;
+        all.extend(culled_overlay);
+
+        // Translate so the tile origin is at (0,0) in the rasterised image.
+        // The scroll offset shifts content upward (subtract scroll) so that
+        // what is visible at scroll_y appears at y=0.
+        let offset_x = scroll_x + tile_x as f32 * ts;
+        let offset_y = scroll_y + tile_y as f32 * ts;
+
+        crate::cpu_raster::rasterize_cpu(tile_size, tile_size, &all, offset_x, offset_y)
     }
 
     // Note: render_to_image for GPU path has different signature:

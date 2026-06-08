@@ -286,6 +286,29 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
   };
 
   window.Notification = Notification;
+
+  // ── ServiceWorkerRegistration integration (W3C Notifications API §5) ──────
+
+  // showNotification(title, options) → Promise<undefined>
+  // Creates a Notification through the SW registration, delegating to the
+  // Notification constructor so it goes through the same permission check and
+  // OS queue. Resolves immediately (Phase 0 — no delivery confirmation).
+  //
+  // getNotifications(filter?) → Promise<Notification[]>
+  // Phase 0: returns an empty array. Persistent notification registry and
+  // tag-based filtering are deferred to a future phase.
+  if (typeof ServiceWorkerRegistration !== 'undefined') {
+    ServiceWorkerRegistration.prototype.showNotification = function(title, options) {
+      return new Promise(function(resolve) {
+        new Notification(title, options);
+        resolve(undefined);
+      });
+    };
+
+    ServiceWorkerRegistration.prototype.getNotifications = function(_filter) {
+      return new Promise(function(resolve) { resolve([]); });
+    };
+  }
 })();"#;
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -712,5 +735,139 @@ n.data
             })
             .unwrap();
         assert_eq!(val, 42);
+    }
+
+    // ── ServiceWorkerRegistration tests ───────────────────────────────────────
+
+    fn setup_sw_registration(ctx: &Context) {
+        ctx.with(|c| {
+            c.eval::<(), _>("globalThis.ServiceWorkerRegistration = function() {};")
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn sw_show_notification_returns_promise() {
+        let (_rt, ctx) = make_ctx();
+        setup_dom_stubs(&ctx);
+        install(&ctx, true);
+        setup_sw_registration(&ctx);
+        // Re-eval shim so SW branch fires after ServiceWorkerRegistration is defined.
+        // We reinstall to pick up the SW prototype extension.
+        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
+        ctx.with(|c| {
+            install_notifications_bindings(&c, Arc::clone(&q), true).unwrap();
+        });
+        let is_promise: bool = ctx
+            .with(|c| {
+                c.eval(
+                    r#"
+var reg = new ServiceWorkerRegistration();
+var p = reg.showNotification('SW hello', { body: 'world' });
+typeof p.then === 'function'
+"#,
+                )
+            })
+            .unwrap();
+        assert!(is_promise, "showNotification() should return a thenable");
+    }
+
+    #[test]
+    fn sw_show_notification_queues_to_os() {
+        let (_rt, ctx) = make_ctx();
+        setup_dom_stubs(&ctx);
+        setup_sw_registration(&ctx);
+        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
+        ctx.with(|c| {
+            install_notifications_bindings(&c, Arc::clone(&q), true).unwrap();
+        });
+        ctx.with(|c| {
+            c.eval::<(), _>(
+                r#"
+var reg = new ServiceWorkerRegistration();
+reg.showNotification('SW push', { body: 'payload' });
+"#,
+            )
+            .unwrap();
+        });
+        let drained = drain_notifications(&q);
+        assert_eq!(drained.len(), 1, "notification should reach OS queue");
+        assert_eq!(drained[0].title, "SW push");
+        assert_eq!(drained[0].body, "payload");
+    }
+
+    #[test]
+    fn sw_show_notification_silent_when_denied() {
+        let (_rt, ctx) = make_ctx();
+        setup_dom_stubs(&ctx);
+        setup_sw_registration(&ctx);
+        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
+        ctx.with(|c| {
+            install_notifications_bindings(&c, Arc::clone(&q), false).unwrap();
+        });
+        ctx.with(|c| {
+            c.eval::<(), _>(
+                r#"
+var reg = new ServiceWorkerRegistration();
+reg.showNotification('Silent');
+"#,
+            )
+            .unwrap();
+        });
+        assert!(
+            drain_notifications(&q).is_empty(),
+            "showNotification() must respect denied permission"
+        );
+    }
+
+    #[test]
+    fn sw_get_notifications_returns_empty_array() {
+        let (_rt, ctx) = make_ctx();
+        setup_dom_stubs(&ctx);
+        setup_sw_registration(&ctx);
+        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
+        ctx.with(|c| {
+            install_notifications_bindings(&c, Arc::clone(&q), true).unwrap();
+        });
+        let len: i32 = ctx
+            .with(|c| {
+                c.eval(
+                    r#"
+var reg = new ServiceWorkerRegistration();
+var result = -1;
+reg.getNotifications().then(function(list) { result = list.length; });
+result
+"#,
+                )
+            })
+            .unwrap();
+        assert_eq!(len, 0, "getNotifications() should resolve with empty array");
+    }
+
+    #[test]
+    fn sw_get_notifications_with_filter_returns_empty_array() {
+        let (_rt, ctx) = make_ctx();
+        setup_dom_stubs(&ctx);
+        setup_sw_registration(&ctx);
+        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
+        ctx.with(|c| {
+            install_notifications_bindings(&c, Arc::clone(&q), true).unwrap();
+        });
+        let len: i32 = ctx
+            .with(|c| {
+                c.eval(
+                    r#"
+var reg = new ServiceWorkerRegistration();
+var result = -1;
+reg.getNotifications({ tag: 'news' }).then(function(list) { result = list.length; });
+result
+"#,
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            len, 0,
+            "getNotifications({{tag}}) should still resolve with empty array in Phase 0"
+        );
     }
 }

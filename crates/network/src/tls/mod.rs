@@ -15,8 +15,8 @@
 pub mod fingerprint;
 
 pub use fingerprint::{
-    ChromeJa3Snapshot, JA4ChromeSnapshot, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT,
-    CHROME_130_JA4_SNAPSHOT,
+    CertInfo, ChromeJa3Snapshot, JA4ChromeSnapshot, TlsHandshakeInfo,
+    CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
 };
 
 use std::sync::Arc;

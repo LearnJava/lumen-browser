@@ -41,6 +41,8 @@ impl Opcode {
 
 pub(crate) struct Frame {
     pub(crate) fin:     bool,
+    /// RSV1 bit (bit 6 of byte 0). Set by permessage-deflate to indicate a compressed payload.
+    pub(crate) rsv1:    bool,
     pub(crate) opcode:  Opcode,
     pub(crate) payload: Vec<u8>,
 }
@@ -55,6 +57,7 @@ pub(crate) fn read_frame<R: Read>(r: &mut R) -> Result<Frame> {
         .map_err(|e| Error::Network(format!("ws: read frame header: {e}")))?;
 
     let fin        = hdr[0] & 0x80 != 0;
+    let rsv1       = hdr[0] & 0x40 != 0;
     let opcode_raw = hdr[0] & 0x0F;
     let masked     = hdr[1] & 0x80 != 0;
     let len7       = (hdr[1] & 0x7F) as u64;
@@ -109,15 +112,17 @@ pub(crate) fn read_frame<R: Read>(r: &mut R) -> Result<Frame> {
         mask::apply(&mut payload, key);
     }
 
-    Ok(Frame { fin, opcode, payload })
+    Ok(Frame { fin, rsv1, opcode, payload })
 }
 
 /// Write one frame to `w`.
 ///
 /// `mask_key` MUST be `Some` for client-to-server frames (RFC 6455 §5.3).
+/// `rsv1` is set for permessage-deflate compressed frames (RFC 7692 §7).
 pub(crate) fn write_frame<W: Write>(
     w:        &mut W,
     fin:      bool,
+    rsv1:     bool,
     opcode:   Opcode,
     payload:  &[u8],
     mask_key: Option<[u8; 4]>,
@@ -125,7 +130,7 @@ pub(crate) fn write_frame<W: Write>(
     // header: byte0 + len byte(s) + optional mask key
     let mut hdr = Vec::with_capacity(14);
 
-    let byte0 = (u8::from(fin) << 7) | (opcode as u8);
+    let byte0 = (u8::from(fin) << 7) | (u8::from(rsv1) << 6) | (opcode as u8);
     hdr.push(byte0);
 
     let mask_bit: u8 = if mask_key.is_some() { 0x80 } else { 0 };
@@ -195,7 +200,7 @@ mod tests {
         let text = b"Hello";
         let key = masked_key();
         let mut buf = Vec::new();
-        write_frame(&mut buf, true, Opcode::Text, text, Some(key)).unwrap();
+        write_frame(&mut buf, true, false, Opcode::Text, text, Some(key)).unwrap();
 
         let mut cur = Cursor::new(buf);
         let frame = read_frame(&mut cur).unwrap();
@@ -208,7 +213,7 @@ mod tests {
     fn roundtrip_binary_frame_no_mask() {
         let data: Vec<u8> = (0..=255u8).collect();
         let mut buf = Vec::new();
-        write_frame(&mut buf, true, Opcode::Binary, &data, None).unwrap();
+        write_frame(&mut buf, true, false, Opcode::Binary, &data, None).unwrap();
 
         let mut cur = Cursor::new(buf);
         let frame = read_frame(&mut cur).unwrap();
@@ -220,7 +225,7 @@ mod tests {
     fn roundtrip_126_byte_extended_length() {
         let data = vec![0xABu8; 126];
         let mut buf = Vec::new();
-        write_frame(&mut buf, true, Opcode::Binary, &data, None).unwrap();
+        write_frame(&mut buf, true, false, Opcode::Binary, &data, None).unwrap();
         let mut cur = Cursor::new(buf);
         let frame = read_frame(&mut cur).unwrap();
         assert_eq!(frame.payload.len(), 126);
@@ -231,7 +236,7 @@ mod tests {
     fn roundtrip_close_frame() {
         let payload = make_close_payload(1000, "going away");
         let mut buf = Vec::new();
-        write_frame(&mut buf, true, Opcode::Close, &payload, Some(masked_key())).unwrap();
+        write_frame(&mut buf, true, false, Opcode::Close, &payload, Some(masked_key())).unwrap();
         let mut cur = Cursor::new(buf);
         let frame = read_frame(&mut cur).unwrap();
         let (code, reason) = parse_close_payload(&frame.payload);
@@ -275,5 +280,28 @@ mod tests {
         assert!(!Opcode::Text.is_control());
         assert!(!Opcode::Binary.is_control());
         assert!(!Opcode::Continuation.is_control());
+    }
+
+    /// RSV1=true should round-trip through the frame codec.
+    #[test]
+    fn rsv1_bit_roundtrip() {
+        let data = b"compressed payload";
+        let mut buf = Vec::new();
+        write_frame(&mut buf, true, true, Opcode::Binary, data, None).unwrap();
+        let mut cur = Cursor::new(buf);
+        let frame = read_frame(&mut cur).unwrap();
+        assert!(frame.rsv1, "RSV1 should be preserved");
+        assert_eq!(frame.payload, data);
+    }
+
+    /// RSV1=false should round-trip as false.
+    #[test]
+    fn rsv1_false_roundtrip() {
+        let data = b"plain payload";
+        let mut buf = Vec::new();
+        write_frame(&mut buf, true, false, Opcode::Text, data, None).unwrap();
+        let mut cur = Cursor::new(buf);
+        let frame = read_frame(&mut cur).unwrap();
+        assert!(!frame.rsv1, "RSV1 should be false for uncompressed frame");
     }
 }

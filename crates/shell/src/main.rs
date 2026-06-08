@@ -22,6 +22,7 @@
 
 mod address_bar;
 mod animation_scheduler;
+mod click_log;
 mod backend_factory;
 mod bidi;
 mod config;
@@ -40,10 +41,13 @@ mod notification;
 mod omnibox;
 mod panels;
 mod platform;
+mod reader_view;
+mod source_view;
 pub mod surface;
 mod runtime;
 mod scroll;
 mod scroll_anim;
+mod extensions;
 mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
@@ -66,7 +70,7 @@ use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
-use lumen_storage::{BfCache, BfCacheEntry, SearchHistory};
+use lumen_storage::{BfCache, BfCacheEntry, History, SearchHistory};
 use lumen_dom::{
     Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
@@ -195,7 +199,10 @@ fn main() -> ExitCode {
         }
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
-    let (det_mode, rest_args) = deterministic::extract_deterministic(&rest_args);
+    let (click_log_flag, rest_args) = extract_click_log(&rest_args);
+    click_log::init(click_log_flag);
+    let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
+    let det_mode = det_cfg.enabled;
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let (proxy, rest_args) = match extract_proxy(&rest_args) {
@@ -311,6 +318,7 @@ fn run_window_mode(
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
     let mut app = Lumen {
         display_list: Vec::new(),
+        tile_grid: lumen_paint::TileGrid::default_size(),
         title: None,
         pending_images: Vec::new(),
         source,
@@ -358,9 +366,13 @@ fn run_window_mode(
         form_state: HashMap::new(),
         validation_tooltip: None,
         color_picker_node: None,
+        select_dropdown_node: None,
         ls_storage: HashMap::new(),
-        idb_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+        idb_dir: lumen_idb_dir(),
         sw_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+        cookie_jar: Arc::new(
+            lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
+        ),
         js_ctx: None,
         no_scrollbar,
         first_paint_delivered: false,
@@ -405,6 +417,8 @@ fn run_window_mode(
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
+        history_store: History::open_in_memory().expect("history_store in-memory"),
+        history_panel: panels::history_panel::HistoryPanel::new(),
         command_palette: panels::command_palette::CommandPalette::new(),
         focus: panels::focus_panel::FocusModePanel::new(),
         pip: panels::pip_window::PipWindow::new(),
@@ -428,6 +442,18 @@ fn run_window_mode(
             &network_log,
         )),
         privacy: panels::privacy_panel::PrivacyPanel::new(network_log),
+        a11y_store: lumen_storage::A11yPrefs::open_in_memory()
+            .expect("a11y_prefs in-memory"),
+        a11y_panel: panels::a11y_panel::A11yPanel::new(),
+        print_panel: panels::print_panel::PrintPanel::new(),
+        settings_store: lumen_storage::BrowserSettings::open_in_memory()
+            .expect("settings in-memory"),
+        settings_panel: panels::settings_panel::SettingsPanel::new(),
+        shortcuts_panel: {
+            let ks = lumen_storage::KeyboardShortcuts::open_in_memory()
+                .expect("shortcuts in-memory");
+            panels::shortcuts_panel::ShortcutsPanel::new(&ks.all())
+        },
         fallbacks_preloaded: false,
         zoom_factor: zoom::ZOOM_DEFAULT,
         display_url: None,
@@ -437,6 +463,9 @@ fn run_window_mode(
         archive: tabs::archive::TabArchive::new(),
         restore_spinner_start_ms: None,
         resize_active: None,
+        reader_original_source: None,
+        cert_info: None,
+        cert_panel: panels::cert_panel::CertPanel::new(),
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -492,7 +521,7 @@ fn do_print_to_pdf(
     use lumen_layout::{paginate, PaginationContext};
     use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
 
-    let raw = source.load_bytes(event_sink.clone())?;
+    let raw = source.load_bytes(event_sink.clone(), None)?;
     let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
     let parsed = parse_and_layout(
         &raw.bytes,
@@ -508,6 +537,7 @@ fn do_print_to_pdf(
         false, // headless PDF mode: no interactive JS needed
         false, // deterministic: not needed for PDF rendering
         false, // dark_mode: light mode for PDF output
+        None,  // cookie_jar: not available in standalone PDF mode
     )?;
 
     let ctx = PaginationContext {
@@ -521,6 +551,65 @@ fn do_print_to_pdf(
     let mut pages = paginate(&parsed.layout, &ctx);
     let page_count_total = pages.len() as u32;
     // Attach @page margin-box data: page N of M at bottom-center.
+    attach_page_boxes(&mut pages, page_count_total, &ctx);
+    let cmds = build_print_display_list(&pages);
+    let split_pages = split_at_page_breaks(cmds);
+
+    let images = Renderer::render_print_pages(
+        INTER_FONT.to_vec(),
+        &split_pages,
+        PDF_PAGE_W,
+        PDF_PAGE_H,
+    )?;
+
+    let page_count = images.len();
+    let pdf_bytes = encode_images_as_pdf(&images, PDF_PAGE_W, PDF_PAGE_H);
+    std::fs::write(output, &pdf_bytes)?;
+    Ok(page_count)
+}
+
+/// Print with custom margin values (in CSS px) from the print dialog (E-1).
+///
+/// `margin_tb` applies to top + bottom; `margin_lr` applies to left + right.
+fn do_print_to_pdf_with_opts(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+    margin_tb: f32,
+    margin_lr: f32,
+) -> Result<usize, Box<dyn Error>> {
+    use lumen_layout::{paginate, PaginationContext};
+    use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
+
+    let raw = source.load_bytes(event_sink.clone(), None)?;
+    let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
+    let parsed = parse_and_layout(
+        &raw.bytes,
+        raw.content_type,
+        &raw.base,
+        &event_sink,
+        vp,
+        &mut std::collections::HashSet::new(),
+        None,
+        None,
+        None,
+        &NullHyphenationProvider,
+        false,
+        false,
+        false,
+        None,
+    )?;
+
+    let ctx = PaginationContext {
+        page_width: PDF_PAGE_W as f32,
+        page_height: PDF_PAGE_H as f32,
+        margin_top: margin_tb,
+        margin_bottom: margin_tb,
+        margin_left: margin_lr,
+        margin_right: margin_lr,
+    };
+    let mut pages = paginate(&parsed.layout, &ctx);
+    let page_count_total = pages.len() as u32;
     attach_page_boxes(&mut pages, page_count_total, &ctx);
     let cmds = build_print_display_list(&pages);
     let split_pages = split_at_page_breaks(cmds);
@@ -667,7 +756,7 @@ fn run_dump(
     kind: DumpKind,
     event_sink: Arc<dyn EventSink>,
 ) -> Result<(), Box<dyn Error>> {
-    let raw = source.load_bytes(event_sink.clone())?;
+    let raw = source.load_bytes(event_sink.clone(), None)?;
     match kind {
         DumpKind::Source => {
             let encoding = lumen_encoding::detect(&raw.bytes, raw.content_type);
@@ -678,13 +767,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -870,6 +959,22 @@ fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
     (found, rest)
 }
 
+/// Извлечь `--activity-log` (или `--click-log`) из аргументов.
+/// Также активируется переменной окружения `LUMEN_ACTIVITY_LOG=1`.
+fn extract_click_log(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = std::env::var("LUMEN_ACTIVITY_LOG").is_ok_and(|v| v == "1")
+        || std::env::var("LUMEN_CLICK_LOG").is_ok_and(|v| v == "1");
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--activity-log" || arg == "--click-log" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
 /// Извлечь `--devtools-port N` из аргументов, вернуть (port, остальные аргументы).
 fn extract_devtools_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), String> {
     let mut port: Option<u16> = None;
@@ -932,6 +1037,9 @@ enum PageSource {
     Empty,
     File(PathBuf),
     Url(String),
+    /// `about:blank` — пустой документ без сетевого запроса (HTML spec §7.5).
+    /// `url_str()` возвращает "about:blank" для адресной строки и истории.
+    AboutBlank,
     /// Страница восстанавливается из bfcache: HTML уже есть в памяти,
     /// сетевой запрос не нужен. `base_url` — оригинальный URL страницы
     /// (для разрешения относительных ссылок внутри HTML).
@@ -1077,9 +1185,9 @@ pub(crate) trait PersistentJs {
     ///
     /// Must be called after `update_viewport_size` so JS reads consistent
     /// dimensions. Shell calls it after every `relayout_page` and any
-    /// `prefers-color-scheme` toggle.
+    /// `prefers-color-scheme` or `prefers-reduced-motion` toggle.
     #[allow(dead_code)]
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool);
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool);
     /// Poll all live `WebSocket` instances and deliver queued events to JS.
     ///
     /// Must be called on every event-loop step so that `onopen`/`onmessage`/
@@ -1286,11 +1394,11 @@ impl PersistentJs for QuickPersistentJs {
     fn notify_window_loaded(&self) {
         self.rt.notify_window_loaded();
     }
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool) {
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool) {
         let dark = if prefers_dark { "true" } else { "false" };
-        // prefers_reduced_motion: shell doesn't yet expose this preference, hard-coded false.
+        let rm = if reduced_motion { "true" } else { "false" };
         self.eval_js(&format!(
-            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},false);"
+            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},{rm});"
         ));
     }
     fn pump_websockets(&self) {
@@ -1395,6 +1503,7 @@ impl PageSource {
             Some(s) if s.starts_with("http://") || s.starts_with("https://") => {
                 PageSource::Url(s.to_owned())
             }
+            Some("about:blank") => PageSource::AboutBlank,
             Some(s) => PageSource::File(PathBuf::from(s)),
             None => PageSource::Empty,
         }
@@ -1405,6 +1514,7 @@ impl PageSource {
             PageSource::Empty => "(пустая вкладка)".to_owned(),
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
+            PageSource::AboutBlank => "about:blank".to_owned(),
             PageSource::Snapshot { base_url, .. } => format!("[bfcache] {base_url}"),
         }
     }
@@ -1415,7 +1525,7 @@ impl PageSource {
         let url_s = match self {
             PageSource::Url(u) => u.as_str(),
             PageSource::Snapshot { base_url, .. } => base_url.as_str(),
-            _ => return None,
+                _ => return None,
         };
         lumen_core::url::Url::parse(url_s).ok().map(|u| {
             let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
@@ -1428,6 +1538,7 @@ impl PageSource {
         match self {
             PageSource::Url(u) => Some(u.as_str()),
             PageSource::Snapshot { base_url, .. } => Some(base_url.as_str()),
+            PageSource::AboutBlank => Some("about:blank"),
             _ => None,
         }
     }
@@ -1440,7 +1551,7 @@ impl PageSource {
             PageSource::File(p) => ResourceBase::File(p.clone()),
             PageSource::Url(u) => ResourceBase::Url(u.clone()),
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-            PageSource::Empty => return href.to_owned(),
+            PageSource::Empty | PageSource::AboutBlank => return href.to_owned(),
         };
         base.resolve_str(href)
     }
@@ -1448,9 +1559,18 @@ impl PageSource {
     /// Прочитать байты страницы с диска или из сети, плюс вернуть базу для
     /// относительных URL и подсказку о content-type. Используется и обычным
     /// `load`, и dump-режимами.
-    fn load_bytes(&self, sink: Arc<dyn EventSink>) -> Result<RawPage, Box<dyn Error>> {
+    fn load_bytes(
+        &self,
+        sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    ) -> Result<RawPage, Box<dyn Error>> {
         match self {
             PageSource::Empty => Err("источник пуст — нечего загружать".into()),
+            PageSource::AboutBlank => Ok(RawPage {
+                bytes: b"<!DOCTYPE html><html><head></head><body></body></html>".to_vec(),
+                base: ResourceBase::Url("about:blank".to_owned()),
+                content_type: Some("text/html"),
+            }),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
                 Ok(RawPage {
@@ -1465,11 +1585,16 @@ impl PageSource {
                 use lumen_network::{BrotliContentDecoder, HttpClient};
 
                 let lumen_url = Url::parse(url)?;
-                let client = crate::config::global().apply_http(
-                    HttpClient::new()
-                        .with_sink(sink)
-                        .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new())),
-                );
+                let mut builder = HttpClient::new()
+                    .with_sink(sink)
+                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+                if let Some(jar) = cookie_jar {
+                    builder = builder.with_cookie_jar(
+                        Arc::new(lumen_storage::CookieJarProvider::new(jar)),
+                        None,
+                    );
+                }
+                let client = crate::config::global().apply_http(builder);
                 let bytes = client.fetch(&lumen_url)?;
                 eprintln!("Получено {} байт", bytes.len());
                 Ok(RawPage {
@@ -1500,12 +1625,12 @@ impl PageSource {
         hp: &dyn HyphenationProvider,
         cookie_banner_dismiss: bool,
     ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-        if matches!(self, PageSource::Empty) {
+        if matches!(self, PageSource::Empty | PageSource::AboutBlank) {
             return Ok((LoadedPage::empty(), None, None));
         }
-        let raw = self.load_bytes(sink.clone())?;
+        let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1715,8 +1840,14 @@ enum KeyCommand {
     ToggleCookieBannerDismiss,
     /// Показать/скрыть правую боковую панель (Ctrl+Shift+A, 7D.3).
     ToggleSidebar,
+    /// Открыть/закрыть панель настроек доступности (Ctrl+Shift+Q, E-2).
+    ToggleA11y,
     /// Показать/скрыть менеджер закладок (Ctrl+Shift+O, task #22).
     ToggleBookmarks,
+    /// Показать/скрыть панель истории браузера (Ctrl+H, task D-5).
+    ToggleHistory,
+    /// Открыть/закрыть страницу настроек браузера (Ctrl+,, task D-7).
+    ToggleSettings,
     /// Показать/скрыть командную палитру (Ctrl+K, §7E.2, task #23).
     ToggleCommandPalette,
     /// Войти/выйти из focus mode + Pomodoro (Ctrl+Shift+F, task #25, V4).
@@ -1735,6 +1866,16 @@ enum KeyCommand {
     TogglePip,
     /// Показать/скрыть панель Read-later (Ctrl+Shift+R, §12.3).
     ToggleReadLater,
+    /// Включить/выключить Reader View (F9, §D-3): clean article layout.
+    ToggleReaderView,
+    /// Открыть просмотр исходного кода текущей страницы (Ctrl+U, §D-2).
+    ViewSource,
+    /// Открыть/закрыть панель горячих клавиш (Ctrl+Shift+/, §D-4).
+    ToggleShortcuts,
+    /// Открыть/закрыть диалог печати страницы (Ctrl+P, E-1).
+    TogglePrint,
+    /// Открыть/закрыть просмотр TLS-сертификата (Ctrl+Shift+C, §D-1).
+    ToggleCert,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1836,6 +1977,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyO if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleBookmarks)
         }
+        // Ctrl+H — toggle browser history panel (task D-5)
+        KeyCode::KeyH if ctrl_only => Some(KeyCommand::ToggleHistory),
+        // Ctrl+, — open browser settings (task D-7)
+        KeyCode::Comma if ctrl_only => Some(KeyCommand::ToggleSettings),
         // Ctrl+Shift+F — toggle focus mode + Pomodoro timer (task #25, V4)
         KeyCode::KeyF if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleFocusMode)
@@ -1862,10 +2007,24 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyV if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::TogglePip)
         }
+        // Ctrl+Shift+Q — toggle accessibility settings panel (E-2)
+        KeyCode::KeyQ if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleA11y)
+        }
         // Ctrl+Shift+R — toggle Read-later panel (§12.3)
         KeyCode::KeyR if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleReadLater)
         }
+        // F9 — toggle Reader View (§D-3)
+        KeyCode::F9 if no_mods => Some(KeyCommand::ToggleReaderView),
+        // Ctrl+U — view page source (§D-2)
+        KeyCode::KeyU if ctrl_only => Some(KeyCommand::ViewSource),
+        // Ctrl+Shift+/ — toggle keyboard shortcuts panel (§D-4)
+        KeyCode::Slash if ctrl_and_shift => Some(KeyCommand::ToggleShortcuts),
+        // Ctrl+P — print dialog (E-1)
+        KeyCode::KeyP if ctrl_only => Some(KeyCommand::TogglePrint),
+        // Ctrl+Shift+C — certificate viewer (§D-1)
+        KeyCode::KeyC if ctrl_and_shift => Some(KeyCommand::ToggleCert),
         // Ctrl+= — zoom in
         KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
         // Ctrl+- — zoom out
@@ -1938,13 +2097,19 @@ impl ResourceBase {
     fn http_client_for_subresource(
         &self,
         sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     ) -> lumen_network::HttpClient {
         use lumen_network::{BrotliContentDecoder, HttpClient, MixedContentMode};
-        let client = crate::config::global().apply_http(
-            HttpClient::new()
-                .with_sink(sink)
-                .with_content_decoder(Arc::new(BrotliContentDecoder::new())),
-        );
+        let mut builder = HttpClient::new()
+            .with_sink(sink)
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()));
+        if let Some(jar) = cookie_jar {
+            builder = builder.with_cookie_jar(
+                Arc::new(lumen_storage::CookieJarProvider::new(jar)),
+                None,
+            );
+        }
+        let client = crate::config::global().apply_http(builder);
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
         {
@@ -1961,7 +2126,7 @@ enum ResolvedResource {
 
 // ── Загрузка внешних CSS ─────────────────────────────────────────────────────
 
-fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>) -> String {
+fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>) -> String {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs);
 
@@ -2000,7 +2165,7 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
                     continue;
                 }
 
-                let client = base.http_client_for_subresource(sink.clone());
+                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                 match client.fetch_subresource(&sub_url, RequestDestination::Style) {
                     Ok(bytes) => {
                         let content = String::from_utf8_lossy(&bytes);
@@ -2065,6 +2230,7 @@ fn fetch_and_decode_images(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     viewport: lumen_core::geom::Size,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> (Vec<(String, lumen_image::Image)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
@@ -2077,7 +2243,7 @@ fn fetch_and_decode_images(
             lazy_pairs.push((req.node_id.index() as u32, req.url));
             continue;
         }
-        let bytes = match fetch_image_bytes(&req.url, base, sink) {
+        let bytes = match fetch_image_bytes(&req.url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск картинки {}: {e}", req.url);
@@ -2167,6 +2333,7 @@ fn fetch_image_bytes(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     match base.resolve(raw_src) {
         ResolvedResource::File(path) => std::fs::read(&path).map_err(|e| {
@@ -2179,7 +2346,7 @@ fn fetch_image_bytes(
             // Images are loaded in no-cors mode: cross-origin allowed, but
             // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
-            let client = base.http_client_for_subresource(sink.clone());
+            let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
             Ok(client.fetch_subresource(&lumen_url, RequestDestination::Image)?)
         }
     }
@@ -2287,8 +2454,12 @@ struct PageSnapshot {
     form_state: forms::FormState,
     validation_tooltip: Option<(Rect, String)>,
     color_picker_node: Option<NodeId>,
+    /// NodeId of the `<select>` whose dropdown is open in this tab snapshot.
+    select_dropdown_node: Option<NodeId>,
     ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
-    idb_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Directory for per-origin IndexedDB SQLite files. Cloned from the active
+    /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
+    idb_dir: Option<std::path::PathBuf>,
     sw_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     js_ctx: Option<Box<dyn PersistentJs>>,
     first_paint_delivered: bool,
@@ -2306,6 +2477,14 @@ struct PageSnapshot {
     /// the JS side so the shell can store it in `NavEntry` when pushState fires.
     /// Initialised to `"null"` (the default initial `history.state`).
     current_history_state_json: String,
+    /// Original page source preserved while Reader View (§D-3) is active.
+    /// `None` = this tab is not in reader mode.
+    reader_original_source: Option<PageSource>,
+    /// TLS certificate data for the current page (§D-1).
+    ///
+    /// Populated when a successful HTTPS connection is made; `None` for HTTP pages
+    /// or when cert extraction is not yet wired (Phase 0 uses stubs).
+    cert_info: Option<panels::cert_panel::PanelCertData>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2323,6 +2502,7 @@ fn parse_and_layout(
     cookie_banner_dismiss: bool,
     deterministic: bool,
     dark_mode: bool,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -2346,7 +2526,7 @@ fn parse_and_layout(
     // sse_provider — в new EventSource(). Все три используют один HttpClient.
     let (fetch_provider, ws_provider, sse_provider) = match base {
         ResourceBase::Url(_) => {
-            let client = base.http_client_for_subresource(Arc::clone(sink));
+            let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar.clone());
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
@@ -2363,6 +2543,9 @@ fn parse_and_layout(
         ResourceBase::Url(u) => u.as_str().to_owned(),
         ResourceBase::File(p) => format!("file://{}", p.display()),
     };
+    // Extension content scripts: collect JS sources that match the page URL.
+    let ext_registry = extensions::ExtensionRegistry::load();
+    let ext_scripts = ext_registry.content_scripts_for_url(&page_url);
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
@@ -2375,6 +2558,7 @@ fn parse_and_layout(
         sw_backend,
         cookie_banner_dismiss,
         deterministic,
+        &ext_scripts,
     );
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
@@ -2413,14 +2597,14 @@ fn parse_and_layout(
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
     let (images, animated_gifs, lazy_pairs) = {
         let mut d = doc_arc.lock().unwrap();
-        fetch_and_decode_images(&mut d, base, sink, viewport)
+        fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone())
     };
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let css = {
         let d = doc_arc.lock().unwrap();
         let mut css = extract_style_blocks(&d);
-        css.push_str(&load_linked_stylesheets(&d, base, sink));
+        css.push_str(&load_linked_stylesheets(&d, base, sink, cookie_jar.clone()));
         css
     };
 
@@ -2428,7 +2612,7 @@ fn parse_and_layout(
 
     // @font-face: загружаем url()-источники до layout.
     // CSS: @font-face multi-font TextMeasurer — P1 нужно поддержать font-family в layout
-    let font_registry = load_font_faces(&sheet.font_faces, base, sink);
+    let font_registry = load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone());
 
     // Populate document.fonts with FontFace objects from @font-face rules.
     // Phase 1: store FontFace metadata; status marked as Loaded after successful load.
@@ -2469,7 +2653,7 @@ fn parse_and_layout(
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
     let mut images = images;
-    for (src, image) in fetch_and_decode_background_images(&layout, base, sink) {
+    for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone()) {
         images.push((src, image));
     }
 
@@ -2500,11 +2684,12 @@ fn fetch_and_decode_background_images(
     layout: &LayoutBox,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Vec<(String, lumen_image::Image)> {
     let urls = lumen_layout::collect_background_image_requests(layout);
     let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
     for url in urls {
-        let bytes = match fetch_image_bytes(&url, base, sink) {
+        let bytes = match fetch_image_bytes(&url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск bg-картинки {url}: {e}");
@@ -2567,6 +2752,7 @@ fn load_font_faces(
     font_faces: &[lumen_css_parser::FontFaceRule],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> lumen_font::FontRegistry {
     use lumen_css_parser::FontFaceSourceKind;
     use lumen_core::FontStyle;
@@ -2586,35 +2772,46 @@ fn load_font_faces(
             .unwrap_or(FontStyle::Normal);
 
         for src in &rule.sources {
-            if src.kind == FontFaceSourceKind::Local {
-                continue;
-            }
+            // CSS Fonts L4 §4.1: try each source in order; first successful wins.
+            let bytes = if src.kind == FontFaceSourceKind::Local {
+                // CSS §4.3: match by family name (case-insensitive) against system fonts.
+                // Phase 0: PostScript / full-name matching not yet implemented.
+                match registry.resolve_local_bytes(&src.value, weight, style) {
+                    Some(b) => b,
+                    None => continue, // not found locally — try next source
+                }
+            } else {
+                let raw = match fetch_image_bytes(&src.value, base, sink, cookie_jar.clone()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
+                        continue;
+                    }
+                };
 
-            let raw = match fetch_image_bytes(&src.value, base, sink) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
+                let decoded = match lumen_font::maybe_decode_font(&raw) {
+                    Ok(Some(d)) => d,
+                    Ok(None) => raw,
+                    Err(e) => {
+                        eprintln!("@font-face «{}»: не декодирован WOFF: {e}", rule.family);
+                        continue;
+                    }
+                };
+
+                if lumen_font::Font::parse(&decoded).is_err() {
+                    eprintln!("@font-face «{}»: невалидный шрифт {}", rule.family, src.value);
                     continue;
                 }
-            };
 
-            let bytes = match lumen_font::maybe_decode_font(&raw) {
-                Ok(Some(decoded)) => decoded,
-                Ok(None) => raw,
-                Err(e) => {
-                    eprintln!("@font-face «{}»: не декодирован WOFF: {e}", rule.family);
-                    continue;
-                }
+                decoded
             };
-
-            if lumen_font::Font::parse(&bytes).is_err() {
-                eprintln!("@font-face «{}»: невалидный шрифт {}", rule.family, src.value);
-                continue;
-            }
 
             eprintln!(
-                "@font-face загружен: «{}» weight={} src={}",
-                rule.family, weight, src.value
+                "@font-face загружен: «{}» weight={} src={} ({})",
+                rule.family,
+                weight,
+                src.value,
+                if src.kind == FontFaceSourceKind::Local { "local" } else { "url" },
             );
             registry.register_from_bytes(&rule.family, weight, style, bytes);
             break;
@@ -2646,6 +2843,30 @@ fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) 
     map.insert(lb.node, lb.style.clone());
     for child in &lb.children {
         collect_box_styles(child, map);
+    }
+}
+
+/// Traverse the layout tree and promote nodes with `will-change: transform/opacity/filter`
+/// to their own GPU layers via `RenderBackend::promote_layer`.
+///
+/// Called after every relayout so the promoted-layer set stays current.
+/// Nodes removed from the DOM are cleaned up automatically by `sync_promoted_layers`
+/// (called by each backend's `promote_layer` impl via `LayerCache`).
+fn promote_will_change_layers(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
+    promote_will_change_rec(lb, renderer);
+}
+
+fn promote_will_change_rec(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
+    let needs_layer = lb.style.will_change.iter().any(|p| {
+        matches!(p.as_str(), "transform" | "opacity" | "filter")
+    });
+    if needs_layer {
+        let w = lb.rect.width.max(1.0) as u32;
+        let h = lb.rect.height.max(1.0) as u32;
+        renderer.promote_layer(lb.node.index() as u32, w, h);
+    }
+    for child in &lb.children {
+        promote_will_change_rec(child, renderer);
     }
 }
 
@@ -2719,6 +2940,34 @@ fn meta_initial_scale(src: &LayoutSource) -> f32 {
 
 /// Get-or-create the localStorage partition for the given `ResourceBase` origin.
 /// Returns `None` for file: bases (no persistent origin-partitioned storage).
+/// Returns the platform-specific directory for per-origin IndexedDB SQLite files,
+/// creating it if it does not exist.
+///
+/// - Windows: `%APPDATA%\lumen\idb\`
+/// - Unix:    `$HOME/.config/lumen/idb/`
+/// - Fallback (env vars missing): `./lumen-idb/` (relative to working directory)
+///
+/// Returns `None` when directory creation fails — the caller falls back to
+/// ephemeral in-memory IDB storage for the session.
+fn lumen_idb_dir() -> Option<std::path::PathBuf> {
+    let dir = if cfg!(target_os = "windows") {
+        std::env::var("APPDATA")
+            .ok()
+            .map(|p| std::path::PathBuf::from(p).join("lumen").join("idb"))
+    } else {
+        std::env::var("HOME")
+            .ok()
+            .map(|p| std::path::PathBuf::from(p).join(".config").join("lumen").join("idb"))
+    }
+    .unwrap_or_else(|| std::path::PathBuf::from("lumen-idb"));
+
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("idb: не удалось создать директорию {}: {e}", dir.display());
+        return None;
+    }
+    Some(dir)
+}
+
 fn ls_store_for_base(
     base: &ResourceBase,
     ls_storage: &mut HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
@@ -2738,21 +2987,49 @@ fn ls_store_for_base(
 }
 
 /// Build the per-origin IndexedDB persistence handle for the given `ResourceBase`.
-/// Returns `None` for `file:` bases (no origin-partitioned persistent storage),
-/// matching `ls_store_for_base`. The returned `IdbStore` shares `backend`, so
-/// the same origin sees its databases across reloads.
+///
+/// Returns `None` for `file:` bases (no origin storage).
+/// When `idb_dir` is `Some`, opens or creates a dedicated SQLite file
+/// `{idb_dir}/{sha256_hex(eTLD+1)[:16]}.db`; when `None` uses an ephemeral
+/// in-memory store (tests / headless — no cross-reload persistence).
 fn idb_store_for_base(
     base: &ResourceBase,
-    backend: &Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    idb_dir: Option<&std::path::Path>,
 ) -> Option<Arc<dyn lumen_core::ext::IdbBackend>> {
-    let origin = match base {
-        ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
-            let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
-            format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
-        })?,
+    let url = match base {
+        ResourceBase::Url(u) => u.as_str(),
         ResourceBase::File(_) => return None,
     };
-    Some(Arc::new(lumen_storage::IdbStore::new(Arc::clone(backend), origin)))
+    idb_store_for_url(url, idb_dir)
+}
+
+/// Core IDB store builder — shared by [`idb_store_for_base`] and the reload path.
+fn idb_store_for_url(
+    url: &str,
+    idb_dir: Option<&std::path::Path>,
+) -> Option<Arc<dyn lumen_core::ext::IdbBackend>> {
+    let parsed = lumen_core::url::Url::parse(url).ok()?;
+    let host = parsed.host();
+    if host.is_empty() {
+        return None;
+    }
+    // eTLD+1 for key derivation; falls back to raw host (IPs, localhost, unknown TLDs).
+    let etld_plus_one = {
+        use lumen_core::ext::PublicSuffixList;
+        lumen_storage::PslProvider::new()
+            .registrable_domain(host)
+            .unwrap_or(host)
+            .to_string()
+    };
+    if let Some(dir) = idb_dir {
+        lumen_storage::IdbStore::for_origin(&etld_plus_one, dir).ok()
+    } else {
+        let origin = format!("{}://{}", parsed.scheme(), parsed.host());
+        Some(Arc::new(lumen_storage::IdbStore::new(
+            Arc::new(Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+            origin,
+        )))
+    }
 }
 
 /// Build the per-origin Service Worker registration persistence handle for the
@@ -2787,8 +3064,9 @@ fn render_bytes(
     cookie_banner_dismiss: bool,
     deterministic: bool,
     dark_mode: bool,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -3071,6 +3349,7 @@ fn run_scripts_with_dom(
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    extra_scripts: &[String],
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
     let mut module_scripts: Vec<String> = Vec::new();
@@ -3078,7 +3357,7 @@ fn run_scripts_with_dom(
 
     let doc_arc = Arc::new(Mutex::new(doc));
 
-    if scripts.is_empty() && module_scripts.is_empty() {
+    if scripts.is_empty() && module_scripts.is_empty() && extra_scripts.is_empty() {
         return (doc_arc, None, None);
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
@@ -3125,6 +3404,19 @@ fn run_scripts_with_dom(
                             );
                         }
                         Err(e) => eprintln!("module error: {e}"),
+                    }
+                }
+                // Extension content scripts run last (after all page scripts).
+                for src in extra_scripts {
+                    match rt.eval(src) {
+                        Ok(_) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "extension: engine=quickjs, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("extension script error: {e}"),
                     }
                 }
                 let nav_req = rt.take_navigate_request().map(|r| match r {
@@ -3240,6 +3532,10 @@ fn window_title(page_title: Option<&str>) -> String {
 
 struct Lumen {
     display_list: DisplayList,
+    /// Tile-based dirty-rect tracker. Updated on every display-list change via
+    /// [`lumen_paint::TileGrid::update_from_diff`]. Dirty tiles are re-rendered
+    /// on the next frame; clean tiles reuse the previous output (Phase 2).
+    tile_grid: lumen_paint::TileGrid,
     title: Option<String>,
     /// Декодированные `<img>` ресурсы. До создания Renderer-а — хранятся
     /// в Vec и заливаются в GPU в `resumed`; после — register_image идёт
@@ -3407,19 +3703,27 @@ struct Lumen {
     /// NodeId of the `<input type="color">` whose picker is currently open.
     /// The picker overlay is viewport-locked; clicking a swatch closes it.
     color_picker_node: Option<NodeId>,
+    /// NodeId of the `<select>` whose dropdown is currently open.
+    /// The dropdown overlay is viewport-locked; clicking an option closes it.
+    select_dropdown_node: Option<NodeId>,
     /// Persistent `localStorage` partitions keyed by origin (scheme+host+port).
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.
     ls_storage: HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
-    /// Shared backend for IndexedDB persistence (one per process, origin-partitioned
-    /// inside). A per-origin `IdbStore` is built over this for each page load, so
-    /// IndexedDB databases survive page reloads within the session (mirrors
-    /// `ls_storage`). Swap `InMemoryStorage` for `SqliteStorage` to persist on disk.
-    idb_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Directory for per-origin IndexedDB SQLite files (`{sha256(eTLD+1)[:16]}.db`).
+    /// `None` → ephemeral in-memory store per page (headless / tests).
+    /// `Some(dir)` → each origin gets its own SQLite file in `dir`; data persists
+    /// across page reloads and is shared across tabs of the same origin.
+    idb_dir: Option<std::path::PathBuf>,
     /// Shared backend for Service Worker registration persistence. A per-origin
     /// `SwStore` is built over this for each page load so SW registrations survive
     /// page navigations within the session (same pattern as `idb_backend`).
     sw_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
+    /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
+    /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
+    /// wired to a per-profile SQLite file in Phase 2.
+    cookie_jar: Arc<lumen_storage::CookieJar>,
     /// Live JS context for the current page — keeps event listeners active after
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
@@ -3577,6 +3881,18 @@ struct Lumen {
     /// visibility. Folder tree + bookmark list + search + drag-and-drop re-file
     /// (move bookmark to folder, persisted via `Bookmarks::set_folder`).
     bookmark_panel: panels::bookmark_panel::BookmarkPanel,
+    /// SQLite-backed browsing history store (in-memory for the session, task D-5).
+    ///
+    /// Records each page visit. The history panel reads via `History::recent`
+    /// (50 entries, grouped by date). `History::delete` / `History::clear` are
+    /// called from the panel's delete and clear-all buttons.
+    history_store: History,
+    /// Browser history panel state (task D-5).
+    ///
+    /// Centred floating overlay. `Ctrl+H` toggles visibility. Shows recent pages
+    /// grouped by date with search (via `HistoryFts`), delete per-entry, and a
+    /// "Очистить всё" button.
+    history_panel: panels::history_panel::HistoryPanel,
     /// Command palette modal state (task #23, §7E.2).
     ///
     /// `Ctrl+K` toggles a centred modal that fuzzy-searches across commands,
@@ -3685,6 +4001,44 @@ struct Lumen {
     ///
     /// [`network_panel`]: Lumen::network_panel
     privacy: panels::privacy_panel::PrivacyPanel,
+    /// Persistent accessibility preferences store (task E-2).
+    ///
+    /// Backed by SQLite (in-memory for the session). Stores font-size
+    /// multiplier, prefers-reduced-motion, forced-colors, and cursor size.
+    /// Read on panel open; written when panel closes.
+    a11y_store: lumen_storage::A11yPrefs,
+    /// Accessibility settings panel overlay (task E-2, `Ctrl+Shift+Q`).
+    ///
+    /// A centred 300×260 px modal. Holds a working draft; on close the draft
+    /// is persisted to `a11y_store` and media changes are re-delivered to JS.
+    a11y_panel: panels::a11y_panel::A11yPanel,
+    /// Print dialog overlay (task E-1, `Ctrl+P`).
+    ///
+    /// A centred 560×400 px modal with paper size, orientation, margins,
+    /// page range, colour mode, and output-file fields. Clicking **Print**
+    /// calls `do_print_to_pdf()` with the configured settings.
+    print_panel: panels::print_panel::PrintPanel,
+    /// Persistent browser settings store (task D-7).
+    ///
+    /// Backed by SQLite (in-memory for the session). Stores homepage, search
+    /// engine ID, shields, fingerprint mode, DoH, font size, theme, and
+    /// download path. Read on panel open; written when panel closes.
+    settings_store: lumen_storage::BrowserSettings,
+    /// Settings page overlay state (task D-7, `about:settings`).
+    ///
+    /// `Ctrl+,` (or navigating to `about:settings`) toggles a centred
+    /// 640×480 overlay with four tabbed sections: General, Privacy,
+    /// Appearance, Downloads.
+    settings_panel: panels::settings_panel::SettingsPanel,
+    /// Keyboard shortcuts panel (Ctrl+Shift+/, §D-4).
+    ///
+    /// Shows all `KeyCommand` bindings with rebind-on-click support.
+    shortcuts_panel: panels::shortcuts_panel::ShortcutsPanel,
+    /// Certificate viewer panel (Ctrl+Shift+C, §D-1).
+    ///
+    /// Centred 500×440 overlay showing X.509 cert data (subject CN/Org, issuer,
+    /// validity dates, SHA-256 fingerprint, SAN list, TLS version).
+    cert_panel: panels::cert_panel::CertPanel,
     /// Whether the curated system-font fallback chain has been preloaded into
     /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
     ///
@@ -3733,6 +4087,16 @@ struct Lumen {
     /// Set on MouseInput Pressed over a resize grip, cleared on MouseInput Released.
     /// During CursorMoved, width/height are updated via JS binding.
     resize_active: Option<(lumen_dom::NodeId, f32, f32)>,
+    /// Original page source stored when Reader View (§D-3) is active.
+    ///
+    /// `Some` when the current page is showing the clean reader HTML (F9 toggle);
+    /// `None` in normal browsing mode.  Toggling F9 again restores this source.
+    reader_original_source: Option<PageSource>,
+    /// TLS certificate information for the current tab (§D-1).
+    ///
+    /// Populated when a page loads over HTTPS; cleared on tab switch / navigation.
+    /// Phase 0: shell can set this to a stub value via `CertInfo::stub_for`.
+    cert_info: Option<panels::cert_panel::PanelCertData>,
 }
 
 /// State for an in-progress CSS View Transition cross-fade (CSS View Transitions L1).
@@ -3795,7 +4159,7 @@ impl Lumen {
         // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
         let meta_scale = meta_initial_scale(src);
         let (css_w, css_h) =
-            zoom::effective_viewport(vp_size.width as f32, vp_size.height as f32, meta_scale, self.zoom_factor);
+            zoom::effective_viewport(vp_size.width, vp_size.height, meta_scale, self.zoom_factor);
         let viewport = Size::new(css_w, css_h);
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
@@ -3804,6 +4168,7 @@ impl Lumen {
         lumen_layout::clear_interactive_state();
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
+        self.tile_grid.update_from_diff(&self.display_list, &new_dl);
         self.display_list = new_dl;
         // Sync transitions: compare prev styles with new layout before replacing.
         let now_s = self.epoch.elapsed().as_secs_f32();
@@ -3816,6 +4181,12 @@ impl Lumen {
         }
         self.prev_styles = new_styles;
         self.layout_box = Some(lb);
+        // Promote nodes with will-change: transform/opacity/filter to GPU layers so
+        // animation ticks can update only the layer matrix, bypassing relayout.
+        // CSS: will-change — P4 wires ComputedStyle.will_change to promote_layer calls here.
+        if let (Some(lb_ref), Some(r)) = (self.layout_box.as_ref(), self.renderer.as_mut()) {
+            promote_will_change_layers(lb_ref, r.as_mut());
+        }
         self.update_snap_containers();
         self.animation_scheduler.clear();
         // Do NOT reset transition_scheduler here: active transitions must survive
@@ -3839,7 +4210,7 @@ impl Lumen {
                 // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                 // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
                 // read from winit at window creation / refreshed on ThemeChanged.
-                js.deliver_media_query_changes(viewport.width, viewport.height, self.dark_mode);
+                js.deliver_media_query_changes(viewport.width, viewport.height, self.dark_mode, self.a11y_store.reduced_motion());
                 // After fresh rects are in JS: fire lazy-load proximity check.
                 // Images that entered the viewport+margin are queued by JS via
                 // _lumen_request_lazy_image_load; we drain and fetch them below.
@@ -3877,7 +4248,7 @@ impl Lumen {
             PageSource::Empty => return,
         };
         for (nid, url) in requests {
-            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink) {
+            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
@@ -3994,6 +4365,7 @@ impl Lumen {
                 .and_then(|lb| forms::find_box_rect(lb, nid))
                 .map(|r| r.y)
         });
+        click_log::log_fragment(&fragment, target_y.is_some());
         if let Some(y) = target_y {
             self.scroll_to(y);
         }
@@ -4006,6 +4378,7 @@ impl Lumen {
         if matches!(self.source, PageSource::Empty) {
             return;
         }
+        click_log::log_load_start(&self.source.describe());
         println!("Reload: {}", self.source.describe());
 
         // Phase 4c: попробовать загрузить через GpuSession (WinitSession)
@@ -4019,7 +4392,7 @@ impl Lumen {
                 || Size::new(1024.0, 720.0),
                 |r| {
                     let s = r.viewport_size();
-                    Size::new(s.width as f32, s.height as f32)
+                    Size::new(s.width, s.height)
                 },
             );
             let ls_store = self.source.origin_str().map(|o| {
@@ -4027,10 +4400,10 @@ impl Lumen {
                     Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
                 }))
             });
-            let idb_backend = self.source.origin_str().map(|o| {
-                Arc::new(lumen_storage::IdbStore::new(Arc::clone(&self.idb_backend), o))
-                    as Arc<dyn lumen_core::ext::IdbBackend>
-            });
+            let idb_backend = self
+                .source
+                .url_str()
+                .and_then(|u| idb_store_for_url(u, self.idb_dir.as_deref()));
             let sw_backend = self.source.origin_str().map(|o| {
                 Arc::new(lumen_storage::SwStore::new(Arc::clone(&self.sw_backend), o))
                     as Arc<dyn lumen_core::ext::SwBackend>
@@ -4047,6 +4420,8 @@ impl Lumen {
                 self.js_ctx = new_js_ctx;
                 self.content_height = content_height_of(&page.display_list);
                 self.content_width = content_width_of(&page.display_list);
+                // On full page load, mark all tiles dirty — content has changed completely.
+                self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
                 self.display_list = page.display_list;
                 self.animation_scheduler.clear();
                 self.transition_scheduler = TransitionScheduler::new();
@@ -4115,8 +4490,12 @@ impl Lumen {
                 // JS may have requested navigation via location.href= etc.
                 // Store it for processing in about_to_wait (after first render).
                 self.pending_js_navigate = page.js_navigate;
+                let title = self.title.as_deref().unwrap_or("");
+                click_log::log_load_ok(&self.source.describe(), title);
+                click_log::log_page_ready(&self.source.describe(), self.scroll_y);
             }
             Err(err) => {
+                click_log::log_load_err(&self.source.describe(), &err.to_string());
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
             }
         }
@@ -4143,7 +4522,7 @@ impl Lumen {
             || Size::new(1024.0, 720.0),
             |r| {
                 let s = r.viewport_size();
-                Size::new(s.width as f32, s.height as f32)
+                Size::new(s.width, s.height)
             },
         );
 
@@ -4195,15 +4574,16 @@ impl Lumen {
     ///
     /// При ошибке — `LoadError`.
     fn start_streaming_load(&self) {
-        if matches!(self.source, PageSource::Empty) {
+        if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
         let source = self.source.clone();
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
+        let cookie_jar = Arc::clone(&self.cookie_jar);
 
         std::thread::spawn(move || {
-            let raw = match source.load_bytes(Arc::clone(&sink)) {
+            let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
@@ -4241,7 +4621,7 @@ impl Lumen {
     fn paint_partial_dom(&mut self, doc: &lumen_dom::Document) {
         let Some(renderer) = self.renderer.as_ref() else { return };
         let vp_size = renderer.viewport_size();
-        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        let viewport = Size::new(vp_size.width, vp_size.height);
 
         let font = match lumen_font::Font::parse(INTER_FONT) {
             Ok(f) => f,
@@ -4277,6 +4657,8 @@ impl Lumen {
         self.js_ctx = new_js_ctx;
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
+        // Full page load: force all tiles dirty.
+        self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
         self.display_list = page.display_list;
         self.animation_scheduler.clear();
         self.transition_scheduler = TransitionScheduler::new();
@@ -4300,17 +4682,23 @@ impl Lumen {
         self.form_state.clear();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        self.select_dropdown_node = None;
         // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
 
-        // Индексировать страницу в history_fts для omnibox (@history).
-        // На Phase 0 используем текущий URL и title; extraction текста отложен.
-        // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots индексируются.
+        // Индексировать страницу в history_fts для omnibox (@history) и записать
+        // в history_store для панели истории (Ctrl+H).
+        // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots.
         if let Some(url) = self.source.url_str() {
             let title = page.title.as_deref().unwrap_or("");
             let _ = self.history_fts.index(self.next_history_id, url, title, "");
             self.next_history_id += 1;
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let _ = self.history_store.record_visit(url, title, now_secs);
         }
         // Clear GIF animation state from previous page.
         self.animated_gifs.clear();
@@ -4485,22 +4873,26 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     || Size::new(1024.0, 720.0),
                     |r| {
                         let s = r.viewport_size();
-                        Size::new(s.width as f32, s.height as f32)
+                        Size::new(s.width, s.height)
                     },
                 );
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
-                let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
+                let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar))) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
+                        click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
+                        click_log::log_page_ready(&self.source.describe(), self.scroll_y);
                     }
                     Err(e) => {
+                        click_log::log_load_err(&self.source.describe(), &e.to_string());
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
                     }
                 }
             }
             LoadEvent::LoadError(msg) => {
+                click_log::log_load_err(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
                 self.stream_builder = None;
             }
@@ -4650,6 +5042,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         w.request_redraw();
                     }
                 }
+                input::InputCommand::KeyDown { code } => {
+                    self.inject_special_key(&code);
+                }
             }
         }
 
@@ -4768,7 +5163,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 if changed {
                     // Rebuild display list with the updated scroll offsets.
-                    self.display_list = paint_ordered(lb);
+                    let new_dl = paint_ordered(lb);
+                    self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+                    self.display_list = new_dl;
                     // Sync JS cache so scrollTop/scrollLeft reads are accurate.
                     let states = collect_scroll_containers(lb)
                         .iter()
@@ -4816,6 +5213,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.image_cache.on_memory_pressure(level);
             if let Some(renderer) = &mut self.renderer {
                 renderer.on_layer_memory_pressure(level);
+                renderer.on_atlas_memory_pressure(level);
             }
         }
 
@@ -4831,9 +5229,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // before the redirect completes (matches browser behaviour).
         if let Some(nav) = self.pending_js_navigate.take() {
             match nav {
-                JsNavigateRequest::Push(url)    => self.navigate_to(PageSource::Url(url)),
-                JsNavigateRequest::Replace(url) => self.navigate_replace(PageSource::Url(url)),
-                JsNavigateRequest::Reload       => self.reload(),
+                JsNavigateRequest::Push(url) => {
+                    click_log::log_js_nav("pushState/location.href", &url);
+                    self.navigate_to(PageSource::Url(url));
+                }
+                JsNavigateRequest::Replace(url) => {
+                    click_log::log_js_nav("replaceState/location.replace", &url);
+                    self.navigate_replace(PageSource::Url(url));
+                }
+                JsNavigateRequest::Reload => {
+                    click_log::log_js_nav("location.reload", &self.source.describe());
+                    self.reload();
+                }
             }
         }
     }
@@ -5040,7 +5447,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     };
                 }
                 // B-7: Active resize — update element width/height as mouse moves.
-                // Calculate delta and call JS binding to update style.
+                #[cfg(feature = "quickjs")]
                 if let Some((node_id, start_x, start_y)) = self.resize_active {
                     let dpr = self
                         .renderer
@@ -5051,18 +5458,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let y_css = (position.y as f32) / dpr;
                     let delta_x = x_css - start_x;
                     let delta_y = y_css - start_y;
-
-                    // Update the element's width and height via JS binding.
-                    // The binding `_lumen_apply_resize(node_id, delta_x, delta_y)` will
-                    // modify the inline style of the element.
-                    #[cfg(feature = "quickjs")]
-                    {
-                        let nid_u32 = node_id.index() as u32;
-                        self.eval_js(&format!(
-                            "_lumen_apply_resize({}, {}, {});",
-                            nid_u32, delta_x, delta_y
-                        ));
-                    }
+                    let nid_u32 = node_id.index() as u32;
+                    self.eval_js(&format!(
+                        "_lumen_apply_resize({}, {}, {});",
+                        nid_u32, delta_x, delta_y
+                    ));
                     self.request_redraw();
                 }
             }
@@ -5145,13 +5545,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                     // B-7: Check if click is on resize grip of any element in layout tree.
                     // If so, activate resize mode. This must be checked before other UI panels.
-                    if let Some(ref layout_box) = self.layout_box {
-                        if let Some(nid) = self.find_resize_grip_node(layout_box, x_css, y_css) {
+                    if let Some(ref layout_box) = self.layout_box
+                        && let Some(nid) = self.find_resize_grip_node(layout_box, x_css, y_css) {
                             self.resize_active = Some((nid, x_css, y_css));
                             self.request_redraw();
                             return;
                         }
-                    }
 
                     // Command palette (task #23): modal — captures every click.
                     // A click on a row activates it; a click on the scrim closes.
@@ -5553,6 +5952,280 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // Accessibility settings panel (E-2): centred overlay.
+                    if self.a11y_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        use panels::a11y_panel::A11yHit;
+                        let hit = panels::a11y_panel::hit_test(
+                            &self.a11y_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        );
+                        match hit {
+                            A11yHit::Close => {
+                                let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                                self.a11y_panel.visible = false;
+                                self.deliver_a11y_media_changes();
+                            }
+                            A11yHit::FontMultiplier(v) => {
+                                self.a11y_panel.draft.font_size_multiplier = v as f64;
+                            }
+                            A11yHit::ReducedMotion => {
+                                self.a11y_panel.draft.reduced_motion =
+                                    !self.a11y_panel.draft.reduced_motion;
+                            }
+                            A11yHit::ForcedColors => {
+                                self.a11y_panel.draft.forced_colors =
+                                    !self.a11y_panel.draft.forced_colors;
+                            }
+                            A11yHit::CursorSizeOption(size) => {
+                                self.a11y_panel.draft.cursor_size = size;
+                            }
+                            A11yHit::Inside => { /* swallow */ }
+                            A11yHit::Outside => {
+                                let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                                self.a11y_panel.visible = false;
+                                self.deliver_a11y_media_changes();
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Print dialog (E-1): centred overlay, Ctrl+P.
+                    if self.print_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        use panels::print_panel::PrintHit;
+                        let hit = panels::print_panel::hit_test(
+                            &self.print_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        );
+                        match hit {
+                            PrintHit::Close | PrintHit::Cancel => {
+                                self.print_panel.close();
+                            }
+                            PrintHit::Print => {
+                                let path = std::path::PathBuf::from(
+                                    self.print_panel.output_path.clone()
+                                );
+                                let source = self.source.clone();
+                                let sink = Arc::clone(&self.event_sink);
+                                let (margin_tb, margin_lr) = self.print_panel.margin_px();
+                                if let Err(e) = do_print_to_pdf_with_opts(
+                                    &source,
+                                    &path,
+                                    sink,
+                                    margin_tb,
+                                    margin_lr,
+                                ) {
+                                    eprintln!("Ошибка печати: {e}");
+                                }
+                                self.print_panel.close();
+                            }
+                            PrintHit::PaperSize(s) => {
+                                self.print_panel.paper = s;
+                            }
+                            PrintHit::Orientation(o) => {
+                                self.print_panel.orientation = o;
+                            }
+                            PrintHit::Margins(m) => {
+                                self.print_panel.margins = m;
+                            }
+                            PrintHit::PageRangeField => {
+                                self.print_panel.editing_field =
+                                    Some(panels::print_panel::PrintField::PageRange);
+                            }
+                            PrintHit::ColorMode(c) => {
+                                self.print_panel.color_mode = c;
+                            }
+                            PrintHit::OutputPathField => {
+                                self.print_panel.editing_field =
+                                    Some(panels::print_panel::PrintField::OutputPath);
+                            }
+                            PrintHit::Inside => { /* swallow */ }
+                            PrintHit::Outside => {
+                                self.print_panel.close();
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Settings panel (task D-7): centred overlay.
+                    if self.settings_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
+                        let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
+                        use panels::settings_panel::SettingsHit;
+                        let hit = panels::settings_panel::hit_test(
+                            &self.settings_panel,
+                            x_css,
+                            y_css,
+                            sp_x,
+                            sp_y,
+                        );
+                        match hit {
+                            SettingsHit::Close => {
+                                let draft = self.settings_panel.apply_draft();
+                                let _ = self.settings_store.apply_snapshot(&draft);
+                                self.settings_panel.visible = false;
+                            }
+                            SettingsHit::TabSelect(sec) => {
+                                self.settings_panel.section = sec;
+                                self.settings_panel.scroll_y = 0.0;
+                            }
+                            SettingsHit::ToggleShields => {
+                                self.settings_panel.draft.shields_enabled =
+                                    !self.settings_panel.draft.shields_enabled;
+                            }
+                            SettingsHit::ToggleDoh => {
+                                self.settings_panel.draft.doh_enabled =
+                                    !self.settings_panel.draft.doh_enabled;
+                            }
+                            SettingsHit::SetFingerprintMode(mode) => {
+                                self.settings_panel.draft.fingerprint_mode = mode;
+                            }
+                            SettingsHit::SetTheme(theme) => {
+                                self.settings_panel.draft.theme = theme;
+                            }
+                            SettingsHit::FontSizeDecrease => {
+                                self.settings_panel.draft.font_size =
+                                    (self.settings_panel.draft.font_size - 2.0).max(8.0);
+                            }
+                            SettingsHit::FontSizeIncrease => {
+                                self.settings_panel.draft.font_size =
+                                    (self.settings_panel.draft.font_size + 2.0).min(36.0);
+                            }
+                            SettingsHit::FocusHomepage => {
+                                self.settings_panel.focused_input =
+                                    Some(panels::settings_panel::SettingInput::Homepage);
+                            }
+                            SettingsHit::FocusDownloadPath => {
+                                self.settings_panel.focused_input =
+                                    Some(panels::settings_panel::SettingInput::DownloadPath);
+                            }
+                            SettingsHit::Inside => { /* swallow */ }
+                            SettingsHit::Outside => {
+                                let draft = self.settings_panel.apply_draft();
+                                let _ = self.settings_store.apply_snapshot(&draft);
+                                self.settings_panel.visible = false;
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Keyboard shortcuts panel (§D-4): centred overlay.
+                    if self.shortcuts_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
+                        let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
+                        use panels::shortcuts_panel::ShortcutsHit;
+                        let lx = x_css - kp_x;
+                        let ly = y_css - kp_y;
+                        if (0.0..panels::shortcuts_panel::PANEL_W).contains(&lx)
+                            && (0.0..panels::shortcuts_panel::PANEL_H).contains(&ly)
+                        {
+                            match self.shortcuts_panel.hit_test(lx, ly) {
+                                ShortcutsHit::Close => {
+                                    self.shortcuts_panel.close();
+                                }
+                                ShortcutsHit::StartRebind(idx) => {
+                                    self.shortcuts_panel.rebinding = Some(idx);
+                                }
+                                ShortcutsHit::Consumed => {}
+                            }
+                        } else {
+                            self.shortcuts_panel.close();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Certificate viewer panel (§D-1): centred overlay.
+                    if self.cert_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
+                        let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
+                        let lx = x_css - cp_x;
+                        let ly = y_css - cp_y;
+                        if (0.0..panels::cert_panel::PANEL_W).contains(&lx)
+                            && (0.0..panels::cert_panel::PANEL_H).contains(&ly)
+                        {
+                            use panels::cert_panel::CertHit;
+                            match self.cert_panel.hit_test(lx, ly) {
+                                CertHit::Close | CertHit::Header => {
+                                    self.cert_panel.close();
+                                }
+                                CertHit::Body => { /* swallow */ }
+                            }
+                        } else {
+                            self.cert_panel.close();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // History panel (task D-5): centred floating overlay.
+                    if self.history_panel.visible {
+                        let (px, py) = self.history_panel_anchor();
+                        use panels::history_panel::HistoryHit;
+                        let hit =
+                            panels::history_panel::hit_test(&self.history_panel, x_css, y_css, px, py);
+                        match hit {
+                            HistoryHit::Close => {
+                                self.history_panel.visible = false;
+                                self.history_panel.search_active = false;
+                            }
+                            HistoryHit::FocusSearch => {
+                                self.history_panel.search_active = true;
+                            }
+                            HistoryHit::ClearAll => {
+                                let _ = self.history_store.clear();
+                                let _ = self.history_fts.clear();
+                                self.refresh_history();
+                            }
+                            HistoryHit::Delete(id) => {
+                                if let Some(url) = self
+                                    .history_panel
+                                    .rows
+                                    .iter()
+                                    .find_map(|r| {
+                                        if let panels::history_panel::HistoryRow::Entry(e) = r {
+                                            if e.id == id { Some(e.url.clone()) } else { None }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                {
+                                    let _ = self.history_store.delete(&url);
+                                    self.refresh_history();
+                                }
+                            }
+                            HistoryHit::Navigate(url) => {
+                                self.history_panel.visible = false;
+                                self.navigate_to(PageSource::Url(url));
+                            }
+                            HistoryHit::Inside => { /* swallow */ }
+                            HistoryHit::Outside => {
+                                self.history_panel.visible = false;
+                                self.history_panel.search_active = false;
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
                     // Sidebar web panel (7D.3): right-docked panel.
                     if self.sidebar.visible {
                         let win_w = self.viewport_width_css();
@@ -5680,7 +6353,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
                 } else {
-                    // Released — завершаем drag (если он был).
+                    // Released — завершаем drag (если был) и сбрасываем resize.
+                    self.resize_active = None;
                     // CSS :active — clear on release.
                     if self.active_nid.is_some() {
                         self.active_nid = None;
@@ -5717,19 +6391,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // не приходит, поэтому делаем вручную).
                     self.update_cursor_icon();
                 }
-            }
-            // B-7 Phase 1: Handle mouse release to clear resize state.
-            // This is separate from the MouseInput Pressed block above.
-            WindowEvent::MouseInput { state: ref state2, button: ref button2, .. } if button2 == &MouseButton::Left && state2 == &ElementState::Released => {
-                // Clear resize_active on mouse release.
-                self.resize_active = None;
-                // Clear :active pseudo-class if set.
-                if self.active_nid.is_some() {
-                    self.active_nid = None;
-                    self.relayout();
-                    self.request_redraw();
-                }
-                self.update_cursor_icon();
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 // Privacy network panel intercepts the wheel while visible:
@@ -5789,6 +6450,36 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     };
                     // winit: wheel up → lines > 0 → scroll content up (scroll_y -=).
                     self.bookmark_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // History panel intercepts the wheel while visible.
+                if self.history_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.history_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // Keyboard shortcuts panel intercepts the wheel while visible (§D-4).
+                if self.shortcuts_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.shortcuts_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // Certificate viewer panel intercepts the wheel while visible (§D-1).
+                if self.cert_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.cert_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
                     self.request_redraw();
                     return;
                 }
@@ -6116,6 +6807,43 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     picker.append(&mut overlay_buf);
                     overlay_buf = picker;
                 }
+                if let (Some(sel_node), Some(lb)) =
+                    (self.select_dropdown_node, &self.layout_box)
+                    && let Some(anchor) = forms::find_box_rect(lb, sel_node)
+                {
+                    let doc = self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
+                    if let Some(doc) = doc {
+                        let opts = forms::collect_select_options(&doc, sel_node);
+                        let vp_h = self.viewport_height_css();
+                        let mut dd = forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h);
+                        dd.append(&mut overlay_buf);
+                        overlay_buf = dd;
+                    }
+                }
+
+                // <dialog> modal overlay (L-2) — ::backdrop + centered dialog above page.
+                if let Some(lb) = &self.layout_box {
+                    let doc =
+                        self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
+                    if let Some(doc) = doc {
+                        let modal_nids = forms::collect_modal_dialogs(&doc);
+                        if !modal_nids.is_empty() {
+                            let vp_h = self.viewport_height_css();
+                            for &dlg_nid in &modal_nids {
+                                if let Some(dlg_lb) = forms::find_layout_box(lb, dlg_nid) {
+                                    let mut dlg_overlay = forms::build_dialog_overlay(
+                                        dlg_lb,
+                                        self.scroll_y,
+                                        vp_w,
+                                        vp_h,
+                                    );
+                                    dlg_overlay.append(&mut overlay_buf);
+                                    overlay_buf = dlg_overlay;
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Адресная строка (Ctrl+L) — рисуется поверх всего остального.
                 if self.address_bar.is_open() {
@@ -6357,6 +7085,68 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut bm_cmds);
                 }
 
+                // Accessibility settings panel (E-2): centred overlay, Ctrl+Shift+Q.
+                if self.a11y_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let win_size = (win_w as u32, win_h as u32);
+                    let mut a11y_cmds =
+                        panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size);
+                    overlay_buf.append(&mut a11y_cmds);
+                }
+
+                // Print dialog (E-1): centred overlay, Ctrl+P.
+                if self.print_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let pp_x = (win_w - panels::print_panel::PANEL_W) * 0.5;
+                    let pp_y = (win_h - panels::print_panel::PANEL_H) * 0.5;
+                    // Dim backdrop behind the modal.
+                    overlay_buf.push(lumen_paint::DisplayCommand::FillRect {
+                        rect: lumen_core::geom::Rect::new(0.0, 0.0, win_w, win_h),
+                        color: lumen_layout::Color { r: 0, g: 0, b: 0, a: 110 },
+                    });
+                    let mut pp_cmds =
+                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y);
+                    overlay_buf.append(&mut pp_cmds);
+                }
+
+                // Settings panel (task D-7): centred overlay, Ctrl+, or about:settings.
+                if self.settings_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
+                    let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
+                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y);
+                }
+
+                // Keyboard shortcuts panel (§D-4): centred floating overlay.
+                if self.shortcuts_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
+                    let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
+                    self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y);
+                }
+
+                // Certificate viewer panel (§D-1): centred floating overlay.
+                if self.cert_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
+                    let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
+                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y);
+                }
+
+                // History panel (task D-5): centred floating overlay.
+                if self.history_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let mut hist_cmds =
+                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h);
+                    overlay_buf.append(&mut hist_cmds);
+                }
+
                 // §12.3 Read-later panel: right-docked overlay.
                 if self.read_later_panel.visible {
                     let win_w = self.viewport_width_css();
@@ -6382,8 +7172,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         tabs::strip::build_tab_bar(&self.tab_strip, tab_area_w);
                     overlay_buf.append(&mut tab_cmds);
                     // Tab tier tooltip on hover.
-                    if let Some(idx) = self.hovered_tab_idx {
-                        if let Some(tab) = self.tab_strip.tabs.get(idx) {
+                    if let Some(idx) = self.hovered_tab_idx
+                        && let Some(tab) = self.tab_strip.tabs.get(idx) {
                             let tab_w = tab_area_w / self.tab_strip.tabs.len().max(1) as f32;
                             let tab_center_x = (idx as f32 + 0.5) * tab_w;
                             if let Some(mut tooltip_cmds) = tabs::strip::build_tab_tooltip(
@@ -6394,7 +7184,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 overlay_buf.append(&mut tooltip_cmds);
                             }
                         }
-                    }
                     // Archive toolbar button (rightmost 36 px of tab bar).
                     let mut arch_btn = tabs::archive::build_button(
                         &self.archive,
@@ -6621,7 +7410,7 @@ impl Lumen {
             0.0
         };
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = y_css + self.scroll_y;
+        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
@@ -6653,7 +7442,10 @@ impl Lumen {
         } else {
             0.0
         };
-        ((x_css - panel_x_offset) + self.scroll_x, y_css + self.scroll_y)
+        (
+            (x_css - panel_x_offset) + self.scroll_x,
+            (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y,
+        )
     }
 
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
@@ -6719,10 +7511,47 @@ impl Lumen {
         // Any click outside the picker closes it.
         self.color_picker_node = None;
 
+        // ── Select dropdown option hit ───────────────────
+        // Check if click lands on an open <select> dropdown.
+        let select_hit: Option<(NodeId, usize)> = {
+            let sel_node = self.select_dropdown_node;
+            sel_node.and_then(|sn| {
+                let anchor = forms::find_box_rect(self.layout_box.as_ref()?, sn)?;
+                let opts_count = self.layout_source.as_ref()
+                    .map(|src| forms::collect_select_options(&src.document.lock().unwrap(), sn).len())
+                    .unwrap_or(0);
+                let vp_h = self.viewport_height_css();
+                let vp_w2 = self.viewport_width_css();
+                let idx = forms::hit_select_option(anchor, opts_count, scroll_y, vp_w2, vp_h, x_css, y_css)?;
+                Some((sn, idx))
+            })
+        };
+        if let Some((sn, idx)) = select_hit {
+            self.select_dropdown_node = None;
+            if let Some(src) = self.layout_source.as_mut() {
+                let mut doc = src.document.lock().unwrap();
+                let opts = forms::collect_select_options(&doc, sn);
+                if !opts.get(idx).is_some_and(|o| o.disabled) {
+                    forms::apply_select_choice(&mut doc, &opts, idx);
+                    // Update form_state value so form submission includes the chosen value.
+                    if let Some(chosen) = opts.get(idx) {
+                        self.form_state.entry(sn).or_default().value = chosen.value.clone();
+                    }
+                    drop(doc);
+                    self.relayout();
+                }
+            }
+            return;
+        }
+        // Any click outside the dropdown closes it.
+        self.select_dropdown_node = None;
+
         // ── Form control + link click ────────────────────
         // Single hit test shared by form dispatch and link navigation.
         // When the vertical/tree tabs panel is visible, page content is shifted
         // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
+        // Page content is also shifted down by TAB_BAR_HEIGHT via PushTransform,
+        // so we subtract that offset from y to get layout coordinates.
         let panel_x_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
         } else if self.tree_tabs.visible {
@@ -6731,10 +7560,57 @@ impl Lumen {
             0.0
         };
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = y_css + self.scroll_y;
+        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
+
+        // Debug click log — активируется флагом --click-log или LUMEN_CLICK_LOG=1.
+        // For click log: report both the hit box node (<p>) and the inline source_node
+        // (<a> text node) so the log shows what find_link_href actually searches from.
+        let click_log_hit: Option<(u32, String, String, String)> =
+            if click_log::is_enabled() {
+                hit_result.as_ref().and_then(|r| {
+                    self.layout_source.as_ref().map(|src| {
+                        let doc = src.document.lock().unwrap();
+                        // Use source_node for tag/class info — it reveals the inline element.
+                        let effective_id = r.source_node;
+                        let node = doc.get(effective_id);
+                        let (tag, id_attr, class_attr) =
+                            if let NodeData::Element { name, attrs } = &node.data {
+                                let id = attrs.iter()
+                                    .find(|a| a.name.local == "id")
+                                    .map(|a| a.value.as_str())
+                                    .unwrap_or("");
+                                let cls = attrs.iter()
+                                    .find(|a| a.name.local == "class")
+                                    .map(|a| a.value.as_str())
+                                    .unwrap_or("");
+                                (name.local.to_string(), id.to_owned(), cls.to_owned())
+                            } else if let NodeData::Text(t) = &node.data {
+                                // Show which text we clicked and note the parent element.
+                                let parent_tag = node.parent
+                                    .map(|pid| {
+                                        let pn = doc.get(pid);
+                                        if let NodeData::Element { name, .. } = &pn.data {
+                                            format!("<{}>", name.local)
+                                        } else {
+                                            "?".to_owned()
+                                        }
+                                    })
+                                    .unwrap_or_default();
+                                let preview: String = t.chars().take(30).collect();
+                                (format!("#text in {parent_tag}"), String::new(), format!("\"{preview}\""))
+                            } else {
+                                ("#other".to_owned(), String::new(), String::new())
+                            };
+                        (effective_id.index() as u32, tag, id_attr, class_attr)
+                    })
+                })
+            } else {
+                None
+            };
+
         // Track focused node for TypeText injection and CSS :focus matching.
         let new_focused = hit_result.as_ref().map(|r| r.node);
         let focus_changed = new_focused != self.focused_node;
@@ -6774,6 +7650,59 @@ impl Lumen {
             } else {
                 forms::FormClickAction::Nothing
             };
+
+        // Log form actions (non-link outcomes).
+        if click_log::is_enabled() {
+            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                node_id: *nid, tag, id_attr: id, class_attr: cls,
+            });
+            match &form_action {
+                forms::FormClickAction::Nothing => {} // logged in the Nothing branch below
+                forms::FormClickAction::ToggleCheckbox(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleCheckbox"),
+                    });
+                }
+                forms::FormClickAction::ToggleRadio { .. } => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleRadio"),
+                    });
+                }
+                forms::FormClickAction::OpenColorPicker(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenColorPicker"),
+                    });
+                }
+                forms::FormClickAction::OpenSelectDropdown(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenSelectDropdown"),
+                    });
+                }
+                forms::FormClickAction::SubmitForm(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("SubmitForm"),
+                    });
+                }
+                forms::FormClickAction::ToggleDetails(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleDetails"),
+                    });
+                }
+            }
+        }
+
         match form_action {
             forms::FormClickAction::ToggleCheckbox(id) => {
                 if let Some(src) = self.layout_source.as_mut() {
@@ -6796,6 +7725,26 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
+            forms::FormClickAction::OpenSelectDropdown(id) => {
+                self.select_dropdown_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::ToggleDetails(id) => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
+                }
+                // Fire HTML5 §4.11.1 `toggle` event on the <details> element.
+                #[cfg(feature = "quickjs")]
+                if let Some(ctx) = &self.js_ctx {
+                    ctx.eval_js(&format!(
+                        "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
+                        id.index()
+                    ));
+                }
+                self.relayout();
+            }
             forms::FormClickAction::SubmitForm(submit_node) => {
                 // Phase 3: HTML5 form submission algorithm integration.
                 // Execute submit_form() which performs constraint validation.
@@ -6804,8 +7753,16 @@ impl Lumen {
                     if let Some(submit_event) = forms::build_form_submit_event(&doc, submit_node) {
                         match submit_event {
                             lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
-                                // Form passed validation — collect fields and submit.
-                                let body = forms::encode_form_fields(&fields);
+                                // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
+                                let enctype = forms::get_form_enctype(&doc, submit_node);
+                                let body = if enctype == "multipart/form-data" {
+                                    // Multipart: deterministic boundary for Phase 0.
+                                    let boundary = "----LumenFormBoundary0000000000000000";
+                                    let (_ct, bytes) = forms::encode_form_fields_multipart(&fields, boundary);
+                                    String::from_utf8_lossy(&bytes).into_owned()
+                                } else {
+                                    forms::encode_form_fields(&fields)
+                                };
                                 use lumen_core::event::{Event, TabId};
                                 self.event_sink.emit(&Event::FormSubmit {
                                     tab_id: TabId(0),
@@ -6816,15 +7773,20 @@ impl Lumen {
                                 match method.as_str() {
                                     "get" => {
                                         // HTML LS §form-submission step 23: navigate
-                                        // to action + query-string.
-                                        let get_url = forms::make_get_url(&action, &body);
+                                        // to action + query-string (only urlencoded for GET).
+                                        let url_body = if enctype == "multipart/form-data" {
+                                            forms::encode_form_fields(&fields)
+                                        } else {
+                                            body.clone()
+                                        };
+                                        let get_url = forms::make_get_url(&action, &url_body);
                                         let resolved = self.source.resolve_href(&get_url);
                                         drop(doc);
                                         self.navigate_to(PageSource::from_arg(Some(&resolved)));
                                     }
                                     _ => {
                                         // POST: emit event; real network send is P3 task.
-                                        eprintln!("[forms] POST {} body={}", action, body);
+                                        eprintln!("[forms] POST {} enctype={} body-len={}", action, enctype, body.len());
                                     }
                                 }
                             }
@@ -6853,20 +7815,71 @@ impl Lumen {
                 // ── Link click ───────────────────────────
                 // No form control was activated — check if
                 // the clicked node is inside an <a href>.
+                // Use source_node (text node inside inline element) so find_link_href
+                // can walk up and find the <a> parent: text → <a href="…"> → found.
+                // Falls back to r.node for non-inline boxes.
                 let href = hit_result.as_ref().and_then(|r| {
                     self.layout_source
                         .as_ref()
-                        .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.node))
+                        .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.source_node))
                 });
                 if let Some(href) = href {
                     if let Some(frag) = links::fragment_only(&href) {
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log_click(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkFragment(frag),
+                            });
+                        }
                         // Same-page fragment navigation.
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log_click(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkNavigate {
+                                    href: &href,
+                                    resolved: &resolved,
+                                },
+                            });
+                        }
                         let target = PageSource::from_arg(Some(&resolved));
                         self.navigate_to(target);
+                    } else {
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log_click(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkBlocked(&href),
+                            });
+                        }
                     }
+                } else if click_log::is_enabled() {
+                    let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                        node_id: *nid, tag, id_attr: id, class_attr: cls,
+                    });
+                    let outcome = if hit_result.is_none() {
+                        click_log::ClickOutcome::NoHit
+                    } else {
+                        click_log::ClickOutcome::NoLink
+                    };
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome,
+                    });
                 }
             }
         }
@@ -6874,6 +7887,28 @@ impl Lumen {
 
     /// Inject a typed character into the focused element (TypeText injection path).
     ///
+    /// Inject a special (non-printable) key press: `keydown` → `keyup`.
+    ///
+    /// `code` is a W3C `KeyboardEvent.code` string, e.g. `"Enter"`, `"Backspace"`.
+    /// The matching `KeyboardEvent.key` value is resolved via [`input::native::code_to_key`]
+    /// (`"Space"` → `" "`, everything else passes through unchanged).
+    /// Events have `isTrusted=true`; JS `dispatchEvent()` is never used.
+    fn inject_special_key(&mut self, code: &str) {
+        let Some(ctx) = self.js_ctx.as_ref() else { return };
+        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
+        let key = input::native::code_to_key(code);
+        for event_type in &["keydown", "keyup"] {
+            let script = format!(
+                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                node_id, event_type, key, code,
+            );
+            ctx.eval_js(&script);
+        }
+        if let Some(nav) = ctx.take_navigate_request() {
+            self.pending_js_navigate = Some(nav);
+        }
+    }
+
     /// Fires `keydown` → `input` → `keyup` JS events via `_lumen_dispatch_key_event`
     /// on the last-focused node so events have `isTrusted=true`.
     fn inject_char(&mut self, ch: char) {
@@ -6939,6 +7974,25 @@ impl Lumen {
             && self.bookmark_panel.search_active
             && self.handle_bookmark_key(code, key_event)
         {
+            return;
+        }
+
+        // History panel search box: printable input + Backspace + Esc route here.
+        // Arrow keys scroll the list. Modified keys fall through for global shortcuts.
+        if self.history_panel.visible && self.handle_history_key(code, key_event) {
+            return;
+        }
+
+        // Settings panel text inputs + Esc. Modified keys fall through for global shortcuts.
+        if self.print_panel.visible && self.handle_print_key(code, key_event) {
+            return;
+        }
+        if self.settings_panel.visible && self.handle_settings_key(code, key_event) {
+            return;
+        }
+
+        // Keyboard shortcuts panel — capture any keypress when rebinding (§D-4).
+        if self.shortcuts_panel.visible && self.handle_shortcuts_key(code, key_event) {
             return;
         }
 
@@ -7207,6 +8261,36 @@ impl Lumen {
                 }
                 self.request_redraw();
             }
+            KeyCommand::ToggleHistory => {
+                self.history_panel.toggle();
+                if self.history_panel.visible {
+                    self.refresh_history();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleA11y => {
+                if self.a11y_panel.visible {
+                    let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                    self.a11y_panel.visible = false;
+                    self.deliver_a11y_media_changes();
+                } else {
+                    self.a11y_panel.load_draft(self.a11y_store.snapshot());
+                    self.a11y_panel.visible = true;
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleSettings => {
+                let snap = self.settings_store.snapshot();
+                if self.settings_panel.visible {
+                    // Flush draft to store on close.
+                    let draft = self.settings_panel.apply_draft();
+                    let _ = self.settings_store.apply_snapshot(&draft);
+                    self.settings_panel.visible = false;
+                } else {
+                    self.settings_panel.open(snap);
+                }
+                self.request_redraw();
+            }
             KeyCommand::ToggleCommandPalette => {
                 self.command_palette.toggle();
                 if self.command_palette.visible {
@@ -7259,6 +8343,25 @@ impl Lumen {
                 }
                 self.request_redraw();
             }
+            KeyCommand::ToggleReaderView => {
+                self.toggle_reader_view();
+            }
+            KeyCommand::ViewSource => {
+                self.show_view_source();
+            }
+            KeyCommand::ToggleShortcuts => {
+                self.shortcuts_panel.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::TogglePrint => {
+                self.print_panel.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::ToggleCert => {
+                let cert = self.cert_info.clone();
+                self.cert_panel.toggle(cert);
+                self.request_redraw();
+            }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
                 self.relayout();
@@ -7280,6 +8383,23 @@ impl Lumen {
     /// layout for the first `<video>` element and embeds its `src` / `poster`;
     /// if the page has no video, the card opens with a placeholder so the user
     /// still gets feedback (and can drag / close it).
+    /// Re-deliver media query changes to JS after accessibility prefs change.
+    ///
+    /// Called when the a11y panel closes so `prefers-reduced-motion` MQLs fire.
+    fn deliver_a11y_media_changes(&self) {
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let w = self.viewport_width_css();
+            let h = self.viewport_height_css();
+            let dark = if self.dark_mode { "true" } else { "false" };
+            let rm = if self.a11y_store.reduced_motion() { "true" } else { "false" };
+            js.eval_js(&format!(
+                "if(typeof _lumen_deliver_media_changes==='function')\
+                 _lumen_deliver_media_changes({w},{h},{dark},{rm});"
+            ));
+        }
+    }
+
     fn toggle_pip(&mut self) {
         if self.pip.active {
             self.pip.close();
@@ -7300,6 +8420,7 @@ impl Lumen {
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
+        click_log::log_nav(&source.describe());
         self.hint.close();
         // Snapshot current page into bfcache if it has an HTML source.
         if let Some(ref ls) = self.layout_source
@@ -7588,13 +8709,28 @@ impl Lumen {
     /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
     /// → record in search_history → plain navigate.
     fn handle_omnibox_commit(&mut self, value: String) {
+        // `view-source:<url>` — fetch and display syntax-highlighted source (§D-2).
+        if let Some(target_url) = value.trim().strip_prefix("view-source:") {
+            let target_url = target_url.trim().to_owned();
+            self.show_view_source_for_url(&target_url);
+            return;
+        }
+
+        // `about:settings` — open the browser settings overlay (task D-7).
+        if value.trim() == "about:settings" {
+            let snap = self.settings_store.snapshot();
+            self.settings_panel.open(snap);
+            self.request_redraw();
+            return;
+        }
+
         // `sidebar:<url>` — load the URL into the right-docked sidebar panel (7D.3).
         if let Some(sidebar_url) = value.strip_prefix("sidebar:") {
             let sidebar_url = sidebar_url.trim().to_owned();
             if !sidebar_url.is_empty() {
                 let sink = Arc::clone(&self.event_sink);
                 let src = PageSource::from_arg(Some(&sidebar_url));
-                match src.load_bytes(sink) {
+                match src.load_bytes(sink, Some(Arc::clone(&self.cookie_jar))) {
                     Ok(raw) => {
                         self.open_sidebar_page(sidebar_url, &raw.bytes, String::new());
                     }
@@ -7806,6 +8942,176 @@ impl Lumen {
         }
     }
 
+    /// Handle keyboard input when the history panel is visible.
+    ///
+    /// When `search_active`: printable chars → search query, Backspace → delete
+    /// char, Escape → blur search (panel stays open). Arrow keys scroll the list.
+    /// Returns `true` if the key was consumed.
+    fn handle_history_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                if self.history_panel.search_active {
+                    self.history_panel.search_active = false;
+                } else {
+                    self.history_panel.visible = false;
+                }
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.history_panel.search_active => {
+                self.history_panel.backspace_search();
+                self.refresh_history();
+                self.request_redraw();
+                true
+            }
+            KeyCode::ArrowDown => {
+                self.history_panel.scroll_by(LINE_STEP_CSS_PX);
+                self.request_redraw();
+                true
+            }
+            KeyCode::ArrowUp => {
+                self.history_panel.scroll_by(-LINE_STEP_CSS_PX);
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.history_panel.search_active
+                    && let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.history_panel.append_search(ch);
+                        }
+                        self.refresh_history();
+                        self.request_redraw();
+                        return true;
+                    }
+                false
+            }
+        }
+    }
+
+    /// Handle keyboard input when the print dialog is visible (E-1).
+    ///
+    /// Printable chars go to the focused text field. Escape closes the dialog.
+    /// Returns `true` if the key was consumed.
+    fn handle_print_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.print_panel.close();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.print_panel.editing_field.is_some() => {
+                self.print_panel.pop_char();
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.print_panel.editing_field.is_some()
+                    && let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.print_panel.push_char(ch);
+                        }
+                        self.request_redraw();
+                        return true;
+                    }
+                false
+            }
+        }
+    }
+
+    /// Handle keyboard input when the settings panel is visible.
+    ///
+    /// Printable chars go to the focused text input. Escape closes panel (flushing
+    /// draft). Returns `true` if the key was consumed.
+    fn handle_settings_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                let draft = self.settings_panel.apply_draft();
+                let _ = self.settings_store.apply_snapshot(&draft);
+                self.settings_panel.visible = false;
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.settings_panel.focused_input.is_some() => {
+                self.settings_panel.backspace();
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.settings_panel.focused_input.is_some()
+                    && let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.settings_panel.append_char(ch);
+                        }
+                        self.request_redraw();
+                        return true;
+                    }
+                false
+            }
+        }
+    }
+
+    /// Обрабатывает клавишный ввод для панели горячих клавиш (§D-4).
+    ///
+    /// Когда активен rebind mode (`rebinding.is_some()`): захватывает
+    /// следующую клавишу и передаёт в `accept_rebind`. Esc отменяет rebind.
+    /// Возвращает `true`, если событие поглощено.
+    fn handle_shortcuts_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if key_event.repeat {
+            return false;
+        }
+        if self.shortcuts_panel.rebinding.is_some() {
+            if code == KeyCode::Escape {
+                self.shortcuts_panel.cancel_rebind();
+                self.request_redraw();
+                return true;
+            }
+            let modifier = {
+                let m = self.modifiers;
+                let ctrl = m.control_key();
+                let shift = m.shift_key();
+                let alt = m.alt_key();
+                match (ctrl, shift, alt) {
+                    (true, true, false) => "ctrl+shift",
+                    (true, false, true) => "ctrl+alt",
+                    (true, false, false) => "ctrl",
+                    (false, true, false) => "shift",
+                    (false, false, true) => "alt",
+                    _ => "",
+                }
+            };
+            let key = format!("{:?}", code);
+            let key = key.trim_start_matches("Key").trim_start_matches("Digit").to_string();
+            self.shortcuts_panel.accept_rebind(modifier, &key);
+            self.request_redraw();
+            return true;
+        }
+        if code == KeyCode::Escape {
+            self.shortcuts_panel.close();
+            self.request_redraw();
+            return true;
+        }
+        false
+    }
+
     /// Обрабатывает клавишный ввод пока hint-режим активен.
     ///
     /// `Escape` — закрыть overlay. Любой одиночный символ (строчный ASCII) —
@@ -7876,6 +9182,25 @@ impl Lumen {
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
+            }
+            forms::FormClickAction::OpenSelectDropdown(id) => {
+                self.select_dropdown_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::ToggleDetails(id) => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
+                }
+                #[cfg(feature = "quickjs")]
+                if let Some(ctx) = &self.js_ctx {
+                    ctx.eval_js(&format!(
+                        "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
+                        id.index()
+                    ));
+                }
+                self.relayout();
             }
             forms::FormClickAction::SubmitForm(_) | forms::FormClickAction::Nothing => {
                 // Link navigation.
@@ -8056,6 +9381,81 @@ impl Lumen {
     ///
     /// Called after every save/delete and when the panel opens.  Shows the 50
     /// most recent items (unread first, then read, then archived).
+    /// Toggle Reader View (§D-3, F9).
+    ///
+    /// When entering reader mode: extracts the article region from the current
+    /// page's HTML source, wraps it in a clean reading template, and re-renders
+    /// it as an in-memory `PageSource::Snapshot` without a network round-trip.
+    /// The original source is stashed in `reader_original_source`.
+    ///
+    /// When exiting: restores the stashed source and reloads.
+    fn toggle_reader_view(&mut self) {
+        if let Some(original) = self.reader_original_source.take() {
+            // Exit reader mode — restore original page.
+            self.source = original;
+            self.reload();
+            return;
+        }
+
+        // Enter reader mode — extract article from current HTML source.
+        let html = match self.layout_source.as_ref().and_then(|ls| ls.html_source.as_deref()) {
+            Some(s) if !s.is_empty() => s.to_owned(),
+            _ => return, // nothing to extract from
+        };
+
+        let Some(article) = reader_view::extract_article(&html) else { return };
+        let reader_html = reader_view::build_reader_html(&article);
+
+        let base_url = self.source.url_str()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "about:reader".to_owned());
+
+        self.reader_original_source = Some(self.source.clone());
+        self.source = PageSource::Snapshot { html: reader_html, base_url };
+        self.reload();
+    }
+
+    /// Show syntax-highlighted source of the current page (Ctrl+U, §D-2).
+    ///
+    /// Uses the already-parsed HTML stored in `layout_source.html_source`.
+    /// No-op when the page has no HTML source (e.g. empty tab).
+    fn show_view_source(&mut self) {
+        let html = match self.layout_source.as_ref().and_then(|ls| ls.html_source.as_deref()) {
+            Some(s) if !s.is_empty() => s.to_owned(),
+            _ => return,
+        };
+        let url = self.source.url_str()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "about:source".to_owned());
+        let source_html = source_view::build_view_source_html(&url, &html);
+        self.navigate_to(PageSource::Snapshot {
+            html: source_html,
+            base_url: format!("view-source:{url}"),
+        });
+    }
+
+    /// Fetch `url` and display its raw bytes as syntax-highlighted source (§D-2).
+    ///
+    /// Used when the user types `view-source:<url>` in the address bar.
+    fn show_view_source_for_url(&mut self, url: &str) {
+        let source = PageSource::from_arg(Some(url));
+        let sink = Arc::clone(&self.event_sink);
+        let jar = Arc::clone(&self.cookie_jar);
+        match source.load_bytes(sink, Some(jar)) {
+            Ok(raw) => {
+                let html_str = String::from_utf8_lossy(&raw.bytes).into_owned();
+                let source_html = source_view::build_view_source_html(url, &html_str);
+                self.navigate_to(PageSource::Snapshot {
+                    html: source_html,
+                    base_url: format!("view-source:{url}"),
+                });
+            }
+            Err(e) => {
+                eprintln!("view-source: не удалось загрузить {url}: {e}");
+            }
+        }
+    }
+
     fn refresh_read_later(&mut self) {
         let mut entries = self
             .read_later_store
@@ -8083,6 +9483,51 @@ impl Lumen {
             })
             .collect();
         self.bookmark_panel.set_data(entries);
+    }
+
+    /// Reload the history panel data from `history_store`.
+    ///
+    /// When `history_panel.query` is non-empty, uses `HistoryFts::search` for
+    /// full-text matching. Otherwise falls back to `History::recent(50)`.
+    fn refresh_history(&mut self) {
+        let query = self.history_panel.query.trim().to_owned();
+        let items: Vec<panels::history_panel::HistoryItem> = if query.is_empty() {
+            self.history_store
+                .recent(50)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| panels::history_panel::HistoryItem {
+                    id: e.id,
+                    url: e.url,
+                    title: e.title,
+                    visit_date: e.visit_date,
+                    visit_count: e.visit_count,
+                })
+                .collect()
+        } else {
+            self.history_fts
+                .search(&query, 50)
+                .unwrap_or_default()
+                .into_iter()
+                .enumerate()
+                .map(|(i, hit)| panels::history_panel::HistoryItem {
+                    id: i as i64 + 1,
+                    url: hit.url,
+                    title: hit.title,
+                    visit_date: 0,
+                    visit_count: 1,
+                })
+                .collect()
+        };
+        self.history_panel.set_items(items);
+    }
+
+    /// Top-left corner of the history panel in window-space CSS px.
+    fn history_panel_anchor(&self) -> (f32, f32) {
+        let win_w = self.viewport_width_css();
+        let px = (win_w - panels::history_panel::PANEL_W) * 0.5;
+        let py = tabs::strip::TAB_BAR_HEIGHT + 4.0;
+        (px, py)
     }
 
     /// Rebuild the command-palette item list: curated commands, every bookmark,
@@ -8543,7 +9988,7 @@ impl Lumen {
             return;
         };
         let vp_size = renderer.viewport_size();
-        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        let viewport = Size::new(vp_size.width, vp_size.height);
         scroll::decode_gating::discard_offscreen_images(
             &mut self.image_cache,
             root,
@@ -8582,8 +10027,9 @@ impl Lumen {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).
+            // Page content is shifted down by TAB_BAR_HEIGHT via PushTransform.
             let page_x = x_css + self.scroll_x;
-            let page_y = y_css + self.scroll_y;
+            let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
             match hit_test(Point::new(page_x, page_y), lb) {
                 Some(result) => css_cursor_to_winit(result.cursor),
                 None => CursorIcon::Default,
@@ -8629,7 +10075,7 @@ impl Lumen {
     /// Silent — ошибки записи не ломают выход. Не сохраняет Empty-страницу.
     fn save_session_on_close(&self) {
         let url = match &self.source {
-            PageSource::Empty => return,
+            PageSource::Empty | PageSource::AboutBlank => return,
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
@@ -8809,7 +10255,7 @@ impl Lumen {
             PageSource::Url(u) => u.clone(),
             PageSource::File(p) => format!("file://{}", p.display()),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
-            PageSource::Empty => String::new(),
+            PageSource::Empty | PageSource::AboutBlank => String::new(),
         };
         let title = snap.title.clone().unwrap_or_default();
         let scroll_x = snap.scroll_x;
@@ -8913,10 +10359,11 @@ impl Lumen {
             doc,
             event_sink,
             &mut self.ls_storage,
-            &self.idb_backend,
+            self.idb_dir.as_deref(),
             &self.sw_backend,
             cookie_banner_dismiss,
             deterministic,
+            Some(Arc::clone(&self.cookie_jar)),
         );
 
         let layout_source = LayoutSource {
@@ -8930,7 +10377,7 @@ impl Lumen {
             || (1024.0_f32, 720.0_f32),
             |r| {
                 let s = r.viewport_size();
-                (s.width as f32, s.height as f32)
+                (s.width, s.height)
             },
         );
         let meta_scale = meta_initial_scale(&layout_source);
@@ -9090,13 +10537,9 @@ impl Lumen {
             form_state: std::mem::take(&mut self.form_state),
             validation_tooltip: self.validation_tooltip.take(),
             color_picker_node: self.color_picker_node.take(),
+            select_dropdown_node: self.select_dropdown_node.take(),
             ls_storage: std::mem::take(&mut self.ls_storage),
-            idb_backend: std::mem::replace(
-                &mut self.idb_backend,
-                Arc::new(std::sync::Mutex::new(
-                    lumen_storage::store::InMemoryStorage::new(),
-                )),
-            ),
+            idb_dir: self.idb_dir.clone(),
             sw_backend: std::mem::replace(
                 &mut self.sw_backend,
                 Arc::new(std::sync::Mutex::new(
@@ -9118,6 +10561,8 @@ impl Lumen {
                 &mut self.current_history_state_json,
                 String::from("null"),
             ),
+            reader_original_source: self.reader_original_source.take(),
+            cert_info: self.cert_info.take(),
         }
     }
 
@@ -9155,8 +10600,9 @@ impl Lumen {
         self.form_state = snap.form_state;
         self.validation_tooltip = snap.validation_tooltip;
         self.color_picker_node = snap.color_picker_node;
+        self.select_dropdown_node = snap.select_dropdown_node;
         self.ls_storage = snap.ls_storage;
-        self.idb_backend = snap.idb_backend;
+        self.idb_dir = snap.idb_dir;
         self.sw_backend = snap.sw_backend;
         self.js_ctx = snap.js_ctx;
         self.first_paint_delivered = snap.first_paint_delivered;
@@ -9167,6 +10613,8 @@ impl Lumen {
         self.zoom_factor = snap.zoom_factor;
         self.display_url = snap.display_url;
         self.current_history_state_json = snap.current_history_state_json;
+        self.reader_original_source = snap.reader_original_source;
+        self.cert_info = snap.cert_info;
     }
 
     /// Reset all per-page fields to blank-tab defaults.
@@ -9204,10 +10652,9 @@ impl Lumen {
         self.form_state = HashMap::new();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        self.select_dropdown_node = None;
         self.ls_storage = HashMap::new();
-        self.idb_backend = Arc::new(std::sync::Mutex::new(
-            lumen_storage::store::InMemoryStorage::new(),
-        ));
+        // idb_dir is session-level — intentionally not reset here.
         self.sw_backend = Arc::new(std::sync::Mutex::new(
             lumen_storage::store::InMemoryStorage::new(),
         ));
@@ -9220,6 +10667,8 @@ impl Lumen {
         self.zoom_factor = zoom::ZOOM_DEFAULT;
         self.display_url = None;
         self.current_history_state_json = String::from("null");
+        self.reader_original_source = None;
+        self.cert_info = None;
         // Cancel in-flight scroll animations.
         self.scroll_anim = None;
         self.momentum_anim = None;
@@ -9403,7 +10852,7 @@ fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
 /// (нечего восстанавливать). `File` → путь, `Snapshot` → `base_url`.
 fn source_url_string(src: &PageSource) -> Option<String> {
     match src {
-        PageSource::Empty => None,
+        PageSource::Empty | PageSource::AboutBlank => None,
         PageSource::File(p) => Some(p.display().to_string()),
         PageSource::Url(u) => Some(u.clone()),
         PageSource::Snapshot { base_url, .. } => Some(base_url.clone()),
@@ -10144,6 +11593,24 @@ mod tests {
             PageSource::File(PathBuf::from("a.html")).describe(),
             "a.html",
         );
+    }
+
+    #[test]
+    fn page_source_about_blank_from_arg() {
+        assert!(matches!(
+            PageSource::from_arg(Some("about:blank")),
+            PageSource::AboutBlank
+        ));
+    }
+
+    #[test]
+    fn page_source_about_blank_url_str() {
+        assert_eq!(PageSource::AboutBlank.url_str(), Some("about:blank"));
+    }
+
+    #[test]
+    fn page_source_about_blank_describe() {
+        assert_eq!(PageSource::AboutBlank.describe(), "about:blank");
     }
 
     #[test]

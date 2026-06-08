@@ -26,6 +26,7 @@
 
 mod types;
 pub mod context;
+pub mod determinism;
 pub mod isolation;
 pub mod session;
 pub mod winit_session;
@@ -39,6 +40,7 @@ pub use session::InProcessSession;
 pub use winit_session::WinitSession;
 pub use gpu_session::{GpuSession, RenderedPage, JsNavigateRequest};
 pub use isolation::{OriginGroup, OriginIsolationContext};
+pub use determinism::ClockMode;
 /// Типизированный снимок вычисленных CSS-свойств из lumen-layout.
 ///
 /// Возвращается [`BrowserSession::computed_style_snapshot`]; предпочтительнее
@@ -188,4 +190,39 @@ pub trait BrowserSession {
     /// Если не вызвано, используется default для текущего профиля.
     /// Переопределение сохраняется при смене профиля.
     fn set_user_agent(&mut self, ua: &str) -> Result<()>;
+
+    // ── Deterministic mode (8F) ──────────────────────────────────────────────
+
+    /// Управление режимом часов `Date.now()` / `performance.now()` (8F.1).
+    ///
+    /// - `ClockMode::Frozen(ms)` — все вызовы возвращают `ms`.
+    /// - `ClockMode::Monotonic { step_ms }` — каждый вызов увеличивает счётчик на `step_ms`.
+    /// - `ClockMode::Real` — системные часы (по умолчанию).
+    ///
+    /// Для InProcessSession: сохраняет режим в `SessionContext`. JS runtime применяет
+    /// его при следующей навигации через `set_deterministic_mode()` (задача 8A.7).
+    fn set_clock(&mut self, mode: ClockMode) -> Result<()>;
+
+    /// Установить зерно ГПСЧ для воспроизводимого `Math.random()` (8F.2).
+    ///
+    /// `Some(seed)` — xorshift32 PRNG, сеяный `seed`; одинаковое зерно = одинаковая последовательность.
+    /// `None` — восстановить OS entropy.
+    ///
+    /// Зерно применяется при следующей навигации через `JsRuntime::set_deterministic_mode()`.
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()>;
+
+    /// Зафиксировать профиль отпечатка и заморозить его (8F.3).
+    ///
+    /// Устанавливает `profile` и запрещает дальнейшие изменения через
+    /// `set_fingerprint_profile()`. В JS-слое canvas/WebGL/audio/font API
+    /// возвращают детерминированные значения, соответствующие профилю:
+    ///
+    /// - **Canvas** — `toDataURL()` возвращает фиксированный blank hash.
+    /// - **WebGL** — `getParameter(VENDOR/RENDERER)` нормализованы через `GpuFingerprint`.
+    /// - **AudioContext** — `sampleRate` зафиксирован в 44100 Гц, сэмплы нулевые.
+    /// - **Font enumeration** — `document.fonts` возвращает только bundled Inter.
+    ///
+    /// Для отмены заморозки используйте `set_fingerprint_profile()` — но если профиль
+    /// заморожен, это вернёт `Err`.
+    fn freeze_fingerprint(&mut self, profile: FingerprintProfile) -> Result<()>;
 }

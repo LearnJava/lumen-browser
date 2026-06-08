@@ -4,6 +4,7 @@ pub mod webp;
 mod gif;
 pub mod avif;
 pub mod jxl;
+pub mod heic;
 pub mod decode_cache;
 
 pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
@@ -13,6 +14,7 @@ pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
 pub use gif::{decode_gif, decode_gif_animated, AnimatedFrame, AnimatedGif, GifError, GifLoopCount, is_gif};
 pub use avif::{AvifError, AvifImageDecoder, decode_avif, is_avif};
 pub use jxl::{JxlError, decode_jxl, is_jxl};
+pub use heic::{HeicError, decode_heic, is_heic};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -27,7 +29,7 @@ pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 /// выбирал подходящий fallback вместо пустой коробки.
 #[must_use]
 pub fn supported_mime_types() -> &'static [&'static str] {
-    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif", "image/jxl"]
+    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif", "image/jxl", "image/heic", "image/heif"]
 }
 
 /// Декодирует растровое изображение по сигнатуре первых байтов.
@@ -63,6 +65,9 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     if is_jxl(bytes) {
         return Err(ImageError::Jxl(decode_jxl(bytes).unwrap_err()));
     }
+    if is_heic(bytes) {
+        return Err(ImageError::Heic(decode_heic(bytes).unwrap_err()));
+    }
     Err(ImageError::UnknownFormat)
 }
 
@@ -81,6 +86,8 @@ pub enum ImageError {
     Avif(AvifError),
     /// JPEG XL сигнатура распознана, но декодирование не поддерживается (Phase 0).
     Jxl(JxlError),
+    /// HEIC/HEIF ftyp-бокс обнаружен, но декодирование не поддерживается (Phase 1).
+    Heic(HeicError),
 }
 
 impl core::fmt::Display for ImageError {
@@ -93,6 +100,7 @@ impl core::fmt::Display for ImageError {
             Self::Gif(e) => write!(f, "GIF: {e}"),
             Self::Avif(e) => write!(f, "AVIF: {e}"),
             Self::Jxl(e) => write!(f, "JPEG XL: {e}"),
+            Self::Heic(e) => write!(f, "HEIC/HEIF: {e}"),
         }
     }
 }
@@ -121,6 +129,10 @@ impl From<AvifError> for ImageError {
 
 impl From<JxlError> for ImageError {
     fn from(e: JxlError) -> Self { Self::Jxl(e) }
+}
+
+impl From<HeicError> for ImageError {
+    fn from(e: HeicError) -> Self { Self::Heic(e) }
 }
 
 /// Идентифицированный цветовой охват ICC профиля.
@@ -862,5 +874,53 @@ mod tests {
     fn supported_mime_types_includes_jxl() {
         let types = supported_mime_types();
         assert!(types.contains(&"image/jxl"), "image/jxl должен быть в поддерживаемых типах");
+    }
+
+    fn make_ftyp_bytes(major: &[u8; 4]) -> Vec<u8> {
+        let mut v = vec![0x00, 0x00, 0x00, 0x10]; // box size = 16
+        v.extend_from_slice(b"ftyp");
+        v.extend_from_slice(major);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // minor version
+        // Pad to 32 bytes so other checks don't fail due to short input.
+        v.extend_from_slice(&[0x00; 16]);
+        v
+    }
+
+    #[test]
+    fn heic_signature_detected() {
+        let bytes = make_ftyp_bytes(b"heic");
+        assert!(is_heic(&bytes));
+    }
+
+    #[test]
+    fn heic_decode_always_fails_phase1() {
+        let bytes = make_ftyp_bytes(b"heic");
+        let result = decode(&bytes);
+        assert!(matches!(result, Err(ImageError::Heic(_))));
+    }
+
+    #[test]
+    fn supported_mime_types_includes_heic() {
+        let types = supported_mime_types();
+        assert!(types.contains(&"image/heic"), "image/heic должен быть в поддерживаемых типах");
+    }
+
+    #[test]
+    fn supported_mime_types_includes_heif() {
+        let types = supported_mime_types();
+        assert!(types.contains(&"image/heif"), "image/heif должен быть в поддерживаемых типах");
+    }
+
+    #[test]
+    fn heic_error_from_conversion() {
+        let err: ImageError = HeicError.into();
+        assert!(matches!(err, ImageError::Heic(HeicError)));
+    }
+
+    #[test]
+    fn heic_error_display() {
+        let err = ImageError::Heic(HeicError);
+        let s = format!("{err}");
+        assert!(s.starts_with("HEIC/HEIF:"), "Display должен начинаться с HEIC/HEIF: — получено {s:?}");
     }
 }

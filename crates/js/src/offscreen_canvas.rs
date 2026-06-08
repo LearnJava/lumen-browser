@@ -355,6 +355,37 @@ pub fn install_offscreen_canvas_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         }),
     )?;
 
+    // _lumen_offscreen_canvas_from_image_data(width, height, hex_rgba) → canvas_id (0 on error)
+    //
+    // Creates a new OffscreenCanvas pre-filled from RGBA8 hex bytes.
+    // Used by createImageBitmap(ImageData) to snapshot pixel data into a bitmap.
+    g.set(
+        "_lumen_offscreen_canvas_from_image_data",
+        rquickjs::Function::new(ctx.clone(), |w: u32, h: u32, hex: String| -> u32 {
+            let w = w.clamp(1, MAX_CANVAS_DIM);
+            let h = h.clamp(1, MAX_CANVAS_DIM);
+            let expected = (w * h * 4) as usize;
+            let bytes: Vec<u8> = hex
+                .as_bytes()
+                .chunks(2)
+                .filter_map(|pair| {
+                    let s = std::str::from_utf8(pair).ok()?;
+                    u8::from_str_radix(s, 16).ok()
+                })
+                .collect();
+            if bytes.len() != expected {
+                return 0;
+            }
+            let id = NEXT_OFFSCREEN_ID.fetch_add(1, Ordering::Relaxed);
+            OFFSCREEN_CANVASES.with(|c| {
+                if let Ok(mut map) = c.try_borrow_mut() {
+                    map.insert(id, Context2D::from_pixels(w, h, bytes));
+                }
+            });
+            id
+        }),
+    )?;
+
     // Install the JS shim that defines the public OffscreenCanvas class
     ctx.eval::<(), _>(OFFSCREEN_CANVAS_SHIM)?;
 
@@ -468,11 +499,71 @@ const OFFSCREEN_CANVAS_SHIM: &str = r#"
     }
   };
 
-  // createImageBitmap shim (minimal)
+  // createImageBitmap(source[, sx, sy, sw, sh])
+  // Supports: ImageData, OffscreenCanvas, Blob (stub), HTMLImageElement (stub).
   if (!globalThis.createImageBitmap) {
     globalThis.createImageBitmap = function(source, sx, sy, sw, sh) {
-      // TODO: Implement createImageBitmap from Canvas, ImageData, Blob, etc.
-      return Promise.reject(new Error('createImageBitmap not yet implemented'));
+      return new Promise(function(resolve, reject) {
+        if (!source) {
+          reject(new TypeError('createImageBitmap: source is null'));
+          return;
+        }
+
+        // ImageData: has .data (Uint8ClampedArray), .width, .height
+        if (source.data && typeof source.width === 'number' && typeof source.height === 'number') {
+          var w = source.width >>> 0;
+          var h = source.height >>> 0;
+          if (w === 0 || h === 0) {
+            reject(new Error('createImageBitmap: ImageData has zero dimensions'));
+            return;
+          }
+          var data = source.data;
+          // Encode RGBA bytes as lowercase hex string for native binding
+          var hex = '';
+          for (var i = 0; i < data.length; i++) {
+            var b = data[i] & 0xff;
+            hex += (b < 16 ? '0' : '') + b.toString(16);
+          }
+          var cid = _lumen_offscreen_canvas_from_image_data(w, h, hex);
+          if (cid === 0) {
+            reject(new Error('createImageBitmap: pixel data size mismatch'));
+            return;
+          }
+          resolve({ width: w, height: h, __canvas_id__: cid, close: function() {} });
+          return;
+        }
+
+        // OffscreenCanvas: snapshot its current pixels into an ImageBitmap
+        if (typeof source.__canvas_id__ === 'number') {
+          var jsonStr = _lumen_offscreen_canvas_transfer_to_image_bitmap(source.__canvas_id__);
+          if (!jsonStr) {
+            reject(new Error('createImageBitmap: OffscreenCanvas is empty or already transferred'));
+            return;
+          }
+          var parts = jsonStr.split(',');
+          resolve({
+            width:  parseInt(parts[0], 10),
+            height: parseInt(parts[1], 10),
+            data:   parts[2] || '',
+            close: function() {}
+          });
+          return;
+        }
+
+        // Blob: has ._bytes — image decoding not yet implemented
+        if (source._bytes instanceof Uint8Array) {
+          reject(new Error('createImageBitmap from Blob requires image decoding (not yet implemented)'));
+          return;
+        }
+
+        // HTMLImageElement: pixel data not yet accessible from JS
+        if (source.tagName === 'IMG') {
+          reject(new Error('createImageBitmap from HTMLImageElement not yet implemented'));
+          return;
+        }
+
+        reject(new TypeError('createImageBitmap: unsupported source type'));
+      });
     };
   }
 })();
@@ -682,6 +773,144 @@ mod tests {
                 )
                 .unwrap();
             assert!(result);
+        });
+    }
+
+    // ── Phase 1: createImageBitmap + Worker availability tests ────────────────
+
+    #[test]
+    fn native_from_image_data_valid_2x2() {
+        // 2×2 RGBA pixels, all transparent black
+        let hex = "0".repeat(32); // 16 bytes = 32 hex chars
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+
+            let result: u32 = ctx
+                .eval(format!("_lumen_offscreen_canvas_from_image_data(2, 2, '{hex}')"))
+                .unwrap();
+            assert!(result > 0, "expected non-zero canvas_id from valid 2x2 image data");
+        });
+    }
+
+    #[test]
+    fn native_from_image_data_size_mismatch_returns_zero() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+
+            // 3×3 requested but only 4 bytes provided → mismatch
+            let result: u32 = ctx
+                .eval("_lumen_offscreen_canvas_from_image_data(3, 3, 'aabbccdd')")
+                .unwrap();
+            assert_eq!(result, 0, "size mismatch should return 0");
+        });
+    }
+
+    #[test]
+    fn native_from_image_data_red_pixel_stored() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+
+            // 1×1 canvas with red pixel (ff0000ff)
+            let result: u32 = ctx
+                .eval("_lumen_offscreen_canvas_from_image_data(1, 1, 'ff0000ff')")
+                .unwrap();
+            assert!(result > 0);
+            // Verify pixel is stored
+            OFFSCREEN_CANVASES.with(|c| {
+                if let Ok(map) = c.try_borrow() {
+                    let ctx2d = map.get(&result).expect("canvas should be registered");
+                    let pixels = ctx2d.pixels();
+                    assert_eq!(pixels[0], 0xff, "R=255");
+                    assert_eq!(pixels[1], 0x00, "G=0");
+                    assert_eq!(pixels[2], 0x00, "B=0");
+                    assert_eq!(pixels[3], 0xff, "A=255");
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn js_create_image_bitmap_is_function() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+
+            let result: bool = ctx
+                .eval("typeof createImageBitmap === 'function'")
+                .unwrap();
+            assert!(result, "createImageBitmap should be a function");
+        });
+    }
+
+    #[test]
+    fn js_create_image_bitmap_from_image_data_sync_via_native() {
+        // Test the native binding that createImageBitmap(ImageData) uses internally.
+        // We bypass the Promise wrapper and test the hex-encode → canvas ID path.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+
+            // Build a 2×2 RGBA hex string from a typed array (same code path as createImageBitmap)
+            let result: bool = ctx.eval(r#"
+                var data = new Uint8Array([
+                  100, 150, 200, 255,
+                  50,  80,  120, 200,
+                  10,  20,  30,  100,
+                  0,   0,   0,   0
+                ]);
+                var hex = '';
+                for (var i = 0; i < data.length; i++) {
+                  var b = data[i] & 0xff;
+                  hex += (b < 16 ? '0' : '') + b.toString(16);
+                }
+                var cid = _lumen_offscreen_canvas_from_image_data(2, 2, hex);
+                cid > 0
+            "#).unwrap();
+            assert!(result, "createImageBitmap inner binding should produce a canvas");
+        });
+    }
+
+    #[test]
+    fn js_create_image_bitmap_from_offscreen_canvas_via_transfer() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+
+            let result: bool = ctx.eval(r#"
+                // Draw something on a canvas then call _lumen_offscreen_canvas_transfer_to_image_bitmap
+                var canvas = new OffscreenCanvas(4, 4);
+                var ctx2d = canvas.getContext('2d');
+                ctx2d.fillStyle = '#00ff00';
+                ctx2d.fillRect(0, 0, 4, 4);
+                // Transfer bitmap using same underlying native binding
+                var json = _lumen_offscreen_canvas_transfer_to_image_bitmap(canvas.__canvas_id__);
+                json.length > 0
+            "#).unwrap();
+            assert!(result);
+        });
+    }
+
+    #[test]
+    fn js_offscreen_canvas_available_in_fresh_context() {
+        // Simulates worker thread: fresh JS context with OffscreenCanvas installed.
+        let (_rt2, ctx2) = make_ctx();
+        ctx2.with(|ctx| {
+            // No reset_state — fresh thread-local for this context
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+
+            let result: bool = ctx
+                .eval("typeof OffscreenCanvas === 'function' && typeof createImageBitmap === 'function'")
+                .unwrap();
+            assert!(result, "OffscreenCanvas and createImageBitmap must be available in fresh (worker) context");
         });
     }
 }

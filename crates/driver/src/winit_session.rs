@@ -900,6 +900,22 @@ impl BrowserSession for WinitSession {
     fn set_user_agent(&mut self, ua: &str) -> Result<()> {
         self.context.set_user_agent(ua)
     }
+
+    fn set_clock(&mut self, mode: crate::ClockMode) -> Result<()> {
+        self.context.set_clock_mode(mode);
+        Ok(())
+    }
+
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()> {
+        self.context.set_rng_seed(seed);
+        Ok(())
+    }
+
+    fn freeze_fingerprint(&mut self, profile: FingerprintProfile) -> Result<()> {
+        self.context.set_fingerprint_profile(profile)?;
+        self.context.freeze_fingerprint();
+        Ok(())
+    }
 }
 
 impl WinitSession {
@@ -938,6 +954,7 @@ impl WinitSession {
         }
     }
 
+    #[allow(dead_code)]
     fn deliver_lcp_entry(
         &mut self,
         _element_id: i32,
@@ -945,12 +962,11 @@ impl WinitSession {
         _start_ms: f64,
         _render_time_ms: f64,
     ) -> crate::Result<()> {
-        // Phase 4: headless driver doesn't support JS delivery
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn deliver_layout_shift(&mut self, _value: f64, _session_id: u32, _had_input: bool) -> crate::Result<()> {
-        // Phase 4: headless driver doesn't support JS delivery
         Ok(())
     }
 }

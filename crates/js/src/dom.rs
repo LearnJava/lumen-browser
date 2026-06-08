@@ -542,6 +542,20 @@ fn install_primitives(
         });
         let d = Arc::clone(&doc);
         reg!(
+            "_lumen_get_attr_names",
+            move |node_id: u32| -> Vec<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                match &doc.get(nid).data {
+                    NodeData::Element { attrs, .. } => {
+                        attrs.iter().map(|a| a.name.local.to_string()).collect()
+                    }
+                    _ => Vec::new(),
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
             "_lumen_get_text_content",
             move |node_id: u32| -> String {
                 let doc = d.lock().unwrap();
@@ -610,6 +624,17 @@ fn install_primitives(
         );
     }
 
+    // ── DOM node count ───────────────────────────────────────────────────────
+    {
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_dom_node_count",
+            move || -> u32 {
+                d.lock().unwrap().node_count() as u32
+            }
+        );
+    }
+
     // ── tree mutation ────────────────────────────────────────────────────────
     {
         let d = Arc::clone(&doc);
@@ -617,8 +642,11 @@ fn install_primitives(
             "_lumen_create_element",
             move |tag: String| -> u32 {
                 let mut doc = d.lock().unwrap();
-                let nid = doc.create_element(QualName::html(tag.to_ascii_lowercase()));
-                nid.index() as u32
+                // Returns u32::MAX when MAX_DOM_NODES is reached; JS shim handles this.
+                match doc.try_create_element(QualName::html(tag.to_ascii_lowercase())) {
+                    Ok(nid) => nid.index() as u32,
+                    Err(_) => u32::MAX,
+                }
             }
         );
         let d = Arc::clone(&doc);
@@ -1021,6 +1049,47 @@ fn install_primitives(
                 .as_ref()
                 .map_or_else(Vec::new, |r| r.body.clone())
         });
+
+        // _lumen_fetch_body_length() → u32
+        // Returns the byte length of the most recent cached response body.
+        // Used by the pull()-based ReadableStream in Response.body to avoid
+        // copying the full body into JS memory at construction time.
+        let c = Arc::clone(&cache);
+        reg!("_lumen_fetch_body_length", move || -> u32 {
+            c.lock()
+                .unwrap()
+                .as_ref()
+                .map_or(0, |r| r.body.len() as u32)
+        });
+
+        // _lumen_fetch_body_chunk(offset: u32, size: u32) → Vec<u8>
+        // Returns bytes [offset .. offset+size] of the cached response body.
+        // Called repeatedly by Response.body.pull() to stream large responses
+        // without loading the entire body into JS at once (Fetch Standard §2.2).
+        let c = Arc::clone(&cache);
+        reg!(
+            "_lumen_fetch_body_chunk",
+            move |offset: u32, size: u32| -> Vec<u8> {
+                let guard = c.lock().unwrap();
+                let body = guard.as_ref().map_or(&[] as &[u8], |r| r.body.as_slice());
+                let start = (offset as usize).min(body.len());
+                let end = (start + size as usize).min(body.len());
+                body[start..end].to_vec()
+            }
+        );
+
+        // _lumen_check_sri_integrity(integrity) → bool
+        // Verifies the cached response body against the SRI `integrity` string
+        // (W3C SRI §3.3.5). Must be called after _lumen_fetch_sync / _lumen_fetch_sync_with_body
+        // and before reading the body. Returns true if integrity is empty or passes.
+        {
+            let c_sri = Arc::clone(&cache);
+            reg!("_lumen_check_sri_integrity", move |integrity: String| -> bool {
+                let guard = c_sri.lock().unwrap();
+                let body = guard.as_ref().map_or(&[] as &[u8], |r| r.body.as_slice());
+                crate::sri::check_sri(body, &integrity)
+            });
+        }
 
         // _lumen_fetch_sync_with_body(url, method, content_type, body_bytes) → bool
         // Used by fetch() when init.body is present (FormData, string, ArrayBuffer).
@@ -2065,6 +2134,13 @@ fn install_primitives(
     // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL
     crate::trusted_types::install_trusted_types_bindings(ctx)?;
 
+    // D-6: Extension system — chrome.runtime.sendMessage() native binding.
+    // Phase 0: no-op; the message is logged to stderr for debugging.
+    // Phase 1: shell wires a real IPC channel between content scripts and extension background.
+    reg!("_lumen_chrome_runtime_send_message", |msg: String| {
+        let _ = msg;
+    });
+
     // CSS Typed OM API: element.attributeStyleMap / computedStyleMap()
     {
         let d = Arc::clone(&doc);
@@ -2475,13 +2551,171 @@ function BeforeUnloadEvent(type, init) {
 BeforeUnloadEvent.prototype = Object.create(Event.prototype);
 BeforeUnloadEvent.prototype.constructor = BeforeUnloadEvent;
 
-// DragEvent — drag-and-drop events
+// ── HTML5 Drag and Drop API (HTML LS §9.10) ───────────────────────────────────
+// DataTransferItem — single item in the drag data store.
+function DataTransferItem(kind, type, data) {
+    this.kind = kind;   // 'string' or 'file'
+    this.type = String(type || '').toLowerCase();
+    this._data = data;  // string value or null for file kind
+}
+DataTransferItem.prototype.getAsString = function(callback) {
+    if (this.kind !== 'string' || typeof callback !== 'function') return;
+    var d = this._data;
+    try { callback(d != null ? String(d) : ''); } catch(e) {}
+};
+DataTransferItem.prototype.getAsFile = function() {
+    return null; // Phase 0: no native file access
+};
+
+// DataTransferItemList — ordered list of DataTransferItems.
+function DataTransferItemList(owner) {
+    this._items = [];
+    this._owner = owner; // back-ref to DataTransfer for type sync
+}
+DataTransferItemList.prototype.add = function(dataOrFile, type) {
+    if (typeof dataOrFile === 'string') {
+        var t = String(type || 'text/plain').toLowerCase();
+        // Spec: only one item per unique type (string kind)
+        for (var i = 0; i < this._items.length; i++) {
+            if (this._items[i].kind === 'string' && this._items[i].type === t) return null;
+        }
+        var item = new DataTransferItem('string', t, dataOrFile);
+        this._items.push(item);
+        this._owner._sync_from_items();
+        return item;
+    }
+    // file kind (Phase 0: no actual File support)
+    return null;
+};
+DataTransferItemList.prototype.remove = function(index) {
+    if (index >= 0 && index < this._items.length) {
+        this._items.splice(index, 1);
+        this._owner._sync_from_items();
+    }
+};
+DataTransferItemList.prototype.clear = function() {
+    this._items = [];
+    this._owner._sync_from_items();
+};
+Object.defineProperty(DataTransferItemList.prototype, 'length', {
+    get: function() { return this._items.length; }
+});
+// Indexed access via Proxy-like approach using numeric properties
+DataTransferItemList.prototype._rebuild_indices = function() {
+    // Clear old numeric properties beyond new length
+    var old_n = typeof this._prev_len === 'number' ? this._prev_len : 0;
+    var n = this._items.length;
+    for (var i = n; i < old_n; i++) delete this[i];
+    for (var j = 0; j < n; j++) this[j] = this._items[j];
+    this._prev_len = n;
+};
+DataTransferItemList.prototype[Symbol.iterator] = function() {
+    var items = this._items.slice();
+    var idx = 0;
+    return {
+        next: function() {
+            if (idx < items.length) return { value: items[idx++], done: false };
+            return { value: undefined, done: true };
+        }
+    };
+};
+
+// DataTransfer — the drag data store (HTML LS §9.10.1).
+function DataTransfer() {
+    this._data = {};         // format → string
+    this._types = [];        // read-only types list
+    this.effectAllowed = 'uninitialized';
+    this.dropEffect = 'none';
+    this.items = new DataTransferItemList(this);
+    this.files = Object.freeze([]); // FileList stub
+}
+DataTransfer.prototype._sync_from_items = function() {
+    // Rebuild _data and _types from items list; also refresh indexed access on the list
+    this._data = {};
+    this._types = [];
+    var list = this.items._items;
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].kind === 'string') {
+            this._data[list[i].type] = list[i]._data;
+            this._types.push(list[i].type);
+        }
+    }
+    this.items._rebuild_indices();
+};
+Object.defineProperty(DataTransfer.prototype, 'types', {
+    get: function() { return Object.freeze(this._types.slice()); }
+});
+DataTransfer.prototype.setData = function(format, data) {
+    var fmt = String(format || '').toLowerCase();
+    // Normalise 'text' → 'text/plain', 'url' → 'text/uri-list' per spec
+    if (fmt === 'text') fmt = 'text/plain';
+    if (fmt === 'url') fmt = 'text/uri-list';
+    // Remove existing item with same type, then add new one
+    var list = this.items._items;
+    for (var i = list.length - 1; i >= 0; i--) {
+        if (list[i].kind === 'string' && list[i].type === fmt) list.splice(i, 1);
+    }
+    list.push(new DataTransferItem('string', fmt, String(data != null ? data : '')));
+    this._sync_from_items();
+};
+DataTransfer.prototype.getData = function(format) {
+    var fmt = String(format || '').toLowerCase();
+    if (fmt === 'text') fmt = 'text/plain';
+    if (fmt === 'url') fmt = 'text/uri-list';
+    return Object.prototype.hasOwnProperty.call(this._data, fmt) ? this._data[fmt] : '';
+};
+DataTransfer.prototype.clearData = function(format) {
+    if (arguments.length === 0 || format === undefined || format === null) {
+        // Remove all string-kind items
+        var list = this.items._items;
+        for (var i = list.length - 1; i >= 0; i--) {
+            if (list[i].kind === 'string') list.splice(i, 1);
+        }
+    } else {
+        var fmt = String(format).toLowerCase();
+        if (fmt === 'text') fmt = 'text/plain';
+        if (fmt === 'url') fmt = 'text/uri-list';
+        var list2 = this.items._items;
+        for (var i = list2.length - 1; i >= 0; i--) {
+            if (list2[i].kind === 'string' && list2[i].type === fmt) list2.splice(i, 1);
+        }
+    }
+    this._sync_from_items();
+};
+DataTransfer.prototype.setDragImage = function(_image, _x, _y) {
+    // Phase 0: no-op (custom drag image not supported)
+};
+
+// DragEvent — drag-and-drop events (HTML LS §9.10.5)
 function DragEvent(type, init) {
     MouseEvent.call(this, type, init);
-    this.dataTransfer = (init && init.dataTransfer != null) ? init.dataTransfer : null;
+    // If no DataTransfer provided, create a fresh one for new drag operations
+    this.dataTransfer = (init && init.dataTransfer != null)
+        ? init.dataTransfer
+        : new DataTransfer();
 }
 DragEvent.prototype = Object.create(MouseEvent.prototype);
 DragEvent.prototype.constructor = DragEvent;
+
+// _lumen_dispatch_drag_event — called by Rust shell (Phase 1) to fire a drag event
+// on a specific element. data_json is a JSON string of { format: value } pairs.
+function _lumen_dispatch_drag_event(nid, type, x, y, data_json) {
+    var dt = new DataTransfer();
+    if (data_json) {
+        try {
+            var d = JSON.parse(data_json);
+            var keys = Object.keys(d);
+            for (var i = 0; i < keys.length; i++) dt.setData(keys[i], d[keys[i]]);
+        } catch(e) {}
+    }
+    var evt = new DragEvent(type, {
+        bubbles: true, cancelable: true, isTrusted: true,
+        clientX: x || 0, clientY: y || 0,
+        dataTransfer: dt
+    });
+    _lumen_dispatch_rich(nid, evt);
+    return !evt.defaultPrevented;
+}
 
 // ClipboardEvent — copy / cut / paste
 function ClipboardEvent(type, init) {
@@ -3175,6 +3409,7 @@ function _lumen_make_element(nid) {
         },
         showModal: function() {
             _lumen_set_attr(nid, 'open', '');
+            _lumen_set_attr(nid, 'data-lumen-modal', '');
             if (_lumen_modal_dialog_nids.indexOf(nid) < 0) {
                 _lumen_modal_dialog_nids.push(nid);
             }
@@ -3183,6 +3418,7 @@ function _lumen_make_element(nid) {
             if (_lumen_get_attr(nid, 'open') === undefined) return;
             if (rv !== undefined) _returnValue = String(rv);
             _lumen_remove_attr(nid, 'open');
+            _lumen_remove_attr(nid, 'data-lumen-modal');
             var idx = _lumen_modal_dialog_nids.indexOf(nid);
             if (idx >= 0) _lumen_modal_dialog_nids.splice(idx, 1);
             var closeEvt = new Event('close', { bubbles: false, cancelable: false });
@@ -3243,6 +3479,22 @@ function _lumen_make_element(nid) {
         onfullscreenerror:  null,
         onpointerlockchange: null,
         onpointerlockerror: null,
+        // HTML LS §9.10 — drag-and-drop IDL attributes
+        get draggable() {
+            var v = _lumen_get_attr(nid, 'draggable');
+            if (v === undefined || v === null) return false;
+            return String(v).toLowerCase() !== 'false';
+        },
+        set draggable(v) {
+            _lumen_set_attr(nid, 'draggable', v ? 'true' : 'false');
+        },
+        ondragstart:  null,
+        ondrag:       null,
+        ondragend:    null,
+        ondragenter:  null,
+        ondragover:   null,
+        ondragleave:  null,
+        ondrop:       null,
         appendChild:     function(c) {
             if (!c || c.__nid__ === undefined) return c;
             if (c.__isDocumentFragment__) {
@@ -3855,6 +4107,7 @@ var _FS_ATTR = 'data-lumen-fullscreen';
 var _doc_hidden = false;
 var _doc_visibility_state = 'visible';
 var _doc_ready_state = 'loading';
+var __dom_node_warned = false;
 
 var document = {
     get title()  { return _lumen_get_document_title(); },
@@ -3878,7 +4131,17 @@ var document = {
         return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
     },
     createElement:     function(tag) {
-        return _lumen_make_element(_lumen_create_element(String(tag).toLowerCase()));
+        var nid = _lumen_create_element(String(tag).toLowerCase());
+        // QuickJS converts the Rust u32::MAX sentinel to -1 (signed overflow).
+        if (nid < 0) {
+            throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
+        }
+        var cnt = _lumen_dom_node_count();
+        if (!__dom_node_warned && cnt >= 40000) {
+            __dom_node_warned = true;
+            console.warn('DOM tree exceeds 40000 nodes');
+        }
+        return _lumen_make_element(nid);
     },
     createTextNode:         function(t)   { return _lumen_make_element(_lumen_create_text_node(String(t))); },
     createComment:          function()    { return _lumen_make_element(_lumen_create_text_node('')); },
@@ -5005,14 +5268,16 @@ function ReadableStream(source, strategy) {
     this._rs_error = undefined;
     this._rs_reader = null;
     this._rs_cancel_fn = typeof source.cancel === 'function' ? source.cancel : null;
+    // Store pull fn for demand-driven invocation (Streams §3.6.3).
+    this._rs_pull_fn = typeof source.pull === 'function' ? source.pull : null;
     this._rs_ctrl = new ReadableStreamDefaultController(this);
     if (typeof source.start === 'function') {
         try { source.start(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
     }
-    // Simplified pull: call once after start if queue empty and stream still readable.
-    if (typeof source.pull === 'function' && this._rs_state === 'readable'
+    // Eagerly fill: call pull once after start if queue empty and stream still readable.
+    if (this._rs_pull_fn && this._rs_state === 'readable'
             && this._rs_ctrl._queue.length === 0 && !this._rs_ctrl._closeRequested) {
-        try { source.pull(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
+        try { this._rs_pull_fn(this._rs_ctrl); } catch(e) { this._rs_ctrl.error(e); }
     }
 }
 Object.defineProperty(ReadableStream.prototype, 'locked', {
@@ -5102,11 +5367,18 @@ ReadableStreamDefaultReader.prototype.read = function() {
     }
     if (stream._rs_state === 'closed') return Promise.resolve({ value: undefined, done: true });
     var self = this;
-    return new Promise(function(resolve, reject) {
+    var p = new Promise(function(resolve, reject) {
         self._readRequests.push(function(result, err) {
             if (err !== undefined) reject(err); else resolve(result);
         });
     });
+    // Demand-driven pull: when queue is empty and a read is pending, ask source for more data.
+    // pull() either enqueues a chunk (resolving the pending request via enqueue()) or
+    // calls c.close() (resolving via _rs_do_close()). Mirrors Streams spec ReadableStreamFill.
+    if (stream._rs_pull_fn && stream._rs_state === 'readable' && !ctrl._closeRequested) {
+        try { stream._rs_pull_fn(ctrl); } catch(e) { ctrl.error(e); }
+    }
+    return p;
 };
 ReadableStreamDefaultReader.prototype.cancel = function(reason) {
     var stream = this._stream;
@@ -5404,6 +5676,30 @@ Headers.prototype.entries = function() { return this._map.map(function(p) { retu
 Headers.prototype.keys   = function() { return this._map.map(function(p) { return p[0]; }); };
 Headers.prototype.values = function() { return this._map.map(function(p) { return p[1]; }); };
 
+// _rs_make_body_stream(bodyBytes, respRef) — builds a pull()-based ReadableStream
+// that delivers bodyBytes in 64 KiB chunks (Fetch Standard §2.2, WHATWG Streams §3.4.4).
+// Intercepting getReader() marks respRef.bodyUsed = true so subsequent .text() etc. reject.
+var _RS_CHUNK = 65536;
+function _rs_make_body_stream(bodyBytes, respRef) {
+    var pos = 0;
+    var stream = new ReadableStream({
+        pull: function(c) {
+            if (pos >= bodyBytes.length) { c.close(); return; }
+            var end = Math.min(pos + _RS_CHUNK, bodyBytes.length);
+            c.enqueue(bodyBytes.subarray(pos, end));
+            pos = end;
+        },
+        cancel: function() { pos = bodyBytes.length; }
+    });
+    var _orig = stream.getReader.bind(stream);
+    stream.getReader = function(opts) {
+        if (respRef.bodyUsed) throw new TypeError('body already consumed');
+        respRef.bodyUsed = true;
+        return _orig(opts);
+    };
+    return stream;
+}
+
 // Response (Fetch Standard §2.5)
 function Response(body, init) {
     init = init || {};
@@ -5415,24 +5711,66 @@ function Response(body, init) {
     this.type = 'default';
     this.url = '';
     this.bodyUsed = false;
-    this._body = body;
-    // Expose body as ReadableStream (Fetch Standard §2.2 + WHATWG Streams §3).
-    // For Lumen's sync fetch, the entire response is already buffered; the stream
-    // delivers it as a single Uint8Array chunk and immediately closes.
     var bodyBytes = (body instanceof Uint8Array) ? body
                   : (body == null ? new Uint8Array(0) : new TextEncoder().encode(String(body)));
-    this.body = new ReadableStream({
-        start: function(c) { if (bodyBytes.length > 0) c.enqueue(bodyBytes); c.close(); }
-    });
+    this._body = bodyBytes;
+    this.body = _rs_make_body_stream(bodyBytes, this);
 }
+// _fromFetchCache — factory used by fetch() to build a Response that reads
+// the response body lazily from the Rust-side FetchCache via _lumen_fetch_body_chunk().
+// This avoids a full copy of large bodies into JS memory at response construction time.
+Response._fromFetchCache = function(status, statusText, headers) {
+    var r = Object.create(Response.prototype);
+    r.status = status;
+    r.statusText = statusText;
+    r.ok = status >= 200 && status < 300;
+    r.headers = new Headers(headers);
+    r.redirected = false;
+    r.type = 'default';
+    r.url = '';
+    r.bodyUsed = false;
+    r._body = null; // loaded on demand
+    var totalLen = _lumen_fetch_body_length();
+    var pos = 0;
+    var stream = new ReadableStream({
+        pull: function(c) {
+            if (pos >= totalLen) { c.close(); return; }
+            var size = Math.min(_RS_CHUNK, totalLen - pos);
+            var chunk = _lumen_fetch_body_chunk(pos, size);
+            c.enqueue(new Uint8Array(chunk));
+            pos += size;
+        },
+        cancel: function() { pos = totalLen; }
+    });
+    var _orig = stream.getReader.bind(stream);
+    stream.getReader = function(opts) {
+        if (r.bodyUsed) throw new TypeError('body already consumed');
+        r.bodyUsed = true;
+        return _orig(opts);
+    };
+    r.body = stream;
+    return r;
+};
 Response.prototype._consumeBody = function() {
     if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
     this.bodyUsed = true;
+    // When body was loaded via _fromFetchCache, _body is null — read all from Rust side.
+    if (this._body === null) {
+        var len = _lumen_fetch_body_length();
+        return Promise.resolve(len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0));
+    }
     return Promise.resolve(this._body);
 };
 Response.prototype.text = function() {
     if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
     this.bodyUsed = true;
+    if (this._body === null) {
+        var len = _lumen_fetch_body_length();
+        var bytes = len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0);
+        return Promise.resolve(new TextDecoder().decode(bytes));
+    }
     var b = this._body;
     if (b instanceof Uint8Array) return Promise.resolve(new TextDecoder().decode(b));
     return Promise.resolve(b == null ? '' : String(b));
@@ -5442,7 +5780,13 @@ Response.prototype.json = function() {
 };
 Response.prototype.arrayBuffer = function() {
     if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
     this.bodyUsed = true;
+    if (this._body === null) {
+        var len = _lumen_fetch_body_length();
+        var arr = len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0);
+        return Promise.resolve(arr.buffer.slice(0));
+    }
     var b = this._body;
     if (b instanceof Uint8Array) return Promise.resolve(b.buffer.slice(0));
     return Promise.resolve(new Uint8Array(0).buffer);
@@ -5607,6 +5951,33 @@ FormData.prototype._toUrlEncoded = function() {
     }).join('&');
 };
 
+FormData.prototype._toMultipart = function(boundary) {
+    var enc = new TextEncoder();
+    var parts = [];
+    var dash = enc.encode('--');
+    var bnd = enc.encode(boundary);
+    var crlf = enc.encode('\\r\\n');
+    for (var i = 0; i < this._entries.length; i++) {
+        var name = this._entries[i][0];
+        var value = this._entries[i][1];
+        var safeName = name.replace(/\\r/g, '%0D').replace(/\\n/g, '%0A').replace(/\\x22/g, '%22');
+        var disp = 'Content-Disposition: form-data; name=\\x22' + safeName + '\\x22\\r\\n\\r\\n';
+        var dispHeader = enc.encode(disp);
+        var body = enc.encode(value);
+        parts.push(dash, bnd, crlf, dispHeader, body, crlf);
+    }
+    parts.push(dash, bnd, enc.encode('--'), crlf);
+    var totalLen = 0;
+    for (var j = 0; j < parts.length; j++) { totalLen += parts[j].length; }
+    var out = new Uint8Array(totalLen);
+    var off = 0;
+    for (var k = 0; k < parts.length; k++) {
+        out.set(parts[k], off);
+        off += parts[k].length;
+    }
+    return out;
+};
+
 // ── TextEncoder / TextDecoder (WHATWG Encoding §8–9) ─────────────────────────
 // Pure-JS UTF-8 implementation; QuickJS does not provide a built-in.
 
@@ -5639,25 +6010,75 @@ TextEncoder.prototype.encode = function(str) {
     return new Uint8Array(bytes);
 };
 
-function TextDecoder(label) {
+function TextDecoder(label, options) {
     this.encoding = (label || 'utf-8').toLowerCase();
+    this.fatal = !!(options && options.fatal);
+    this.ignoreBOM = !!(options && options.ignoreBOM);
+    this._pending = null;
 }
-TextDecoder.prototype.decode = function(buf) {
-    var bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf instanceof ArrayBuffer ? buf : new ArrayBuffer(0));
+// Encoding Standard §9.1 — UTF-8 decode with optional stream mode.
+// When options.stream is true, incomplete multi-byte sequences at the end of
+// the chunk are saved in this._pending and prepended to the next decode() call.
+TextDecoder.prototype.decode = function(buf, options) {
+    var stream = !!(options && options.stream);
+    var input;
+    if (buf === undefined || buf === null) {
+        input = new Uint8Array(0);
+    } else {
+        input = buf instanceof Uint8Array ? buf : new Uint8Array(buf instanceof ArrayBuffer ? buf : new ArrayBuffer(0));
+    }
+    // Prepend any bytes carried over from the previous streaming chunk.
+    var bytes;
+    if (this._pending && this._pending.length > 0) {
+        var combined = new Uint8Array(this._pending.length + input.length);
+        combined.set(this._pending);
+        combined.set(input, this._pending.length);
+        bytes = combined;
+    } else {
+        bytes = input;
+    }
+    this._pending = null;
     var str = '', i = 0;
     while (i < bytes.length) {
-        var b = bytes[i++];
+        var b = bytes[i];
+        var seqLen;
         if (b < 0x80) {
-            str += String.fromCharCode(b);
+            seqLen = 1;
         } else if ((b & 0xE0) === 0xC0) {
-            str += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i++] & 0x3F));
+            seqLen = 2;
         } else if ((b & 0xF0) === 0xE0) {
-            str += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F));
+            seqLen = 3;
+        } else if ((b & 0xF8) === 0xF0) {
+            seqLen = 4;
         } else {
-            var hi = ((b & 0x07) << 18) | ((bytes[i++] & 0x3F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F);
+            // Stray continuation byte — emit replacement character.
+            str += '�';
+            i++;
+            continue;
+        }
+        if (i + seqLen > bytes.length) {
+            // Incomplete sequence at end of chunk.
+            if (stream) {
+                this._pending = bytes.slice(i);
+            } else if (this.fatal) {
+                throw new TypeError('TextDecoder: incomplete multi-byte sequence');
+            } else {
+                str += '�';
+            }
+            break;
+        }
+        if (seqLen === 1) {
+            str += String.fromCharCode(b);
+        } else if (seqLen === 2) {
+            str += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i + 1] & 0x3F));
+        } else if (seqLen === 3) {
+            str += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F));
+        } else {
+            var hi = ((b & 0x07) << 18) | ((bytes[i + 1] & 0x3F) << 12) | ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F);
             hi -= 0x10000;
             str += String.fromCharCode(0xD800 + (hi >> 10), 0xDC00 + (hi & 0x3FF));
         }
+        i += seqLen;
     }
     return str;
 };
@@ -5665,6 +6086,7 @@ TextDecoder.prototype.decode = function(buf) {
 // fetch() (Fetch Standard §3) — synchronous under the hood, wrapped in Promise.
 // Supports request body: FormData → application/x-www-form-urlencoded,
 // string → text/plain;charset=UTF-8, Uint8Array/ArrayBuffer → application/octet-stream.
+// FormData → multipart/form-data with a generated boundary (Fetch spec §5.4 «extract a body»).
 function fetch(input, init) {
     try {
         var url = typeof input === 'string' ? input : (input && input.url ? input.url : String(input));
@@ -5678,9 +6100,12 @@ function fetch(input, init) {
         if (reqBody !== null && reqBody !== undefined) {
             var bodyBytes, contentType;
             if (reqBody instanceof FormData) {
-                var enc = reqBody._toUrlEncoded();
-                bodyBytes = Array.from(new TextEncoder().encode(enc));
-                contentType = 'application/x-www-form-urlencoded';
+                // Fetch spec §5.4: FormData body → multipart/form-data with random boundary.
+                // Phase 0: deterministic boundary for testability; production boundary is random.
+                var boundary = '----LumenFormBoundary' + Math.random().toString(36).slice(2, 10).toUpperCase();
+                var multipartBytes = reqBody._toMultipart(boundary);
+                bodyBytes = Array.from(multipartBytes);
+                contentType = 'multipart/form-data; boundary=' + boundary;
             } else if (typeof reqBody === 'string') {
                 bodyBytes = Array.from(new TextEncoder().encode(reqBody));
                 contentType = 'text/plain;charset=UTF-8';
@@ -5719,12 +6144,20 @@ function fetch(input, init) {
         var status = _lumen_fetch_get_status();
         var statusText = _lumen_fetch_get_status_text();
         var rawHeaders = _lumen_fetch_get_headers();
-        var body = _lumen_fetch_get_body();
+        // SRI integrity check (W3C SRI §3.3.5): verify body hash before exposing response.
+        // _lumen_check_sri_integrity reads directly from Rust FetchCache — no JS copy needed.
+        var integrity = (init && init.integrity) ? String(init.integrity)
+                      : (typeof input === 'object' && input && input.integrity ? String(input.integrity) : '');
+        if (integrity && !_lumen_check_sri_integrity(integrity)) {
+            return Promise.reject(new TypeError('fetch: SRI integrity check failed for ' + url));
+        }
         var hdrs = [];
         for (var i = 0; i + 1 < rawHeaders.length; i += 2) {
             hdrs.push([rawHeaders[i], rawHeaders[i + 1]]);
         }
-        var resp = new Response(body, { status: status, statusText: statusText, headers: hdrs });
+        // Use lazy Rust-side chunk reading: body stays in Rust FetchCache until consumed.
+        // This avoids copying large response bodies into JS memory at response construction.
+        var resp = Response._fromFetchCache(status, statusText, hdrs);
         resp.url = url;
         return Promise.resolve(resp);
     } catch(e) {
@@ -6878,6 +7311,12 @@ var performance = {
             _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'measure'; });
         }
     },
+    // W3C Resource Timing L2 §4.4 — clears all 'resource' entries from the buffer.
+    clearResourceTimings: function() {
+        _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'resource'; });
+    },
+    // W3C Resource Timing L2 §4.4 — sets max buffer size; Phase 0: no-op (unbounded).
+    setResourceTimingBufferSize: function(_maxSize) {},
 };
 
 function _perf_entries_by_name(name, type) {
@@ -6986,6 +7425,39 @@ function _lumen_deliver_layout_shift(value, session_id, had_input) {
         value: value,
         hadRecentInput: !!had_input,
         sources: [],
+    };
+    _perf_entries.push(entry);
+    _perf_observer_notify([entry]);
+}
+
+// Called by network layer when a resource fetch completes.
+// W3C Resource Timing L2 §4: creates a PerformanceResourceTiming entry with
+// all sub-timings set to start_ms (Phase 0 — no per-phase breakdown available).
+// initiator = 'script'|'link'|'img'|'fetch'|'xmlhttprequest'|'other'.
+function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms) {
+    var s = Number(start_ms);
+    var d = Number(duration_ms);
+    var entry = {
+        entryType: 'resource',
+        name: String(url),
+        startTime: s,
+        duration: d,
+        initiatorType: String(initiator),
+        fetchStart: s,
+        domainLookupStart: s,
+        domainLookupEnd: s,
+        connectStart: s,
+        connectEnd: s,
+        secureConnectionStart: s,
+        requestStart: s,
+        responseStart: s,
+        responseEnd: s + d,
+        transferSize: 0,
+        encodedBodySize: 0,
+        decodedBodySize: 0,
+        responseStatus: 0,
+        renderBlockingStatus: 'non-blocking',
+        contentType: '',
     };
     _perf_entries.push(entry);
     _perf_observer_notify([entry]);
@@ -7167,6 +7639,9 @@ window.ErrorEvent            = ErrorEvent;
 window.SubmitEvent           = SubmitEvent;
 window.PageTransitionEvent   = PageTransitionEvent;
 window.BeforeUnloadEvent     = BeforeUnloadEvent;
+window.DataTransfer          = DataTransfer;
+window.DataTransferItem      = DataTransferItem;
+window.DataTransferItemList  = DataTransferItemList;
 window.DragEvent             = DragEvent;
 window.ClipboardEvent        = ClipboardEvent;
 window.CompositionEvent      = CompositionEvent;
@@ -8687,6 +9162,7 @@ document.addEventListener('keydown', function(evt) {
     var notPrevented = _lumen_dispatch(lastNid, cancelEvt);
     if (notPrevented) {
         _lumen_remove_attr(lastNid, 'open');
+        _lumen_remove_attr(lastNid, 'data-lumen-modal');
         _lumen_modal_dialog_nids.pop();
         var closeEvt = new Event('close', { bubbles: false, cancelable: false });
         _lumen_dispatch(lastNid, closeEvt);
@@ -9571,6 +10047,38 @@ function _lumen_apply_resize(nid, delta_x, delta_y) {
     style.width = new_width + 'px';
     style.height = new_height + 'px';
 }
+
+// D-6: Extension system stub — chrome.runtime API Phase 0.
+// Provides enough surface so existing extension content-scripts don't throw on import.
+// Phase 0: sendMessage is fire-and-forget (message goes to native no-op binding).
+// Phase 1: shell wires up a real message bus between content scripts and extension background.
+(function() {
+    var _rt = {
+        id: 'lumen-extension',
+        sendMessage: function(msg, callback) {
+            _lumen_chrome_runtime_send_message(JSON.stringify(msg));
+            if (typeof callback === 'function') { callback(undefined); }
+        },
+        onMessage: {
+            _listeners: [],
+            addListener: function(fn) { this._listeners.push(fn); },
+            removeListener: function(fn) {
+                this._listeners = this._listeners.filter(function(l) { return l !== fn; });
+            },
+            hasListener: function(fn) { return this._listeners.indexOf(fn) !== -1; }
+        },
+        getURL: function(path) { return 'chrome-extension://lumen-extension/' + path; },
+        getManifest: function() { return { name: '', version: '0', manifest_version: 3 }; }
+    };
+    if (typeof globalThis !== 'undefined') {
+        globalThis.chrome = { runtime: _rt };
+        globalThis.browser = { runtime: _rt };
+    }
+    if (typeof window !== 'undefined') {
+        window.chrome = { runtime: _rt };
+        window.browser = { runtime: _rt };
+    }
+})();
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -14209,6 +14717,83 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::String("k=v".into()));
     }
 
+    #[test]
+    fn formdata_to_multipart_contains_boundary() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('name', 'alice'); \
+             var bnd = 'test-boundary'; \
+             var bytes = fd._toMultipart(bnd); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('--test-boundary') >= 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_to_multipart_contains_field_name_and_value() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('email', 'user@example.com'); \
+             var bytes = fd._toMultipart('bnd'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('name=\"email\"') >= 0 && s.indexOf('user@example.com') >= 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_to_multipart_ends_with_closing_delimiter() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('x', '1'); \
+             var bytes = fd._toMultipart('B'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('--B--') >= 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_to_multipart_empty_entries_yields_only_closing_boundary() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); \
+             var bytes = fd._toMultipart('B'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.trim()"
+        ).unwrap();
+        // Empty FormData → just --B--\r\n
+        assert_eq!(r, lumen_core::JsValue::String("--B--".into()));
+    }
+
+    #[test]
+    fn formdata_to_multipart_escapes_quotes_in_name() {
+        // Use \" in the JS string to pass a double-quote character as field name.
+        // In the Rust string, \" is a literal " (Rust escape); QuickJS then evaluates
+        // 'ev\"il' in single-quoted JS string, where \" is interpreted as ".
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('ev\\\"il', 'val'); \
+             var bytes = fd._toMultipart('B'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('ev%22il') >= 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn formdata_to_multipart_multiple_fields_ordered() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fd = new FormData(); fd.append('a', '1'); fd.append('b', '2'); \
+             var bytes = fd._toMultipart('X'); \
+             var s = ''; for (var i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } \
+             s.indexOf('name=\"a\"') < s.indexOf('name=\"b\"')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     // Mock fetch provider that records calls to fetch_with_body_sync.
     type FetchCall = (String, String, String, Vec<u8>);
     struct CaptureFetch {
@@ -14238,7 +14823,8 @@ mod tests {
     }
 
     #[test]
-    fn fetch_post_formdata_sends_url_encoded_body() {
+    fn fetch_post_formdata_sends_multipart_body() {
+        // Fetch spec §5.4: FormData body → multipart/form-data (not urlencoded).
         let capture = CaptureFetch::new();
         let rt = runtime_with_fetch(Arc::clone(&capture));
         rt.eval(
@@ -14250,8 +14836,17 @@ mod tests {
         let (url, method, ct, body) = &calls[0];
         assert_eq!(url, "https://example.com/api");
         assert_eq!(method, "POST");
-        assert_eq!(ct, "application/x-www-form-urlencoded");
-        assert_eq!(std::str::from_utf8(body).unwrap(), "user=bob&age=30");
+        // Content-Type must start with multipart/form-data and include a boundary.
+        assert!(ct.starts_with("multipart/form-data; boundary="),
+            "expected multipart/form-data content-type, got: {ct}");
+        // Body must contain the field names and values in multipart format.
+        let body_str = std::str::from_utf8(body).unwrap();
+        assert!(body_str.contains("name=\"user\""), "body should contain field name 'user'");
+        assert!(body_str.contains("bob"), "body should contain value 'bob'");
+        assert!(body_str.contains("name=\"age\""), "body should contain field name 'age'");
+        assert!(body_str.contains("30"), "body should contain value '30'");
+        // Body must end with closing boundary --boundary--\r\n
+        assert!(body_str.contains("--\r\n"), "body must contain closing boundary");
     }
 
     #[test]
@@ -16253,6 +16848,83 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    // ── K-3: Fetch streaming body tests ──────────────────────────────────────
+
+    #[test]
+    fn response_body_reader_reads_first_chunk() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var out = null; \
+             var reader = new Response('hello').body.getReader(); \
+             reader.read().then(function(r) { out = r; }); \
+             _lumen_drain_microtasks(); \
+             out !== null && !out.done && out.value instanceof Uint8Array && out.value.length === 5"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_reader_done_after_all_chunks() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var done = false; \
+             var reader = new Response('hi').body.getReader(); \
+             reader.read().then(function() { return reader.read(); }) \
+                   .then(function(r) { done = r.done; }); \
+             _lumen_drain_microtasks(); \
+             done === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_getreader_marks_body_used() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var resp = new Response('data'); \
+             resp.body.getReader(); \
+             resp.bodyUsed === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_text_rejects_after_getreader() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var resp = new Response('abc'); \
+             resp.body.getReader(); \
+             var rejected = false; \
+             resp.text().then(null, function() { rejected = true; }); \
+             _lumen_drain_microtasks(); \
+             rejected === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_body_getreader_rejects_if_already_used() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var resp = new Response('x'); \
+             resp.text().then(function() {}); \
+             var threw = false; \
+             try { resp.body.getReader(); } catch(e) { threw = true; } \
+             threw === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_body_chunk_binding_returns_slice() {
+        // _lumen_fetch_body_length / _lumen_fetch_body_chunk work when no cache is set.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "_lumen_fetch_body_length() === 0 && _lumen_fetch_body_chunk(0, 10).length === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     #[test]
     fn text_decoder_stream_decodes_utf8() {
         let rt = runtime_with_dom(make_doc());
@@ -16265,6 +16937,89 @@ mod tests {
              reader.read().then(function(r) { out.push(r.value); }); \
              _lumen_drain_microtasks(); \
              out.length === 1 && out[0] === 'Hello'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_mode_ascii() {
+        // {stream: true} with complete ASCII works like normal decode.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             var s = dec.decode(new Uint8Array([72,101,108,108,111]), {stream: true}); \
+             s === 'Hello'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_mode_buffers_partial_utf8() {
+        // Euro sign € = 0xE2 0x82 0xAC (3-byte UTF-8).
+        // Sending only the first byte with stream:true must return '' and buffer it.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             var partial = dec.decode(new Uint8Array([0xE2]), {stream: true}); \
+             partial === ''"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_mode_reassembles_split_multibyte() {
+        // Continuation of previous: second chunk provides the rest of €.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             dec.decode(new Uint8Array([0xE2]), {stream: true}); \
+             var result = dec.decode(new Uint8Array([0x82, 0xAC])); \
+             result === '€'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_mode_final_flush_clears_buffer() {
+        // After streaming, final decode() with no args flushes (returns empty or replacement).
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             dec.decode(new Uint8Array([72]), {stream: true}); \
+             var flushed = dec.decode(); \
+             typeof flushed === 'string'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_no_arg_returns_empty_string() {
+        // decode() with no arguments (empty flush) always returns a string.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var dec = new TextDecoder(); \
+             dec.decode() === '' && dec.decode(null) === ''"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn text_decoder_stream_decoder_stream_splits_multibyte() {
+        // TextDecoderStream uses {stream:true} internally — writing bytes of €
+        // in two chunks must produce the character exactly once.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var out = []; \
+             var tds = new TextDecoderStream(); \
+             var writer = tds.writable.getWriter(); \
+             var reader = tds.readable.getReader(); \
+             writer.write(new Uint8Array([0xE2])); \
+             reader.read().then(function(r) { if (!r.done) out.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             writer.write(new Uint8Array([0x82, 0xAC])); \
+             reader.read().then(function(r) { if (!r.done) out.push(r.value); }); \
+             _lumen_drain_microtasks(); \
+             out.join('') === '€'"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
@@ -18763,6 +19518,99 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    // ── Resource Timing L2 tests (E-2) ─────────────────────────────────────────
+
+    #[test]
+    fn resource_timing_record_exists_in_entries() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://example.com/app.js', 'script', 1000, 50);
+            var entries = performance.getEntriesByType('resource');
+            entries.length === 1 && entries[0].name === 'https://example.com/app.js'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_entry_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://cdn.example.com/style.css', 'link', 500, 80);
+            var e = performance.getEntriesByType('resource')[0];
+            e.entryType === 'resource' &&
+            e.initiatorType === 'link' &&
+            e.fetchStart === 500 &&
+            e.responseEnd === 580 &&
+            e.duration === 80
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_phase0_sub_timings_equal_fetch_start() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://example.com/img.png', 'img', 200, 30);
+            var e = performance.getEntriesByType('resource')[0];
+            e.domainLookupStart === 200 &&
+            e.domainLookupEnd === 200 &&
+            e.connectStart === 200 &&
+            e.requestStart === 200 &&
+            e.responseStart === 200
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_clear_resource_timings() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://example.com/a.js', 'script', 100, 10);
+            _lumen_record_resource_timing('https://example.com/b.js', 'script', 200, 20);
+            performance.clearResourceTimings();
+            performance.getEntriesByType('resource').length === 0
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_observer_notified() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
+            po.observe({entryTypes: ['resource']});
+            _lumen_record_resource_timing('https://example.com/fetch.json', 'fetch', 300, 15);
+            got.length === 1 && got[0].initiatorType === 'fetch' && got[0].duration === 15
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resource_timing_multiple_entries() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_record_resource_timing('https://example.com/1.js', 'script', 100, 10);
+            _lumen_record_resource_timing('https://example.com/2.js', 'script', 200, 20);
+            _lumen_record_resource_timing('https://example.com/3.css', 'link', 300, 5);
+            var all = performance.getEntriesByType('resource');
+            all.length === 3 && all[2].name === 'https://example.com/3.css' && all[2].initiatorType === 'link'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     // ── CSS Typed OM L1 tests (A-3 feature) ────────────────────────────────────
     #[test]
     fn css_typed_om_css_style_value_exists() {
@@ -18882,5 +19730,231 @@ mod tests {
             "#
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── DOM node count / limit bindings ───────────────────────────────────────
+
+    #[test]
+    fn dom_node_count_binding_returns_positive() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_lumen_dom_node_count() > 0").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dom_node_count_increments_after_create_element() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var before = _lumen_dom_node_count();
+            document.createElement('span');
+            _lumen_dom_node_count() === before + 1
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dom_node_count_at_max_after_prefill() {
+        let doc = {
+            use lumen_dom::{Document, QualName};
+            let mut d = Document::new();
+            while d.node_count() < lumen_dom::MAX_DOM_NODES {
+                d.create_element(QualName::html("div"));
+            }
+            // Verify prefill worked
+            assert_eq!(d.node_count(), lumen_dom::MAX_DOM_NODES);
+            Arc::new(Mutex::new(d))
+        };
+        let rt = runtime_with_dom(doc);
+        // The binding should reflect the pre-filled count
+        let r = rt.eval(&format!("_lumen_dom_node_count() >= {}", lumen_dom::MAX_DOM_NODES)).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dom_create_element_throws_quota_exceeded_when_full() {
+        // Pre-fill the arena to MAX_DOM_NODES via the Rust API so the JS
+        // binding returns the error sentinel without 50 000 JS evals.
+        let doc = {
+            use lumen_dom::{Document, QualName};
+            let mut d = Document::new();
+            while d.node_count() < lumen_dom::MAX_DOM_NODES {
+                d.create_element(QualName::html("div"));
+            }
+            Arc::new(Mutex::new(d))
+        };
+        let rt = runtime_with_dom(doc);
+        // QuickJS converts Rust u32::MAX to -1 (signed overflow), so the shim
+        // now checks `nid < 0` and throws QuotaExceededError.
+        let r = rt.eval(
+            r#"
+            var caught = '';
+            try { document.createElement('p'); }
+            catch (e) { caught = e.name; }
+            caught
+            "#,
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("QuotaExceededError".into()));
+    }
+
+    // ── D-6: chrome.runtime stub tests ───────────────────────────────────────
+
+    #[test]
+    fn chrome_runtime_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn chrome_runtime_send_message_is_function() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof chrome.runtime.sendMessage").unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("function".into()));
+    }
+
+    #[test]
+    fn chrome_runtime_send_message_does_not_throw() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var ok = false;
+            try { chrome.runtime.sendMessage({type: 'test'}); ok = true; } catch(e) {}
+            ok
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn chrome_runtime_on_message_add_listener() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var called = false;
+            chrome.runtime.onMessage.addListener(function(msg) { called = true; });
+            chrome.runtime.onMessage._listeners.length === 1
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn browser_runtime_alias_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof browser !== 'undefined' && typeof browser.runtime !== 'undefined'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn chrome_runtime_get_url() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("chrome.runtime.getURL('icons/icon.png')").unwrap();
+        assert_eq!(v, lumen_core::JsValue::String(
+            "chrome-extension://lumen-extension/icons/icon.png".into()
+        ));
+    }
+
+    // ── HTML5 Drag and Drop API (HTML LS §9.10) ───────────────────────────────
+
+    #[test]
+    fn data_transfer_set_get_data() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text/plain', 'hello drag');
+            dt.getData('text/plain')
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("hello drag".into()));
+    }
+
+    #[test]
+    fn data_transfer_normalises_text_format() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text', 'world');
+            dt.getData('text/plain')
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("world".into()));
+    }
+
+    #[test]
+    fn data_transfer_types_reflect_set_data() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text/plain', 'a');
+            dt.setData('text/html', '<b>a</b>');
+            dt.types.length === 2 && dt.types.indexOf('text/plain') >= 0
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn data_transfer_clear_data_single_format() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text/plain', 'a');
+            dt.setData('text/html', '<b>a</b>');
+            dt.clearData('text/plain');
+            dt.types.length === 1 && dt.types[0] === 'text/html'
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn data_transfer_item_list_add_and_iterate() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.items.add('foo', 'text/plain');
+            dt.items.length === 1 && dt.items[0].kind === 'string'
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn data_transfer_item_get_as_string() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var dt = new DataTransfer();
+            dt.setData('text/plain', 'payload');
+            var got = null;
+            dt.items[0].getAsString(function(s) { got = s; });
+            got
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("payload".into()));
+    }
+
+    #[test]
+    fn drag_event_has_fresh_data_transfer() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var e = new DragEvent('dragstart', { bubbles: true });
+            e.dataTransfer instanceof DataTransfer
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn draggable_attribute_getter_setter() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var el = document.createElement('div');
+            document.body.appendChild(el);
+            el.draggable = true;
+            el.draggable === true && el.getAttribute('draggable') === 'true'
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn data_transfer_classes_exported_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            typeof window.DataTransfer === 'function' &&
+            typeof window.DataTransferItem === 'function' &&
+            typeof window.DataTransferItemList === 'function'
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
     }
 }

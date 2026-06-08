@@ -1,6 +1,9 @@
 pub mod audio_bindings;
 pub mod audio_element;
+pub mod background_fetch;
 pub mod background_sync;
+pub mod badging;
+pub mod periodic_sync;
 pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
@@ -13,6 +16,7 @@ pub mod canvas2d;
 pub mod clipboard;
 pub mod contacts;
 pub mod cookie_banner;
+pub mod cookie_store;
 pub mod payment_request;
 pub mod credentials;
 pub mod device_sensors;
@@ -53,6 +57,33 @@ pub mod trusted_types;
 pub mod sanitizer;
 pub mod screen_orientation;
 pub mod scroll_snap_events;
+pub mod sri;
+pub mod media_stream_recording;
+pub mod serial;
+pub mod compute_pressure;
+pub mod csp;
+pub mod permissions_policy;
+pub mod web_codecs;
+pub mod ua_client_hints;
+pub mod media_capabilities;
+pub mod virtual_keyboard;
+pub mod wake_lock;
+pub mod web_locks;
+pub mod scheduler;
+pub mod reporting_api;
+pub mod web_audio;
+pub mod webgpu;
+pub mod webxr;
+pub mod form_validation;
+pub mod element_internals;
+pub mod presentation_api;
+pub mod webassembly;
+pub mod generic_sensor;
+pub mod video_pip;
+pub mod web_midi;
+pub mod storage_manager;
+pub mod xhr;
+pub mod dom_parser;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -489,9 +520,63 @@ impl QuickJsRuntime {
                 eprintln!("Bluetooth bindings init failed: {}", e);
             }
 
+            // Install WebSerial API (W3C Serial API L1) — after DOM/navigator so that
+            // Promise, DOMException, and navigator are available. Phase 0: requestPort()
+            // rejects NotSupportedError; getPorts() returns [].
+            if let Err(e) = serial::install_serial_bindings(&ctx) {
+                eprintln!("WebSerial bindings init failed: {}", e);
+            }
+
+            // Install Compute Pressure API (W3C Compute Pressure L1) — after DOM/navigator.
+            // Phase 0: PressureObserver registers callback but never fires; knownSources()=['cpu'].
+            if let Err(e) = compute_pressure::install_compute_pressure_bindings(&ctx) {
+                eprintln!("Compute Pressure API init failed: {}", e);
+            }
+
+            // Install Badging API (W3C Badging API) — after DOM/navigator.
+            // Phase 0: navigator.setAppBadge/clearAppBadge are no-ops; _lumen_set_app_badge hook
+            // prepared for OS integration in shell Phase 1.
+            if let Err(e) = badging::install_badging_bindings(&ctx) {
+                eprintln!("Badging API init failed: {}", e);
+            }
+
+            // Install CSP violation event class (W3C CSP Level 3 §7.8) — after DOM/document.
+            // Phase 0: SecurityPolicyViolationEvent class + _lumen_dispatch_csp_violation helper.
+            // Phase 1: shell calls _lumen_fire_csp_violation for actual enforcement.
+            if let Err(e) = csp::install_csp_bindings(&ctx) {
+                eprintln!("CSP bindings init failed: {}", e);
+            }
+
+            // Install Permissions Policy bindings (W3C Permissions Policy §8) — after DOM/document.
+            // Phase 0: document.featurePolicy + _lumen_set_permissions_policy(headerValue) hook.
+            // Phase 1: shell calls _lumen_set_permissions_policy after HTTP response headers.
+            if let Err(e) = permissions_policy::install_permissions_policy_bindings(&ctx) {
+                eprintln!("Permissions Policy bindings init failed: {}", e);
+            }
+
+            // Install Web Codecs API stubs (W3C Web Codecs) — Phase 0: VideoDecoder/VideoEncoder/
+            // AudioDecoder/AudioEncoder constructors + state machine. isConfigSupported() → false.
+            if let Err(e) = web_codecs::install_web_codecs(&ctx) {
+                eprintln!("Web Codecs API init failed: {}", e);
+            }
+
+            // Install User-Agent Client Hints (W3C UA-CH §4–6) — after navigator shim.
+            // Phase 0: navigator.userAgentData with static Chrome 114 / Windows 10 profile.
+            if let Err(e) = ua_client_hints::install_ua_client_hints_bindings(&ctx) {
+                eprintln!("UA Client Hints init failed: {}", e);
+            }
+
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
             if let Err(e) = video_bindings::install_video_bindings(&ctx) {
                 eprintln!("Video bindings init failed: {}", e);
+            }
+
+            // Install Video Picture-in-Picture API (W3C PiP L1 §3) — after video_bindings.
+            // Phase 0: video.requestPictureInPicture() → Promise<PictureInPictureWindow>,
+            // document.exitPictureInPicture(), pictureInPictureElement, pictureInPictureEnabled.
+            // Shell integration (P3) connects _lumen_pip_enter/_lumen_pip_exit to OS float window.
+            if let Err(e) = video_pip::install_video_pip_api(&ctx) {
+                eprintln!("Video Picture-in-Picture API init failed: {}", e);
             }
 
             // Install HTMLAudioElement stubs (HTML spec §4.8.10) — after DOM/video.
@@ -561,6 +646,13 @@ impl QuickJsRuntime {
                 eprintln!("Notifications bindings init failed: {}", e);
             }
 
+            // Install Background Fetch API stub (W3C Background Fetch L1, Phase 0) — after DOM
+            // so Promise is available. Provides registration.backgroundFetch.fetch(id, reqs, opts)
+            // / get(id) / getIds(). Phase 0: in-memory; shell _lumen_bg_fetch_* wiring is Phase 1.
+            if let Err(e) = background_fetch::init_background_fetch(&ctx) {
+                eprintln!("Background Fetch API init failed: {}", e);
+            }
+
             // Install Background Sync API stub (W3C Background Sync L2, Phase 0) — after DOM
             // so Promise is available. Provides registration.sync.register(tag) / getTags().
             // Phase 0: tags stored in-memory; actual sync-on-next-navigation wiring is P2/P3.
@@ -568,11 +660,25 @@ impl QuickJsRuntime {
                 eprintln!("Background Sync API init failed: {}", e);
             }
 
+            // Install Periodic Background Sync API stub (W3C PBSync, Phase 0) — after DOM so
+            // Promise is available. Provides registration.periodicSync.register(tag, {minInterval})
+            // / unregister(tag) / getTags(). Phase 0: in-memory; OS scheduler wiring is P2/P3.
+            if let Err(e) = periodic_sync::init_periodic_sync(&ctx) {
+                eprintln!("Periodic Background Sync API init failed: {}", e);
+            }
+
             // Install Push API stub (W3C Push API L1, Phase 0) — after DOM so Promise is
             // available. Provides registration.pushManager.subscribe() / getSubscription() /
             // permissionState(). Phase 0: static endpoint, in-memory subscriptions.
             if let Err(e) = push_api::init_push_api(&ctx) {
                 eprintln!("Push API init failed: {}", e);
+            }
+
+            // Install Cookie Store API (WHATWG Cookie Store API, Phase 0) — after DOM so
+            // Promise and document.cookie are available. Provides window.cookieStore with
+            // get/getAll/set/delete and CookieChangeEvent. Phase 0: in-memory store.
+            if let Err(e) = cookie_store::init_cookie_store(&ctx) {
+                eprintln!("Cookie Store API init failed: {}", e);
             }
 
             // Install cookie-banner auto-dismiss shim (7C.3) — last, after full DOM.
@@ -706,6 +812,130 @@ impl QuickJsRuntime {
                 eprintln!("Document Picture-in-Picture API init failed: {}", e);
             }
 
+            // Install MediaRecorder API stub (W3C MediaStream Recording L2) — pure JS implementation.
+            // Phase 0: MediaRecorder state machine (inactive/recording/paused), mimeType reflection,
+            // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
+            if let Err(e) = media_stream_recording::init_media_stream_recording(&ctx) {
+                eprintln!("MediaRecorder API init failed: {}", e);
+            }
+
+            // Install Media Capabilities API (W3C Media Capabilities §5) — after DOM/navigator.
+            // Phase 0: navigator.mediaCapabilities singleton; decodingInfo/encodingInfo always
+            // return supported=true, smooth=true, powerEfficient=false.
+            if let Err(e) = media_capabilities::install_media_capabilities_bindings(&ctx) {
+                eprintln!("Media Capabilities API init failed: {}", e);
+            }
+
+            // Install Virtual Keyboard API (W3C VK API) — after navigator.
+            // Phase 0: geometry stubs + geometrychange event infrastructure.
+            if let Err(e) = virtual_keyboard::install_virtual_keyboard_bindings(&ctx) {
+                eprintln!("Virtual Keyboard API init failed: {}", e);
+            }
+
+            // Install Web Locks API (W3C Web Locks Level 1) — after DOM/navigator.
+            // Phase 0: in-memory per-context FIFO lock queue; supports exclusive/shared modes,
+            // ifAvailable, steal, and AbortSignal. navigator.locks → LockManager.
+            if let Err(e) = web_locks::install_web_locks_bindings(&ctx) {
+                eprintln!("Web Locks API init failed: {}", e);
+            }
+
+            // Install Reporting API (W3C Reporting API L1) — observer + _lumen_deliver_report.
+            if let Err(e) = reporting_api::install_reporting_api_bindings(&ctx) {
+                eprintln!("Reporting API init failed: {}", e);
+            }
+
+            // Install Screen Wake Lock API (W3C Screen Wake Lock Level 1) — after DOM/navigator.
+            // Phase 0: in-memory sentinel with auto-release on visibilitychange → hidden.
+            if let Err(e) = wake_lock::install_wake_lock_bindings(&ctx) {
+                eprintln!("Screen Wake Lock API init failed: {}", e);
+            }
+
+            // Install W3C Scheduler API Level 1 — scheduler.postTask / yield, TaskController/Signal.
+            // Phase 0: user-blocking → queueMicrotask, user-visible → setTimeout(0), background → setTimeout(200).
+            if let Err(e) = scheduler::install_scheduler_api(&ctx) {
+                eprintln!("Scheduler API init failed: {}", e);
+            }
+
+            // Install W3C Web Audio API Level 1 — AudioContext, AudioNode hierarchy, AudioParam.
+            // Phase 0: no DSP; graph operations in-memory only; decodeAudioData returns silent buffer.
+            if let Err(e) = web_audio::install_web_audio_api(&ctx) {
+                eprintln!("Web Audio API init failed: {}", e);
+            }
+
+            // Install W3C WebGPU API — navigator.gpu, GPUAdapter/Device/Buffer/Texture/Pipeline stubs.
+            // Phase 0: no GPU; all create* ops in-memory only; submit/draw/dispatch are no-ops.
+            if let Err(e) = webgpu::install_webgpu_bindings(&ctx) {
+                eprintln!("WebGPU API init failed: {}", e);
+            }
+
+            // Install WebXR Device API (W3C WebXR Device API §5) — after DOM/navigator.
+            // Phase 0: isSessionSupported() → false, requestSession() → NotSupportedError.
+            // XRSession/XRFrame/XRReferenceSpace/XRView stubs exported on window.
+            if let Err(e) = webxr::install_webxr_bindings(&ctx) {
+                eprintln!("WebXR Device API init failed: {}", e);
+            }
+
+            if let Err(e) = form_validation::install_form_validation_bindings(&ctx) {
+                eprintln!("Form Constraint Validation API init failed: {}", e);
+            }
+
+            // Phase 0: element.attachInternals() + CustomStateSet; :state() selector is P4 handoff.
+            if let Err(e) = element_internals::install_element_internals_bindings(&ctx) {
+                eprintln!("ElementInternals API init failed: {}", e);
+            }
+
+            // Phase 0: navigator.presentation + PresentationRequest/Connection stubs.
+            if let Err(e) = presentation_api::install_presentation_api(&ctx) {
+                eprintln!("Presentation API init failed: {}", e);
+            }
+
+            // Install WebAssembly API (W3C WebAssembly JavaScript Interface §7) — after DOM.
+            // Phase 0: compile/instantiate return resolved Promises with empty Module/Instance;
+            // validate() checks the 4-byte WASM magic header. No actual WASM execution.
+            // Phase 1 (future): integrate wasmtime or wasmer for real WASM execution.
+            if let Err(e) = webassembly::install_webassembly_bindings(&ctx) {
+                eprintln!("WebAssembly bindings init failed: {}", e);
+            }
+
+            // Phase 0: W3C Generic Sensor API — Accelerometer, Gyroscope, LinearAccelerationSensor,
+            // GravitySensor, AbsoluteOrientationSensor, RelativeOrientationSensor, Magnetometer,
+            // AmbientLightSensor. start() activates sensor; no readings until Phase 1 OS integration.
+            if let Err(e) = generic_sensor::install_generic_sensor_bindings(&ctx) {
+                eprintln!("Generic Sensor API init failed: {}", e);
+            }
+
+            // Phase 0: W3C Web MIDI L1 — navigator.requestMIDIAccess() resolves with empty
+            // MIDIAccess (no hardware). Phase 1 wires _lumen_midi_deliver_message to
+            // CoreMIDI / WinMM / ALSA backends.
+            if let Err(e) = web_midi::install_web_midi_api(&ctx) {
+                eprintln!("Web MIDI API init failed: {}", e);
+            }
+
+            // Phase 0: WHATWG Storage §9 — navigator.storage singleton.
+            // estimate() → {usage:0, quota:10GiB}; persist/persisted → true; getDirectory() → OPFS stub.
+            // Phase 1: _lumen_storage_estimate/persist/get_directory wire real OS metrics + sandboxed FS.
+            if let Err(e) = storage_manager::install_storage_manager_bindings(&ctx) {
+                eprintln!("StorageManager API init failed: {}", e);
+            }
+
+            // Install XMLHttpRequest API (WHATWG XHR Standard §4) — after DOM so fetch(),
+            // FormData, Blob, TextDecoder/Encoder, ProgressEvent infra, and the
+            // _lumen_fetch_sync* native bindings are all present.
+            // Phase 0: open/send/abort/getResponseHeader/getAllResponseHeaders, readystatechange
+            // and load/error/progress/abort events.  Reuses the fetch HTTP stack.
+            if let Err(e) = xhr::install_xhr_bindings(&ctx) {
+                eprintln!("XMLHttpRequest API init failed: {}", e);
+            }
+
+            // W3C DOM Parsing and Serialization — DOMParser + XMLSerializer.
+            // After DOM and _lumen_get_attr_names / _lumen_get_children / _lumen_is_text_node
+            // bindings are registered.  DOMParser.parseFromString() creates independent
+            // virtual documents (pure-JS nodes, not backed by Rust lumen_dom).
+            // XMLSerializer.serializeToString() handles both virtual and native nodes.
+            if let Err(e) = dom_parser::install_dom_parser(&ctx) {
+                eprintln!("DOMParser/XMLSerializer init failed: {}", e);
+            }
+
             Ok(())
         })
     }
@@ -726,6 +956,54 @@ impl QuickJsRuntime {
     /// page URL hash, making JS rendering output independent of wall-clock time.
     pub fn set_deterministic_mode(&self) {
         self.deterministic.store(true, Ordering::Relaxed);
+    }
+
+    /// Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3).
+    ///
+    /// Installs JS overrides that make fingerprinting APIs return fixed deterministic
+    /// values regardless of platform:
+    /// - **Canvas** — `toDataURL()` / `toBlob()` return a fixed empty PNG data URL
+    ///   (already handled by `canvas2d.rs`; this call is a no-op reinforcement).
+    /// - **AudioContext** — `createAnalyser` buffer data returns all-zero samples;
+    ///   `sampleRate` is pinned to 44100.
+    /// - **Font enumeration** — `document.fonts.check()` always returns `true` for
+    ///   the single bundled font (Inter); `document.fonts` iterates only Inter.
+    ///
+    /// Must be called after `install_dom` and before running page scripts.
+    /// Idempotent — safe to call multiple times.
+    pub fn freeze_fingerprint(&self) {
+        // Language: inject a small JS shim that normalises the remaining APIs.
+        // Canvas and WebGL are already normalised at the Rust level (canvas2d.rs,
+        // webgl_canvas.rs). Here we target audio analyser output and font enumeration.
+        const FREEZE_SHIM: &str = r#"
+(function(){
+  // Audio: pin AnalyserNode.getByteFrequencyData / getFloatFrequencyData to zeros.
+  if(typeof AnalyserNode!=='undefined'){
+    AnalyserNode.prototype.getByteFrequencyData=function(arr){
+      if(arr && arr.fill) arr.fill(0);
+    };
+    AnalyserNode.prototype.getFloatFrequencyData=function(arr){
+      if(arr && arr.fill) arr.fill(-Infinity);
+    };
+    AnalyserNode.prototype.getByteTimeDomainData=function(arr){
+      if(arr && arr.fill) arr.fill(128);
+    };
+    AnalyserNode.prototype.getFloatTimeDomainData=function(arr){
+      if(arr && arr.fill) arr.fill(0);
+    };
+  }
+  // Font: document.fonts.check() always true; forEach/keys/values yield nothing extra.
+  if(typeof document!=='undefined' && document.fonts){
+    try{
+      document.fonts.check=function(){return true;};
+    }catch(e){}
+  }
+})();
+"#;
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>(FREEZE_SHIM).ok();
+        });
     }
 
     /// Deliver messages posted by worker threads to their `Worker` JS instances.

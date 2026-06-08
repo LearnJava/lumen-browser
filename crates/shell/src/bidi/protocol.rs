@@ -1,38 +1,30 @@
-//! WebDriver BiDi — диспетчер команд (Phase 1, §6.11, ADR-006).
+//! WebDriver BiDi — command dispatcher (Phase 1, §6.11, ADR-006).
 //!
-//! Разбирает BiDi-команду `{"id":N,"method":"module.command","params":{...}}`,
-//! маршрутизирует на обработчик, возвращает один или несколько фреймов для
-//! отправки клиенту (W3C WebDriver BiDi, Working Draft).
+//! Parses a BiDi command `{"id":N,"method":"module.command","params":{...}}`,
+//! routes to the handler, and returns one or more frames for the client
+//! (W3C WebDriver BiDi, Working Draft).
 //!
-//! Форматы сообщений (BiDi §3.4):
-//! - Команда: `{"id":<js-uint>,"method":"<str>","params":<obj>}`
-//! - Успех:   `{"type":"success","id":<js-uint>,"result":<obj>}`
-//! - Ошибка:  `{"type":"error","id":<js-uint|null>,"error":"<code>","message":"<str>","stacktrace":""}`
-//! - Событие: `{"type":"event","method":"<str>","params":<obj>}`
+//! Message formats (BiDi §3.4):
+//! - Command: `{"id":<js-uint>,"method":"<str>","params":<obj>}`
+//! - Success: `{"type":"success","id":<js-uint>,"result":<obj>}`
+//! - Error:   `{"type":"error","id":<js-uint|null>,"error":"<code>","message":"<str>","stacktrace":""}`
+//! - Event:   `{"type":"event","method":"<str>","params":<obj>}`
 //!
-//! Реализованные команды:
-//! - `session.status` — `ready:true`, пока сессия не создана.
-//! - `session.new` — создаёт сессию + дефолтный browsing context (без события,
-//!   подписок ещё нет — порядок BiDi: `session.new` → `session.subscribe`).
-//! - `session.subscribe` / `session.unsubscribe` — реально хранят набор подписок;
-//!   события эмитятся только подписанным клиентам (точное имя метода или модуль).
-//! - `session.end` — ACK + закрытие соединения.
-//! - `browsingContext.create` — новый контекст (опц. `referenceContext` → parent);
-//!   эмитит `browsingContext.created`, если подписан.
-//! - `browsingContext.close` — удаляет контекст (и его потомков); эмитит
-//!   `browsingContext.contextDestroyed`, если подписан.
-//! - `browsingContext.navigate` — обновляет URL контекста, возвращает
-//!   `{navigation, url}`; эмитит `browsingContext.load`, если подписан.
-//! - `browsingContext.activate` — ACK (валидирует контекст).
-//! - `browsingContext.getTree` — дерево всех контекстов (вложенность по parent).
+//! Implemented commands:
+//! - `session.*`         — status/new/subscribe/unsubscribe/end/setDefaultUserContextLocale
+//! - `browsingContext.*` — create/close/navigate/activate/getTree
+//! - `script.*`          — evaluate/callFunction/addPreloadScript/removePreloadScript/disown/getRealms
+//! - `network.*`         — getResponseBody/setOfflineStatus/addIntercept/removeIntercept/
+//!   continueRequest/continueResponse/continueWithAuth/failRequest/setCacheBehavior
+//! - `input.*`           — performActions/releaseActions/setFiles
+//! - `browser.*`         — setTimezoneOverride
+//! - `emulation.*`       — setUserAgentOverride
 //!
-//! Live-wiring к реальному движку (фактическая навигация в `lumen-driver`,
-//! `domContentLoaded`/response-body/cookie-события) — handoff P3, см. 8H.3.
-//! Этот слой — чистая state-машина протокола: одно соединение = одно [`BidiState`].
-//!
-//! Всё остальное → ошибка `unknown command`.
+//! Live wiring to the actual engine (real navigation, `domContentLoaded`, cookie events)
+//! is a P3 handoff — roadmap 8H.3.
+//! This layer is a pure protocol state machine: one connection = one [`BidiState`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
 
@@ -44,22 +36,66 @@ struct BidiContext {
     url: String,
     /// Родительский контекст (`Some` для вложенных, `None` для top-level).
     parent: Option<String>,
+    /// Per-context User-Agent override; `None` означает использование сессионного переопределения.
+    ua_override: Option<String>,
 }
 
-/// Состояние одного BiDi-соединения.
+/// One network intercept rule registered via `network.addIntercept`.
+struct NetworkIntercept {
+    /// Opaque intercept identifier (BiDi `intercept`).
+    id: String,
+    /// Phases at which to intercept: "beforeRequestSent", "responseStarted", "authRequired".
+    #[allow(dead_code)]
+    phases: Vec<String>,
+    /// URL patterns to match; empty means match-all (Phase 1 stub: stored but not evaluated).
+    #[allow(dead_code)]
+    url_patterns: Vec<String>,
+}
+
+/// Connection-level BiDi state.
 ///
-/// Хранит сессию, набор browsing context'ов и активные подписки на события.
-/// Не разделяется между соединениями — каждое соединение изолировано.
+/// Holds the session, all browsing contexts, active event subscriptions,
+/// buffered network response bodies, and network intercept rules.
+/// Not shared between connections — each connection is fully isolated.
 #[derive(Default)]
 pub struct BidiState {
-    /// ID активной сессии (`None`, пока не вызван `session.new`).
+    /// Active session ID (`None` until `session.new` is called).
     session_id: Option<String>,
-    /// Все browsing context'ы соединения; первый создаётся вместе с сессией.
+    /// All browsing contexts in this connection; first one is created with the session.
     contexts: Vec<BidiContext>,
-    /// Активные подписки: имя события (`module.event`) или модуль (`module`).
+    /// Active subscriptions: event name (`module.event`) or module (`module`).
     subscriptions: BTreeSet<String>,
-    /// Монотонный счётчик для детерминированной генерации id-ов.
+    /// Monotonic counter for deterministic ID generation.
     counter: u64,
+    /// Buffered response bodies: requestId → body (most recent).
+    ///
+    /// Populated via [`BidiState::record_response_body`] from the network layer.
+    /// Queried by `network.getResponseBody`.
+    response_bodies: HashMap<u64, Vec<u8>>,
+    /// Default locale for user contexts (IETF BCP 47).
+    ///
+    /// Set by `session.setDefaultUserContextLocale`; `None` = browser system locale.
+    default_locale: Option<String>,
+    /// IANA timezone override identifier.
+    ///
+    /// Set by `browser.setTimezoneOverride`; `None` = system timezone.
+    timezone_override: Option<String>,
+    /// Offline network simulation: `true` = all network requests fail.
+    ///
+    /// Set by `network.setOfflineStatus`.
+    offline: bool,
+    /// Session-level User-Agent override; per-context overrides take priority.
+    ///
+    /// Set by `emulation.setUserAgentOverride` without `contexts`.
+    session_ua_override: Option<String>,
+    /// Registered network intercept rules (Phase 1 stub: stored, not evaluated).
+    ///
+    /// Populated by `network.addIntercept`, removed by `network.removeIntercept`.
+    intercepts: Vec<NetworkIntercept>,
+    /// Cache behaviour override: "default", "bypass", or "restore".
+    ///
+    /// Set by `network.setCacheBehavior`; `None` = default browser caching.
+    cache_behavior: Option<String>,
 }
 
 impl BidiState {
@@ -96,6 +132,78 @@ impl BidiState {
     /// Найти контекст по id (`None`, если такого нет).
     fn find(&self, id: &str) -> Option<&BidiContext> {
         self.contexts.iter().find(|c| c.id == id)
+    }
+
+    /// Current default locale for user contexts (IETF BCP 47).
+    ///
+    /// `None` if not set by `session.setDefaultUserContextLocale`.
+    // Shell layer reads this when initialising the JS engine context; not wired yet → false dead_code.
+    #[allow(dead_code)]
+    pub fn locale(&self) -> Option<&str> {
+        self.default_locale.as_deref()
+    }
+
+    /// Current timezone override (IANA identifier).
+    ///
+    /// `None` if not set by `browser.setTimezoneOverride`.
+    // Shell layer passes this to the JS engine at init; not wired yet → false dead_code.
+    #[allow(dead_code)]
+    pub fn timezone(&self) -> Option<&str> {
+        self.timezone_override.as_deref()
+    }
+
+    /// Whether offline network simulation is active.
+    // Shell layer blocks network requests when offline=true; not wired yet → false dead_code.
+    #[allow(dead_code)]
+    pub fn is_offline(&self) -> bool {
+        self.offline
+    }
+
+    /// Effective User-Agent for a context: per-context → session-level → `None`.
+    // Shell layer injects this UA into HTTP headers when present.
+    #[allow(dead_code)]
+    pub fn user_agent_for(&self, context_id: &str) -> Option<&str> {
+        self.contexts
+            .iter()
+            .find(|c| c.id == context_id)
+            .and_then(|c| c.ua_override.as_deref())
+            .or(self.session_ua_override.as_deref())
+    }
+
+    /// Active cache behavior override: "default", "bypass", or "restore".
+    ///
+    /// `None` if not set by `network.setCacheBehavior`.
+    // Shell layer applies this to the HTTP client cache policy; not wired yet → false dead_code.
+    #[allow(dead_code)]
+    pub fn cache_behavior(&self) -> Option<&str> {
+        self.cache_behavior.as_deref()
+    }
+
+    /// Number of active network intercept rules.
+    // Used in tests and future shell integration.
+    #[allow(dead_code)]
+    pub fn intercept_count(&self) -> usize {
+        self.intercepts.len()
+    }
+
+    /// Буферизовать тело сетевого ответа и эмитировать `network.responseBodyReceived`.
+    ///
+    /// Вызывается из сетевого слоя при получении тела ответа. Возвращает BiDi-фреймы
+    /// для отправки клиенту (пустой вектор, если подписки нет).
+    /// Повторный вызов с тем же `request_id` перезаписывает предыдущее тело.
+    // Вызывается из network-слоя при 8H.3 live-wiring; пока stub-слой не подключён,
+    // сигнал dead_code ложный.
+    #[allow(dead_code)]
+    pub fn record_response_body(&mut self, request_id: u64, body: Vec<u8>) -> Vec<String> {
+        self.response_bodies.insert(request_id, body.clone());
+        if self.is_subscribed("network.responseBodyReceived") {
+            vec![make_event(
+                "network.responseBodyReceived",
+                network_response_body_event_params(request_id, &body),
+            )]
+        } else {
+            vec![]
+        }
     }
 }
 
@@ -161,6 +269,23 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "script.callFunction" => script_call_function(id, &params, state),
         "script.addPreloadScript" => script_add_preload(id, &params, state),
         "script.removePreloadScript" => script_remove_preload(id, &params, state),
+        "script.disown" => script_disown(id, &params),
+        "script.getRealms" => script_get_realms(id, state),
+        "network.getResponseBody" => network_get_response_body(id, &params, state),
+        "network.setOfflineStatus" => network_set_offline(id, &params, state),
+        "network.addIntercept" => network_add_intercept(id, &params, state),
+        "network.removeIntercept" => network_remove_intercept(id, &params, state),
+        "network.continueRequest" => DispatchResult::single(make_success(id, empty_obj())),
+        "network.continueResponse" => DispatchResult::single(make_success(id, empty_obj())),
+        "network.continueWithAuth" => DispatchResult::single(make_success(id, empty_obj())),
+        "network.failRequest" => DispatchResult::single(make_success(id, empty_obj())),
+        "network.setCacheBehavior" => network_set_cache_behavior(id, &params, state),
+        "input.performActions" => input_perform_actions(id, &params, state),
+        "input.releaseActions" => input_release_actions(id, &params, state),
+        "input.setFiles" => input_set_files(id, &params, state),
+        "session.setDefaultUserContextLocale" => session_set_locale(id, &params, state),
+        "browser.setTimezoneOverride" => browser_set_timezone(id, &params, state),
+        "emulation.setUserAgentOverride" => emulation_set_ua_override(id, &params, state),
         other => DispatchResult::single(make_error(
             Some(id),
             "unknown command",
@@ -207,6 +332,7 @@ fn session_new(id: i64, _params: &JsonValue, state: &mut BidiState) -> DispatchR
         id: context_id,
         url: "about:blank".into(),
         parent: None,
+        ua_override: None,
     });
 
     let mut result = BTreeMap::new();
@@ -269,6 +395,7 @@ fn bc_create(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResu
         id: context_id.clone(),
         url: "about:blank".into(),
         parent,
+        ua_override: None,
     });
 
     let mut result = BTreeMap::new();
@@ -495,14 +622,14 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &BidiState) -> DispatchRe
         .and_then(|t| t.get("context"))
         .and_then(|v| v.as_str());
 
-    if let Some(ctx_id) = ctx_id {
-        if state.find(ctx_id).is_none() {
-            return DispatchResult::single(make_error(
-                Some(id),
-                "no such frame",
-                &format!("unknown browsing context: {ctx_id}"),
-            ));
-        }
+    if let Some(ctx_id) = ctx_id
+        && state.find(ctx_id).is_none()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("unknown browsing context: {ctx_id}"),
+        ));
     }
 
     // Phase 1: return undefined stub.
@@ -538,6 +665,316 @@ fn script_add_preload(id: i64, _params: &JsonValue, state: &mut BidiState) -> Di
 ///
 /// Phase 1 stub: ACK без реального удаления.
 fn script_remove_preload(id: i64, _params: &JsonValue, _state: &mut BidiState) -> DispatchResult {
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+// ──────────────────────────────────────────
+// network.* handlers (BiDi §12)
+// ──────────────────────────────────────────
+
+/// `network.getResponseBody` — вернуть буферизованное тело ответа (BiDi §12.6.4).
+///
+/// Ожидает `params.request.requestId` (число). Возвращает тело в base64.
+/// Ошибка `no such request`, если тело не буферизовано (запрос неизвестен).
+fn network_get_response_body(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+    let request_id = params
+        .get("request")
+        .and_then(|r| r.get("requestId"))
+        .and_then(|v| v.as_number())
+        .map(|n| n as u64);
+
+    let Some(request_id) = request_id else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "missing request.requestId",
+        ));
+    };
+
+    let Some(body) = state.response_bodies.get(&request_id) else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such request",
+            &format!("no buffered body for requestId: {request_id}"),
+        ));
+    };
+
+    let encoded = lumen_core::hash::base64_encode(body);
+    let mut body_obj = BTreeMap::new();
+    body_obj.insert("type".into(), JsonValue::String("base64".into()));
+    body_obj.insert("value".into(), JsonValue::String(encoded));
+
+    let mut result = BTreeMap::new();
+    result.insert("body".into(), JsonValue::Object(body_obj));
+
+    DispatchResult::single(make_success(id, JsonValue::Object(result)))
+}
+
+/// Параметры события `network.responseBodyReceived` (BiDi §12.5.3, упрощённые).
+///
+/// Содержит `request.requestId` и тело в base64 — минимальный набор для stub-слоя.
+// Вызывается только из record_response_body, которая помечена #[allow(dead_code)].
+#[allow(dead_code)]
+fn network_response_body_event_params(request_id: u64, body: &[u8]) -> JsonValue {
+    let mut req = BTreeMap::new();
+    req.insert("requestId".into(), JsonValue::Number(request_id as f64));
+
+    let encoded = lumen_core::hash::base64_encode(body);
+    let mut body_obj = BTreeMap::new();
+    body_obj.insert("type".into(), JsonValue::String("base64".into()));
+    body_obj.insert("value".into(), JsonValue::String(encoded));
+
+    let mut params = BTreeMap::new();
+    params.insert("request".into(), JsonValue::Object(req));
+    params.insert("body".into(), JsonValue::Object(body_obj));
+
+    JsonValue::Object(params)
+}
+
+/// `session.setDefaultUserContextLocale` — установить локаль по умолчанию для контекстов.
+///
+/// Параметр `locale` — IETF BCP 47 тег (напр., `"en-US"`, `"ru"`).
+/// Хранится в [`BidiState::default_locale`] и читается через [`BidiState::locale()`].
+fn session_set_locale(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    state.default_locale = params.get("locale").and_then(|v| v.as_str()).map(str::to_owned);
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `browser.setTimezoneOverride` — установить переопределение часового пояса.
+///
+/// Параметр `timezoneId` — IANA-идентификатор (напр., `"America/New_York"`, `"Europe/Moscow"`).
+/// Хранится в [`BidiState::timezone_override`] и читается через [`BidiState::timezone()`].
+fn browser_set_timezone(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    state.timezone_override =
+        params.get("timezoneId").and_then(|v| v.as_str()).map(str::to_owned);
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `network.setOfflineStatus` — переключить симуляцию offline-режима сети.
+///
+/// Параметры: `{"status": {"offline": true}}` или `{"offline": true}` (упрощённая форма).
+/// После установки `true` все сетевые запросы должны имитировать ошибку подключения.
+/// Читается через [`BidiState::is_offline()`].
+fn network_set_offline(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    // Поддерживаем обе формы: {"status":{"offline":true}} и {"offline":true}.
+    let offline = params
+        .get("status")
+        .and_then(|s| s.get("offline"))
+        .and_then(JsonValue::as_bool)
+        .or_else(|| params.get("offline").and_then(JsonValue::as_bool))
+        .unwrap_or(false);
+    state.offline = offline;
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `emulation.setUserAgentOverride` — переопределить User-Agent на уровне сессии или контекста.
+///
+/// Параметр `userAgent` — строка UA. Необязательный параметр `contexts` — массив context id:
+/// если задан, переопределение применяется к указанным контекстам; иначе — ко всей сессии.
+/// Per-context переопределение имеет приоритет над сессионным при чтении
+/// через [`BidiState::user_agent_for()`].
+fn emulation_set_ua_override(
+    id: i64,
+    params: &JsonValue,
+    state: &mut BidiState,
+) -> DispatchResult {
+    let ua = params.get("userAgent").and_then(|v| v.as_str()).map(str::to_owned);
+    let ctx_ids: Vec<String> = params
+        .get("contexts")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default();
+
+    if ctx_ids.is_empty() {
+        state.session_ua_override = ua;
+    } else {
+        for ctx_id in &ctx_ids {
+            if state.contexts.iter().all(|c| c.id != *ctx_id) {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "no such frame",
+                    &format!("no such context: {ctx_id}"),
+                ));
+            }
+        }
+        for ctx_id in &ctx_ids {
+            if let Some(ctx) = state.contexts.iter_mut().find(|c| c.id == *ctx_id) {
+                ctx.ua_override = ua.clone();
+            }
+        }
+    }
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+// ──────────────────────────────────────────
+// script.disown / script.getRealms (BiDi §10)
+// ──────────────────────────────────────────
+
+/// `script.disown` — release remote value handles (BiDi §10.2.3).
+///
+/// Phase 1 stub: validates params shape, returns ACK.
+/// Real handle tracking requires 8A.7 (shell-as-driver-client).
+fn script_disown(id: i64, _params: &JsonValue) -> DispatchResult {
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `script.getRealms` — list all realms in the session (BiDi §10.2.6).
+///
+/// Phase 1 stub: returns an empty realms array.
+/// Real realm tracking requires live wiring to the JS engine — 8H.3.
+fn script_get_realms(id: i64, _state: &BidiState) -> DispatchResult {
+    let mut result = BTreeMap::new();
+    result.insert("realms".into(), JsonValue::Array(vec![]));
+    DispatchResult::single(make_success(id, JsonValue::Object(result)))
+}
+
+// ──────────────────────────────────────────
+// network.addIntercept / removeIntercept / setCacheBehavior (BiDi §12)
+// ──────────────────────────────────────────
+
+/// `network.addIntercept` — register a network intercept rule (BiDi §12.6.9).
+///
+/// Phase 1: stores the rule and returns an opaque `intercept` ID.
+/// Actual request interception (pausing and delivering `network.beforeRequestSent`
+/// events) requires live network integration — 8H.3.
+fn network_add_intercept(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let phases: Vec<String> = params
+        .get("phases")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default();
+
+    if phases.is_empty() {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "phases must be a non-empty array",
+        ));
+    }
+
+    let url_patterns: Vec<String> = params
+        .get("urlPatterns")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.get("pattern").and_then(|p| p.as_str()).map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let intercept_id = state.next_id(0x1ce0);
+    state.intercepts.push(NetworkIntercept {
+        id: intercept_id.clone(),
+        phases,
+        url_patterns,
+    });
+
+    let mut result = BTreeMap::new();
+    result.insert("intercept".into(), JsonValue::String(intercept_id));
+    DispatchResult::single(make_success(id, JsonValue::Object(result)))
+}
+
+/// `network.removeIntercept` — remove a registered intercept rule (BiDi §12.6.11).
+///
+/// Returns `no such intercept` if the ID is unknown.
+fn network_remove_intercept(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let Some(intercept_id) = params.get("intercept").and_then(|v| v.as_str()) else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "missing intercept id",
+        ));
+    };
+
+    let before = state.intercepts.len();
+    state.intercepts.retain(|i| i.id != intercept_id);
+    if state.intercepts.len() == before {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such intercept",
+            &format!("unknown intercept: {intercept_id}"),
+        ));
+    }
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `network.setCacheBehavior` — configure browser cache behaviour (BiDi §12.6.12).
+///
+/// Accepts `{"cacheBehavior":"default"|"bypass"|"restore"}`.
+/// Phase 1: stored in state; actual HTTP client integration is 8H.3.
+fn network_set_cache_behavior(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    let behavior = params
+        .get("cacheBehavior")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    state.cache_behavior = behavior;
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+// ──────────────────────────────────────────
+// input.* handlers (BiDi §15)
+// ──────────────────────────────────────────
+
+/// `input.performActions` — execute a sequence of input actions (BiDi §15.7.3).
+///
+/// Phase 1 stub: validates `context` and `actions` parameters, returns ACK.
+/// Actual action dispatch to the windowing layer requires 8H.3.
+fn input_perform_actions(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+    // Validate context if provided.
+    if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
+        && state.find(ctx_id).is_none()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("unknown browsing context: {ctx_id}"),
+        ));
+    }
+
+    // Validate actions is an array.
+    match params.get("actions") {
+        Some(JsonValue::Array(_)) | None => {}
+        _ => {
+            return DispatchResult::single(make_error(
+                Some(id),
+                "invalid argument",
+                "actions must be an array",
+            ));
+        }
+    }
+
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `input.releaseActions` — release all active input sources (BiDi §15.7.4).
+///
+/// Phase 1 stub: validates context, returns ACK.
+fn input_release_actions(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+    if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
+        && state.find(ctx_id).is_none()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("unknown browsing context: {ctx_id}"),
+        ));
+    }
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `input.setFiles` — set files on a file-input element (BiDi §15.7.2).
+///
+/// Phase 1 stub: validates context, returns ACK.
+fn input_set_files(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+    if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
+        && state.find(ctx_id).is_none()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("unknown browsing context: {ctx_id}"),
+        ));
+    }
     DispatchResult::single(make_success(id, empty_obj()))
 }
 
@@ -976,5 +1413,362 @@ mod tests {
             &mut state,
         );
         assert!(result.frames[0].contains("success"), "got: {}", result.frames[0]);
+    }
+
+    // --- network.* tests ---
+
+    #[test]
+    fn get_response_body_returns_base64() {
+        let mut state = BidiState::new();
+        state.record_response_body(42, b"hello".to_vec());
+        let r = dispatch(
+            r#"{"id":1,"method":"network.getResponseBody","params":{"request":{"requestId":42}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        let body = v.get("result").unwrap().get("body").unwrap();
+        assert_eq!(body.get("type").and_then(|x| x.as_str()), Some("base64"));
+        // "hello" in base64 is "aGVsbG8="
+        assert_eq!(body.get("value").and_then(|x| x.as_str()), Some("aGVsbG8="));
+    }
+
+    #[test]
+    fn get_response_body_missing_request_id_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":2,"method":"network.getResponseBody","params":{"request":{}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("invalid argument"));
+    }
+
+    #[test]
+    fn get_response_body_unknown_request_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":3,"method":"network.getResponseBody","params":{"request":{"requestId":999}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such request"));
+    }
+
+    #[test]
+    fn record_response_body_emits_event_when_subscribed() {
+        let mut state = BidiState::new();
+        dispatch(
+            r#"{"id":1,"method":"session.subscribe","params":{"events":["network.responseBodyReceived"]}}"#,
+            &mut state,
+        );
+        let frames = state.record_response_body(7, b"data".to_vec());
+        assert_eq!(frames.len(), 1);
+        let ev = parse(&frames[0]);
+        assert_eq!(ev.get("type").and_then(|x| x.as_str()), Some("event"));
+        assert_eq!(ev.get("method").and_then(|x| x.as_str()), Some("network.responseBodyReceived"));
+        let params = ev.get("params").unwrap();
+        assert_eq!(params.get("request").unwrap().get("requestId").and_then(|x| x.as_number()), Some(7.0));
+    }
+
+    #[test]
+    fn record_response_body_no_event_when_not_subscribed() {
+        let mut state = BidiState::new();
+        let frames = state.record_response_body(5, b"body".to_vec());
+        assert!(frames.is_empty());
+        // Body is still buffered — can be retrieved via command.
+        let r = dispatch(
+            r#"{"id":1,"method":"network.getResponseBody","params":{"request":{"requestId":5}}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn second_record_overwrites_first() {
+        let mut state = BidiState::new();
+        state.record_response_body(10, b"first".to_vec());
+        state.record_response_body(10, b"second".to_vec());
+        let r = dispatch(
+            r#"{"id":1,"method":"network.getResponseBody","params":{"request":{"requestId":10}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        let val = v.get("result").unwrap().get("body").unwrap().get("value").and_then(|x| x.as_str()).unwrap();
+        // "second" in base64 is "c2Vjb25k"
+        assert_eq!(val, "c2Vjb25k");
+    }
+
+    // --- G-2: locale / timezone / offline / UA override tests ---
+
+    #[test]
+    fn set_locale_stores_and_returns_success() {
+        let mut state = BidiState::new();
+        assert!(state.locale().is_none());
+        let r = dispatch(
+            r#"{"id":1,"method":"session.setDefaultUserContextLocale","params":{"locale":"ru-RU"}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.locale(), Some("ru-RU"));
+        // Overwrite with a new locale.
+        dispatch(
+            r#"{"id":2,"method":"session.setDefaultUserContextLocale","params":{"locale":"en-US"}}"#,
+            &mut state,
+        );
+        assert_eq!(state.locale(), Some("en-US"));
+    }
+
+    #[test]
+    fn set_timezone_stores_and_returns_success() {
+        let mut state = BidiState::new();
+        assert!(state.timezone().is_none());
+        let r = dispatch(
+            r#"{"id":1,"method":"browser.setTimezoneOverride","params":{"timezoneId":"Europe/Moscow"}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.timezone(), Some("Europe/Moscow"));
+    }
+
+    #[test]
+    fn network_offline_status_toggled() {
+        let mut state = BidiState::new();
+        assert!(!state.is_offline());
+        // Включить offline через {"status":{"offline":true}}.
+        let r = dispatch(
+            r#"{"id":1,"method":"network.setOfflineStatus","params":{"status":{"offline":true}}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&r.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+        assert!(state.is_offline());
+        // Отключить через упрощённую форму {"offline":false}.
+        dispatch(
+            r#"{"id":2,"method":"network.setOfflineStatus","params":{"offline":false}}"#,
+            &mut state,
+        );
+        assert!(!state.is_offline());
+    }
+
+    #[test]
+    fn ua_override_session_and_per_context() {
+        let mut state = BidiState::new();
+        let cid = new_session_ctx(&mut state);
+
+        // До установки — нет UA для контекста.
+        assert!(state.user_agent_for(&cid).is_none());
+
+        // Сессионный UA.
+        dispatch(
+            r#"{"id":1,"method":"emulation.setUserAgentOverride","params":{"userAgent":"Lumen/Test"}}"#,
+            &mut state,
+        );
+        assert_eq!(state.user_agent_for(&cid), Some("Lumen/Test"));
+
+        // Per-context UA переопределяет сессионный.
+        let cmd = format!(
+            r#"{{"id":2,"method":"emulation.setUserAgentOverride","params":{{"userAgent":"CtxUA","contexts":["{cid}"]}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert_eq!(parse(&r.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.user_agent_for(&cid), Some("CtxUA"));
+
+        // Несуществующий контекст — ошибка.
+        let bad = dispatch(
+            r#"{"id":3,"method":"emulation.setUserAgentOverride","params":{"userAgent":"X","contexts":["bad-id"]}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&bad.frames[0]).get("error").and_then(|x| x.as_str()), Some("no such frame"));
+    }
+
+    // --- script.disown / script.getRealms ---
+
+    #[test]
+    fn script_disown_acks() {
+        let mut state = BidiState::new();
+        let result = dispatch(
+            r#"{"id":1,"method":"script.disown","params":{"handles":["h1"],"target":{"context":"c1"}}}"#,
+            &mut state,
+        );
+        assert!(result.frames[0].contains("success"), "got: {}", result.frames[0]);
+    }
+
+    #[test]
+    fn script_get_realms_returns_empty_array() {
+        let mut state = BidiState::new();
+        let result = dispatch(
+            r#"{"id":2,"method":"script.getRealms","params":{}}"#,
+            &mut state,
+        );
+        let v = parse(&result.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        let realms = v.get("result").unwrap().get("realms").unwrap();
+        assert_eq!(realms.as_array().unwrap().len(), 0);
+    }
+
+    // --- network.addIntercept / removeIntercept ---
+
+    #[test]
+    fn network_add_intercept_returns_id() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"network.addIntercept","params":{"phases":["beforeRequestSent"]}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        let intercept_id = v.get("result").unwrap().get("intercept").and_then(|x| x.as_str());
+        assert!(intercept_id.is_some(), "expected intercept id");
+        assert_eq!(state.intercept_count(), 1);
+    }
+
+    #[test]
+    fn network_add_intercept_empty_phases_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"network.addIntercept","params":{"phases":[]}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("invalid argument"));
+    }
+
+    #[test]
+    fn network_remove_intercept_removes_rule() {
+        let mut state = BidiState::new();
+        let add = dispatch(
+            r#"{"id":1,"method":"network.addIntercept","params":{"phases":["responseStarted"]}}"#,
+            &mut state,
+        );
+        let intercept_id = parse(&add.frames[0])
+            .get("result").unwrap()
+            .get("intercept").unwrap()
+            .as_str().unwrap()
+            .to_owned();
+        assert_eq!(state.intercept_count(), 1);
+
+        let cmd = format!(
+            r#"{{"id":2,"method":"network.removeIntercept","params":{{"intercept":"{intercept_id}"}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert_eq!(parse(&r.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.intercept_count(), 0);
+    }
+
+    #[test]
+    fn network_remove_intercept_unknown_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"network.removeIntercept","params":{"intercept":"nope"}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such intercept"));
+    }
+
+    #[test]
+    fn network_set_cache_behavior_stores_value() {
+        let mut state = BidiState::new();
+        assert!(state.cache_behavior().is_none());
+        let r = dispatch(
+            r#"{"id":1,"method":"network.setCacheBehavior","params":{"cacheBehavior":"bypass"}}"#,
+            &mut state,
+        );
+        assert_eq!(parse(&r.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+        assert_eq!(state.cache_behavior(), Some("bypass"));
+    }
+
+    #[test]
+    fn network_continue_request_acks() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"network.continueRequest","params":{"request":{"requestId":1}}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn network_fail_request_acks() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"network.failRequest","params":{"request":{"requestId":1}}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    // --- input.* tests ---
+
+    #[test]
+    fn input_perform_actions_acks() {
+        let mut state = BidiState::new();
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":[{{"type":"key","id":"k","actions":[]}}]}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn input_perform_actions_unknown_context_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"input.performActions","params":{"context":"nope","actions":[]}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such frame"));
+    }
+
+    #[test]
+    fn input_perform_actions_bad_actions_type_errors() {
+        let mut state = BidiState::new();
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":"bad"}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("invalid argument"));
+    }
+
+    #[test]
+    fn input_release_actions_acks() {
+        let mut state = BidiState::new();
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":1,"method":"input.releaseActions","params":{{"context":"{cid}"}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn input_release_actions_unknown_context_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"input.releaseActions","params":{"context":"nope"}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("no such frame"));
+    }
+
+    #[test]
+    fn input_set_files_acks() {
+        let mut state = BidiState::new();
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":1,"method":"input.setFiles","params":{{"context":"{cid}","element":{{"sharedId":"el1"}},"files":["/tmp/test.txt"]}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
     }
 }
