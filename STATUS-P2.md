@@ -6,9 +6,9 @@
 
 ## In progress
 
-**A-1: CSS Properties & Values API (Houdini)**  
-Branch: `p2-a1-css-properties-values`  
-Next step: Implement `RegisteredPropertiesMap` registry + JS shim for `CSS.registerProperty()` in lumen-js/src/css_properties_values_api.rs
+**O-1: BiDi gaps — viewport-before-popup**  
+Branch: `p2-o1-bidi-gaps`  
+Next step: `browsingContext.setViewport` command + `browsingContext.viewportChanged` event + viewport in BrowsingContextInfo in `crates/shell/src/bidi/protocol.rs`
 
 ---
 
