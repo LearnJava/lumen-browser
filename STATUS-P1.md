@@ -6,11 +6,22 @@
 
 ## In progress
 
-_(нет)_
+In progress: I-1 Web Audio API Phase 1  branch: p1-i1-web-audio
+Next step: расширить audio_bindings.rs — добавить все стандартные узлы AudioContext  crates/js/src/audio_bindings.rs:49
 
 ---
 
 ## Next
+
+### I — Web Platform APIs Phase 3
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| I-1 | **Web Audio API Phase 1** — полный граф AudioContext: `createGain`, `createBiquadFilter`, `createBufferSource`, `createPanner`, `createStereoPanner`, `createConvolver`, `createDelay`, `createChannelSplitter`, `createChannelMerger`, `createDynamicsCompressor`, `createMediaElementSource`, `createMediaStreamSource`, `createMediaStreamDestination`. `AudioParam` с `setValueAtTime/linearRampToValueAtTime/exponentialRampToValueAtTime/cancelScheduledValues`. `AudioNode` base с `connect/disconnect`. `ctx.destination` (AudioDestinationNode). `ctx.audioWorklet.addModule()` → Promise.resolve(). Экспорт всех классов на globalThis. 10 тестов. | M | `lumen-js` |
+| I-2 | **WebXR Device API stub** — W3C WebXR Device API §5 Phase 0: `navigator.xr.isSessionSupported(mode)` → Promise<false>, `navigator.xr.requestSession(mode)` → reject NotSupportedError, `XRSession`/`XRFrame`/`XRReferenceSpace`/`XRView` стабы. `navigator.xr.addEventListener('devicechange')`. Экспорт на window. 4 теста. | XS | `lumen-js` |
+| I-3 | **HTML Form Constraint Validation API** — WHATWG HTML §4.10.21: `ValidityState` (valueMissing/typeMismatch/patternMismatch/tooLong/tooShort/rangeUnderflow/rangeOverflow/stepMismatch/badInput/customError/valid). `element.checkValidity()` → fires `invalid` event, `element.reportValidity()`, `element.validity`, `element.setCustomValidity(msg)`, `element.validationMessage`, `element.willValidate`. `form.checkValidity()` / `form.reportValidity()` итерирует controls. 6 тестов. | S | `lumen-js` |
+| I-4 | **CSS `@counter-style` algorithm stub** — CSS Lists & Counters L3 §7: `CounterStyleDef {system, symbols, prefix, suffix, pad, fallback}` в `layout/src/counter_style.rs`. Системы: cyclic, numeric, alphabetic, symbolic, additive, fixed. `resolve_counter_value(def, n) -> String`. Wire в `build_list_marker_text()`. `// CSS: list-style-type (custom counter-style)` P4 handoff в STATUS-P4.md. 8 тестов. | S | `lumen-layout` |
+| I-5 | **ElementInternals + Custom State Pseudo-class** — WHATWG HTML §4.13.2: `element.attachInternals()` → `ElementInternals` (states: CustomStateSet, validity/checkValidity/reportValidity/setValidity, role/ariaLabel/etc.). `CustomStateSet`: `add(state)/has(state)/delete(state)/clear()`. Нативный биндинг `_lumen_element_internals_get_states(nid)`. Phase 0: JS-шим без реальной a11y-интеграции; `:state()` selector P4 handoff. 5 тестов. | XS | `lumen-js` |
 
 ### H — Advanced Web Platform APIs
 
