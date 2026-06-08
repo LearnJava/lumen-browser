@@ -5041,6 +5041,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         w.request_redraw();
                     }
                 }
+                input::InputCommand::KeyDown { code } => {
+                    self.inject_special_key(&code);
+                }
             }
         }
 
@@ -7883,6 +7886,28 @@ impl Lumen {
 
     /// Inject a typed character into the focused element (TypeText injection path).
     ///
+    /// Inject a special (non-printable) key press: `keydown` → `keyup`.
+    ///
+    /// `code` is a W3C `KeyboardEvent.code` string, e.g. `"Enter"`, `"Backspace"`.
+    /// The matching `KeyboardEvent.key` value is resolved via [`input::native::code_to_key`]
+    /// (`"Space"` → `" "`, everything else passes through unchanged).
+    /// Events have `isTrusted=true`; JS `dispatchEvent()` is never used.
+    fn inject_special_key(&mut self, code: &str) {
+        let Some(ctx) = self.js_ctx.as_ref() else { return };
+        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
+        let key = input::native::code_to_key(code);
+        for event_type in &["keydown", "keyup"] {
+            let script = format!(
+                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                node_id, event_type, key, code,
+            );
+            ctx.eval_js(&script);
+        }
+        if let Some(nav) = ctx.take_navigate_request() {
+            self.pending_js_navigate = Some(nav);
+        }
+    }
+
     /// Fires `keydown` → `input` → `keyup` JS events via `_lumen_dispatch_key_event`
     /// on the last-focused node so events have `isTrusted=true`.
     fn inject_char(&mut self, ch: char) {

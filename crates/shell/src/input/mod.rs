@@ -9,11 +9,12 @@
 //!
 //! ```text
 //! caller (BrowserSession, test, MCP tool)
-//!   └─ InputSender::click / type_text / scroll
+//!   └─ InputSender::click / type_text / key_down / scroll
 //!         └─ mpsc::Sender<InputCommand>
 //!               ↓
 //!         Lumen.input_rx  (drained each about_to_wait)
-//!               └─ handle_click_at / dispatch_mouse_move / type_char / scroll_to
+//!               └─ handle_click_at / dispatch_mouse_move / inject_char
+//!                  inject_special_key / scroll_to
 //! ```
 //!
 //! # isTrusted guarantee
@@ -24,6 +25,7 @@
 
 pub mod gesture;
 pub mod humanlike;
+pub mod native;
 pub mod vim;
 
 use std::sync::mpsc;
@@ -77,6 +79,21 @@ pub enum InputCommand {
         /// Vertical scroll offset in CSS pixels (0 = top).
         y: f32,
     },
+
+    /// Press and immediately release a special (non-printable) key.
+    ///
+    /// Fires `keydown` → `keyup` via `_lumen_dispatch_key_event` (isTrusted=true).
+    /// Use [`native`] constants for the `code` string (e.g. `native::ENTER`,
+    /// `native::BACKSPACE`).  The `KeyboardEvent.key` value is derived from
+    /// `code` via [`native::code_to_key`] ("Space" → `" "`, everything else
+    /// passes through unchanged).
+    ///
+    /// Note: for printable characters use [`TypeText`](InputCommand::TypeText)
+    /// which also fires the `input` event required to update `<input>` values.
+    KeyDown {
+        /// W3C `KeyboardEvent.code` string, e.g. `"Enter"`, `"Backspace"`, `"ArrowDown"`.
+        code: String,
+    },
 }
 
 // ── InputSender / InputReceiver ──────────────────────────────────────────────
@@ -112,6 +129,40 @@ impl InputSender {
     #[allow(dead_code)]
     pub fn scroll(&self, x: f32, y: f32) {
         let _ = self.0.send(InputCommand::Scroll { x, y });
+    }
+
+    /// Press and release a special key identified by its W3C `KeyboardEvent.code`.
+    ///
+    /// Use [`native`] constants for the code string: `native::ENTER`,
+    /// `native::BACKSPACE`, `native::TAB`, `native::ARROW_DOWN`, etc.
+    /// Fires `keydown` → `keyup` with `isTrusted=true`.
+    #[allow(dead_code)]
+    pub fn key_down(&self, code: &str) {
+        let _ = self.0.send(InputCommand::KeyDown { code: code.to_owned() });
+    }
+
+    /// Press Enter in the focused element (submits forms, confirms dialogs).
+    #[allow(dead_code)]
+    pub fn enter(&self) {
+        self.key_down(native::ENTER);
+    }
+
+    /// Press Backspace in the focused element (deletes character before cursor).
+    #[allow(dead_code)]
+    pub fn backspace(&self) {
+        self.key_down(native::BACKSPACE);
+    }
+
+    /// Press Tab (move focus to the next focusable element).
+    #[allow(dead_code)]
+    pub fn tab(&self) {
+        self.key_down(native::TAB);
+    }
+
+    /// Press Escape (dismiss dialogs, close menus, blur focused element).
+    #[allow(dead_code)]
+    pub fn escape(&self) {
+        self.key_down(native::ESCAPE);
     }
 }
 
@@ -233,5 +284,57 @@ mod tests {
         let (tx, rx) = channel();
         drop(tx);
         assert!(rx.drain().is_empty());
+    }
+
+    #[test]
+    fn key_down_roundtrip() {
+        let (tx, rx) = channel();
+        tx.key_down("Enter");
+        let cmds = rx.drain();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            InputCommand::KeyDown { code } => assert_eq!(code, "Enter"),
+            _ => panic!("expected KeyDown"),
+        }
+    }
+
+    #[test]
+    fn enter_convenience_sends_key_down_enter() {
+        let (tx, rx) = channel();
+        tx.enter();
+        let cmds = rx.drain();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            InputCommand::KeyDown { code } => assert_eq!(code, "Enter"),
+            _ => panic!("expected KeyDown(Enter)"),
+        }
+    }
+
+    #[test]
+    fn backspace_convenience_sends_key_down_backspace() {
+        let (tx, rx) = channel();
+        tx.backspace();
+        let cmds = rx.drain();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            InputCommand::KeyDown { code } => assert_eq!(code, "Backspace"),
+            _ => panic!("expected KeyDown(Backspace)"),
+        }
+    }
+
+    #[test]
+    fn tab_and_escape_convenience() {
+        let (tx, rx) = channel();
+        tx.tab();
+        tx.escape();
+        let cmds = rx.drain();
+        assert_eq!(cmds.len(), 2);
+        match (&cmds[0], &cmds[1]) {
+            (InputCommand::KeyDown { code: a }, InputCommand::KeyDown { code: b }) => {
+                assert_eq!(a, "Tab");
+                assert_eq!(b, "Escape");
+            }
+            _ => panic!("expected two KeyDown commands"),
+        }
     }
 }
