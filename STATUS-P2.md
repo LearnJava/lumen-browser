@@ -6,8 +6,7 @@
 
 ## In progress
 
-**K-1 | WebAssembly Phase 0 stub**  branch: p2-k1-wasm
-Next step: создать `crates/js/src/webassembly.rs` + install_webassembly_bindings()
+(none)
 
 ---
 
@@ -17,7 +16,7 @@ Next step: создать `crates/js/src/webassembly.rs` + install_webassembly_b
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| K-1 | **WebAssembly Phase 0 stub** — *в работе* | S | `lumen-js` |
+| ~~K-1~~ | ~~**WebAssembly Phase 0 stub**~~ — **выполнено** | S | `lumen-js` |
 | K-2 | **`<select>` interactive dropdown** | M | `lumen-shell`, `lumen-layout` |
 | K-3 | **Fetch streaming body (ReadableStream)** | M | `lumen-js`, `lumen-network` |
 | K-4 | **`<form>` multipart/form-data encoding** | S | `lumen-js`, `lumen-core` |
@@ -26,6 +25,19 @@ Next step: создать `crates/js/src/webassembly.rs` + install_webassembly_b
 ---
 
 ## Current / Recently Merged
+
+**K-1 | WebAssembly Phase 0 stub** ✅ 2026-06-08 (merged)
+- `WebAssembly` global object: compile/instantiate/compileStreaming/instantiateStreaming → Promise
+- `WebAssembly.validate(buf)`: проверяет 4-байтовый WASM magic (0x00 0x61 0x73 0x6D)
+- `WebAssembly.Module` + статические методы exports/imports/customSections → []
+- `WebAssembly.Instance`: exports → {} (Phase 0 — реального выполнения нет)
+- `WebAssembly.Memory`: ArrayBuffer 64KiB/page, grow() с maximum-ограничением
+- `WebAssembly.Table`: типизированная таблица funcref/externref, get/set/grow
+- `WebAssembly.Global`: mutable/immutable, value getter/setter, TypeError при immutable set
+- `WebAssembly.Tag` / `WebAssembly.Exception`: стаб exceptions proposal
+- `WebAssembly.CompileError` / `LinkError` / `RuntimeError` — классы ошибок
+- Phase 1 (future): интеграция wasmtime/wasmer для реального WASM-выполнения
+- 10 unit-тестов. Итого lumen-js: 1504 тестов (+10), Clippy чист.
 
 **J-5 | Presentation API stub** ✅ 2026-06-08 (merged)
 - `navigator.presentation` singleton: `defaultRequest` getter/setter, `requestAvailability()` → `Promise<{value:false}>`
