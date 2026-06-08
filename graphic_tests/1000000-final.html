@@ -804,5 +804,20 @@
 
 </div><!-- /card -->
 
+<!-- ::selection demo card -->
+<div class="card">
+<style>
+  .sel-swatch { display:inline-block; width:120px; height:32px; border-radius:3px; margin:4px; }
+  .sel-default { background:#0078D4; }
+  .sel-alt     { background:#e74c3c; }
+  .sel-custom  { background:#2ecc71; }
+  ::selection        { background-color:#0078D4; color:#fff; }
+  .sel-alt::selection{ background-color:#e74c3c; color:#fff; }
+</style>
+<div class="sel-swatch sel-default"></div>
+<div class="sel-swatch sel-alt"></div>
+<div class="sel-swatch sel-custom"></div>
+</div><!-- /::selection card -->
+
 </body>
 </html>

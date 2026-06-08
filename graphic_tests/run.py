@@ -107,6 +107,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('63', '63-masonry.html',            1.0, 'CSS Masonry layout (Houdini) Phase 0: waterfall grid — items placed in column with min height; column-count, gap'),
     ('64', '64-table.html',              1.0, 'CSS 2.1 §17 Table layout: emit_table_box() renders table/thead/tbody/tr/td cells with separate border-spacing, cell backgrounds, borders; col_span/row_span in struct'),
     ('65', '65-flex-align-content.html', 0.5, 'CSS Flexbox align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch for multi-line flex containers'),
+    ('66', '66-selection-pseudo.html',  0.5, 'CSS ::selection pseudo-element: background-color + color override; swatch boxes show parsed selection colours; page renders correctly with ::selection rules present'),
 ]
 
 # --- PNG reader (stdlib only) ---

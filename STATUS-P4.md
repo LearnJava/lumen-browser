@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`::selection` pseudo-element  branch: p4-selection-pseudo
+Next step: fix compute_pseudo_element_style + SelectionHighlight + display list wiring  style.rs:5455, lib.rs, display_list.rs
 
 ## Workflow
 
