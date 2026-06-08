@@ -54,6 +54,15 @@ None
 
 ## Current / Recently Merged
 
+**O-1 | BiDi viewport-before-popup** ✅ 2026-06-08 (merged)
+- `viewport: Option<(u32, u32)>` поле в `BidiContext` — CSS-пиксели (w, h)
+- `browsingContext.setViewport` команда (BiDi §6.6.9): валидация + сохранение + `viewportChanged` event
+- `viewport_json` helper: сериализует (w,h) → `{width, height}` или `null`
+- `viewport_for(ctx_id)` accessor для shell-слоя (8H.3 wiring handoff)
+- viewport включён в `BrowsingContextInfo` (getTree / created / destroyed)
+- 7 тестов: stores_dimensions / emits_event / no_event_without_sub / unknown_ctx_error / missing_ctx_error / null_clears / get_tree_includes
+- Clippy чист, все тесты lumen-shell ✅
+
 **L-4 | `<meter>`/`<progress>` visual fill rendering** ✅ 2026-06-08 (merged)
 - `FormControlKind::Progress {value: Option<f32>, max}` — determinate/indeterminate bar
 - `FormControlKind::Meter {value, min, max, low, high, optimum}` — HTML5 §4.10.14 gauge
