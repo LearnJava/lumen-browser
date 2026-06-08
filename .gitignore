@@ -37,3 +37,4 @@ __pycache__/
 # См. CLAUDE.md → «Графические тесты», правило №1.
 /graphic_tests/screenshots/
 /graphic_tests/debug/
+/graphic_tests/results/

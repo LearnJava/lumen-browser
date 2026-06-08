@@ -330,10 +330,20 @@ The 1px magenta body background shows through `.__f`'s margins on all 4 sides. C
 ### Running
 
 ```bash
-python graphic_tests/run.py                   # blocking pipeline: first fail = stop
-python graphic_tests/run.py --only 03         # single test
-python graphic_tests/run.py --continue-on-fail  # diagnostic mode
+python graphic_tests/run.py                          # blocking pipeline: first fail = stop
+python graphic_tests/run.py --only 03                # single test
+python graphic_tests/run.py --continue-on-fail       # diagnostic: run all, collect all results
+python graphic_tests/run.py --recheck                # re-run only FAIL tests from latest.json
+python graphic_tests/run.py --build                  # cargo build --release first, then run
+python graphic_tests/run.py --no-cache               # force re-capture Edge screenshots
 ```
+
+Results are saved to `graphic_tests/results/`:
+- `YYYYMMDD-HHMMSS.json` — full results: status, diff%, diff_region bounding box per test
+- `YYYYMMDD-HHMMSS.html` — visual report: Edge | Lumen | Diff images side by side for each FAIL
+- `latest.json` — always points to the last run (used by `--recheck`)
+
+Edge screenshots are cached: re-captured only when the HTML source is newer than the PNG.
 
 Pipeline: build Lumen release (if needed), then for each test — Edge headless + Lumen gdigrab + crop by magenta marker + pixel diff + % threshold. First test exceeding threshold stops the pipeline.
 
