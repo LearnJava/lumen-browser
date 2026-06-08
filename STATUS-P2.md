@@ -14,6 +14,24 @@ Next step: Implement `RegisteredPropertiesMap` registry + JS shim for `CSS.regis
 
 ## Next
 
+### N — Закрытие Phase 1 (после A-1 — следующий приоритет)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| N-1 | **10A: TabState state machine T0–T4** — `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + trigger-условия (idle timeout ∨ memory pressure ∨ LRU budget) + per-user timeout-конфиг (5 мин / 30 мин / pinned-never). `shell/src/tab_lifecycle/state.rs` | M | `lumen-shell`, `lumen-storage` |
+| N-2 | **10E.4: Scroll-discard** — при удалении узла >3 экранов от viewport освобождать `ImageHandle`; `shell/src/scroll/decode_gating.rs`. Зависит от `ImageDecodeCache` (уже готов). | XS | `lumen-shell`, `lumen-image` |
+
+### O — Закрытие Phase 2
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| O-1 | **8H.3: BiDi gaps (продолжение)** — из оставшихся: viewport-before-popup, preload per-context, download lifecycle, cookie-change events, per-origin clear. Locale/timezone/offline/response-body уже выполнены. `shell/src/bidi/` | M | `lumen-shell` (`bidi/`) |
+| O-2 | **10I: T2 → SQLite JS heap persistence** — schema `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll, form_state, ts)` + async-save при T1→T2 + async-load при T2→T0 с UI hint при >100 ms. `storage/src/tab_snapshot.rs` | M | `lumen-storage`, `lumen-shell` |
+| O-3 | **10K: UI tier indication** — иконка "Z"/fade-opacity на T2/T3 вкладках + tooltip "Вкладка спит — клик восстановит" + loading-spinner при restore >200 ms. `shell/src/tabs/strip_ui.rs` | S | `lumen-shell` |
+| O-4 | **10M: `samples/heavy.html`** — Habr-style тестовая страница (50+ элементов, много текста, изображения) для T0-heavy бенчей. `samples/heavy.html` | XS | — |
+| O-5 | **6+ (forms): Native form pickers + validation tooltip UI** — date/color picker (OS dialog), validation tooltip рядом с полем, интеграция с `FormValidation` JS API. `shell/src/forms/pickers.rs` | M | `lumen-shell`, `lumen-js` |
+| O-6 | **Кастомизация UI** — drag&drop вкладок (переупорядочивание), темы (light/dark/custom accent). `shell/src/panels/themes.rs` (§12.10) | L | `lumen-shell`, `lumen-paint` |
+
 ### L — Волна 4 HTML Interactive Elements + Rendering
 
 | # | Задача | Размер | Крейты |
