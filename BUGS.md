@@ -86,6 +86,8 @@ BUG-070 | FIXED 2026-06-08 | js     | Дубликат BUG-067 (тот же ко
 BUG-071 | FIXED 2026-06-08 | mcp    | `MockSession` в lumen-mcp не реализует методы `set_clock`, `set_rng_seed`, `freeze_fingerprint` из трейта `BrowserSession` (добавлены P1 в N-2 deterministic mode) — компиляция `--workspace` падает с E0046 | crates/mcp/src/server.rs:508
 BUG-072 | FIXED 2026-06-08 | js     | Form Constraint Validation API init failed: FORM_VALIDATION_SHIM ссылается на bare `HTMLInputElement`/`HTMLTextAreaElement`/`HTMLSelectElement`/`HTMLButtonElement` (строки 169-172) — в install_dom эти конструкторы не определены глобально → ReferenceError «HTMLInputElement is not defined», шим не устанавливается. Нужны typeof-гварды | crates/js/src/form_validation.rs:169
 BUG-073 | FIXED 2026-06-08 | js     | chrome_runtime_absent (no_automation_markers.rs) падает: D-6 extension-stub в WEB_API_SHIM безусловно ставит window.chrome.runtime, ломая anti-CDP-detection маркер. Fix: IIFE гардировано флагом `_LUMEN_EXTENSION_ACTIVE`; тесты dom.rs выставляют флаг перед install_dom | crates/js/src/dom.rs:10131
+BUG-074 | OPEN   | layout | height:100% на flex-item не резолвится — available_height=None передаётся в lay_out() при шаге 1 flex-алгоритма, percentage height от definite flex-container height игнорируется. TEST-67 (attr-typed) failing 20.19% — bar/::before с height:100% рендерятся h=0 | crates/engine/layout/src/box_tree.rs:4953
+BUG-075 | OPEN   | layout | display:table без явной ширины растягивается до ширины контейнера вместо shrink-to-fit. TEST-69 (border-spacing) failing 42.62% — таблица должна быть ~228px, рендерится 982px | crates/engine/layout/src/box_tree.rs:4103
 ```
 
 ---

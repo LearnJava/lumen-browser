@@ -5186,8 +5186,9 @@ fn lay_out_flex(
     };
 
     // Apply align-content to distribute remaining space between flex lines (row wrap only).
-    // Uses explicit_cross (container height) to compute free cross-axis space.
-    if !is_column && n_lines > 1 && is_wrap {
+    // CSS Box Alignment L3: align-content applies to single-line wrapped containers too
+    // (Chrome/Edge 103+ behavior). Removed `n_lines > 1` guard to match browsers.
+    if !is_column && is_wrap {
         let line_gap_total = cross_gap * (n_lines.saturating_sub(1)) as f32;
         let used_cross: f32 = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
         let free_cross = explicit_cross.map_or(0.0, |h| (h - used_cross).max(0.0));
@@ -8818,6 +8819,38 @@ mod tests {
         let per = 200.0_f32 / 3.0;
         assert!((a.rect.y - per).abs() < 0.5, "a.y expected ≈{per:.2}, got {}", a.rect.y);
         assert!((c.rect.y - (50.0 + 2.0 * per)).abs() < 0.5, "c.y expected ≈{:.2}, got {}", 50.0 + 2.0 * per, c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_single_line_flex_end() {
+        // Single-line flex container (all items fit in one row) with align-content: flex-end.
+        // CSS Box Alignment L3: align-content applies even when n_lines == 1.
+        // Container 300×200, items 80×50 — all 3 fit in one row (240px < 300px, single line).
+        // free_cross = 200 - 50 = 150; flex-end offset = 150 → items at y=150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:300px;height:200px;align-content:flex-end} #a,#b,#c{width:80px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 150.0, "a.y with single-line flex-end {}", a.rect.y);
+        assert_eq!(b.rect.y, 150.0, "b.y with single-line flex-end {}", b.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y with single-line flex-end {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_single_line_center() {
+        // Single-line flex with align-content: center → items centered vertically.
+        // Container 300×200, items 80×50 (all fit one row). free_cross=150, offset=75.
+        let html = r#"<div id="flex"><div id="a"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:300px;height:200px;align-content:center} #a{width:80px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        assert_eq!(a.rect.y, 75.0, "a.y with single-line center {}", a.rect.y);
     }
 
     #[test]
