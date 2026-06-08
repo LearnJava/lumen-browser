@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+H-2: Badging API  branch: p1-h2-badging-api
+Next step: clippy + tests  crates/js/src/badging.rs
 
 ---
 
