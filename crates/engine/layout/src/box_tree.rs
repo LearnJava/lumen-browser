@@ -4162,6 +4162,9 @@ fn lay_out_table_row(
             .collect()
     };
 
+    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h once the field exists.
+    let h_spacing: f32 = 0.0;
+
     // Step 3: lay out each cell at its column x position.
     // When col_widths is present, the column width is authoritative — clear the cell's CSS
     // `width` temporarily so lay_out uses `avail` as the final width.
@@ -4169,8 +4172,10 @@ fn lay_out_table_row(
     for (j, &i) in cell_idxs.iter().enumerate() {
         let (col_start, avail) = cell_cols[j];
         let cell_x = if use_global {
-            // Exact x from column positions.
+            // Exact x from column positions, accounting for h_spacing slots.
+            // Cell at col_start k: content_x + (k+1)*h_spacing + sum(col_widths[0..k]).
             content_x
+                + (col_start + 1) as f32 * h_spacing
                 + (0..col_start)
                     .map(|c| col_widths.and_then(|cw| cw.get(c)).copied().unwrap_or(0.0))
                     .sum::<f32>()
@@ -4259,9 +4264,14 @@ fn lay_out_table(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) -> f32 {
+    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h/v once fields exist.
+    let _h_spacing: f32 = 0.0; // reserved for P4 wiring
+    let v_spacing: f32 = 0.0;
+
     let col_widths = compute_table_col_widths(b, content_width, viewport);
 
-    let mut cur_y = content_y;
+    // First row starts after the top outer v_spacing slot.
+    let mut cur_y = content_y + v_spacing;
     let mut rowspan_map: Vec<u32> = Vec::new();
 
     // flat_row_rects[k] = (y, height) for the k-th row in DOM order (across all groups).
@@ -4315,7 +4325,9 @@ fn lay_out_table(
                     }
                 }
                 let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
-                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb;
+                // Add v_spacing gap after each row (outer bottom slot included).
+                // CSS: border-spacing
+                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb + v_spacing;
                 decrement_rowspan_map(&mut rowspan_map);
             }
             BoxKind::TableRowGroup => {
@@ -4357,7 +4369,8 @@ fn lay_out_table(
                         }
                     }
                     let r_mb = b.children[i].children[r].style.margin_bottom.resolve_or_zero(r_em, content_width, viewport);
-                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb;
+                    // CSS: border-spacing
+                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb + v_spacing;
                     decrement_rowspan_map(&mut rowspan_map);
                 }
                 let g_pt = b.children[i].style.padding_top.resolve_or_zero(group_em, content_width, viewport);
@@ -4478,7 +4491,14 @@ fn decrement_rowspan_map(map: &mut [u32]) {
 /// `colspan > 1` distribute their width across columns; `rowspan > 1` cells block
 /// subsequent rows from reusing those columns. Returns a `Vec<f32>` of border-box
 /// widths, one per column.
+///
+/// In Separate border mode, `(n_cols + 1) * h_spacing` is reserved for inter-cell and
+/// outer gaps before distributing the remaining width among auto-width columns.
+/// CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
 fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -> Vec<f32> {
+    // CSS: border-spacing — P4 wires from ComputedStyle.border_spacing_h once the field exists.
+    let h_spacing: f32 = 0.0;
+
     let mut col_explicit: Vec<Option<f32>> = Vec::new();
     let mut rowspan_map: Vec<u32> = Vec::new();
 
@@ -4505,10 +4525,12 @@ fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -
         return Vec::new();
     }
 
+    // Subtract spacing slots from available width before distributing to auto columns.
+    let total_h_spacing = (n_cols + 1) as f32 * h_spacing;
     let total_explicit: f32 = col_explicit.iter().filter_map(|w| *w).sum();
     let auto_count = col_explicit.iter().filter(|w| w.is_none()).count();
     let auto_share = if auto_count > 0 {
-        ((content_width - total_explicit) / auto_count as f32).max(0.0)
+        ((content_width - total_h_spacing - total_explicit) / auto_count as f32).max(0.0)
     } else {
         0.0
     };

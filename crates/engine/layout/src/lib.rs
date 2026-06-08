@@ -32,6 +32,7 @@ pub mod snapshot;
 pub mod stacking;
 pub mod style;
 pub mod subgrid;
+pub mod table;
 pub mod text_iter;
 pub(crate) mod vertical;
 

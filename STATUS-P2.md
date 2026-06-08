@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**G-5 | CSS Grid Table border-collapse Phase 2**  branch: p2-g5-table-border-collapse
+Next step: add BorderCollapse/BorderPrecedence/CollapsedBorder to table.rs, wire border-spacing into lay_out_table/compute_table_col_widths in box_tree.rs, declare table mod in lib.rs
 
 ---
 
