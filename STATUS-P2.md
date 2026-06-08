@@ -6,12 +6,20 @@
 
 ## In progress
 
-**I-2 | Screen Wake Lock API**  branch: p2-i2-wake-lock
-Next step: задача завершена — clippy ✅, 9 тестов ✅  crates/js/src/wake_lock.rs:1
+(none)
 
 ---
 
 ## Current / Recently Merged
+
+**I-2 | Screen Wake Lock API** ✅ 2026-06-08 (merged)
+- `crates/js/src/wake_lock.rs` — JS-шим `WakeLockSentinel` + `navigator.wakeLock`
+- `navigator.wakeLock.request('screen')` → `Promise<WakeLockSentinel>`
+- `WakeLockSentinel.release()` — `released` устанавливается синхронно; событие release — микрозадача
+- Автоматический release при `document.visibilitychange → hidden` (spec §4.3)
+- Неизвестный тип (`'video'`) → `Promise.reject(TypeError)`
+- 6 unit-тестов в wake_lock::tests + 3 pre-existing dom::tests ✅
+- Итого: 9 тестов wake_lock, Clippy чист
 
 **I-1 | Web Locks API** ✅ 2026-06-08 (merged)
 - `crates/js/src/web_locks.rs` — JS-шим `LockManager` с FIFO-очередью
@@ -401,8 +409,8 @@ Ordered by priority. Сгруппированы по домену.
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| I-1 | **Web Locks API** — W3C Web Locks L1: `navigator.locks.request(name, {mode?, signal?}, callback)` → Promise, `LockManager.query()` → LockManagerSnapshot. Phase 0: in-memory per-context, FIFO queue, exclusive/shared modes. `// locks: Web Locks API`. 5 тестов. | S | `lumen-js` |
-| I-2 | **Screen Wake Lock API** — W3C Screen Wake Lock L1: `navigator.wakeLock.request('screen')` → `WakeLockSentinel`, `.release()`, `onrelease` event, автоматический release при `document.visibilitychange` → hidden. 4 теста. | XS | `lumen-js` |
+| ~~I-1~~ | ~~**Web Locks API**~~ — **выполнено** | S | `lumen-js` |
+| ~~I-2~~ | ~~**Screen Wake Lock API**~~ — **выполнено** | XS | `lumen-js` |
 | I-3 | **Compression Streams API** — WHATWG Compression Streams: `new CompressionStream('gzip'|'deflate'|'deflate-raw')`, `new DecompressionStream(...)`. `.readable`/`.writable` (TransformStream). Phase 0: gzip/deflate через miniz_oxide в Rust, `_lumen_compress_bytes`/`_lumen_decompress_bytes` биндинги. 5 тестов. | S | `lumen-js`, `lumen-network` |
 | I-4 | **Web Share API** — W3C Web Share L2: `navigator.share({title?, text?, url?, files?})` → Promise, `navigator.canShare(data)` → bool. Phase 0: Windows → `ShellExecute` mailto, Linux/macOS → no-op. `_lumen_share_data(title,text,url)` биндинг. 4 теста. | XS | `lumen-js` |
 | I-5 | **Scheduler API** — W3C Scheduler API L1: `scheduler.postTask(callback, {priority?, delay?, signal?})` → Promise, `scheduler.yield()` → Promise. Приоритеты: `user-blocking`/`user-visible`/`background`. Phase 0: оборачивает `setTimeout`/`queueMicrotask`. `TaskController`/`TaskSignal`. 5 тестов. | S | `lumen-js` |
