@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+In progress: H-3 Virtual Keyboard API  branch: p1-h3-virtual-keyboard
+Next step: реализовать virtual_keyboard.rs + зарегистрировать в lib.rs  crates/js/src/virtual_keyboard.rs
 
 ---
 
