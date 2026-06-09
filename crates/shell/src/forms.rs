@@ -54,6 +54,11 @@ pub enum FormClickAction {
     OpenDatePicker(NodeId),
     /// Open a dropdown overlay showing the `<option>` children of the `<select>`.
     OpenSelectDropdown(NodeId),
+    /// Open the OS native file-picker dialog for `<input type="file">`.
+    ///
+    /// Shell reads `accept` + `multiple` attributes, calls `platform::file_dialog::open_file_dialog`,
+    /// then evals `_lumen_deliver_file_list(nid, json)` to push results into JS.
+    OpenFilePicker(NodeId),
     SubmitForm(NodeId),
     /// Toggle the `open` attribute on a `<details>` element (HTML5 §4.11.1).
     /// NodeId is the `<details>` parent of the clicked `<summary>`.
@@ -82,6 +87,7 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
                 | InputType::Time
                 | InputType::Month
                 | InputType::Week => FormClickAction::OpenDatePicker(node),
+                InputType::File => FormClickAction::OpenFilePicker(node),
                 InputType::Submit => FormClickAction::SubmitForm(node),
                 InputType::Range => FormClickAction::SlideRange(node),
                 _ => FormClickAction::Nothing,

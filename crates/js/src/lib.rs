@@ -87,6 +87,7 @@ pub mod xhr;
 pub mod dom_parser;
 pub mod gc_policy;
 pub mod svg;
+pub mod file_input;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -953,6 +954,13 @@ impl QuickJsRuntime {
             // Must come after dom_parser (document.createElementNS already defined).
             if let Err(e) = svg::install_svg_bindings(&ctx) {
                 eprintln!("SVG DOM API init failed: {}", e);
+            }
+
+            // W3C File API — File/FileList classes, _lumen_deliver_file_list(nid, json).
+            // Called from shell after OS file dialog closes with selected paths.
+            // Must come after SVG bindings (svg install already after dom_parser).
+            if let Err(e) = file_input::install_file_input_bindings(&ctx) {
+                eprintln!("File API init failed: {}", e);
             }
 
             Ok(())

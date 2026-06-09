@@ -4259,6 +4259,35 @@ impl Lumen {
         None
     }
 
+    /// Open the OS native file-picker for `<input type="file">` at `id`.
+    ///
+    /// Reads the `accept` and `multiple` attributes from the DOM, invokes the
+    /// platform file dialog (blocking), then delivers the result to JS via
+    /// `_lumen_deliver_file_list(nid, json)`.
+    fn open_file_picker(&mut self, id: NodeId) {
+        let (accept, multiple) = if let Some(src) = self.layout_source.as_ref() {
+            let doc = src.document.lock().unwrap();
+            let n = doc.get(id);
+            let accept = n.get_attr("accept").unwrap_or("").to_string();
+            let multiple = n.get_attr("multiple").is_some();
+            (accept, multiple)
+        } else {
+            (String::new(), false)
+        };
+        let entries = platform::file_dialog::open_file_dialog(&accept, multiple);
+        if entries.is_empty() {
+            // User cancelled — no event fired (HTML LS §4.10.5.1.16.3 step 3).
+            return;
+        }
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = self.js_ctx.as_ref() {
+            let json = platform::file_dialog::entries_to_json(&entries);
+            js.eval_js(&format!("_lumen_deliver_file_list({}, {})", id.0, json));
+        }
+        #[cfg(not(feature = "quickjs"))]
+        let _ = entries;
+    }
+
     /// Повторный layout+paint при изменении размера viewport.
     /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     fn relayout(&mut self) {
@@ -8010,6 +8039,13 @@ impl Lumen {
                         outcome: click_log::ClickOutcome::FormAction("OpenSelectDropdown"),
                     });
                 }
+                forms::FormClickAction::OpenFilePicker(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenFilePicker"),
+                    });
+                }
                 forms::FormClickAction::SubmitForm(_) => {
                     click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
@@ -8076,6 +8112,9 @@ impl Lumen {
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
+            }
+            forms::FormClickAction::OpenFilePicker(id) => {
+                self.open_file_picker(id);
             }
             forms::FormClickAction::ToggleDetails(id) => {
                 if let Some(src) = self.layout_source.as_mut() {
@@ -9576,6 +9615,9 @@ impl Lumen {
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
+            }
+            forms::FormClickAction::OpenFilePicker(id) => {
+                self.open_file_picker(id);
             }
             forms::FormClickAction::ToggleDetails(id) => {
                 if let Some(src) = self.layout_source.as_mut() {
