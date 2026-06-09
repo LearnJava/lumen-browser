@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+O-5: Platform a11y bridges  branch: p1-o5-a11y-bridges
+Next step: cargo check + clippy + tests → commit  a11y/src/platform/mod.rs:1
 
 ---
 
