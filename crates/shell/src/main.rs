@@ -1319,6 +1319,15 @@ pub(crate) trait PersistentJs {
     /// full GC + lowered threshold to keep heap small during long idle).
     #[allow(dead_code)]
     fn run_gc_pass(&self, level: u8);
+    /// Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances.
+    ///
+    /// `progress_y` = block-axis fraction `[0.0, 1.0]` (scroll_y / max_scroll_y).
+    /// `progress_x` = inline-axis fraction `[0.0, 1.0]` (scroll_x / max_scroll_x).
+    ///
+    /// Called after each scroll update in `RedrawRequested` step 1. Drives
+    /// CSS Scroll-Driven Animations L1 §3 (CSS Scroll-Driven Animations Level 1).
+    #[allow(dead_code)]
+    fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32);
 }
 
 #[cfg(feature = "quickjs")]
@@ -1520,6 +1529,9 @@ impl PersistentJs for QuickPersistentJs {
             _ => GcLevel::Aggressive,
         };
         self.rt.run_gc_pass(gc_level);
+    }
+    fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32) {
+        self.rt.deliver_scroll_progress(progress_y, progress_x);
     }
 }
 
@@ -6784,13 +6796,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::RedrawRequested => {
                 // HTML §8.1.5.1 «Update the rendering» — spec-correct order:
-                //   1. scroll             ← advance_scroll_anim + advance_momentum
-                //   2. CSS Animations + Transitions tick  (spec: update animations before rAF)
-                //   3. rAF callbacks      ← runtime.run_rendering_step + JS run_animation_frame
-                //   4. layout invalidation ← relayout() if dom_dirty after rAF
-                //      → deliver_layout_observers() (ResizeObserver + IntersectionObserver)
-                //   5. paint timing       ← PerformanceObserver 'paint' entries
-                //   6. paint              ← r.render(...)
+                //   1.   scroll              ← advance_scroll_anim + advance_momentum
+                //   1.5  scroll-driven anims ← deliver_scroll_progress → ScrollTimeline.currentTime
+                //   2.   CSS Animations + Transitions tick  (spec: update animations before rAF)
+                //   3.   rAF callbacks       ← runtime.run_rendering_step + JS run_animation_frame
+                //   4.   layout invalidation ← relayout() if dom_dirty after rAF
+                //        → deliver_layout_observers() (ResizeObserver + IntersectionObserver)
+                //   5.   paint timing        ← PerformanceObserver 'paint' entries
+                //   6.   paint               ← r.render(...)
                 //
                 // Scroll before CSS/rAF so callbacks read current scroll position.
                 // CSS animations/transitions before rAF: spec §8.1.5.1 step «update
@@ -6807,6 +6820,35 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
                 self.try_discard_offscreen_images();
+
+                // Step 1.5: CSS Scroll-Driven Animations — update ScrollTimeline.currentTime.
+                // Spec §8.1.5.1 step «update scroll-linked animations» precedes CSS animations.
+                // Compute root-viewport block/inline progress and deliver to JS.
+                {
+                    let (p_y, p_x) = if let Some(lb) = &self.layout_box {
+                        let vp = lumen_layout::Viewport {
+                            width: self.viewport_width_css(),
+                            height: self.viewport_height_css(),
+                        };
+                        let tl_y = lumen_layout::ScrollTimeline {
+                            element: None,
+                            axis: lumen_layout::ScrollAxis::Block,
+                        };
+                        let tl_x = lumen_layout::ScrollTimeline {
+                            element: None,
+                            axis: lumen_layout::ScrollAxis::Inline,
+                        };
+                        (
+                            lumen_layout::resolve_scroll_progress(&tl_y, lb, self.scroll_x, self.scroll_y, vp),
+                            lumen_layout::resolve_scroll_progress(&tl_x, lb, self.scroll_x, self.scroll_y, vp),
+                        )
+                    } else {
+                        (0.0_f32, 0.0_f32)
+                    };
+                    if let Some(js) = &self.js_ctx {
+                        js.deliver_scroll_progress(p_y, p_x);
+                    }
+                }
 
                 // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
                 // Both schedulers are ticked once per frame and merged into a single

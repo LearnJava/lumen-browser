@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**O-10: CSS Scroll-Driven Animations Phase 1 shell wiring**  branch: p1-o10-scroll-driven-anim
+Next step: создать scroll_timeline.rs в lumen-js + deliver_scroll_progress в shell  crates/js/src/scroll_timeline.rs
 
 ---
 
