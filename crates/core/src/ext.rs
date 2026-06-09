@@ -1922,6 +1922,26 @@ pub trait BrowserSession: Send {
         let _ = (value, session_id, had_input);
         Ok(()) // default: no-op
     }
+
+    /// Deliver a generic PerformanceEntry to the Performance Timeline.
+    ///
+    /// Creates a `{entryType, name, startTime, duration}` entry and merges in any
+    /// extra properties from `detail_json` (an optional JSON object string).
+    /// Notifies all matching `PerformanceObserver` callbacks synchronously.
+    ///
+    /// Use for entry types without a dedicated binding: 'longtask', 'element',
+    /// 'event', 'navigation', etc.
+    fn deliver_perf_entry(
+        &mut self,
+        entry_type: &str,
+        name: &str,
+        start_ms: f64,
+        duration_ms: f64,
+        detail_json: Option<&str>,
+    ) -> Result<()> {
+        let _ = (entry_type, name, start_ms, duration_ms, detail_json);
+        Ok(()) // default: no-op
+    }
 }
 
 /// Null implementation of `BrowserSession` — all methods return `NotImplemented`.
@@ -1992,6 +2012,9 @@ impl BrowserSession for NullBrowserSession {
         Ok(())
     }
     fn deliver_layout_shift(&mut self, _: f64, _: u32, _: bool) -> Result<()> {
+        Ok(())
+    }
+    fn deliver_perf_entry(&mut self, _: &str, _: &str, _: f64, _: f64, _: Option<&str>) -> Result<()> {
         Ok(())
     }
 }
