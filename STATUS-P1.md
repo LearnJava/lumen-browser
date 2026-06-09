@@ -6,7 +6,8 @@
 
 ## In progress
 
-(нет)
+In progress: O-8 — date picker overlay + форм пикеры  branch: p1-o8-form-pickers
+Next step: добавить OpenDatePicker + build_date_picker в forms.rs, wire в main.rs  forms.rs:62
 
 ---
 
@@ -29,7 +30,7 @@
 | ~~O-4~~ | ~~**10L: JS heap GC tuning per tier**~~ — **выполнено** | S | `lumen-js` |
 | ~~O-5~~ | ~~**6+ (a11y bridges): Platform a11y bridges**~~ — **выполнено** | M | `lumen-a11y`, `lumen-shell` |
 | ~~O-6~~ | ~~**KnowledgeStore** — trait в lumen-core::ext, DefaultKnowledgeStore, @notes omnibox~~ — **выполнено** | L | `lumen-knowledge`, `lumen-core`, `lumen-shell` |
-| O-7 | **10M: `samples/heavy.html`** — Habr-style тестовая страница (50+ элементов, много текста, изображения) для T0-heavy бенчей. `samples/heavy.html` | XS | — |
+| ~~O-7~~ | ~~**10M: `samples/heavy.html`**~~ — **выполнено (P2)** | XS | — |
 | O-8 | **6+ (forms): Native form pickers + validation tooltip UI** — date/color picker (OS-диалог), validation tooltip рядом с полем, интеграция с `FormValidation` JS API. `shell/src/forms/pickers.rs` | M | `lumen-shell`, `lumen-js` |
 | O-9 | **Кастомизация UI** — drag&drop вкладок (переупорядочивание), темы (light/dark/custom accent). `shell/src/panels/themes.rs` (§12.10) | L | `lumen-shell`, `lumen-paint` |
 | O-10 | **CSS Scroll-Driven Animations Phase 1 shell wiring** — shell-wiring scroll-driven animations (алгоритм в layout уже есть); `@scroll-timeline` → viewport-progress. `shell/src/scroll/` + `lumen-layout` | M | `lumen-shell`, `lumen-layout` |

@@ -50,6 +50,8 @@ pub enum FormClickAction {
     ToggleCheckbox(NodeId),
     ToggleRadio { clicked: NodeId, _group_name: String },
     OpenColorPicker(NodeId),
+    /// Open a calendar date-picker overlay for `<input type="date/datetime-local/time/month/week">`.
+    OpenDatePicker(NodeId),
     /// Open a dropdown overlay showing the `<option>` children of the `<select>`.
     OpenSelectDropdown(NodeId),
     SubmitForm(NodeId),
@@ -75,6 +77,11 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
                     FormClickAction::ToggleRadio { clicked: node, _group_name: name }
                 }
                 InputType::Color => FormClickAction::OpenColorPicker(node),
+                InputType::Date
+                | InputType::DateTimeLocal
+                | InputType::Time
+                | InputType::Month
+                | InputType::Week => FormClickAction::OpenDatePicker(node),
                 InputType::Submit => FormClickAction::SubmitForm(node),
                 InputType::Range => FormClickAction::SlideRange(node),
                 _ => FormClickAction::Nothing,
@@ -910,6 +917,337 @@ pub fn apply_select_choice(doc: &mut Document, options: &[SelectOption], opt_idx
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Date picker overlay
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// What a viewport-space click hit inside an open date picker.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DatePickerHit {
+    /// Click landed on the previous-month arrow.
+    Prev,
+    /// Click landed on the next-month arrow.
+    Next,
+    /// Click landed on calendar day `day` (1-based).
+    Day(u8),
+    /// Click outside the picker (or in an empty cell).
+    None,
+}
+
+const DATE_CELL_W: f32 = 24.0;
+const DATE_CELL_H: f32 = 24.0;
+const DATE_CELL_GAP: f32 = 2.0;
+const DATE_PICKER_PAD: f32 = 6.0;
+const DATE_HEADER_H: f32 = 26.0;
+const DATE_DAYNAME_H: f32 = 18.0;
+const DATE_ROWS: usize = 6;
+
+fn date_picker_size() -> (f32, f32) {
+    let w = 7.0 * (DATE_CELL_W + DATE_CELL_GAP) - DATE_CELL_GAP + DATE_PICKER_PAD * 2.0;
+    let h = DATE_PICKER_PAD * 2.0
+        + DATE_HEADER_H
+        + DATE_DAYNAME_H
+        + DATE_ROWS as f32 * (DATE_CELL_H + DATE_CELL_GAP);
+    (w, h)
+}
+
+/// True if `year` is a leap year.
+pub fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+/// Number of days in the given month (1-based month, Gregorian calendar).
+pub fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if is_leap_year(year) { 29 } else { 28 },
+        _ => 30,
+    }
+}
+
+/// ISO weekday (0=Mon … 6=Sun) of the first day of the given month.
+/// Uses Zeller's congruence converted to ISO day-of-week.
+pub fn first_weekday_of_month(year: i32, month: u8) -> u8 {
+    let (y, m) = if month <= 2 {
+        (year - 1, month as i32 + 12)
+    } else {
+        (year, month as i32)
+    };
+    let k = y % 100;
+    let j = y / 100;
+    // Zeller: h=0 Sat, h=1 Sun, h=2 Mon … h=6 Fri
+    let h = (1 + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 - 2 * j).rem_euclid(7);
+    // Convert to ISO: (h + 5) % 7  → Mon=0 … Sun=6
+    ((h + 5) % 7) as u8
+}
+
+/// English month name, 1-based.
+pub fn month_name(month: u8) -> &'static str {
+    match month {
+        1 => "January", 2 => "February", 3 => "March",
+        4 => "April",   5 => "May",       6 => "June",
+        7 => "July",    8 => "August",    9 => "September",
+        10 => "October", 11 => "November", 12 => "December",
+        _ => "?",
+    }
+}
+
+/// Parse an ISO 8601 date string `YYYY-MM-DD` → `(year, month, day)`.
+/// Returns `None` if the string is malformed.
+pub fn parse_date_value(value: &str) -> Option<(i32, u8, u8)> {
+    let parts: Vec<&str> = value.splitn(3, '-').collect();
+    if parts.len() != 3 { return None; }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u8 = parts[1].parse().ok()?;
+    let d: u8 = parts[2].parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) { return None; }
+    Some((y, m, d))
+}
+
+/// Format `(year, month, day)` as `YYYY-MM-DD`.
+pub fn format_date_value(year: i32, month: u8, day: u8) -> String {
+    format!("{:04}-{:02}-{:02}", year, month, day)
+}
+
+/// Return the current year and month derived from the system clock.
+/// Falls back to (2026, 1) if the clock is unavailable.
+pub fn today_year_month() -> (i32, u8) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    // Howard Hinnant civil_from_days algorithm.
+    let days = (secs / 86400) as i32;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y_final = if m <= 2 { y + 1 } else { y };
+    (y_final, m as u8)
+}
+
+/// Build a calendar date-picker overlay anchored below `anchor` (document coords).
+///
+/// `year`/`month` define which month to display (1-based month).
+/// The overlay is viewport-locked: `scroll_y` converts document-space anchor to
+/// viewport-space. Navigation arrows (Prev/Next) are rendered at the header ends.
+pub fn build_date_picker(
+    anchor: Rect,
+    scroll_y: f32,
+    viewport_w: f32,
+    year: i32,
+    month: u8,
+) -> DisplayList {
+    let mut out: DisplayList = Vec::new();
+    let (pw, ph) = date_picker_size();
+
+    let vp_y = anchor.y - scroll_y + anchor.height + 4.0;
+    let vp_x = anchor.x.min(viewport_w - pw).max(0.0);
+    let bg = Rect::new(vp_x, vp_y, pw, ph);
+
+    // Background
+    out.push(DisplayCommand::FillRect {
+        rect: bg,
+        color: Color { r: 255, g: 255, b: 255, a: 255 },
+    });
+    out.push(DisplayCommand::DrawBorder {
+        rect: bg,
+        widths: [1.0; 4],
+        colors: [Color { r: 160, g: 160, b: 160, a: 255 }; 4],
+        styles: [BorderStyle::Solid; 4],
+        radii: lumen_paint::CornerRadii::default(),
+    });
+
+    let content_x = vp_x + DATE_PICKER_PAD;
+    let content_w = pw - DATE_PICKER_PAD * 2.0;
+    let header_y = vp_y + DATE_PICKER_PAD;
+
+    // ── Header: "← June 2026 →" ─────────────────────────────────────
+    let arrow_w = DATE_HEADER_H;
+    // Prev arrow background on hover — rendered as a grey rect
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(content_x, header_y, arrow_w, DATE_HEADER_H),
+        color: Color { r: 235, g: 235, b: 235, a: 255 },
+    });
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(content_x, header_y + 4.0, arrow_w, DATE_HEADER_H - 4.0),
+        text: "<".to_owned(),
+        font_size: 14.0,
+        color: Color { r: 40, g: 40, b: 40, a: 255 },
+        font_family: vec![],
+        font_weight: FontWeight(700),
+        font_style: FontStyle::Normal,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
+    });
+    // Month/year label centered
+    let label = format!("{} {}", month_name(month), year);
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(content_x + arrow_w, header_y + 4.0, content_w - arrow_w * 2.0, DATE_HEADER_H - 4.0),
+        text: label,
+        font_size: 12.0,
+        color: Color { r: 20, g: 20, b: 20, a: 255 },
+        font_family: vec![],
+        font_weight: FontWeight(600),
+        font_style: FontStyle::Normal,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
+    });
+    // Next arrow
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(content_x + content_w - arrow_w, header_y, arrow_w, DATE_HEADER_H),
+        color: Color { r: 235, g: 235, b: 235, a: 255 },
+    });
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(content_x + content_w - arrow_w, header_y + 4.0, arrow_w, DATE_HEADER_H - 4.0),
+        text: ">".to_owned(),
+        font_size: 14.0,
+        color: Color { r: 40, g: 40, b: 40, a: 255 },
+        font_family: vec![],
+        font_weight: FontWeight(700),
+        font_style: FontStyle::Normal,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
+    });
+
+    // ── Day-of-week header ───────────────────────────────────────────
+    let daynames = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+    let daynames_y = header_y + DATE_HEADER_H;
+    for (i, name) in daynames.iter().enumerate() {
+        let cell_x = content_x + i as f32 * (DATE_CELL_W + DATE_CELL_GAP);
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(cell_x, daynames_y, DATE_CELL_W, DATE_DAYNAME_H),
+            text: (*name).to_owned(),
+            font_size: 10.0,
+            color: Color { r: 100, g: 100, b: 100, a: 255 },
+            font_family: vec![],
+            font_weight: FontWeight(400),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
+
+    // ── Day cells ────────────────────────────────────────────────────
+    let days_start_y = daynames_y + DATE_DAYNAME_H;
+    let first_col = first_weekday_of_month(year, month) as usize;
+    let num_days = days_in_month(year, month) as usize;
+
+    for day in 1..=num_days {
+        let cell_idx = first_col + day - 1;
+        let row = cell_idx / 7;
+        let col = cell_idx % 7;
+        let cx = content_x + col as f32 * (DATE_CELL_W + DATE_CELL_GAP);
+        let cy = days_start_y + row as f32 * (DATE_CELL_H + DATE_CELL_GAP);
+        let cell_rect = Rect::new(cx, cy, DATE_CELL_W, DATE_CELL_H);
+
+        // Highlight weekend days slightly
+        if col >= 5 {
+            out.push(DisplayCommand::FillRect {
+                rect: cell_rect,
+                color: Color { r: 248, g: 245, b: 255, a: 255 },
+            });
+        }
+        out.push(DisplayCommand::DrawText {
+            rect: cell_rect,
+            text: day.to_string(),
+            font_size: 12.0,
+            color: Color { r: 20, g: 20, b: 20, a: 255 },
+            font_family: vec![],
+            font_weight: FontWeight(400),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
+
+    out
+}
+
+/// Hit-test a viewport-space click `(px, py)` against an open date picker.
+///
+/// Returns `DatePickerHit::Day(d)` when a day cell is clicked,
+/// `DatePickerHit::Prev`/`Next` for navigation arrows, or
+/// `DatePickerHit::None` when the click is outside the picker.
+pub fn hit_date_picker(
+    anchor: Rect,
+    scroll_y: f32,
+    viewport_w: f32,
+    year: i32,
+    month: u8,
+    px: f32,
+    py: f32,
+) -> DatePickerHit {
+    let (pw, ph) = date_picker_size();
+    let vp_y = anchor.y - scroll_y + anchor.height + 4.0;
+    let vp_x = anchor.x.min(viewport_w - pw).max(0.0);
+
+    if px < vp_x || px > vp_x + pw || py < vp_y || py > vp_y + ph {
+        return DatePickerHit::None;
+    }
+
+    let rel_x = px - vp_x - DATE_PICKER_PAD;
+    let rel_y = py - vp_y - DATE_PICKER_PAD;
+    let content_w = pw - DATE_PICKER_PAD * 2.0;
+    let arrow_w = DATE_HEADER_H;
+
+    // Header row
+    if rel_y < DATE_HEADER_H {
+        if rel_x < arrow_w {
+            return DatePickerHit::Prev;
+        }
+        if rel_x > content_w - arrow_w {
+            return DatePickerHit::Next;
+        }
+        return DatePickerHit::None;
+    }
+
+    // Day name row
+    if rel_y < DATE_HEADER_H + DATE_DAYNAME_H {
+        return DatePickerHit::None;
+    }
+
+    // Day cells grid
+    let grid_y = rel_y - DATE_HEADER_H - DATE_DAYNAME_H;
+    let col = (rel_x / (DATE_CELL_W + DATE_CELL_GAP)) as usize;
+    let row = (grid_y / (DATE_CELL_H + DATE_CELL_GAP)) as usize;
+    if col >= 7 { return DatePickerHit::None; }
+
+    // Ensure click is within the cell (not in the gap)
+    let cell_rel_x = rel_x % (DATE_CELL_W + DATE_CELL_GAP);
+    let cell_rel_y = grid_y % (DATE_CELL_H + DATE_CELL_GAP);
+    if cell_rel_x > DATE_CELL_W || cell_rel_y > DATE_CELL_H {
+        return DatePickerHit::None;
+    }
+
+    let first_col = first_weekday_of_month(year, month) as usize;
+    let cell_idx = row * 7 + col;
+    if cell_idx < first_col { return DatePickerHit::None; }
+    let day = cell_idx - first_col + 1;
+    let num_days = days_in_month(year, month) as usize;
+    if day < 1 || day > num_days { return DatePickerHit::None; }
+    DatePickerHit::Day(day as u8)
+}
+
+/// Advance display month by `delta` months (positive = forward, negative = backward).
+/// Returns the new `(year, month)` pair, clamped to valid Gregorian range.
+pub fn advance_month(year: i32, month: u8, delta: i32) -> (i32, u8) {
+    let total = (year * 12 + month as i32 - 1) + delta;
+    let new_year = total.div_euclid(12);
+    let new_month = (total.rem_euclid(12) + 1) as u8;
+    (new_year, new_month)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1573,5 +1911,131 @@ mod tests {
             .and_then(|v| v.trim().parse().ok())
             .unwrap_or(-1.0);
         assert!(val >= 0.0, "value clamped below min should be >= 0, got {val}");
+    }
+
+    // ── Date picker tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn days_in_month_common_cases() {
+        assert_eq!(days_in_month(2026, 1), 31);
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(2024, 2), 29); // leap year
+        assert_eq!(days_in_month(2026, 4), 30);
+        assert_eq!(days_in_month(2026, 12), 31);
+    }
+
+    #[test]
+    fn is_leap_year_cases() {
+        assert!(is_leap_year(2000)); // divisible by 400
+        assert!(!is_leap_year(1900)); // divisible by 100 but not 400
+        assert!(is_leap_year(2024));
+        assert!(!is_leap_year(2023));
+    }
+
+    #[test]
+    fn first_weekday_of_month_june_2026() {
+        // June 1, 2026 is a Monday (ISO weekday 0).
+        assert_eq!(first_weekday_of_month(2026, 6), 0);
+    }
+
+    #[test]
+    fn first_weekday_of_month_january_2024() {
+        // January 1, 2024 is a Monday.
+        assert_eq!(first_weekday_of_month(2024, 1), 0);
+    }
+
+    #[test]
+    fn first_weekday_of_month_february_2026() {
+        // February 1, 2026 is a Sunday (ISO weekday 6).
+        assert_eq!(first_weekday_of_month(2026, 2), 6);
+    }
+
+    #[test]
+    fn parse_date_value_valid() {
+        assert_eq!(parse_date_value("2026-06-09"), Some((2026, 6, 9)));
+        assert_eq!(parse_date_value("2000-01-01"), Some((2000, 1, 1)));
+    }
+
+    #[test]
+    fn parse_date_value_invalid() {
+        assert_eq!(parse_date_value("not-a-date"), None);
+        assert_eq!(parse_date_value("2026-13-01"), None); // month out of range
+        assert_eq!(parse_date_value("2026-06"), None);   // too short
+    }
+
+    #[test]
+    fn format_date_value_roundtrip() {
+        let s = format_date_value(2026, 6, 9);
+        assert_eq!(s, "2026-06-09");
+        assert_eq!(parse_date_value(&s), Some((2026, 6, 9)));
+    }
+
+    #[test]
+    fn advance_month_forward() {
+        assert_eq!(advance_month(2026, 12, 1), (2027, 1));
+        assert_eq!(advance_month(2026, 6, 1), (2026, 7));
+    }
+
+    #[test]
+    fn advance_month_backward() {
+        assert_eq!(advance_month(2026, 1, -1), (2025, 12));
+        assert_eq!(advance_month(2026, 6, -1), (2026, 5));
+    }
+
+    #[test]
+    fn hit_date_picker_outside_returns_none() {
+        let anchor = Rect::new(100.0, 100.0, 120.0, 22.0);
+        // Click far outside the overlay area.
+        let hit = hit_date_picker(anchor, 0.0, 1024.0, 2026, 6, 0.0, 0.0);
+        assert_eq!(hit, DatePickerHit::None);
+    }
+
+    #[test]
+    fn hit_date_picker_prev_arrow() {
+        let anchor = Rect::new(100.0, 100.0, 120.0, 22.0);
+        let (pw, _) = date_picker_size();
+        // Click on prev-arrow: left part of header, inside overlay.
+        let vp_y = 100.0 + 22.0 + 4.0; // anchor bottom + gap
+        let vp_x = 100.0_f32.min(1024.0 - pw).max(0.0);
+        // Click in the middle of the prev arrow (left side of header).
+        let px = vp_x + DATE_PICKER_PAD + DATE_HEADER_H / 2.0;
+        let py = vp_y + DATE_PICKER_PAD + DATE_HEADER_H / 2.0;
+        let hit = hit_date_picker(anchor, 0.0, 1024.0, 2026, 6, px, py);
+        assert_eq!(hit, DatePickerHit::Prev);
+    }
+
+    #[test]
+    fn hit_date_picker_next_arrow() {
+        let anchor = Rect::new(100.0, 100.0, 120.0, 22.0);
+        let (pw, _) = date_picker_size();
+        let vp_y = 100.0 + 22.0 + 4.0;
+        let vp_x = 100.0_f32.min(1024.0 - pw).max(0.0);
+        let content_w = pw - DATE_PICKER_PAD * 2.0;
+        // Click in the middle of the next arrow (right side of header).
+        let px = vp_x + DATE_PICKER_PAD + content_w - DATE_HEADER_H / 2.0;
+        let py = vp_y + DATE_PICKER_PAD + DATE_HEADER_H / 2.0;
+        let hit = hit_date_picker(anchor, 0.0, 1024.0, 2026, 6, px, py);
+        assert_eq!(hit, DatePickerHit::Next);
+    }
+
+    #[test]
+    fn hit_date_picker_first_day() {
+        // June 2026: first_weekday=Mon=0 → day 1 is in column 0, row 0.
+        let anchor = Rect::new(100.0, 100.0, 120.0, 22.0);
+        let (pw, _) = date_picker_size();
+        let vp_y = 100.0 + 22.0 + 4.0;
+        let vp_x = 100.0_f32.min(1024.0 - pw).max(0.0);
+        // Day 1: col=0, row=0 in the grid.
+        let cell_x = vp_x + DATE_PICKER_PAD + DATE_CELL_W / 2.0;
+        let cell_y = vp_y + DATE_PICKER_PAD + DATE_HEADER_H + DATE_DAYNAME_H + DATE_CELL_H / 2.0;
+        let hit = hit_date_picker(anchor, 0.0, 1024.0, 2026, 6, cell_x, cell_y);
+        assert_eq!(hit, DatePickerHit::Day(1));
+    }
+
+    #[test]
+    fn build_date_picker_is_nonempty() {
+        let anchor = Rect::new(10.0, 10.0, 120.0, 22.0);
+        let dl = build_date_picker(anchor, 0.0, 1024.0, 2026, 6);
+        assert!(!dl.is_empty(), "date picker display list should not be empty");
     }
 }
