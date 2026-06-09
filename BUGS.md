@@ -109,7 +109,7 @@ BUG-093 | OPEN   | paint          | scrollbar rendering: DrawScrollbar track+thu
 BUG-094 | OPEN   | paint          | text-shadow with blur PushFilter wrapper ~7% deviation — TEST-52: 6.82% (thr 4.0%) | crates/engine/paint/src/display_list.rs
 BUG-095 | OPEN   | layout/paint   | background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78%; border-box/padding-box/content-box not respected | crates/engine/layout/src/style.rs
 BUG-096 | OPEN   | paint          | SVG <path> stroke tessellation not rendered — TEST-54: 9.50%; Phase 1 | crates/engine/paint/src/display_list.rs
-BUG-097 | OPEN   | layout/paint   | <video> element: no grey placeholder rendered — TEST-55: 26.65%; replaced element box exists but no DrawImage emitted | crates/engine/layout/src/box_tree.rs
+BUG-097 | FIXED 2026-06-09 | layout/paint   | <video> placeholder: posterless video painted grey placeholder; Edge renders empty media transparent → suppress DrawImage when no poster | crates/engine/paint/src/display_list.rs
 BUG-098 | OPEN   | paint          | mix-blend-mode: PushBlendMode/PopBlendMode layers ~14% deviation — TEST-56: 14.12%; compositing order or blending formula | crates/engine/paint/src/renderer.rs
 BUG-099 | OPEN   | js/paint       | <canvas> 2D context not implemented — TEST-57: 28.66%; getContext("2d") stub; Phase 2 | crates/js/src/dom.rs
 BUG-100 | OPEN   | layout         | ::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04% (thr 2.0%); CSS Pseudo-elements L4 §5.3-5.4 | crates/engine/layout/src/box_tree.rs
