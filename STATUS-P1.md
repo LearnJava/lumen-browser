@@ -6,8 +6,7 @@
 
 ## In progress
 
-M-3: SVG DOM API stubs  branch: p1-m3-svg-dom
-Next step: clippy + tests, commit, merge
+_(нет)_
 
 ---
 
@@ -49,7 +48,7 @@ Next step: clippy + tests, commit, merge
 |---|--------|--------|--------|
 | ~~M-1~~ | ~~**XMLHttpRequest (XHR)**~~ — **выполнено** | M | `lumen-js` |
 | ~~M-2~~ | ~~**DOMParser + XMLSerializer**~~ — **выполнено** | M | `lumen-js` |
-| M-3 | **SVG DOM API stubs** — SVGElement, SVGSVGElement, getBBox(), createElementNS SVG | M | `lumen-js` |
+| ~~M-3~~ | ~~**SVG DOM API stubs**~~ — **выполнено** | M | `lumen-js` |
 | M-4 | **`<input type=file>` file picker** — OS dialog + FileList, связь с shell | S | `lumen-js`, `lumen-shell` |
 | M-5 | **`structuredClone()` improvements** — поддержка Map/Set/Date/RegExp в клонировании | XS | `lumen-js` |
 
@@ -108,6 +107,7 @@ Next step: clippy + tests, commit, merge
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | M-3: SVG DOM API stubs | lumen-js: новый модуль svg.rs — полная иерархия SVGElement/SVGGraphicsElement/SVGGeometryElement, 40+ конкретных элементов (SVGSVGElement, SVGRectElement, SVGCircleElement, SVGPathElement, SVGTextElement и др.), типы SVGRect/Point/Length/Matrix/Transform, createElementNS SVG namespace wiring (47 тегов). getBBox()→zeros Phase 0. Исправлен pre-existing doc-comment баг в lib.rs. 1660 тестов lumen-js (+21). Clippy чист. |
 | 2026-06-09 | P-1: Selector rule index | lumen-layout: rule_index.rs — RuleIndex::build/candidates, бакетизация по id/class/type/universal. compute_style: thread_local RULE_IDX_CACHE, brute-force O(N×R) → O(N×кандидаты). 2489 тестов lumen-layout (+8), 66 CPU snapshots identical. Clippy чист. |
 | 2026-06-09 | O-12: 10K.3 Loading-spinner restore + 10K/10L/10M doc | lumen-plan.md: 10K/10K.1/10K.2/10K.3/10L/10M ⬜→✅ (реализация в panels/restore_spinner.rs + tabs/strip.rs существовала, не была задокументирована). subsystems/shell.md: добавлена запись 10K (tier badges + spinner). |
 | 2026-06-09 | O-11: 2A remaining — sandbox-application | lumen-shell: apply_iframe_sandbox_gates переписан — для srcdoc-iframe-ов парсит inline HTML и применяет sandbox gates (scripts/forms/navigation/popup) к внутреннему документу; для URL-based iframe-ов (Phase 0) логирует ограничения без применения к top-level doc. Возвращает usize (кол-во заблокированных единиц). lumen-plan.md: 2A 🟡 → ✅. 7 unit-тестов, 1228 тестов итого. Clippy чист. |
