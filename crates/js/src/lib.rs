@@ -89,6 +89,7 @@ pub mod gc_policy;
 pub mod svg;
 pub mod file_input;
 pub mod tc39_proposals;
+pub mod es2026_proposals;
 pub mod window_management;
 pub mod local_font_access;
 pub mod long_animation_frames;
@@ -736,6 +737,13 @@ impl QuickJsRuntime {
             // helpers. Each shim no-ops if the engine already has native support.
             if let Err(e) = tc39_proposals::install_tc39_proposals(&ctx) {
                 eprintln!("TC39 proposals shim init failed: {}", e);
+            }
+
+            // Install ES2025/2026 proposal shims — Float16Array, Math.f16round,
+            // DataView.getFloat16/setFloat16, Symbol.dispose/asyncDispose,
+            // SuppressedError, DisposableStack, AsyncDisposableStack.
+            if let Err(e) = es2026_proposals::install_es2026_proposals(&ctx) {
+                eprintln!("ES2026 proposals shim init failed: {}", e);
             }
 
             // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.

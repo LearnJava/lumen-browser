@@ -6,11 +6,22 @@
 
 ## In progress
 
-_(нет)_
+U-1: ES2026 Float16Array + Math.f16round + DataView.getFloat16/setFloat16 + Explicit Resource Management  branch: p1-float16array
+Next step: новый модуль `crates/js/src/float16_and_disposable.rs`, установка в `install_dom`
 
 ---
 
 ## Next
+
+### U — TC39 Stage 4 ES2026+ APIs (новые)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| U-1 | **ES2026 Float16Array + DataView extensions + Explicit Resource Management** — `Float16Array`, `Math.f16round`, `DataView.getFloat16/setFloat16`, `DisposableStack`/`AsyncDisposableStack`/`SuppressedError`, `Symbol.dispose`/`Symbol.asyncDispose` | S | `lumen-js` |
+| U-2 | **Speculation Rules API Phase 0** — `<script type="speculationrules">`, `document.prerendering`, `prerenderingchange` event stub | XS | `lumen-js`, `lumen-html-parser` |
+| U-3 | **Soft Navigation Timing API** — `PerformanceSoftNavigationEntry`, `_lumen_deliver_soft_nav` binding | XS | `lumen-js` |
+| U-4 | **Content Index API (PWA)** — `ServiceWorkerRegistration.index.add()/.getAll()/.delete()` stub | XS | `lumen-js` |
+| U-5 | **Digital Credentials API stub** — `navigator.credentials.get({digital: ...})` → reject NotSupportedError | XS | `lumen-js` |
 
 ### T — TC39 Stage 4 ES2025 APIs (новые, не реализованы)
 
