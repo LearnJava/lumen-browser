@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+S-3: Local Font Access API  branch: p1-s3-local-font-access
+Next step: cargo clippy + tests  crates/js/src/local_font_access.rs
 
 ---
 
