@@ -34,7 +34,9 @@
 //! `Token::Text` (из-за chunk boundary), `apply_token` сливает их в
 //! один text-node.
 
-use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId, QualName, ViewportMeta, ViewportWidth};
+use std::collections::HashSet;
+
+use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId, QualName, ShadowRootMode, ViewportMeta, ViewportWidth};
 
 use crate::push_tokenizer::PushTokenizer;
 use crate::tokenizer::{Token, Tokenizer};
@@ -153,6 +155,11 @@ pub struct IncrementalTreeBuilder {
     /// path). When `false`, the parser enters `InHeadNoscript` mode so that
     /// `<noscript>` content is parsed as markup. Default: `true`.
     scripting_enabled: bool,
+    /// NodeIds of `<template>` elements that are Declarative Shadow DOM roots
+    /// (WHATWG HTML §14.5 — `shadowrootmode` attribute present and valid).
+    /// Content is parsed into the shadow root instead of a `DocumentFragment`.
+    /// On `</template>`, the template element itself is detached from the DOM.
+    declarative_shadow_templates: HashSet<NodeId>,
 }
 
 impl IncrementalTreeBuilder {
@@ -172,6 +179,7 @@ impl IncrementalTreeBuilder {
             seen_doctype: false,
             template_mode_stack: Vec::new(),
             scripting_enabled: true,
+            declarative_shadow_templates: HashSet::new(),
         }
     }
 
@@ -474,17 +482,52 @@ impl IncrementalTreeBuilder {
                 ref attrs,
                 ..
             } if name == "template" => {
+                // WHATWG HTML §14.5 — Declarative Shadow DOM.
+                // If `shadowrootmode="open"` or `"closed"` is present and the current
+                // node can host a shadow root, redirect content into the shadow root.
+                let shadow_mode = attrs.iter().find_map(|(name, value)| {
+                    if name.eq_ignore_ascii_case("shadowrootmode") {
+                        match value.as_str() {
+                            "open" => Some(ShadowRootMode::Open),
+                            "closed" => Some(ShadowRootMode::Closed),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                });
+
                 let el = self.create_element_with_attrs(name, attrs);
                 self.append_to_current_open(el);
                 self.open_elements.push(el);
-                // Create the content fragment and associate it with the element.
-                let frag = self.doc.create_fragment();
-                self.doc.set_template_content(el, frag);
-                // Push an active formatting marker so AAA doesn't cross template boundary.
                 self.active_formatting.push(ActiveFormattingEntry::Marker);
-                // The template content will be parsed in InBody mode (per spec §13.2.6.4.19).
                 self.template_mode_stack.push(InsertionMode::InBody);
                 self.insertion_mode = InsertionMode::InTemplate;
+
+                if let Some(mode) = shadow_mode {
+                    // The shadow host is the parent of the <template> element.
+                    // It is the element at open_elements[-2] (we just pushed el at [-1]).
+                    let host = self.open_elements
+                        .len()
+                        .checked_sub(2)
+                        .and_then(|i| self.open_elements.get(i))
+                        .copied();
+                    if let Some(host) = host {
+                        let shadow_root = self.doc.attach_shadow(host, mode);
+                        // Use the shadow root as the template's "content" so that
+                        // current_insertion_parent() redirects content there.
+                        self.doc.set_template_content(el, shadow_root);
+                        self.declarative_shadow_templates.insert(el);
+                    } else {
+                        // Fallback: no valid host — treat as regular template.
+                        let frag = self.doc.create_fragment();
+                        self.doc.set_template_content(el, frag);
+                    }
+                } else {
+                    // Regular <template>: create a DocumentFragment as content.
+                    let frag = self.doc.create_fragment();
+                    self.doc.set_template_content(el, frag);
+                }
             }
             // HTML LS §13.2.6.4.4 «In head» — `</template>` end tag.
             Token::EndTag { ref name } if name == "template" => {
@@ -1059,6 +1102,8 @@ impl IncrementalTreeBuilder {
             return;
         };
 
+        let template_node = self.open_elements[pos];
+
         // Generate implied end tags (not excluding template).
         self.generate_implied_end_tags(None);
 
@@ -1077,6 +1122,14 @@ impl IncrementalTreeBuilder {
             self.insertion_mode = InsertionMode::InBody;
         } else {
             self.insertion_mode = InsertionMode::InTemplate;
+        }
+
+        // WHATWG HTML §14.5 — Declarative Shadow DOM cleanup.
+        // The <template shadowrootmode="..."> element is a syntactic marker only;
+        // its content was parsed directly into the shadow root. Detach it so it
+        // is invisible to the final DOM (the shadow root remains attached to the host).
+        if self.declarative_shadow_templates.remove(&template_node) {
+            self.doc.detach(template_node);
         }
     }
 
@@ -3654,5 +3707,113 @@ mod tests {
             r#"<html><head><meta name="description" content="hello"></head><body></body></html>"#,
         );
         assert!(doc.viewport_meta().is_none(), "description meta must not set viewport_meta");
+    }
+
+    // ─── Declarative Shadow DOM (WHATWG HTML §14.5) ───────────────────────────
+
+    #[test]
+    fn declarative_shadow_dom_open_mode_creates_shadow_root() {
+        use lumen_dom::ShadowRootMode;
+        let doc = parse(r#"<div id="host"><template shadowrootmode="open"><p>shadow</p></template></div>"#);
+        // Find the host <div>
+        let body = doc.body().expect("body exists");
+        let host = doc.get(body).children.first().copied().expect("host div");
+        let sr = doc.shadow_root_of(host);
+        assert!(sr.is_some(), "shadow root must be attached to host");
+        // The shadow root should be open
+        if let Some(sr_id) = sr {
+            let node = doc.get(sr_id);
+            if let lumen_dom::NodeData::ShadowRoot { mode } = &node.data {
+                assert_eq!(*mode, ShadowRootMode::Open);
+            } else {
+                panic!("expected ShadowRoot node");
+            }
+        }
+    }
+
+    #[test]
+    fn declarative_shadow_dom_closed_mode() {
+        use lumen_dom::ShadowRootMode;
+        let doc = parse(r#"<section><template shadowrootmode="closed"><span>inner</span></template></section>"#);
+        let body = doc.body().expect("body");
+        let section = doc.get(body).children.first().copied().expect("section");
+        let sr = doc.shadow_root_of(section).expect("shadow root on section");
+        let node = doc.get(sr);
+        if let lumen_dom::NodeData::ShadowRoot { mode } = &node.data {
+            assert_eq!(*mode, ShadowRootMode::Closed);
+        } else {
+            panic!("expected ShadowRoot node");
+        }
+    }
+
+    #[test]
+    fn declarative_shadow_dom_template_element_removed_from_host() {
+        let doc = parse(r#"<div><template shadowrootmode="open"><p>in shadow</p></template></div>"#);
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children.first().copied().expect("div");
+        // The <template> element must be detached — host's direct children should not include it.
+        for &child in &doc.get(host).children {
+            if let lumen_dom::NodeData::Element { name, .. } = &doc.get(child).data {
+                assert_ne!(name.local.as_str(), "template", "template element must be detached");
+            }
+        }
+    }
+
+    #[test]
+    fn declarative_shadow_dom_content_inside_shadow_root() {
+        use lumen_dom::NodeData;
+        let doc = parse(r#"<div><template shadowrootmode="open"><h1>Hello</h1><p>World</p></template></div>"#);
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children.first().copied().expect("host");
+        let sr = doc.shadow_root_of(host).expect("shadow root");
+        let sr_children: Vec<_> = doc.get(sr).children.iter()
+            .filter_map(|&n| {
+                if let NodeData::Element { name, .. } = &doc.get(n).data {
+                    Some(name.local.as_str().to_owned())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(sr_children.contains(&"h1".to_owned()), "h1 in shadow root");
+        assert!(sr_children.contains(&"p".to_owned()), "p in shadow root");
+    }
+
+    #[test]
+    fn regular_template_unaffected_by_declarative_shadow_dom() {
+        let doc = parse(r#"<div><template><p>regular</p></template></div>"#);
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children.first().copied().expect("div");
+        // No shadow root on the host for a regular template.
+        assert!(doc.shadow_root_of(host).is_none(), "no shadow root for regular template");
+        // The <template> element remains as a child.
+        let has_template = doc.get(host).children.iter().any(|&n| {
+            matches!(&doc.get(n).data, lumen_dom::NodeData::Element { name, .. } if name.local == "template")
+        });
+        assert!(has_template, "regular template element must remain in DOM");
+    }
+
+    #[test]
+    fn declarative_shadow_dom_invalid_mode_falls_back_to_regular_template() {
+        let doc = parse(r#"<div><template shadowrootmode="invalid"><p>inside</p></template></div>"#);
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children.first().copied().expect("div");
+        // Invalid mode → treated as regular template, no shadow root attached.
+        assert!(doc.shadow_root_of(host).is_none(), "invalid shadowrootmode must not attach shadow root");
+    }
+
+    #[test]
+    fn declarative_shadow_dom_in_body() {
+        use lumen_dom::ShadowRootMode;
+        // <template shadowrootmode> in body (not head) should also work.
+        let doc = parse(r#"<html><body><article><template shadowrootmode="open"><nav>menu</nav></template></article></body></html>"#);
+        let body = doc.body().expect("body");
+        let article = doc.get(body).children.first().copied().expect("article");
+        let sr = doc.shadow_root_of(article).expect("shadow root on article");
+        if let lumen_dom::NodeData::ShadowRoot { mode } = &doc.get(sr).data {
+            assert_eq!(*mode, ShadowRootMode::Open);
+        } else {
+            panic!("expected ShadowRoot");
+        }
     }
 }
