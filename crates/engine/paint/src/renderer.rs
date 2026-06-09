@@ -1934,7 +1934,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2399,7 +2405,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2504,7 +2516,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2589,7 +2607,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2644,7 +2668,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2669,7 +2699,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2745,7 +2781,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2827,7 +2869,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2865,7 +2913,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2929,7 +2983,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -5573,27 +5633,29 @@ impl Renderer {
                         }
                         LoadOpChoice::Load => wgpu::LoadOp::Load,
                     };
-                    // Depth attachment only for the frame surface (level 0).
-                    // Off-screen layers don't participate in 3D depth sorting.
-                    let depth_attachment = if batch.target_level == 0 {
-                        self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
-                            view: dv,
-                            depth_ops: Some(wgpu::Operations {
-                                // Clear depth at frame start (ClearWhite/ClearTransparent);
-                                // load otherwise to accumulate depth across same-frame batches
-                                // so 3D-sorted elements preserve relative depth ordering.
-                                load: if matches!(batch.load_op, LoadOpChoice::Load) {
-                                    wgpu::LoadOp::Load
-                                } else {
-                                    wgpu::LoadOp::Clear(1.0)
-                                },
-                                store: wgpu::StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        })
-                    } else {
-                        None
-                    };
+                    // All render passes must supply a depth attachment because the
+                    // fill/rrect/circle pipelines use depth_write_enabled:true.
+                    // wgpu validation requires: pipeline has depth → pass has depth attachment.
+                    // Off-screen opacity layers don't need depth sorting, so they always
+                    // clear to 1.0 (far plane) — correct result; they are composited by alpha.
+                    let depth_attachment = self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                        view: dv,
+                        depth_ops: Some(wgpu::Operations {
+                            // Level 0: clear at frame start (ClearWhite/ClearTransparent),
+                            //          load to accumulate depth across same-frame batches.
+                            // Level > 0: always clear to 1.0 so depth sorting within the
+                            //            offscreen layer is independent of the parent frame.
+                            load: if batch.target_level > 0 {
+                                wgpu::LoadOp::Clear(1.0)
+                            } else if matches!(batch.load_op, LoadOpChoice::Load) {
+                                wgpu::LoadOp::Load
+                            } else {
+                                wgpu::LoadOp::Clear(1.0)
+                            },
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    });
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("draw-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -5670,7 +5732,11 @@ impl Renderer {
                                         store: wgpu::StoreOp::Store,
                                     },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5697,7 +5763,11 @@ impl Renderer {
                                         store: wgpu::StoreOp::Store,
                                     },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5794,7 +5864,11 @@ impl Renderer {
                                         store: wgpu::StoreOp::Store,
                                     },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5844,7 +5918,11 @@ impl Renderer {
                                         store: wgpu::StoreOp::Store,
                                     },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5883,7 +5961,11 @@ impl Renderer {
                                     store: wgpu::StoreOp::Store,
                                 },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -5935,7 +6017,11 @@ impl Renderer {
                                     depth_slice: None,
                                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5968,7 +6054,11 @@ impl Renderer {
                                     depth_slice: None,
                                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -6020,7 +6110,11 @@ impl Renderer {
                                 depth_slice: None,
                                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -6108,7 +6202,11 @@ impl Renderer {
                                         depth_slice: None,
                                         ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                     })],
-                                    depth_stencil_attachment: None,
+                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
                                 });
@@ -6141,7 +6239,11 @@ impl Renderer {
                                         depth_slice: None,
                                         ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                     })],
-                                    depth_stencil_attachment: None,
+                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
                                 });
@@ -6209,7 +6311,11 @@ impl Renderer {
                                 depth_slice: None,
                                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -6247,7 +6353,11 @@ impl Renderer {
                                 depth_slice: None,
                                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -6334,7 +6444,11 @@ impl Renderer {
                                     store: wgpu::StoreOp::Store,
                                 },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });

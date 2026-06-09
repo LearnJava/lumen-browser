@@ -1,33 +1,29 @@
-//! CPU render vs Edge screenshot comparison.
+//! Headless GPU render vs Edge screenshot comparison — primary visual regression gate.
 //!
-//! Renders each `graphic_tests` page through the deterministic CPU path
-//! (`InProcessSession::screenshot_cpu_rgba`) and compares the result against
-//! the cached Edge headless screenshot in
-//! `graphic_tests/screenshots/<stem>-edge.png`.
+//! Renders each `graphic_tests` page through the same femtovg headless path used
+//! by the real Lumen app (`InProcessSession::screenshot` → `Renderer::new_headless`
+//! → `render_to_image`) and compares the result against the cached Edge headless
+//! screenshot in `graphic_tests/screenshots/<stem>-edge.png`.
 //!
-//! **Purpose:** replaces the gdigrab+Python pipeline for Lumen-vs-Edge diff
-//! measurement — no browser window, no ffmpeg, no external tools. The Edge
-//! screenshots are captured once by `run.py` and reused as the reference.
+//! **Purpose:** exact replacement for the ffmpeg/gdigrab pipeline — same render
+//! backend (femtovg), same diff metric, no browser window, no screen capture.
+//! Results must match `run.py` percentages within rounding tolerance.
 //!
 //! **Pixel diff logic** mirrors `run.py diff_stats(channel_threshold=16)`:
 //! a pixel counts as "different" if any RGB channel differs by more than 16.
 //! Alpha channel is ignored (Edge screenshots are opaque RGB).
 //!
 //! **Missing screenshots:** if `<stem>-edge.png` is absent (screenshots/ is
-//! gitignored), the page is marked SKIP. The test always passes — it is an
-//! informational report. Use `run.py` for the hard CI gate.
-//!
-//! Run:
-//! ```bash
-//! cargo test -p lumen-driver --features cpu-render -- --nocapture snapshot_vs_edge
-//! ```
-//!
-//! Regenerate Edge references (requires Edge + run.py):
+//! gitignored), the page is marked SKIP and does not count as a failure.
+//! Generate Edge references once with:
 //! ```bash
 //! python graphic_tests/run.py --no-cache --continue-on-fail
 //! ```
-
-#![cfg(feature = "cpu-render")]
+//!
+//! Run:
+//! ```bash
+//! cargo test -p lumen-driver -- --nocapture snapshot_vs_edge
+//! ```
 
 use lumen_driver::{BrowserSession, InProcessSession};
 use std::path::{Path, PathBuf};
@@ -122,16 +118,22 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Renders `graphic_tests/<stem>.html` via the CPU path → RGBA8 image.
-fn render_cpu(stem: &str) -> lumen_image::Image {
+/// Renders `graphic_tests/<stem>.html` via femtovg headless → RGBA8 image.
+///
+/// Accepts a pre-created `Renderer` so a single wgpu device is reused across all
+/// pages — DX12 cannot create 70+ independent devices in one process.
+fn render_headless(stem: &str, renderer: &mut lumen_paint::Renderer) -> lumen_image::Image {
     let html = workspace_root().join(format!("graphic_tests/{stem}.html"));
     let mut session = InProcessSession::new();
     session
         .navigate(&format!("file://{}", html.display()))
         .unwrap_or_else(|e| panic!("navigate {stem}: {e}"));
-    session
-        .screenshot_cpu_rgba()
-        .unwrap_or_else(|e| panic!("screenshot_cpu_rgba {stem}: {e}"))
+    let dl = session
+        .display_list_for_compare()
+        .unwrap_or_else(|e| panic!("display_list {stem}: {e}"));
+    renderer
+        .render_to_image(&dl, 0.0, 0.0)
+        .unwrap_or_else(|e| panic!("render_to_image {stem}: {e}"))
 }
 
 /// Loads `graphic_tests/screenshots/<stem>-edge.png` → (width, height, RGBA8).
@@ -163,9 +165,17 @@ fn diff_percent(lumen_rgba: &[u8], edge_rgba: &[u8], total_pixels: u32) -> f32 {
 
 #[test]
 fn snapshot_vs_edge() {
+    // Single wgpu device reused across all pages — DX12 cannot create 70+ devices per process.
+    const W: u32 = 1024;
+    const H: u32 = 720;
+    let font = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let mut renderer = lumen_paint::Renderer::new_headless(font, W, H)
+        .expect("headless renderer init");
+
     let mut pass = 0usize;
     let mut fail = 0usize;
     let mut skip = 0usize;
+    let mut failures: Vec<String> = Vec::new();
 
     eprintln!("\n{:<35}  {:>7}  {:>6}  {}", "PAGE", "DIFF%", "LIMIT", "STATUS");
     eprintln!("{}", "-".repeat(60));
@@ -177,7 +187,7 @@ fn snapshot_vs_edge() {
             continue;
         };
 
-        let lumen_img = render_cpu(stem);
+        let lumen_img = render_headless(stem, &mut renderer);
         let lumen_rgba = lumen_img.to_rgba8();
 
         if lumen_img.width != ew || lumen_img.height != eh {
@@ -194,14 +204,21 @@ fn snapshot_vs_edge() {
 
         eprintln!("{stem:<35}  {:>6.2}%  {:>5.1}%  {status}", pct, threshold);
 
-        if pct <= threshold { pass += 1; } else { fail += 1; }
+        if pct <= threshold {
+            pass += 1;
+        } else {
+            fail += 1;
+            failures.push(format!("{stem}: {pct:.2}% > {threshold:.1}% limit"));
+        }
     }
 
     eprintln!("{}", "-".repeat(60));
     eprintln!("PASS: {pass}  FAIL: {fail}  SKIP: {skip}  TOTAL: {}", TESTS.len());
     eprintln!();
 
-    // The test itself always succeeds — this is an informational report.
-    // FAIL lines above show where Lumen diverges from Edge; fix the engine to reduce them.
-    let _ = (pass, fail, skip);
+    assert!(
+        failures.is_empty(),
+        "CPU-render vs Edge mismatches (regenerate Edge refs: python graphic_tests/run.py --no-cache --continue-on-fail):\n{}",
+        failures.join("\n")
+    );
 }
