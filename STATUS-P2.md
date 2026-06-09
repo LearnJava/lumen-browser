@@ -26,9 +26,9 @@ None
 | ~~O-1~~ | ~~**8H.3: BiDi gaps (продолжение)**~~ — **выполнено** (коммит b0cfabda) | M | `lumen-shell` (`bidi/`) |
 | ~~O-2~~ | ~~**10I: T2 → SQLite JS heap persistence**~~ — **выполнено** (коммит 13a3c7f7) | M | `lumen-storage`, `lumen-shell` |
 | ~~O-3~~ | ~~**10K: UI tier indication**~~ — **выполнено** (коммит 934315b6, Phase 1: «Z»-глиф + fade-opacity; loading-spinner Phase 2 отложен) | S | `lumen-shell` |
-| O-4 | **10M: `samples/heavy.html`** — Habr-style тестовая страница (50+ элементов, много текста, изображения) для T0-heavy бенчей. `samples/heavy.html` | XS | — |
-| O-5 | **6+ (forms): Native form pickers + validation tooltip UI** — date/color picker (OS dialog), validation tooltip рядом с полем, интеграция с `FormValidation` JS API. `shell/src/forms/pickers.rs` | M | `lumen-shell`, `lumen-js` |
-| O-6 | **Кастомизация UI** — drag&drop вкладок (переупорядочивание), темы (light/dark/custom accent). `shell/src/panels/themes.rs` (§12.10) | L | `lumen-shell`, `lumen-paint` |
+| ~~O-4~~ | ~~**10M: `samples/heavy.html`**~~ — **передано P1 (P1-O-7)** | XS | — |
+| ~~O-5~~ | ~~**6+ (forms): Native form pickers + validation tooltip UI**~~ — **передано P1 (P1-O-8)** | M | `lumen-shell`, `lumen-js` |
+| ~~O-6~~ | ~~**Кастомизация UI**~~ — **передано P1 (P1-O-9)** | L | `lumen-shell`, `lumen-paint` |
 
 ### L — Волна 4 HTML Interactive Elements + Rendering
 
@@ -38,7 +38,7 @@ None
 | ~~L-2~~ | ~~**`<dialog>` modal overlay rendering + `::backdrop`**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
 | ~~L-3~~ | ~~**`<input type="range">` slider visual rendering + drag**~~ — **выполнено** | S | `lumen-shell`, `lumen-layout`, `lumen-paint` |
 | ~~L-4~~ | ~~**`<meter>`/`<progress>` visual fill rendering**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint` |
-| L-5 | CSS Scroll-Driven Animations Phase 1 shell wiring | M | `lumen-shell`, `lumen-layout` |
+| ~~L-5~~ | ~~CSS Scroll-Driven Animations Phase 1 shell wiring~~ — **передано P1 (P1-O-10)** | M | `lumen-shell`, `lumen-layout` |
 
 ### K — Волна 3 Web Platform APIs
 

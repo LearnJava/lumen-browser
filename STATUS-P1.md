@@ -29,6 +29,12 @@ _(нет)_
 | O-4 | **10L: JS heap GC tuning per tier** — активная вкладка: мягкий GC (`gc_level=0`), idle: агрессивный (`gc_level=2`). `js/src/gc_policy.rs` | S | `lumen-js` |
 | O-5 | **6+ (a11y bridges): Platform a11y bridges** — macOS Accessibility API, Windows UI Automation, Linux AT-SPI2; P1 владеет `lumen-a11y`. `a11y/src/platform/` | M | `lumen-a11y`, `lumen-shell` |
 | O-6 | **KnowledgeStore** — FTS / read-later / notes (§12.1); базируется на уже готовом `HistoryFts`. `crates/knowledge/` | L | `lumen-knowledge`, `lumen-storage`, `lumen-shell` |
+| O-7 | **10M: `samples/heavy.html`** — Habr-style тестовая страница (50+ элементов, много текста, изображения) для T0-heavy бенчей. `samples/heavy.html` | XS | — |
+| O-8 | **6+ (forms): Native form pickers + validation tooltip UI** — date/color picker (OS-диалог), validation tooltip рядом с полем, интеграция с `FormValidation` JS API. `shell/src/forms/pickers.rs` | M | `lumen-shell`, `lumen-js` |
+| O-9 | **Кастомизация UI** — drag&drop вкладок (переупорядочивание), темы (light/dark/custom accent). `shell/src/panels/themes.rs` (§12.10) | L | `lumen-shell`, `lumen-paint` |
+| O-10 | **CSS Scroll-Driven Animations Phase 1 shell wiring** — shell-wiring scroll-driven animations (алгоритм в layout уже есть); `@scroll-timeline` → viewport-progress. `shell/src/scroll/` + `lumen-layout` | M | `lumen-shell`, `lumen-layout` |
+| O-11 | **2A remaining: SOP/CORS mixed-content enforcement** — HttpClient блокирует blockable-ресурсы до TCP-соединения; DOM-применение `sandbox`-флагов `<iframe>` в shell. `network/src/lib.rs` + `shell/src/main.rs` | S | `lumen-network`, `lumen-shell` |
+| O-12 | **10K.3: Loading-spinner при restore >200ms** — UI-спиннер при восстановлении T2→T0 если > 200 мс. `shell/src/tabs/restore_ui.rs` | XS | `lumen-shell` |
 
 ### M — Web Platform Completeness Phase 5
 
