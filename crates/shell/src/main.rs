@@ -1305,6 +1305,13 @@ pub(crate) trait PersistentJs {
     /// `End` triggers relayout and starts 300 ms cross-fade.
     #[allow(dead_code)]
     fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent>;
+    /// Adjust the QuickJS GC based on the tab's lifecycle tier (10L).
+    ///
+    /// `level` encodes aggressiveness: 0 = Soft (active tab, reset threshold),
+    /// 1 = Moderate (T1 background, one GC cycle), 2 = Aggressive (T2+ background,
+    /// full GC + lowered threshold to keep heap small during long idle).
+    #[allow(dead_code)]
+    fn run_gc_pass(&self, level: u8);
 }
 
 #[cfg(feature = "quickjs")]
@@ -1497,6 +1504,15 @@ impl PersistentJs for QuickPersistentJs {
                 lumen_js::ViewTransitionEvent::End => ViewTransitionEvent::End,
             })
             .collect()
+    }
+    fn run_gc_pass(&self, level: u8) {
+        use lumen_js::gc_policy::GcLevel;
+        let gc_level = match level {
+            0 => GcLevel::Soft,
+            1 => GcLevel::Moderate,
+            _ => GcLevel::Aggressive,
+        };
+        self.rt.run_gc_pass(gc_level);
     }
 }
 
@@ -10534,6 +10550,20 @@ impl Lumen {
                 let _ = self.t2_store.store(tab_id as i64, &data);
             }
 
+            // GC tuning per tier (10L): run progressively aggressive GC as a
+            // background tab ages, reclaiming heap without full hibernation cost.
+            let gc_level_opt: Option<u8> = match tr.to {
+                tab_lifecycle::TabState::BackgroundRecent => Some(1), // moderate
+                tab_lifecycle::TabState::BackgroundOld => Some(2),    // aggressive
+                _ => None,
+            };
+            if let (Some(gc_level), Some(js)) = (
+                gc_level_opt,
+                self.bg_tabs.get(&tab_id).and_then(|s| s.js_ctx.as_ref()),
+            ) {
+                js.run_gc_pass(gc_level);
+            }
+
             // Update strip badge for BackgroundOld (amber) or other tier changes.
             if let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == tab_id) {
                 self.tab_strip.set_tab_state(idx, tr.to);
@@ -10912,6 +10942,11 @@ impl Lumen {
         self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
         let snap = self.save_page_snapshot();
         self.bg_tabs.insert(old_id, snap);
+        // GC tuning (10L): run one moderate collection on the tab that just
+        // went to background so it releases unreachable objects quickly.
+        if let Some(js) = self.bg_tabs.get(&old_id).and_then(|s| s.js_ctx.as_ref()) {
+            js.run_gc_pass(1);
+        }
 
         // Sync lifecycle manager: deactivate old, activate new.
         let new_id = self.tab_strip.tabs[idx].id;
@@ -10928,6 +10963,11 @@ impl Lumen {
         if let Some(snap) = self.bg_tabs.remove(&new_id) {
             // T1/T2: fast in-memory restore.
             self.restore_page_snapshot(snap);
+            // GC tuning (10L): reset threshold to active level so the heap
+            // can grow freely now that this tab is in the foreground.
+            if let Some(js) = &self.js_ctx {
+                js.run_gc_pass(0);
+            }
         } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
             // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite
             // checkpoint exists — restore scroll + form state from it.
