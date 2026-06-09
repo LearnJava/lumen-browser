@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+O-9: Кастомизация UI — drag&drop вкладок + темы  branch: p1-o9-tab-drag-themes
+Next step: panels/themes.rs → tabs/strip.rs → main.rs wiring
 
 ---
 
