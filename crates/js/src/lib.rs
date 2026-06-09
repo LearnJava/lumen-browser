@@ -1329,6 +1329,37 @@ impl QuickJsRuntime {
         });
     }
 
+    /// Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`.
+    ///
+    /// Called by the shell after every scroll-position change on an overflow
+    /// container (both wheel-driven and JS-programmatic scrolls).
+    /// Per WHATWG HTML §8.1.6.2 the event is non-bubbling and non-cancelable.
+    /// No-op when the runtime has not been initialised yet.
+    pub fn fire_element_scroll(&self, nid: u32) {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.ctx.with(|ctx| {
+            let script = format!(
+                "if(typeof _lumen_fire_scroll_on_element==='function')\
+                 _lumen_fire_scroll_on_element({nid});"
+            );
+            ctx.eval::<(), _>(script.as_str()).ok();
+        });
+    }
+
+    /// Fire a non-bubbling `scroll` Event on the `window` object (page scroll).
+    ///
+    /// Called by the shell whenever the page-level scroll position changes.
+    /// No-op when the runtime has not been initialised yet.
+    pub fn fire_window_scroll(&self) {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>(
+                "if(typeof _lumen_fire_window_scroll_event==='function')\
+                 _lumen_fire_window_scroll_event();"
+            ).ok();
+        });
+    }
+
     /// Tune the QuickJS GC based on the tab's lifecycle tier (10L).
     ///
     /// - `Soft` (T0 active): reset `gc_threshold` to 1 MiB so the heap can
