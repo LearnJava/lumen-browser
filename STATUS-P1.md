@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+S-2: Window Management API  branch: p1-s2-window-management
+Next step: clippy + tests  crates/js/src/window_management.rs
 
 ---
 
