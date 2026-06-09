@@ -5247,7 +5247,15 @@ fn lay_out_flex(
         if free_cross > 0.0 {
             let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
 
-            match s.align_content {
+            // CSS Box Alignment L3 §5.4: `normal`/`auto` align-content behaves as
+            // `stretch` for flex containers. The default (`Auto`) therefore
+            // distributes free cross-space by growing each flex line.
+            let effective = match s.align_content {
+                AlignValue::Auto | AlignValue::Normal => AlignValue::Stretch,
+                other => other,
+            };
+
+            match effective {
                 AlignValue::End => {
                     line_offsets.fill(free_cross);
                 }
@@ -5273,11 +5281,16 @@ fn lay_out_flex(
                     }
                 }
                 AlignValue::Stretch => {
-                    let total_size: f32 = line_cross_sizes.iter().sum();
-                    if total_size > 0.0 {
-                        for size in line_cross_sizes.iter_mut() {
-                            *size += free_cross * (*size / total_size);
-                        }
+                    // CSS Flexbox §8.3: positive free space is split EQUALLY between
+                    // all flex lines, increasing each line's cross size. Items on a
+                    // later line shift toward the cross-end by the cumulative growth
+                    // of all preceding lines (each grown line pushes the next down).
+                    let per = free_cross / n_lines as f32;
+                    for (i, offset) in line_offsets.iter_mut().enumerate() {
+                        *offset = per * i as f32;
+                    }
+                    for size in line_cross_sizes.iter_mut() {
+                        *size += per;
                     }
                 }
                 _ => {
@@ -8873,6 +8886,27 @@ mod tests {
     }
 
     #[test]
+    fn flex_align_content_default_stretches_lines() {
+        // BUG-107: align-content defaults to `auto`, which CSS Box Alignment L3 §5.4
+        // says behaves as `stretch` for flex containers. With free cross-space the
+        // lines must grow equally and later lines shift toward the cross-end by the
+        // cumulative growth of preceding lines (CSS Flexbox §8.3).
+        //
+        // 200×300 container, 3×90px items → line1 [a,b] (cross 50), line2 [c] (cross 50).
+        // used_cross=100, free_cross=200, per=200/2=100. line1 offset 0, line2 offset 100.
+        // c was at cross_cursor 50 → ends at 50+100 = 150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y default-stretch line1 {}", a.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y default-stretch line2 {}", c.rect.y);
+    }
+
+    #[test]
     fn flex_align_content_single_line_flex_end() {
         // Single-line flex container (all items fit in one row) with align-content: flex-end.
         // CSS Box Alignment L3: align-content applies even when n_lines == 1.
@@ -8902,6 +8936,23 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let a = find_by_id_all(&root, &doc, "a").expect("a");
         assert_eq!(a.rect.y, 75.0, "a.y with single-line center {}", a.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_stretch_repositions_lines() {
+        // BUG-107: explicit align-content:stretch grows lines AND shifts later lines
+        // down by the cumulative growth of preceding lines (previously the growth was
+        // computed but items were never repositioned). Same geometry as the default
+        // test: a.y=0, c.y=150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:stretch} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y (line1) {}", a.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y (line2 shifted) {}", c.rect.y);
     }
 
     #[test]
