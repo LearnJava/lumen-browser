@@ -119,7 +119,7 @@ BUG-103 | OPEN   | js             | View Transitions API not implemented — TES
 BUG-104 | OPEN   | layout         | CSS Scroll Snap not implemented — TEST-62: 63.70% (thr 1.0%); scroll-snap-type/align/stop; Phase 1 | crates/engine/layout/src/style.rs
 BUG-105 | OPEN   | layout         | CSS Masonry layout not implemented — TEST-63: 26.13% (thr 1.0%); waterfall grid; Phase 2 | crates/engine/layout/src/box_tree.rs
 BUG-106 | OPEN   | layout         | CSS 2.1 §17 table: col/rowspan + border-spacing cells ~25% deviation — TEST-64: 24.85% (thr 1.0%) | crates/engine/layout/src/box_tree.rs
-BUG-107 | OPEN   | layout         | flex align-content multi-line: space-between/around/evenly/stretch ~24% deviation — TEST-65: 23.52%; single-line case fixed (BUG merge), multi-line still wrong | crates/engine/layout/src/box_tree.rs
+BUG-107 | FIXED 2026-06-09 | layout         | flex align-content: default (`normal`→`stretch`) did not distribute free cross-space — outer `.__f` rows packed at top instead of stretched. Fix: `Auto`/`Normal` align-content behaves as `stretch` for flex; `Stretch` branch now shifts later lines down by cumulative growth of preceding lines (was computed but never applied). TEST-65 17.34%→row geometry matches Edge (pitch 181.5 vs 182). | crates/engine/layout/src/box_tree.rs:5254
 BUG-108 | OPEN   | paint          | ::selection pseudo-element: background-color/color override not applied — TEST-66: 6.18% | crates/engine/paint/src/display_list.rs
 BUG-109 | OPEN   | css-parser/font | font-variation-settings: wght/wdth/slnt axis values not forwarded to rasterizer — TEST-68: 3.21% | crates/engine/layout/src/style.rs
 BUG-110 | OPEN   | layout/paint   | object-fit: SVG viewBox scaling (fill/contain/cover/none/scale-down) ~8% deviation — TEST-70: 8.03% | crates/engine/layout/src/box_tree.rs
@@ -203,7 +203,7 @@ TEST-61: FAIL 99.53%   view-transitions        ← BUG-103 (thr 1.0%, Phase 2)
 TEST-62: FAIL 63.70%   scroll-snap             ← BUG-104 (thr 1.0%, Phase 1)
 TEST-63: FAIL 26.13%   masonry                 ← BUG-105 (thr 1.0%, Phase 2)
 TEST-64: FAIL 24.85%   table                   ← BUG-106 (thr 1.0%)
-TEST-65: FAIL 23.52%   flex-align-content      ← BUG-107
+TEST-65: FAIL 23.52%   flex-align-content      ← BUG-107 (FIXED 2026-06-09)
 TEST-66: FAIL  6.18%   selection-pseudo        ← BUG-108
 TEST-67: FAIL 20.19%   attr-typed              ← BUG-074 (FIXED 2026-06-08)
 TEST-68: FAIL  3.21%   font-variation-settings ← BUG-109
