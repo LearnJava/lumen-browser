@@ -90,6 +90,7 @@ pub mod svg;
 pub mod file_input;
 pub mod tc39_proposals;
 pub mod window_management;
+pub mod local_font_access;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -978,6 +979,12 @@ impl QuickJsRuntime {
             // Phase 1: _lumen_get_screen_details() native binding for OS multi-screen enumeration.
             if let Err(e) = window_management::install_window_management_api(&ctx) {
                 eprintln!("Window Management API init failed: {}", e);
+            }
+
+            // WICG Local Font Access — navigator.fonts (FontAccessManager) + FontData class.
+            // Phase 0: query() resolves with []. Phase 1: _lumen_local_fonts_query() native binding.
+            if let Err(e) = local_font_access::install_local_font_access_api(&ctx) {
+                eprintln!("Local Font Access API init failed: {}", e);
             }
 
             Ok(())
