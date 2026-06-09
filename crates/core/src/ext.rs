@@ -2567,3 +2567,232 @@ mod tests {
         check(&c);
     }
 }
+
+// ── KnowledgeStore ────────────────────────────────────────────────────────────
+
+/// Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
+/// but lives in `lumen-core` so the trait can be defined without a dependency
+/// on `lumen-knowledge`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnowledgeHistoryHit {
+    /// Row-id in the FTS index; matches `lumen_storage::history::HistoryEntry.id`.
+    pub rowid: i64,
+    /// Page URL.
+    pub url: String,
+    /// Page title at indexing time.
+    pub title: String,
+    /// BM25 snippet from the extracted text, markdown-bold `**word**` around
+    /// matches, up to ~32 tokens, ellipsis-truncated.
+    pub snippet: String,
+    /// BM25 score; lower value = more relevant (FTS5 negated convention).
+    pub score: f64,
+}
+
+/// Result of a full-text notes search.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnowledgeNoteHit {
+    /// Note id.
+    pub id: i64,
+    /// Page URL the note is anchored to.
+    pub url: String,
+    /// Highlighted text selection.
+    pub selection: String,
+    /// User comment.
+    pub comment: String,
+    /// BM25 snippet.
+    pub snippet: String,
+    /// BM25 score; lower = more relevant.
+    pub score: f64,
+}
+
+/// Result of a full-text read-later search.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnowledgeReadLaterHit {
+    /// Entry id.
+    pub id: i64,
+    /// Saved page URL.
+    pub url: String,
+    /// Saved page title.
+    pub title: String,
+    /// BM25 snippet from the extracted text.
+    pub snippet: String,
+    /// BM25 score; lower = more relevant.
+    pub score: f64,
+}
+
+/// Result of a live open-tabs search.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnowledgeTabHit {
+    /// Shell tab identifier (live, not persisted).
+    pub tab_id: i64,
+    /// Current URL of the tab.
+    pub url: String,
+    /// Current title of the tab.
+    pub title: String,
+    /// BM25 snippet from the tab's extracted text.
+    pub snippet: String,
+    /// BM25 score; lower = more relevant.
+    pub score: f64,
+}
+
+/// Unified knowledge-store interface covering the §12 feature set:
+/// history FTS (§12.1), notes (§12.2), read-later (§12.3), and live
+/// open-tabs search (§12.4).
+///
+/// Designed as a replaceable backend: current implementation uses SQLite
+/// FTS5; Phase 3+ target is tantivy (pure-Rust, see §5 dependency table).
+/// Shell, omnibox, and JS bindings depend only on this trait — they never
+/// import `lumen-knowledge` types directly.
+pub trait KnowledgeStore: Send + Sync {
+    // ── History FTS (§12.1) ───────────────────────────────────────────────
+
+    /// Add or update a history page in the FTS index. `rowid` must equal the
+    /// corresponding `lumen_storage::history::HistoryEntry.id`. If an entry
+    /// with the same rowid already exists it is replaced (DELETE + INSERT).
+    ///
+    /// `text` is the readability-extracted plain text from the page body.
+    /// May be empty when the page has not been processed yet.
+    fn index_history(&self, rowid: i64, url: &str, title: &str, text: &str) -> Result<()>;
+
+    /// Remove a page from the FTS history index. No-op if the rowid is absent.
+    fn unindex_history(&self, rowid: i64) -> Result<()>;
+
+    /// Full-text search over indexed history pages, ranked by BM25 relevance.
+    ///
+    /// `query` uses FTS5 syntax: implicit AND for multiple words, `OR`, quoted
+    /// phrases, `^prefix`, etc. Returns at most `limit` results.
+    fn search_history(&self, query: &str, limit: i64) -> Result<Vec<KnowledgeHistoryHit>>;
+
+    // ── Notes (§12.2) ─────────────────────────────────────────────────────
+
+    /// Add a new note. Returns the new note's id.
+    ///
+    /// `selection` — highlighted text from the page; `context` — surrounding
+    /// paragraph; `comment` — user annotation; `created_at` — Unix timestamp.
+    fn add_note(
+        &self,
+        url: &str,
+        selection: &str,
+        context: &str,
+        comment: &str,
+        created_at: i64,
+    ) -> Result<i64>;
+
+    /// Delete a note by id.
+    fn delete_note(&self, id: i64) -> Result<()>;
+
+    /// Full-text search over notes (selection + comment), ranked by BM25.
+    fn search_notes(&self, query: &str, limit: i64) -> Result<Vec<KnowledgeNoteHit>>;
+
+    // ── Read-later (§12.3) ────────────────────────────────────────────────
+
+    /// Save or update a read-later entry. Returns its id. `html_snapshot` is
+    /// the full page HTML BLOB for offline rendering; `text` is the
+    /// readability extract that goes into the FTS index.
+    fn save_read_later(
+        &self,
+        url: &str,
+        title: &str,
+        html_snapshot: &[u8],
+        text: &str,
+        tags: &[String],
+        saved_at: i64,
+    ) -> Result<i64>;
+
+    /// Full-text search over read-later entries (title + text), ranked by BM25.
+    fn search_read_later(&self, query: &str, limit: i64) -> Result<Vec<KnowledgeReadLaterHit>>;
+
+    // ── Open tabs (§12.4) ─────────────────────────────────────────────────
+
+    /// Add or update a live open tab in the in-memory FTS index.
+    ///
+    /// `tab_id` is the shell's live tab identifier (not persisted). Calling
+    /// this with the same `tab_id` replaces the previous entry (navigation).
+    fn index_tab(&self, tab_id: i64, url: &str, title: &str, text: &str) -> Result<()>;
+
+    /// Remove a tab from the live index (e.g. on tab close). No-op if absent.
+    fn remove_tab(&self, tab_id: i64) -> Result<()>;
+
+    /// Full-text search over currently open tabs, ranked by BM25.
+    fn search_tabs(&self, query: &str, limit: i64) -> Result<Vec<KnowledgeTabHit>>;
+}
+
+#[cfg(test)]
+mod knowledge_store_tests {
+    use super::{KnowledgeStore, Result};
+
+    /// Verify that `KnowledgeStore` is object-safe (can be used as `dyn`).
+    fn _assert_object_safe(_: &dyn KnowledgeStore) {}
+
+    struct NullStore;
+
+    impl KnowledgeStore for NullStore {
+        fn index_history(&self, _: i64, _: &str, _: &str, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn unindex_history(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn search_history(&self, _: &str, _: i64) -> Result<Vec<super::KnowledgeHistoryHit>> {
+            Ok(vec![])
+        }
+        fn add_note(&self, _: &str, _: &str, _: &str, _: &str, _: i64) -> Result<i64> {
+            Ok(0)
+        }
+        fn delete_note(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn search_notes(&self, _: &str, _: i64) -> Result<Vec<super::KnowledgeNoteHit>> {
+            Ok(vec![])
+        }
+        fn save_read_later(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[u8],
+            _: &str,
+            _: &[String],
+            _: i64,
+        ) -> Result<i64> {
+            Ok(0)
+        }
+        fn search_read_later(&self, _: &str, _: i64) -> Result<Vec<super::KnowledgeReadLaterHit>> {
+            Ok(vec![])
+        }
+        fn index_tab(&self, _: i64, _: &str, _: &str, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn remove_tab(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn search_tabs(&self, _: &str, _: i64) -> Result<Vec<super::KnowledgeTabHit>> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn null_store_is_object_safe() {
+        let s: Box<dyn KnowledgeStore> = Box::new(NullStore);
+        assert!(s.search_history("x", 10).unwrap().is_empty());
+        assert!(s.search_notes("x", 10).unwrap().is_empty());
+        assert!(s.search_read_later("x", 10).unwrap().is_empty());
+        assert!(s.search_tabs("x", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn null_store_index_unindex_noop() {
+        let s = NullStore;
+        s.index_history(1, "https://a/", "t", "text").unwrap();
+        s.unindex_history(1).unwrap();
+        s.index_tab(1, "https://a/", "t", "text").unwrap();
+        s.remove_tab(1).unwrap();
+    }
+
+    #[test]
+    fn null_store_add_delete_note_noop() {
+        let s = NullStore;
+        let id = s.add_note("https://a/", "sel", "ctx", "cmt", 100).unwrap();
+        assert_eq!(id, 0);
+        s.delete_note(id).unwrap();
+    }
+}

@@ -413,7 +413,9 @@ Dependency graph and crate scope — in [lumen-plan.md](lumen-plan.md). Directio
 
 **Sprint 0 stubs:** `UnicodeProvider`, `IdnaProvider`, `PublicSuffixList`, `ContentDecoder` (`UnsupportedContentDecoder`), `FontFormat`, `SpellChecker`, `HyphenationProvider`.
 
-**Planned:** `WindowingBackend`, `RenderBackend`, `TlsBackend`, `KnowledgeStore`, `AiBackend`.
+**Defined (Phase 2):** `KnowledgeStore` (`core/src/ext.rs`, impl `lumen-knowledge::DefaultKnowledgeStore` — §12.1–12.4; shell @notes omnibox wiring).
+
+**Planned:** `WindowingBackend`, `RenderBackend`, `TlsBackend`, `AiBackend`.
 
 ---
 
