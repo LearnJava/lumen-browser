@@ -25,6 +25,11 @@ BUG-098 (mix-blend-mode 14.12%), BUG-078 (object-fit 12.68%).
 
 При падении `cargo test -p lumen-paint` или `cargo test -p lumen-layout` — исправить немедленно.
 
+**BUG-118 (snapshot_cpu эталоны устарели):** 12 CPU-snapshot эталонов не совпадают с текущим рендером.
+Эталоны сохранены до BUG-117/107/106/096/087 фиксов → layout/paint изменился.
+Проверить визуально, затем регенерировать: `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render`
+Страницы: 39, 40, 41, 30, 46, 28, 29, 32, 27, 34, 24, 54.
+
 ### 3. Shell wiring
 
 _(нет — handoff-задачи перераспределены на P1/P2)_
