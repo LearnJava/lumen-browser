@@ -5,11 +5,12 @@
 //! * computed accessible name (aria-label → labelledby → alt → text content → title)
 //! * ARIA state flags (checked, disabled, expanded, hidden, selected, …)
 //!
-//! Platform bridges (UIA / AT-SPI / NSAccessibility) are P3's job; this crate
-//! only builds the language-neutral tree that bridges will consume.
+//! Platform bridges live in the [`platform`] module:
+//! UIA (Windows), NSAccessibility (macOS), AT-SPI2 (Linux).
 
 mod names;
 mod roles;
+pub mod platform;
 
 pub use names::{compute_description, compute_name};
 pub use roles::{implicit_role, AXRole};

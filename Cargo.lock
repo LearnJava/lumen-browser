@@ -1933,6 +1933,7 @@ dependencies = [
 name = "lumen-shell"
 version = "0.0.1"
 dependencies = [
+ "lumen-a11y",
  "lumen-core",
  "lumen-css-parser",
  "lumen-devtools",

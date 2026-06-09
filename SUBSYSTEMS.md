@@ -7,6 +7,7 @@ Updated with every plan-item commit. For ground truth — `git log --oneline` + 
 
 | Crate | Status | File |
 |---|---|---|
+| lumen-a11y | 🟡 AXTree + platform bridges Phase 0 | [subsystems/a11y.md](subsystems/a11y.md) |
 | lumen-core | ✅ ext traits + Punycode + URL + hash | [subsystems/core.md](subsystems/core.md) |
 | lumen-dom | ✅ arena DOM + InputType + DocumentMode | [subsystems/dom.md](subsystems/dom.md) |
 | lumen-html-parser | ✅ FSM tokenizer + tree builder | [subsystems/html-parser.md](subsystems/html-parser.md) |

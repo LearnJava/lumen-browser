@@ -6,8 +6,7 @@
 
 ## In progress
 
-O-5: Platform a11y bridges  branch: p1-o5-a11y-bridges
-Next step: cargo check + clippy + tests → commit  a11y/src/platform/mod.rs:1
+_(нет)_
 
 ---
 
@@ -28,7 +27,7 @@ Next step: cargo check + clippy + tests → commit  a11y/src/platform/mod.rs:1
 | ~~O-2~~ | ~~**6.9: Performance-observer JS binding**~~ — **выполнено** | S | `lumen-js` |
 | ~~O-3~~ | ~~**7D.1: Passkeys CTAP2-over-USB**~~ — **выполнено** | M | `lumen-network` |
 | ~~O-4~~ | ~~**10L: JS heap GC tuning per tier**~~ — **выполнено** | S | `lumen-js` |
-| O-5 | **6+ (a11y bridges): Platform a11y bridges** — macOS Accessibility API, Windows UI Automation, Linux AT-SPI2; P1 владеет `lumen-a11y`. `a11y/src/platform/` | M | `lumen-a11y`, `lumen-shell` |
+| ~~O-5~~ | ~~**6+ (a11y bridges): Platform a11y bridges**~~ — **выполнено** | M | `lumen-a11y`, `lumen-shell` |
 | O-6 | **KnowledgeStore** — FTS / read-later / notes (§12.1); базируется на уже готовом `HistoryFts`. `crates/knowledge/` | L | `lumen-knowledge`, `lumen-storage`, `lumen-shell` |
 | O-7 | **10M: `samples/heavy.html`** — Habr-style тестовая страница (50+ элементов, много текста, изображения) для T0-heavy бенчей. `samples/heavy.html` | XS | — |
 | O-8 | **6+ (forms): Native form pickers + validation tooltip UI** — date/color picker (OS-диалог), validation tooltip рядом с полем, интеграция с `FormValidation` JS API. `shell/src/forms/pickers.rs` | M | `lumen-shell`, `lumen-js` |
@@ -102,6 +101,7 @@ Next step: cargo check + clippy + tests → commit  a11y/src/platform/mod.rs:1
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | O-5: 6+ platform a11y bridges | lumen-a11y: новый модуль platform/ — PlatformBridge trait, NullBridge, platform_bridge() factory. WinUiaBridge (Phase 0: хранит последнее AXTree; Phase 1: UIA COM IRawElementProviderSimple). MacA11yBridge (Phase 0; Phase 1: NSAccessibility + NSAccessibilityPostNotification). AtSpiBridge (Phase 0; Phase 1: AT-SPI2 D-Bus via atspi+zbus). lumen-shell: lumen-a11y добавлен в зависимости; Lumen::platform_bridge поле; update_platform_ax_tree() вызывается после apply_loaded_page и restore_page_snapshot; focused_node_changed() при смене фокуса. 6 unit-тестов. Clippy чист. |
 | 2026-06-09 | O-4: 10L JS heap GC tuning per tier | lumen-js: новый модуль gc_policy.rs — GcLevel enum (Soft/Moderate/Aggressive), константы GC_THRESHOLD_ACTIVE=1MiB / GC_THRESHOLD_IDLE=64KiB. QuickJsRuntime::run_gc_pass(GcLevel): Soft сбрасывает threshold, Moderate запускает один GC, Aggressive GC + понижает threshold. PersistentJs::run_gc_pass(u8) + QuickPersistentJs impl. Shell wiring: switch_tab — moderate GC на уходящей вкладке (T0→T1), soft GC при восстановлении (T*→T0); tick_lifecycle — moderate/aggressive по tier-переходам из lifecycle manager. 5 unit-тестов. lumen-js: clippy чист, 1626 тестов (+5 vs 1621). |
 | 2026-06-09 | O-3: 7D.1 CTAP2-over-USB roaming authenticator transport | lumen-network: новый модуль ctap2.rs — полный стек CTAP2-over-HID: HidDevice trait, CtapHidChannel (CTAPHID_INIT handshake + packet fragmentation/reassembly + KEEPALIVE skip), CBOR encoder/decoder (uint/bstr/tstr/map), CTAP2 authenticatorMakeCredential + authenticatorGetAssertion builders/parsers, CtapRoamingTransport (CredentialProvider, Phase 0: probe_usb_fido_devices() → empty), CompositeCredentialProvider (roaming → software fallback chain), MockHidDevice (scripted response queue). 15 unit-тестов. Никаких новых зависимостей. Phase 1: платформенный HID backend (Windows HidD_*/SetupDi, Linux hidraw, macOS IOHIDDevice). |
 | 2026-06-09 | O-2: 6.9 PerformanceObserver generic callback delivery | lumen-js: _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, detail_json) — generic JS биндинг для доставки любого PerformanceEntry типа с опциональным JSON-мержем. BrowserSession trait: +deliver_perf_entry() с default no-op. InProcessSession реализует через JS eval. +5 тестов. Попутно: удалён пустой test-блок в navigation_api.rs (pre-existing clippy ошибки). |
