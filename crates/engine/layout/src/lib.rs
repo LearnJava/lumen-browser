@@ -4761,6 +4761,72 @@ mod tests {
         }
     }
 
+    /// UA stylesheet: `<h1>`–`<h6>` получают увеличенный font-size и
+    /// вертикальные margin (HTML Rendering §15.3.3). Регрессия BUG-106:
+    /// без этих дефолтов заголовки рендерились 16px без отступов, из-за чего
+    /// таблицы (TEST-64) уезжали вверх относительно Edge.
+    #[test]
+    fn headings_get_ua_font_size_and_margins() {
+        let root_fs = ComputedStyle::root().font_size;
+        // (tag, font-size factor, vertical margin em)
+        let cases = [
+            ("h1", 2.0_f32, 0.67_f32),
+            ("h2", 1.5, 0.83),
+            ("h3", 1.17, 1.0),
+            ("h4", 1.0, 1.33),
+            ("h5", 0.83, 1.67),
+            ("h6", 0.67, 2.33),
+        ];
+        for (tag, size_factor, margin_em) in cases {
+            let html = format!("<{tag}>x</{tag}>");
+            let doc = lumen_html_parser::parse(&html);
+            let id = doc.get(doc.body().unwrap()).children[0];
+            let style = crate::style::compute_style(
+                &doc,
+                id,
+                &lumen_css_parser::Stylesheet::default(),
+                &ComputedStyle::root(),
+                Size::new(800.0, 600.0),
+                false,
+            );
+            assert!(
+                (style.font_size - root_fs * size_factor).abs() < 0.01,
+                "{tag} font-size: expected {}, got {}",
+                root_fs * size_factor,
+                style.font_size,
+            );
+            assert_eq!(
+                style.margin_top,
+                LengthOrAuto::Length(Length::Em(margin_em)),
+                "{tag} margin-top",
+            );
+            assert_eq!(
+                style.margin_bottom,
+                LengthOrAuto::Length(Length::Em(margin_em)),
+                "{tag} margin-bottom",
+            );
+        }
+    }
+
+    /// UA-дефолты заголовка перекрываются author-CSS (font-size через
+    /// pre-pass, margin через main-pass каскада).
+    #[test]
+    fn heading_ua_defaults_overridden_by_author_css() {
+        let doc = lumen_html_parser::parse("<h3>x</h3>");
+        let id = doc.get(doc.body().unwrap()).children[0];
+        let ss = lumen_css_parser::parse("h3 { font-size: 30px; margin-top: 5px; }");
+        let style = crate::style::compute_style(
+            &doc,
+            id,
+            &ss,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert!((style.font_size - 30.0).abs() < 0.01, "author font-size wins");
+        assert_eq!(style.margin_top, LengthOrAuto::Length(Length::Px(5.0)));
+    }
+
     /// CSS `font-weight: bold` → 700.
     #[test]
     fn font_weight_bold_keyword() {

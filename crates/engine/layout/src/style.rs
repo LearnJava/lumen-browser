@@ -4842,6 +4842,9 @@ pub fn compute_style(
     if let Some(va) = ua_vertical_align(doc, node) {
         style.vertical_align = va;
     }
+    // UA stylesheet: <h1>–<h6> → font-size + vertical margins. HTML Rendering §15.3.3.
+    // Set font-size here (before the author font-size pre-pass) so author CSS overrides it.
+    apply_ua_heading_style(doc, node, inherited, &mut style);
     apply_ua_hr_style(doc, node, &mut style);
     // UA stylesheet: form controls — display, intrinsic dimensions, border,
     // background, and foreground color. HTML5 §15.5. Author CSS поверх перекроет.
@@ -7885,6 +7888,38 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     style.margin_bottom = LengthOrAuto::Length(Length::Em(0.5));
     style.margin_left = LengthOrAuto::Auto;
     style.margin_right = LengthOrAuto::Auto;
+}
+
+/// UA stylesheet для `<h1>`–`<h6>` (HTML Rendering §15.3.3 «Sections and headings»).
+///
+/// Браузеры задают заголовкам увеличенный `font-size` (em относительно
+/// родителя) и вертикальные `margin` (em относительно собственного
+/// computed font-size). `font-weight: bold` уже выставляется `ua_font_weight`.
+///
+/// `font_size` пишется как computed px (`inherited.font_size * factor`) — так же,
+/// как `ua_font_size_factor` для `<small>`/`<sub>`/`<sup>`; author `font-size`
+/// перекроет его в font-size pre-pass. Маргины задаются как `Em`, поэтому
+/// резолвятся против финального font-size заголовка на этапе layout; author CSS
+/// перекроет их в main-pass каскада.
+///
+/// Значения (font-size factor, vertical margin em):
+/// h1 2.0/0.67, h2 1.5/0.83, h3 1.17/1.0, h4 1.0/1.33, h5 0.83/1.67, h6 0.67/2.33.
+fn apply_ua_heading_style(doc: &Document, node: NodeId, inherited: &ComputedStyle, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let (size_factor, margin_em) = match name.local.as_str() {
+        "h1" => (2.0, 0.67),
+        "h2" => (1.5, 0.83),
+        "h3" => (1.17, 1.0),
+        "h4" => (1.0, 1.33),
+        "h5" => (0.83, 1.67),
+        "h6" => (0.67, 2.33),
+        _ => return,
+    };
+    style.font_size = inherited.font_size * size_factor;
+    style.margin_top = LengthOrAuto::Length(Length::Em(margin_em));
+    style.margin_bottom = LengthOrAuto::Length(Length::Em(margin_em));
 }
 
 /// UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»).
