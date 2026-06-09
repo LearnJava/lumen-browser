@@ -6,8 +6,7 @@
 
 ## In progress
 
-BUG-116: auto table column widths — CSS 2.1 §17.5.2 content-based sizing  branch: p3-bug116-table-col-widths
-Next step: CPU snapshot regeneration + merge  crates/engine/layout/src/box_tree.rs:4670
+(none)
 
 ## Next
 
@@ -17,7 +16,7 @@ Next step: CPU snapshot regeneration + merge  crates/engine/layout/src/box_tree.
 
 Много OPEN-багов из графических тестов TEST-58…70 (`grep "OPEN" BUGS.md`).
 Бери по убыванию отклонения, исключая CSS-свойства (домен P4) и Phase 2 фичи.
-Текущий высокий приоритет в домене layout/paint: BUG-106 (table col/rowspan 24.85%),
+Текущий высокий приоритет в домене layout/paint: BUG-098 (mix-blend-mode 14.12%),
 BUG-098 (mix-blend-mode 14.12%), BUG-078 (object-fit 12.68%).
 
 Следить за новыми: `grep "OPEN" BUGS.md`.
