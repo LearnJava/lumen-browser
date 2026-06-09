@@ -89,6 +89,7 @@ pub mod gc_policy;
 pub mod svg;
 pub mod file_input;
 pub mod tc39_proposals;
+pub mod window_management;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -969,6 +970,14 @@ impl QuickJsRuntime {
             // Must come after SVG bindings (svg install already after dom_parser).
             if let Err(e) = file_input::install_file_input_bindings(&ctx) {
                 eprintln!("File API init failed: {}", e);
+            }
+
+            // W3C Multi-Screen Window Placement Level 1 — screen.isExtended,
+            // navigator.getScreenDetails() → Promise<ScreenDetails>, ScreenDetailed class.
+            // Phase 0: single-screen stub (isExtended=false, one ScreenDetailed mirroring screen).
+            // Phase 1: _lumen_get_screen_details() native binding for OS multi-screen enumeration.
+            if let Err(e) = window_management::install_window_management_api(&ctx) {
+                eprintln!("Window Management API init failed: {}", e);
             }
 
             Ok(())
