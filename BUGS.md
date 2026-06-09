@@ -98,7 +98,7 @@ BUG-082 | OPEN   | paint          | css-filter 33% deviation — TEST-30: 33.07%
 BUG-083 | OPEN   | layout/paint   | list-markers residual 3.4% deviation — TEST-32: 3.40%; marker sub-pixel positioning or size mismatch | crates/engine/layout/src/box_tree.rs
 BUG-084 | OPEN   | paint          | border-radius residual 1.5% deviation after BUG-036 fix — TEST-36: 1.50%; AA on %-based corners | crates/engine/paint/src/cpu_raster.rs
 BUG-085 | OPEN   | paint          | linear/radial gradient 12% deviation — TEST-39: 12.05%; stop interpolation or AA mismatch with Edge | crates/engine/paint/src/display_list.rs
-BUG-086 | OPEN   | paint          | conic-gradient 57% deviation — TEST-40: 56.53%; DrawConicGradient rendering error | crates/engine/paint/src/display_list.rs
+BUG-086 | FIXED 2026-06-09 | paint | conic-gradient: femtovg triangle-fan не обрезался по box (гигантские круги) + игнорировал repeating; TEST-40 56.53%→15.92% (остаток — AA/тесселяция, класс BUG-085) | crates/engine/paint/src/backends/femtovg_backend.rs
 BUG-087 | OPEN   | paint/layout   | multiple CSS background layers not rendered — TEST-45: 17.29%; CSS Backgrounds L3 §3 layer stack | crates/engine/paint/src/renderer.rs
 BUG-088 | OPEN   | css-parser/layout | individual CSS transform properties (translate/rotate/scale) not applied — TEST-46: 9.57%; CSS Transforms L2 § | crates/engine/layout/src/style.rs
 BUG-089 | OPEN   | paint          | SVG basic shapes not rendered (rect/circle/ellipse/line) — TEST-47: 21.71%; Phase 1 | crates/engine/paint/src/display_list.rs
@@ -175,7 +175,7 @@ TEST-36: FAIL  1.50%   border-radius           ← BUG-084
 TEST-37: PASS  0.00%   float-clear             ← FIXED (был Phase 1)
 TEST-38: PASS  0.00%   z-index
 TEST-39: FAIL 12.05%   gradients               ← BUG-085
-TEST-40: FAIL 56.53%   conic-gradients         ← BUG-086
+TEST-40: FAIL 15.92%   conic-gradients         ← BUG-086 FIXED (геометрия+repeating); остаток AA класс BUG-085
 TEST-41: PASS  0.00%   table
 TEST-42: PASS  0.27%   position-sticky
 TEST-43: PASS  0.00%   intrinsic-sizing
