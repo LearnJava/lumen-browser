@@ -163,10 +163,10 @@ impl RuleIndex {
             set.extend(v.iter().copied());
         }
         // id bucket
-        if let Some(id_str) = id {
-            if let Some(v) = self.by_id.get(id_str) {
-                set.extend(v.iter().copied());
-            }
+        if let Some(id_str) = id
+            && let Some(v) = self.by_id.get(id_str)
+        {
+            set.extend(v.iter().copied());
         }
         // class buckets (one per class token)
         for &cls in classes {
