@@ -3576,6 +3576,101 @@ function _lumen_make_element(nid) {
             }
             return c;
         },
+        // ── ChildNode mixin (DOM LS §4.2.6) ─────────────────────────────────────
+        // Removes this element from its parent.
+        remove: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid !== null) {
+                _lumen_remove_child(pid, nid);
+                _lumen_ce_maybe_disconnected(this);
+            }
+        },
+        // Inserts nodes immediately before this element.
+        before: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return;
+            for (var _bi = 0; _bi < arguments.length; _bi++) {
+                var _bn = arguments[_bi];
+                if (typeof _bn === 'string') {
+                    var _btn = _lumen_create_text_node(_bn);
+                    _lumen_insert_before(pid, _btn, nid);
+                } else if (_bn && _bn.__nid__ !== undefined) {
+                    _lumen_insert_before(pid, _bn.__nid__, nid);
+                }
+            }
+        },
+        // Inserts nodes immediately after this element.
+        after: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return;
+            var ch = _lumen_get_children(pid);
+            var idx = ch.indexOf(nid);
+            var nextSib = (idx >= 0 && idx + 1 < ch.length) ? ch[idx + 1] : null;
+            for (var _ai = 0; _ai < arguments.length; _ai++) {
+                var _an = arguments[_ai];
+                if (typeof _an === 'string') {
+                    var _atn = _lumen_create_text_node(_an);
+                    if (nextSib !== null) { _lumen_insert_before(pid, _atn, nextSib); }
+                    else { _lumen_append_child(pid, _atn); }
+                } else if (_an && _an.__nid__ !== undefined) {
+                    if (nextSib !== null) { _lumen_insert_before(pid, _an.__nid__, nextSib); }
+                    else { _lumen_append_child(pid, _an.__nid__); }
+                }
+            }
+        },
+        // Replaces this element with the given nodes/strings.
+        replaceWith: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return;
+            var ch = _lumen_get_children(pid);
+            var idx = ch.indexOf(nid);
+            var nextSib = (idx >= 0 && idx + 1 < ch.length) ? ch[idx + 1] : null;
+            _lumen_remove_child(pid, nid);
+            _lumen_ce_maybe_disconnected(this);
+            for (var _ri = 0; _ri < arguments.length; _ri++) {
+                var _rn = arguments[_ri];
+                if (typeof _rn === 'string') {
+                    var _rtn = _lumen_create_text_node(_rn);
+                    if (nextSib !== null) { _lumen_insert_before(pid, _rtn, nextSib); }
+                    else { _lumen_append_child(pid, _rtn); }
+                } else if (_rn && _rn.__nid__ !== undefined) {
+                    if (nextSib !== null) { _lumen_insert_before(pid, _rn.__nid__, nextSib); }
+                    else { _lumen_append_child(pid, _rn.__nid__); }
+                }
+            }
+        },
+        // ── ParentNode extensions (DOM LS §4.2.5) ───────────────────────────────
+        // Inserts nodes before the first child of this element.
+        prepend: function() {
+            var ch = _lumen_get_children(nid);
+            var firstChild = ch.length > 0 ? ch[0] : null;
+            for (var _pi = 0; _pi < arguments.length; _pi++) {
+                var _pn = arguments[_pi];
+                if (typeof _pn === 'string') {
+                    var _ptn = _lumen_create_text_node(_pn);
+                    if (firstChild !== null) { _lumen_insert_before(nid, _ptn, firstChild); }
+                    else { _lumen_append_child(nid, _ptn); }
+                } else if (_pn && _pn.__nid__ !== undefined) {
+                    if (firstChild !== null) { _lumen_insert_before(nid, _pn.__nid__, firstChild); }
+                    else { _lumen_append_child(nid, _pn.__nid__); }
+                }
+            }
+        },
+        // Replaces all children of this element.
+        replaceChildren: function() {
+            var old = _lumen_get_children(nid).slice();
+            for (var _rci = 0; _rci < old.length; _rci++) {
+                _lumen_remove_child(nid, old[_rci]);
+            }
+            for (var _rni = 0; _rni < arguments.length; _rni++) {
+                var _rcn = arguments[_rni];
+                if (typeof _rcn === 'string') {
+                    _lumen_append_child(nid, _lumen_create_text_node(_rcn));
+                } else if (_rcn && _rcn.__nid__ !== undefined) {
+                    _lumen_append_child(nid, _rcn.__nid__);
+                }
+            }
+        },
         // DOM LS §4.4: cloneNode(deep) — shallow or deep copy of this element.
         cloneNode:       function(deep) {
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
@@ -4298,6 +4393,25 @@ var document = {
     },
     hasUnpartitionedCookieAccess: function() {
         return Promise.resolve(true);
+    },
+    // DOM LS §4.6: adoptNode — moves node into this document (Phase 0: no-op, returns node).
+    adoptNode: function(node) { return node; },
+    // DOM LS §4.7: importNode — returns a clone of node for use in this document.
+    importNode: function(node, deep) {
+        if (!node) return null;
+        if (node.__nid__ !== undefined) {
+            var clone_nid = _lumen_clone_subtree(node.__nid__, deep ? 1 : 0);
+            return _lumen_make_element(clone_nid);
+        }
+        return null;
+    },
+    // DOM LS §4.5: createTreeWalker(root, whatToShow, filter) — returns a TreeWalker.
+    createTreeWalker: function(root, whatToShow, filter) {
+        return new _TreeWalker(root, whatToShow !== undefined ? whatToShow : 0xFFFFFFFF, filter || null);
+    },
+    // DOM LS §4.4: createNodeIterator(root, whatToShow, filter) — returns a NodeIterator.
+    createNodeIterator: function(root, whatToShow, filter) {
+        return new _NodeIterator(root, whatToShow !== undefined ? whatToShow : 0xFFFFFFFF, filter || null);
     },
 };
 
@@ -6688,6 +6802,272 @@ function _lumen_deliver_intersection_observers() {
     }
 }
 
+// ── TreeWalker / NodeIterator / NodeFilter (DOM LS §4.4–4.5) ─────────────────
+// NodeFilter constants (DOM LS §4.3).
+var NodeFilter = {
+    FILTER_ACCEPT:  1,
+    FILTER_REJECT:  2,
+    FILTER_SKIP:    3,
+    SHOW_ALL:            0xFFFFFFFF,
+    SHOW_ELEMENT:        0x1,
+    SHOW_TEXT:           0x4,
+    SHOW_CDATA_SECTION:  0x8,
+    SHOW_COMMENT:        0x80,
+    SHOW_DOCUMENT:       0x100,
+    SHOW_DOCUMENT_TYPE:  0x200,
+    SHOW_DOCUMENT_FRAGMENT: 0x400,
+};
+
+// Returns NodeFilter.FILTER_ACCEPT / SKIP / REJECT for a node nid given
+// whatToShow bitmask and an optional filter callback or NodeFilter object.
+function _nf_accepts(nid, whatToShow, filter) {
+    // whatToShow bitmask check
+    var nt = _lumen_is_text_node(nid) ? 3 : 1; // 1=element, 3=text
+    var bit = (nt === 3) ? NodeFilter.SHOW_TEXT : NodeFilter.SHOW_ELEMENT;
+    if (!(whatToShow & bit)) return NodeFilter.FILTER_SKIP;
+    if (!filter) return NodeFilter.FILTER_ACCEPT;
+    var el = _lumen_make_element(nid);
+    var result;
+    if (typeof filter === 'function') {
+        try { result = filter(el); } catch(e) { result = NodeFilter.FILTER_REJECT; }
+    } else if (filter && typeof filter.acceptNode === 'function') {
+        try { result = filter.acceptNode(el); } catch(e) { result = NodeFilter.FILTER_REJECT; }
+    } else {
+        result = NodeFilter.FILTER_ACCEPT;
+    }
+    return result;
+}
+
+// Collects all nids in subtree of root in document order (pre-order, depth-first).
+function _tw_subtree(root_nid) {
+    var result = [];
+    function visit(n) {
+        result.push(n);
+        var ch = _lumen_get_children(n);
+        for (var i = 0; i < ch.length; i++) visit(ch[i]);
+    }
+    visit(root_nid);
+    return result;
+}
+
+// ── TreeWalker (DOM LS §4.5) ─────────────────────────────────────────────────
+function _TreeWalker(root, whatToShow, filter) {
+    this.root        = root;
+    this.whatToShow  = whatToShow;
+    this.filter      = filter;
+    this.currentNode = root;
+}
+
+_TreeWalker.prototype._root_nid = function() {
+    return this.root && this.root.__nid__ !== undefined ? this.root.__nid__ : null;
+};
+
+_TreeWalker.prototype._cur_nid = function() {
+    return this.currentNode && this.currentNode.__nid__ !== undefined ? this.currentNode.__nid__ : null;
+};
+
+// Returns the parent node within the root subtree, or null.
+_TreeWalker.prototype.parentNode = function() {
+    var cur = this._cur_nid();
+    var root = this._root_nid();
+    if (cur === null || cur === root) return null;
+    var p = _lumen_u2n(_lumen_get_parent(cur));
+    while (p !== null) {
+        if (p === root) { break; }
+        var pp = _lumen_u2n(_lumen_get_parent(p));
+        if (pp === null) { p = null; break; }
+        p = pp;
+    }
+    if (p === null) return null;
+    // Walk from root towards cur; find first ancestor that is accepted
+    // Actually per spec: parentNode returns the nearest accepted ancestor in root subtree.
+    var candidate = _lumen_u2n(_lumen_get_parent(cur));
+    while (candidate !== null && candidate !== root) {
+        var r = _nf_accepts(candidate, this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this.currentNode = _lumen_make_element(candidate);
+            return this.currentNode;
+        }
+        candidate = _lumen_u2n(_lumen_get_parent(candidate));
+    }
+    // Check root itself
+    if (root !== null && cur !== root) {
+        var rr = _nf_accepts(root, this.whatToShow, this.filter);
+        if (rr === NodeFilter.FILTER_ACCEPT) {
+            this.currentNode = this.root;
+            return this.currentNode;
+        }
+    }
+    return null;
+};
+
+// Returns the first child of currentNode that passes the filter.
+_TreeWalker.prototype.firstChild = function() {
+    var children = _lumen_get_children(this._cur_nid() || 0);
+    for (var i = 0; i < children.length; i++) {
+        var r = _nf_accepts(children[i], this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this.currentNode = _lumen_make_element(children[i]);
+            return this.currentNode;
+        }
+        if (r !== NodeFilter.FILTER_REJECT) {
+            // SKIP — recurse into its children (DOM spec §4.5.5)
+            var saved = this.currentNode;
+            this.currentNode = _lumen_make_element(children[i]);
+            var found = this.firstChild();
+            if (found) return found;
+            this.currentNode = saved;
+        }
+    }
+    return null;
+};
+
+// Returns the last child of currentNode that passes the filter.
+_TreeWalker.prototype.lastChild = function() {
+    var children = _lumen_get_children(this._cur_nid() || 0);
+    for (var i = children.length - 1; i >= 0; i--) {
+        var r = _nf_accepts(children[i], this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this.currentNode = _lumen_make_element(children[i]);
+            return this.currentNode;
+        }
+        if (r !== NodeFilter.FILTER_REJECT) {
+            var saved = this.currentNode;
+            this.currentNode = _lumen_make_element(children[i]);
+            var found = this.lastChild();
+            if (found) return found;
+            this.currentNode = saved;
+        }
+    }
+    return null;
+};
+
+// Returns the previous sibling (in root subtree) of currentNode.
+_TreeWalker.prototype.previousSibling = function() {
+    var cur = this._cur_nid();
+    var root = this._root_nid();
+    if (cur === null || cur === root) return null;
+    var pid = _lumen_u2n(_lumen_get_parent(cur));
+    if (pid === null) return null;
+    var sibs = _lumen_get_children(pid);
+    var idx  = sibs.indexOf(cur);
+    for (var i = idx - 1; i >= 0; i--) {
+        var r = _nf_accepts(sibs[i], this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this.currentNode = _lumen_make_element(sibs[i]);
+            return this.currentNode;
+        }
+    }
+    return null;
+};
+
+// Returns the next sibling (in root subtree) of currentNode.
+_TreeWalker.prototype.nextSibling = function() {
+    var cur = this._cur_nid();
+    var root = this._root_nid();
+    if (cur === null || cur === root) return null;
+    var pid = _lumen_u2n(_lumen_get_parent(cur));
+    if (pid === null) return null;
+    var sibs = _lumen_get_children(pid);
+    var idx  = sibs.indexOf(cur);
+    for (var i = idx + 1; i < sibs.length; i++) {
+        var r = _nf_accepts(sibs[i], this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this.currentNode = _lumen_make_element(sibs[i]);
+            return this.currentNode;
+        }
+    }
+    return null;
+};
+
+// Returns the previous node in document order (depth-first pre-order) that passes filter.
+_TreeWalker.prototype.previousNode = function() {
+    var root = this._root_nid();
+    var cur  = this._cur_nid();
+    if (cur === null || cur === root) return null;
+    var all = _tw_subtree(root);
+    var idx = all.indexOf(cur);
+    for (var i = idx - 1; i >= 0; i--) {
+        var r = _nf_accepts(all[i], this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this.currentNode = _lumen_make_element(all[i]);
+            return this.currentNode;
+        }
+    }
+    return null;
+};
+
+// Returns the next node in document order (depth-first pre-order) that passes filter.
+_TreeWalker.prototype.nextNode = function() {
+    var root = this._root_nid();
+    var cur  = this._cur_nid();
+    if (root === null) return null;
+    var all = _tw_subtree(root);
+    var idx = cur !== null ? all.indexOf(cur) : -1;
+    for (var i = idx + 1; i < all.length; i++) {
+        var r = _nf_accepts(all[i], this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this.currentNode = _lumen_make_element(all[i]);
+            return this.currentNode;
+        }
+    }
+    return null;
+};
+
+// ── NodeIterator (DOM LS §4.4) ───────────────────────────────────────────────
+// Simplified: maintains a reference position as an index into the flat subtree.
+function _NodeIterator(root, whatToShow, filter) {
+    this.root        = root;
+    this.whatToShow  = whatToShow;
+    this.filter      = filter;
+    this._all        = null; // lazily built
+    this._pos        = -1;   // -1 = before root
+    this.referenceNode = root;
+    this.pointerBeforeReferenceNode = true;
+}
+
+_NodeIterator.prototype._ensure = function() {
+    if (this._all === null) {
+        var root_nid = this.root && this.root.__nid__ !== undefined ? this.root.__nid__ : null;
+        this._all = root_nid !== null ? _tw_subtree(root_nid) : [];
+    }
+};
+
+// Returns the next accepted node (forward traversal).
+_NodeIterator.prototype.nextNode = function() {
+    this._ensure();
+    for (var i = this._pos + 1; i < this._all.length; i++) {
+        var r = _nf_accepts(this._all[i], this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this._pos = i;
+            var el = _lumen_make_element(this._all[i]);
+            this.referenceNode = el;
+            this.pointerBeforeReferenceNode = false;
+            return el;
+        }
+    }
+    return null;
+};
+
+// Returns the previous accepted node (backward traversal).
+_NodeIterator.prototype.previousNode = function() {
+    this._ensure();
+    for (var i = this._pos - 1; i >= 0; i--) {
+        var r = _nf_accepts(this._all[i], this.whatToShow, this.filter);
+        if (r === NodeFilter.FILTER_ACCEPT) {
+            this._pos = i;
+            var el = _lumen_make_element(this._all[i]);
+            this.referenceNode = el;
+            this.pointerBeforeReferenceNode = true;
+            return el;
+        }
+    }
+    return null;
+};
+
+// No-op per DOM LS §4.4.6.
+_NodeIterator.prototype.detach = function() {};
+
 // ── window.matchMedia / MediaQueryList (CSS Media Queries L4 §4.2) ───────────
 // Pure-JS shim on top of the native binding `_lumen_match_media` (parses + matches
 // a media query against an ad-hoc MediaContext). The registry keeps strong refs
@@ -7735,6 +8115,9 @@ window.clearInterval         = clearInterval;
 window.MutationObserver      = MutationObserver;
 window.ResizeObserver        = ResizeObserver;
 window.IntersectionObserver  = IntersectionObserver;
+window.NodeFilter            = NodeFilter;
+window.TreeWalker            = _TreeWalker;
+window.NodeIterator          = _NodeIterator;
 window.PerformanceObserver   = PerformanceObserver;
 window.MediaQueryList        = MediaQueryList;
 window.MediaQueryListEvent   = MediaQueryListEvent;
@@ -13253,6 +13636,258 @@ mod tests {
         "#).unwrap();
         let intersecting = rt.eval("_io2_entry && _io2_entry.isIntersecting").unwrap();
         assert_eq!(intersecting, lumen_core::JsValue::Bool(false));
+    }
+
+    // ── ChildNode / ParentNode mixin tests ───────────────────────────────────
+
+    #[test]
+    fn element_remove_detaches_from_parent() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _container = document.createElement('div');
+            document.body.appendChild(_container);
+            var _div = document.createElement('span');
+            _container.appendChild(_div);
+            _div.remove();
+        "#).unwrap();
+        let count = rt.eval("_container.children.length").unwrap();
+        assert_eq!(count, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn element_before_inserts_node_before_target() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _cont = document.createElement('div');
+            document.body.appendChild(_cont);
+            var _a = document.createElement('span');
+            var _b = document.createElement('div');
+            _a.id = 'A'; _b.id = 'B';
+            _cont.appendChild(_b);
+            _b.before(_a);
+        "#).unwrap();
+        let first_id = rt.eval("_cont.children[0].id").unwrap();
+        assert_eq!(first_id, lumen_core::JsValue::String("A".into()));
+    }
+
+    #[test]
+    fn element_after_inserts_node_after_target() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _cont2 = document.createElement('div');
+            document.body.appendChild(_cont2);
+            var _x = document.createElement('span');
+            var _y = document.createElement('em');
+            _x.id = 'X'; _y.id = 'Y';
+            _cont2.appendChild(_x);
+            _x.after(_y);
+        "#).unwrap();
+        let second_id = rt.eval("_cont2.children[1].id").unwrap();
+        assert_eq!(second_id, lumen_core::JsValue::String("Y".into()));
+    }
+
+    #[test]
+    fn element_replace_with_swaps_element() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _cont3 = document.createElement('div');
+            document.body.appendChild(_cont3);
+            var _old = document.createElement('p');
+            var _new = document.createElement('section');
+            _old.id = 'OLD'; _new.id = 'NEW';
+            _cont3.appendChild(_old);
+            _old.replaceWith(_new);
+        "#).unwrap();
+        let tag = rt.eval("_cont3.children[0].id").unwrap();
+        assert_eq!(tag, lumen_core::JsValue::String("NEW".into()));
+    }
+
+    #[test]
+    fn element_prepend_inserts_before_first_child() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _pcont = document.createElement('div');
+            document.body.appendChild(_pcont);
+            var _first = document.createElement('div');
+            var _second = document.createElement('span');
+            _first.id = 'FIRST'; _second.id = 'SECOND';
+            _pcont.appendChild(_second);
+            _pcont.prepend(_first);
+        "#).unwrap();
+        let first_id = rt.eval("_pcont.children[0].id").unwrap();
+        assert_eq!(first_id, lumen_core::JsValue::String("FIRST".into()));
+    }
+
+    #[test]
+    fn element_replace_children_clears_and_sets() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _rccont = document.createElement('div');
+            document.body.appendChild(_rccont);
+            var _c1 = document.createElement('div');
+            var _c2 = document.createElement('span');
+            var _c3 = document.createElement('p');
+            _rccont.appendChild(_c1);
+            _rccont.appendChild(_c2);
+            _rccont.replaceChildren(_c3);
+        "#).unwrap();
+        let count = rt.eval("_rccont.children.length").unwrap();
+        assert_eq!(count, lumen_core::JsValue::Number(1.0));
+        let tag = rt.eval("_rccont.children[0].tagName.toLowerCase()").unwrap();
+        assert_eq!(tag, lumen_core::JsValue::String("p".into()));
+    }
+
+    // ── TreeWalker / NodeIterator tests ──────────────────────────────────────
+
+    #[test]
+    fn node_filter_constants_available() {
+        let rt = runtime_with_dom(make_doc());
+        let accept = rt.eval("NodeFilter.FILTER_ACCEPT").unwrap();
+        assert_eq!(accept, lumen_core::JsValue::Number(1.0));
+        let show_all = rt.eval("NodeFilter.SHOW_ALL").unwrap();
+        assert_eq!(show_all, lumen_core::JsValue::Number(0xFFFFFFFF_u32 as f64));
+        let show_element = rt.eval("NodeFilter.SHOW_ELEMENT").unwrap();
+        assert_eq!(show_element, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn tree_walker_exists_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt.eval("typeof window.TreeWalker === 'function'").unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn create_tree_walker_returns_walker_with_root() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _twroot = document.createElement('section');
+            document.body.appendChild(_twroot);
+            var _tw = document.createTreeWalker(_twroot, NodeFilter.SHOW_ELEMENT);
+        "#).unwrap();
+        let root_tag = rt.eval("_tw.root.tagName.toLowerCase()").unwrap();
+        assert_eq!(root_tag, lumen_core::JsValue::String("section".into()));
+    }
+
+    #[test]
+    fn tree_walker_next_node_traverses_children() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _twc = document.createElement('section');
+            document.body.appendChild(_twc);
+            var _d1 = document.createElement('div');
+            var _d2 = document.createElement('span');
+            _d1.id = 'D1'; _d2.id = 'D2';
+            _twc.appendChild(_d1);
+            _twc.appendChild(_d2);
+            var _tw2 = document.createTreeWalker(_twc, NodeFilter.SHOW_ELEMENT);
+            var _n1 = _tw2.nextNode(); // D1
+            var _n2 = _tw2.nextNode(); // D2
+        "#).unwrap();
+        let id1 = rt.eval("_n1 && _n1.id").unwrap();
+        assert_eq!(id1, lumen_core::JsValue::String("D1".into()));
+        let id2 = rt.eval("_n2 && _n2.id").unwrap();
+        assert_eq!(id2, lumen_core::JsValue::String("D2".into()));
+    }
+
+    #[test]
+    fn tree_walker_previous_node_goes_back() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _twpc = document.createElement('article');
+            document.body.appendChild(_twpc);
+            var _da = document.createElement('div');
+            var _db = document.createElement('span');
+            _da.id = 'DA'; _db.id = 'DB';
+            _twpc.appendChild(_da);
+            _twpc.appendChild(_db);
+            var _tw3 = document.createTreeWalker(_twpc, NodeFilter.SHOW_ELEMENT);
+            _tw3.nextNode(); // DA
+            _tw3.nextNode(); // DB
+            var _prev = _tw3.previousNode(); // back to DA
+        "#).unwrap();
+        let id = rt.eval("_prev && _prev.id").unwrap();
+        assert_eq!(id, lumen_core::JsValue::String("DA".into()));
+    }
+
+    #[test]
+    fn tree_walker_with_filter_function() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _twfc = document.createElement('aside');
+            document.body.appendChild(_twfc);
+            var _s1 = document.createElement('span');
+            var _s2 = document.createElement('div');
+            var _s3 = document.createElement('span');
+            _s1.id = 'S1'; _s2.id = 'S2'; _s3.id = 'S3';
+            _twfc.appendChild(_s1);
+            _twfc.appendChild(_s2);
+            _twfc.appendChild(_s3);
+            var _tw4 = document.createTreeWalker(_twfc, NodeFilter.SHOW_ELEMENT, function(node) {
+                return node.tagName.toLowerCase() === 'span'
+                    ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            });
+            var _fn1 = _tw4.nextNode(); // S1
+            var _fn2 = _tw4.nextNode(); // S3 (S2=div skipped)
+        "#).unwrap();
+        let id1 = rt.eval("_fn1 && _fn1.id").unwrap();
+        assert_eq!(id1, lumen_core::JsValue::String("S1".into()));
+        let id2 = rt.eval("_fn2 && _fn2.id").unwrap();
+        assert_eq!(id2, lumen_core::JsValue::String("S3".into()));
+    }
+
+    #[test]
+    fn node_iterator_exists_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt.eval("typeof window.NodeIterator === 'function'").unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn node_iterator_next_node_and_previous_node() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _nic = document.createElement('nav');
+            document.body.appendChild(_nic);
+            var _ni_a = document.createElement('div');
+            var _ni_b = document.createElement('span');
+            _ni_a.id = 'NIA'; _ni_b.id = 'NIB';
+            _nic.appendChild(_ni_a);
+            _nic.appendChild(_ni_b);
+            var _ni = document.createNodeIterator(_nic, NodeFilter.SHOW_ELEMENT);
+            var _ni_n1 = _ni.nextNode(); // _nic itself
+            var _ni_n2 = _ni.nextNode(); // NIA
+            var _ni_n3 = _ni.nextNode(); // NIB
+            var _ni_p1 = _ni.previousNode(); // back to NIA
+        "#).unwrap();
+        let n2_id = rt.eval("_ni_n2 && _ni_n2.id").unwrap();
+        assert_eq!(n2_id, lumen_core::JsValue::String("NIA".into()));
+        let p1_id = rt.eval("_ni_p1 && _ni_p1.id").unwrap();
+        assert_eq!(p1_id, lumen_core::JsValue::String("NIA".into()));
+    }
+
+    #[test]
+    fn document_adopt_node_returns_node() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _orig = document.createElement('div');
+            _orig.id = 'ADO';
+            var _adopted = document.adoptNode(_orig);
+        "#).unwrap();
+        let id = rt.eval("_adopted && _adopted.id").unwrap();
+        assert_eq!(id, lumen_core::JsValue::String("ADO".into()));
+    }
+
+    #[test]
+    fn document_import_node_returns_clone() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _tmpl = document.createElement('p');
+            _tmpl.id = 'IMP';
+            var _imported = document.importNode(_tmpl, false);
+        "#).unwrap();
+        let id = rt.eval("_imported && _imported.id").unwrap();
+        assert_eq!(id, lumen_core::JsValue::String("IMP".into()));
     }
 
     #[test]
