@@ -6,8 +6,7 @@
 
 ## In progress
 
-S-3: Local Font Access API  branch: p1-s3-local-font-access
-Next step: cargo clippy + tests  crates/js/src/local_font_access.rs
+_(нет)_
 
 ---
 
@@ -19,7 +18,7 @@ Next step: cargo clippy + tests  crates/js/src/local_font_access.rs
 |---|--------|--------|--------|
 | ~~S-1~~ | ~~**TC39 Stage 4 collection APIs**~~ — **выполнено** | M | `lumen-js` |
 | ~~S-2~~ | ~~**Window Management API**~~ — **выполнено** | S | `lumen-js` |
-| S-3 | **Local Font Access API** — `navigator.fonts.query()` Phase 0 stub → `[]` | XS | `lumen-js` |
+| ~~S-3~~ | ~~**Local Font Access API**~~ — **выполнено** | XS | `lumen-js` |
 | S-4 | **Long Animation Frames API (LoAF)** — `PerformanceLongAnimationFrameTiming`, `PerformanceScriptTiming`, PerformanceObserver `long-animation-frame` | S | `lumen-js` |
 | S-5 | **Launch Handler API** — `window.launchQueue`, `LaunchParams`, `LaunchQueue.setConsumer()` | XS | `lumen-js` |
 
@@ -124,6 +123,7 @@ Next step: cargo clippy + tests  crates/js/src/local_font_access.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | S-3: Local Font Access API | lumen-js: новый модуль local_font_access.rs — WICG Local Font Access. navigator.fonts (FontAccessManager). query() → Promise<[]> в Phase 0 (OS шрифты не перечисляем). FontData класс (postscriptName/fullName/family/style + blob()→Promise<Blob>). _lumen_local_fonts_query() / _lumen_local_font_blob() зарезервированы для Phase 1. 8 unit-тестов. lumen-js: 1734 тестов (+8 vs 1726). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-2: Window Management API | lumen-js: новый модуль window_management.rs — W3C Multi-Screen Window Placement Level 1. screen.isExtended (Phase 0: false), navigator.getScreenDetails() → Promise<ScreenDetails>. ScreenDetailed extends Screen с полями left/top/availLeft/availTop/isPrimary/isInternal/devicePixelRatio/label. ScreenDetails.screens[] + currentScreen. _lumen_get_screen_details() native binding stub для Phase 1 (OS multi-screen). 8 unit-тестов. lumen-js: 1726 тестов (+8 vs 1718). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-1: TC39 Stage 4 collection APIs | lumen-js: новый модуль tc39_proposals.rs — Object.groupBy/Map.groupBy (ES2024 Array Grouping), Set.prototype.union/intersection/difference/symmetricDifference/isSubsetOf/isSupersetOf/isDisjointFrom (ES2025 Set Methods), Promise.withResolvers (ES2024), Promise.try (ES2025), Array.fromAsync (ES2024), Iterator.prototype.map/filter/take/drop/flatMap/reduce/toArray/forEach/some/every/find + Iterator.from() (ES2025 Iterator Helpers). Все шимы проверяют нативную поддержку и скипают при наличии. 25 unit-тестов. lumen-js: 1718 тестов (+25 vs 1693). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | R-1: Overflow scroll wheel routing + scroll events | lumen-layout: `find_scroll_container_at(containers, x, y)` — находит самый глубокий overflow-контейнер под курсором (+5 тестов). lumen-js: `_lumen_fire_scroll_on_element(nid)` + `_lumen_fire_window_scroll_event()` JS-хелперы в WEB_API_SHIM (non-bubbling scroll Event, WHATWG HTML §8.1.6.2); `QuickJsRuntime::fire_element_scroll(nid)` / `fire_window_scroll()` (+3 теста). lumen-shell: `scroll_containers` Vec + `update_scroll_containers()`; `try_scroll_overflow_container(dx, dy)` — маршрутизация ColесаМыши к overflow-контейнеру; `PersistentJs` +fire_element_scroll/fire_window_scroll. 2494 тестов lumen-layout (+5), 1693 тестов lumen-js (+3). Clippy чист. Снимает блокировку P4 #7. |
