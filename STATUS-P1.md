@@ -6,8 +6,7 @@
 
 ## In progress
 
-S-5: Launch Handler API  branch: p1-s5-launch-handler
-Next step: commit + merge  crates/js/src/launch_handler.rs
+_(нет)_
 
 ---
 
@@ -21,7 +20,7 @@ Next step: commit + merge  crates/js/src/launch_handler.rs
 | ~~S-2~~ | ~~**Window Management API**~~ — **выполнено** | S | `lumen-js` |
 | ~~S-3~~ | ~~**Local Font Access API**~~ — **выполнено** | XS | `lumen-js` |
 | ~~S-4~~ | ~~**Long Animation Frames API (LoAF)**~~ — **выполнено** | S | `lumen-js` |
-| S-5 | **Launch Handler API** — `window.launchQueue`, `LaunchParams`, `LaunchQueue.setConsumer()` | XS | `lumen-js` |
+| ~~S-5~~ | ~~**Launch Handler API**~~ — **выполнено** | XS | `lumen-js` |
 
 ### R — Scroll Infrastructure
 
@@ -124,6 +123,7 @@ Next step: commit + merge  crates/js/src/launch_handler.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | S-5: Launch Handler API | lumen-js: новый модуль launch_handler.rs — WICG Web App Launch Handler Phase 0. window.launchQueue (LaunchQueue singleton), LaunchQueue.setConsumer(fn) — регистрирует обработчик параметров запуска; LaunchParams {targetURL, files[]} — объект запуска. _lumen_deliver_launch_params(url, filesJson) — shell-хук для Phase 1 (OS file associations + URL activation). setConsumer() сразу сбрасывает очередь ранее накопленных params. window.LaunchParams экспортирован для feature detection. 9 unit-тестов. lumen-js: 1753 тестов (+9 vs 1744). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-4: Long Animation Frames API (LoAF) | lumen-js: новый модуль long_animation_frames.rs — W3C Long Animation Frames API. PerformanceLongAnimationFrameTiming (entryType='long-animation-frame', поля startTime/duration/renderStart/styleAndLayoutStart/firstUIEventTimestamp/blockingDuration/scripts[]). PerformanceScriptTiming (entryType='script', invoker/invokerType/windowAttribution/executionStart/forcedStyleAndLayoutDuration/pauseDuration/sourceURL/sourceFunctionName/sourceCharPosition). _lumen_deliver_long_animation_frame(start,duration,renderStart,styleLayoutStart,firstUIEventTs,blockingDuration,scripts_json) — delivery binding + уведомление PerformanceObserver. QuickJsRuntime::deliver_long_animation_frame() для shell Phase 1. 10 unit-тестов. lumen-js: 1744 тестов (+10 vs 1734). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-3: Local Font Access API | lumen-js: новый модуль local_font_access.rs — WICG Local Font Access. navigator.fonts (FontAccessManager). query() → Promise<[]> в Phase 0 (OS шрифты не перечисляем). FontData класс (postscriptName/fullName/family/style + blob()→Promise<Blob>). _lumen_local_fonts_query() / _lumen_local_font_blob() зарезервированы для Phase 1. 8 unit-тестов. lumen-js: 1734 тестов (+8 vs 1726). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-2: Window Management API | lumen-js: новый модуль window_management.rs — W3C Multi-Screen Window Placement Level 1. screen.isExtended (Phase 0: false), navigator.getScreenDetails() → Promise<ScreenDetails>. ScreenDetailed extends Screen с полями left/top/availLeft/availTop/isPrimary/isInternal/devicePixelRatio/label. ScreenDetails.screens[] + currentScreen. _lumen_get_screen_details() native binding stub для Phase 1 (OS multi-screen). 8 unit-тестов. lumen-js: 1726 тестов (+8 vs 1718). Clippy чист. Без новых зависимостей. |
