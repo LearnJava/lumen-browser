@@ -6,11 +6,22 @@
 
 ## In progress
 
-_(нет)_
+V-1: Declarative Shadow DOM (`<template shadowrootmode>`)  branch: p1-declarative-shadow-dom
+Next step: implement in tree_builder.rs  crates/engine/html-parser/src/tree_builder.rs:476
 
 ---
 
 ## Next
+
+### V — Web Platform Phase 2 (новые)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| V-1 | **Declarative Shadow DOM** (`<template shadowrootmode="open\|closed">`) | S | `lumen-html-parser`, `lumen-dom` |
+| V-2 | **`@starting-style` CSS at-rule algorithm stub** — enter animations | S | `lumen-layout` |
+| V-3 | **`inert` attribute layout algorithm** — non-interactive subtrees | XS | `lumen-layout`, `lumen-js` |
+| V-4 | **`CSS image-set()` selection algorithm stub** — responsive images | S | `lumen-layout` |
+| V-5 | **TC39 Temporal API Phase 0 stub** — `Temporal.PlainDate/Time/DateTime/Duration` | M | `lumen-js` |
 
 ### U — TC39 Stage 4 ES2026+ APIs (новые)
 
