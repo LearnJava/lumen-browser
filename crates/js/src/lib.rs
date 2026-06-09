@@ -90,6 +90,10 @@ pub mod svg;
 pub mod file_input;
 pub mod tc39_proposals;
 pub mod es2026_proposals;
+pub mod speculation_rules;
+pub mod soft_navigation;
+pub mod content_index;
+pub mod digital_credentials;
 pub mod window_management;
 pub mod local_font_access;
 pub mod long_animation_frames;
@@ -744,6 +748,30 @@ impl QuickJsRuntime {
             // SuppressedError, DisposableStack, AsyncDisposableStack.
             if let Err(e) = es2026_proposals::install_es2026_proposals(&ctx) {
                 eprintln!("ES2026 proposals shim init failed: {}", e);
+            }
+
+            // Install Speculation Rules API Phase 0 — document.prerendering,
+            // document.getSpeculationRules(), _lumen_deliver_speculation_rules hook.
+            if let Err(e) = speculation_rules::install_speculation_rules_api(&ctx) {
+                eprintln!("Speculation Rules API init failed: {}", e);
+            }
+
+            // Install Soft Navigation Timing API — PerformanceSoftNavigationEntry,
+            // _lumen_deliver_soft_nav(url, startTime, durationMs) binding.
+            if let Err(e) = soft_navigation::install_soft_navigation_api(&ctx) {
+                eprintln!("Soft Navigation API init failed: {}", e);
+            }
+
+            // Install Content Index API Phase 0 — ContentIndex class,
+            // ServiceWorkerRegistration.prototype.index getter.
+            if let Err(e) = content_index::install_content_index_api(&ctx) {
+                eprintln!("Content Index API init failed: {}", e);
+            }
+
+            // Install Digital Credentials API Phase 0 — DigitalCredential class,
+            // navigator.credentials.get({digital:...}) → NotSupportedError.
+            if let Err(e) = digital_credentials::install_digital_credentials_api(&ctx) {
+                eprintln!("Digital Credentials API init failed: {}", e);
             }
 
             // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
