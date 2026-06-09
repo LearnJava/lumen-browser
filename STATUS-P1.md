@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**O-3: 7D.1 Passkeys CTAP2-over-USB**  branch: p1-ctap2-usb
+Next step: тесты, коммит, merge  `crates/network/src/ctap2.rs`
 
 ---
 
