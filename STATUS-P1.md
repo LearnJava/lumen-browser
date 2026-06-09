@@ -6,8 +6,7 @@
 
 ## In progress
 
-O-6: KnowledgeStore — trait в lumen-core::ext, DefaultKnowledgeStore в lumen-knowledge, @notes omnibox  branch: p1-o6-knowledge-store
-Next step: добавить KnowledgeStore trait + result types в crates/core/src/ext.rs
+(нет)
 
 ---
 
@@ -29,7 +28,7 @@ Next step: добавить KnowledgeStore trait + result types в crates/core/s
 | ~~O-3~~ | ~~**7D.1: Passkeys CTAP2-over-USB**~~ — **выполнено** | M | `lumen-network` |
 | ~~O-4~~ | ~~**10L: JS heap GC tuning per tier**~~ — **выполнено** | S | `lumen-js` |
 | ~~O-5~~ | ~~**6+ (a11y bridges): Platform a11y bridges**~~ — **выполнено** | M | `lumen-a11y`, `lumen-shell` |
-| O-6 | **KnowledgeStore** — FTS / read-later / notes (§12.1); базируется на уже готовом `HistoryFts`. `crates/knowledge/` | L | `lumen-knowledge`, `lumen-storage`, `lumen-shell` |
+| ~~O-6~~ | ~~**KnowledgeStore** — trait в lumen-core::ext, DefaultKnowledgeStore, @notes omnibox~~ — **выполнено** | L | `lumen-knowledge`, `lumen-core`, `lumen-shell` |
 | O-7 | **10M: `samples/heavy.html`** — Habr-style тестовая страница (50+ элементов, много текста, изображения) для T0-heavy бенчей. `samples/heavy.html` | XS | — |
 | O-8 | **6+ (forms): Native form pickers + validation tooltip UI** — date/color picker (OS-диалог), validation tooltip рядом с полем, интеграция с `FormValidation` JS API. `shell/src/forms/pickers.rs` | M | `lumen-shell`, `lumen-js` |
 | O-9 | **Кастомизация UI** — drag&drop вкладок (переупорядочивание), темы (light/dark/custom accent). `shell/src/panels/themes.rs` (§12.10) | L | `lumen-shell`, `lumen-paint` |
