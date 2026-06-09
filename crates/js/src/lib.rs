@@ -57,6 +57,7 @@ pub mod trusted_types;
 pub mod sanitizer;
 pub mod screen_orientation;
 pub mod scroll_snap_events;
+pub mod scroll_timeline;
 pub mod sri;
 pub mod media_stream_recording;
 pub mod serial;
@@ -777,6 +778,15 @@ impl QuickJsRuntime {
                 eprintln!("Scroll Snap events bindings init failed: {}", e);
             }
 
+            // Install CSS Scroll-Driven Animations Level 1 (W3C §3–4) — after DOM.
+            // Provides `ScrollTimeline` / `ViewTimeline` classes and
+            // `_lumen_deliver_scroll_progress(py, px)` for shell to push viewport
+            // progress into all active root-viewport ScrollTimeline instances.
+            // Phase 1: `animation-timeline: scroll()` parsed in ComputedStyle (P4).
+            if let Err(e) = scroll_timeline::install_scroll_timeline_bindings(&ctx) {
+                eprintln!("Scroll-Driven Animations bindings init failed: {}", e);
+            }
+
             // Install Sanitizer API (W3C Sanitizer API §3) — after DOM so `document`,
             // `Element`, and DOM methods are available.
             // Phase 0: Simple removal of <script> tags and event handler attributes.
@@ -1282,6 +1292,32 @@ impl QuickJsRuntime {
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
             ctx.eval::<(), _>("_lumen_apply_ready_state('complete')").ok();
+        });
+    }
+
+    /// Tune the QuickJS GC based on the tab's lifecycle tier (10L).
+    ///
+    /// - `Soft` (T0 active): reset `gc_threshold` to 1 MiB so the heap can
+    ///   grow freely while the tab is in the foreground.
+    /// - `Moderate` (T1): run one full collection cycle; threshold unchanged.
+    /// - `Aggressive` (T2): run one full cycle + lower `gc_threshold` to
+    ///   64 KiB so subsequent allocations trigger GC much sooner, keeping
+    ///   the retained heap small during long background stays.
+    /// Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances.
+    ///
+    /// `progress_y` is the block-axis fraction `[0.0, 1.0]` (scroll_y / max_scroll_y).
+    /// `progress_x` is the inline-axis fraction `[0.0, 1.0]` (scroll_x / max_scroll_x).
+    ///
+    /// No-op when `install_dom` has not been called yet or no `ScrollTimeline` is registered.
+    pub fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32) {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.ctx.with(|ctx| {
+            let script = format!(
+                "if(typeof _lumen_deliver_scroll_progress==='function')\
+                 _lumen_deliver_scroll_progress({},{});",
+                progress_y, progress_x
+            );
+            ctx.eval::<(), _>(script.as_str()).ok();
         });
     }
 
