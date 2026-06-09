@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+O-11: SOP/CORS sandbox — DOM-применение sandbox-флагов `<iframe>` в shell  branch: p1-o11-sandbox
+Next step: fix apply_iframe_sandbox_gates + srcdoc processing  shell/src/main.rs:3340
 
 ---
 
