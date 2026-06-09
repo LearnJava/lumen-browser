@@ -86,6 +86,7 @@ pub mod storage_manager;
 pub mod xhr;
 pub mod dom_parser;
 pub mod gc_policy;
+pub mod svg;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -947,6 +948,13 @@ impl QuickJsRuntime {
                 eprintln!("DOMParser/XMLSerializer init failed: {}", e);
             }
 
+            // W3C SVG 2 — SVGElement/SVGSVGElement class hierarchy, getBBox() stubs,
+            // SVGRect/SVGPoint/SVGLength/SVGMatrix types, createElementNS SVG wiring.
+            // Must come after dom_parser (document.createElementNS already defined).
+            if let Err(e) = svg::install_svg_bindings(&ctx) {
+                eprintln!("SVG DOM API init failed: {}", e);
+            }
+
             Ok(())
         })
     }
@@ -1295,14 +1303,6 @@ impl QuickJsRuntime {
         });
     }
 
-    /// Tune the QuickJS GC based on the tab's lifecycle tier (10L).
-    ///
-    /// - `Soft` (T0 active): reset `gc_threshold` to 1 MiB so the heap can
-    ///   grow freely while the tab is in the foreground.
-    /// - `Moderate` (T1): run one full collection cycle; threshold unchanged.
-    /// - `Aggressive` (T2): run one full cycle + lower `gc_threshold` to
-    ///   64 KiB so subsequent allocations trigger GC much sooner, keeping
-    ///   the retained heap small during long background stays.
     /// Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances.
     ///
     /// `progress_y` is the block-axis fraction `[0.0, 1.0]` (scroll_y / max_scroll_y).

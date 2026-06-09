@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+M-3: SVG DOM API stubs  branch: p1-m3-svg-dom
+Next step: clippy + tests, commit, merge
 
 ---
 
