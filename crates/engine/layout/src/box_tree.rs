@@ -5225,9 +5225,13 @@ fn lay_out_flex(
         cross_cursor += line_cross + cross_gap;
     }
 
-    // Remove trailing gap from cross_cursor.
-    let mut total_cross = if n_lines > 1 {
-        cross_cursor - cross_gap
+    // Remove the trailing cross gap accumulated by the loop. Each processed line
+    // appends `line_cross + cross_gap` (5225), so after the loop there is always
+    // exactly one surplus `cross_gap` — including single-line containers, where the
+    // row-gap (from `gap`/`row-gap`) must NOT leak into the container's cross size
+    // (nothing to separate). Subtract whenever at least one line was laid out.
+    let mut total_cross = if n_lines > 0 {
+        (cross_cursor - cross_gap).max(0.0)
     } else {
         cross_cursor
     };
@@ -8923,6 +8927,27 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let item = find_by_id_all(&root, &doc, "item").expect("item");
         assert_eq!(item.rect.height, 40.0, "height:50% flex item should be 40px, got {}", item.rect.height);
+    }
+
+    #[test]
+    fn flex_single_line_row_gap_excluded_from_cross_size() {
+        // BUG-113: a single-line row flex container must NOT add the row-gap
+        // (`gap`/`row-gap`) to its own cross size — there is no second line to
+        // separate. Previously the per-line trailing cross-gap leaked into the
+        // container height (e.g. TEST-53 rows drifted ~24px vertically).
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div></div>"#;
+        // gap:24px sets both row- and column-gap; in a row flex the row-gap is the cross gap.
+        let css = "body{margin:0} #flex{display:flex;gap:24px;width:400px} \
+                   #a{width:100px;height:120px} #b{width:100px;height:120px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let flex = find_by_id_all(&root, &doc, "flex").expect("flex");
+        assert_eq!(
+            flex.rect.height, 120.0,
+            "single-line flex height must equal the tallest item (120), not 120+gap; got {}",
+            flex.rect.height
+        );
     }
 
     #[test]
