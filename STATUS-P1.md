@@ -6,11 +6,18 @@
 
 ## In progress
 
-_(нет)_
+T-1: ES2025 Binary Data + misc TC39 APIs  branch: p1-t1-es2025-binary-apis
+Next step: реализовать в crates/js/src/tc39_proposals.rs — Uint8Array.toBase64/fromBase64/toHex/fromHex, RegExp.escape(), Error.isError(), Atomics.pause()
 
 ---
 
 ## Next
+
+### T — TC39 Stage 4 ES2025 APIs (новые, не реализованы)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| T-1 | **ES2025 Binary Data APIs** — `Uint8Array.toBase64/fromBase64/toHex/fromHex`, `RegExp.escape()`, `Error.isError()`, `Atomics.pause()` | S | `lumen-js` |
 
 ### S — TC39 Stage 4 JS APIs (не реализованы в QuickJS)
 
