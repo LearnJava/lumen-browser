@@ -92,6 +92,7 @@ pub mod tc39_proposals;
 pub mod window_management;
 pub mod local_font_access;
 pub mod long_animation_frames;
+pub mod launch_handler;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -995,6 +996,12 @@ impl QuickJsRuntime {
             // Phase 0: query() resolves with []. Phase 1: _lumen_local_fonts_query() native binding.
             if let Err(e) = local_font_access::install_local_font_access_api(&ctx) {
                 eprintln!("Local Font Access API init failed: {}", e);
+            }
+
+            // WICG Launch Handler — window.launchQueue, LaunchParams, setConsumer().
+            // Phase 0: in-memory queue. Phase 1: _lumen_deliver_launch_params() from shell.
+            if let Err(e) = launch_handler::install_launch_handler_api(&ctx) {
+                eprintln!("Launch Handler API init failed: {}", e);
             }
 
             Ok(())
