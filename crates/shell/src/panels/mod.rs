@@ -19,6 +19,7 @@ pub mod sleep_hint;
 pub mod shields_panel;
 pub mod sidebar_panel;
 pub mod split_view;
+pub mod themes;
 pub mod tree_tabs;
 pub mod vertical_tabs;
 pub mod workspace_panel;
