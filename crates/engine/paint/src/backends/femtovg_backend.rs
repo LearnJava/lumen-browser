@@ -46,7 +46,8 @@ use lumen_image::{Image, resize_area_avg};
 use lumen_layout::Color;
 
 use lumen_layout::{
-    BackgroundRepeat, BackgroundSize, GradientStop, Length, ObjectPosition, PositionComponent,
+    BackgroundRepeat, BackgroundSize, BorderStyle, GradientStop, Length, ObjectPosition,
+    PositionComponent,
 };
 
 use lumen_core::geom::Rect;
@@ -474,6 +475,111 @@ impl FemtovgBackend {
         self.canvas.fill_path(&path, &paint);
     }
 
+    /// Fills a circle (used for dotted borders wider than 2px, where Edge renders
+    /// round dots rather than squares).
+    fn draw_fill_circle(&mut self, cx: f32, cy: f32, r: f32, color: Color) {
+        let mut path = femtovg::Path::new();
+        path.circle(cx, cy, r);
+        let paint = femtovg::Paint::color(lumen_to_fvg(color));
+        self.canvas.fill_path(&path, &paint);
+    }
+
+    /// Renders one border side (top/right/bottom/left) honoring its `BorderStyle`.
+    /// `horizontal` = true for top/bottom (pattern runs along X), false for
+    /// left/right (along Y). `width` is the side thickness in CSS px. Geometry
+    /// mirrors the wgpu `emit_border_side` so the femtovg (default) backend draws
+    /// the same dash/dot/double pattern Edge produces (BUG-080). Solid/None fall
+    /// back to a single filled quad — unchanged from the previous behavior.
+    fn draw_border_side(
+        &mut self,
+        side_rect: Rect,
+        horizontal: bool,
+        width: f32,
+        color: Color,
+        style: BorderStyle,
+    ) {
+        let total = if horizontal { side_rect.width } else { side_rect.height };
+        match style {
+            BorderStyle::Dashed => {
+                // Edge/Skia: dash=max(6,2w), gap=max(4,w); n=round(total/period),
+                // dash size fixed, step adjusted so the last dash ends at `total`.
+                let target_dash = (width * 2.0).max(6.0);
+                let target_gap = width.max(4.0);
+                let target_period = target_dash + target_gap;
+                let n = ((total / target_period).round() as usize).max(1);
+                let step = if n > 1 { (total - target_dash) / (n - 1) as f32 } else { 0.0 };
+                for i in 0..n {
+                    let offset = (i as f32 * step).floor();
+                    let seg_end = (offset + target_dash).min(total);
+                    if seg_end > offset {
+                        if horizontal {
+                            self.draw_fill_rect(side_rect.x + offset, side_rect.y, seg_end - offset, side_rect.height, color);
+                        } else {
+                            self.draw_fill_rect(side_rect.x, side_rect.y + offset, side_rect.width, seg_end - offset, color);
+                        }
+                    }
+                }
+            }
+            BorderStyle::Dotted => {
+                // Edge/Skia: n=floor(total/period)+1 dots, symmetric placement.
+                // dot_len ≤ 2px → squares (no AA circle); otherwise round dots.
+                let dot_len = width.max(1.0);
+                let period = dot_len * 2.0;
+                let n = ((total / period).floor() as usize + 1).max(1);
+                let span = total - dot_len;
+                let step = if n > 1 { span / (n - 1) as f32 } else { 0.0 };
+                let mid = if n > 0 { (n - 1) / 2 } else { 0 };
+                let use_rect = dot_len <= 2.0;
+                for i in 0..n {
+                    let offset = if i <= mid {
+                        (i as f32 * step).floor()
+                    } else {
+                        let j = (n - 1 - i) as f32;
+                        span.floor() - (j * step).floor()
+                    };
+                    let seg_end = (offset + dot_len).min(total);
+                    if seg_end > offset {
+                        let seg_len = seg_end - offset;
+                        if use_rect {
+                            if horizontal {
+                                self.draw_fill_rect(side_rect.x + offset, side_rect.y, seg_len, side_rect.height, color);
+                            } else {
+                                self.draw_fill_rect(side_rect.x, side_rect.y + offset, side_rect.width, seg_len, color);
+                            }
+                        } else if horizontal {
+                            let cx = side_rect.x + offset + seg_len / 2.0;
+                            let cy = side_rect.y + side_rect.height / 2.0;
+                            self.draw_fill_circle(cx, cy, side_rect.height / 2.0, color);
+                        } else {
+                            let cx = side_rect.x + side_rect.width / 2.0;
+                            let cy = side_rect.y + offset + seg_len / 2.0;
+                            self.draw_fill_circle(cx, cy, side_rect.width / 2.0, color);
+                        }
+                    }
+                }
+            }
+            BorderStyle::Double => {
+                // CSS Backgrounds L3 §4.2: two solid lines ~1/3 width, gap ~1/3.
+                // width < 3px → no room for a gap, fall back to solid.
+                if width < 3.0 {
+                    self.draw_fill_rect(side_rect.x, side_rect.y, side_rect.width, side_rect.height, color);
+                    return;
+                }
+                let line = (width / 3.0).max(1.0);
+                if horizontal {
+                    self.draw_fill_rect(side_rect.x, side_rect.y, side_rect.width, line, color);
+                    self.draw_fill_rect(side_rect.x, side_rect.y + width - line, side_rect.width, line, color);
+                } else {
+                    self.draw_fill_rect(side_rect.x, side_rect.y, line, side_rect.height, color);
+                    self.draw_fill_rect(side_rect.x + width - line, side_rect.y, line, side_rect.height, color);
+                }
+            }
+            BorderStyle::Solid | BorderStyle::None => {
+                self.draw_fill_rect(side_rect.x, side_rect.y, side_rect.width, side_rect.height, color);
+            }
+        }
+    }
+
     /// Рисует залитый прямоугольник с разными радиусами углов.
     /// Draw a rounded rectangle with per-corner elliptical radii.
     ///
@@ -802,24 +908,34 @@ impl FemtovgBackend {
                     rect.x, rect.y, rect.width, rect.height, *radii, *color,
                 );
             }
-            DisplayCommand::DrawBorder { rect, widths, colors, .. } => {
+            DisplayCommand::DrawBorder { rect, widths, colors, styles, .. } => {
+                // Side rect order: [top, right, bottom, left]. Each side is rendered
+                // according to its `BorderStyle` (Solid → full quad, Dashed/Dotted →
+                // segment pattern, Double → two thin lines). Geometry mirrors the wgpu
+                // `emit_border_side` so both backends match Edge's pattern (BUG-080).
                 if widths[0] > 0.0 {
-                    self.draw_fill_rect(rect.x, rect.y, rect.width, widths[0], colors[0]);
+                    self.draw_border_side(
+                        Rect::new(rect.x, rect.y, rect.width, widths[0]),
+                        true, widths[0], colors[0], styles[0],
+                    );
                 }
                 if widths[1] > 0.0 {
-                    self.draw_fill_rect(
-                        rect.x + rect.width - widths[1], rect.y,
-                        widths[1], rect.height, colors[1],
+                    self.draw_border_side(
+                        Rect::new(rect.x + rect.width - widths[1], rect.y, widths[1], rect.height),
+                        false, widths[1], colors[1], styles[1],
                     );
                 }
                 if widths[2] > 0.0 {
-                    self.draw_fill_rect(
-                        rect.x, rect.y + rect.height - widths[2],
-                        rect.width, widths[2], colors[2],
+                    self.draw_border_side(
+                        Rect::new(rect.x, rect.y + rect.height - widths[2], rect.width, widths[2]),
+                        true, widths[2], colors[2], styles[2],
                     );
                 }
                 if widths[3] > 0.0 {
-                    self.draw_fill_rect(rect.x, rect.y, widths[3], rect.height, colors[3]);
+                    self.draw_border_side(
+                        Rect::new(rect.x, rect.y, widths[3], rect.height),
+                        false, widths[3], colors[3], styles[3],
+                    );
                 }
             }
             DisplayCommand::DrawText { rect, text, font_size, color, .. } => {

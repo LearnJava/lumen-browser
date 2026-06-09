@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BUG-080: border-style dashed/dotted/double в femtovg-бэкенде  branch: p3-bug080-border-style
+Next step: `draw_border_side` рендерит pattern по стилю стороны  crates/engine/paint/src/backends/femtovg_backend.rs:805
 
 ## Next
 
