@@ -9124,14 +9124,24 @@ if (typeof _lumen_idb_load === 'function') {
 })();
 
 // ── structuredClone (HTML LS §2.7) ─────────────────────────────────────────
-// Handles: primitives, plain objects, arrays, Date, RegExp.
-// Not handled: Map, Set, typed arrays as values, circular refs, functions, symbols.
+// Handles: primitives, plain objects, arrays, Date, RegExp, Map, Set.
+// Not handled: typed arrays as values, circular refs, functions, symbols.
 function structuredClone(val) {
     if (val === null || val === undefined) return val;
     var t = typeof val;
     if (t !== 'object') return val;
     if (val instanceof Date) return new Date(val.getTime());
     if (val instanceof RegExp) return new RegExp(val.source, val.flags);
+    if (val instanceof Map) {
+        var m = new Map();
+        val.forEach(function(v, k) { m.set(structuredClone(k), structuredClone(v)); });
+        return m;
+    }
+    if (val instanceof Set) {
+        var s = new Set();
+        val.forEach(function(v) { s.add(structuredClone(v)); });
+        return s;
+    }
     if (Array.isArray(val)) {
         var arr = [];
         for (var i = 0; i < val.length; i++) arr[i] = structuredClone(val[i]);
@@ -15932,6 +15942,79 @@ mod tests {
     fn window_structured_clone_alias() {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("window.structuredClone === structuredClone").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_map() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var orig = new Map([['a', {x:1}], ['b', [2,3]]]);
+                 var clone = structuredClone(orig);
+                 clone.get('a').x = 99;
+                 orig.get('a').x === 1 && clone instanceof Map && clone.size === 2",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_set() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var orig = new Set([1, 'hello', true]);
+                 var clone = structuredClone(orig);
+                 clone instanceof Set && clone.size === 3 &&
+                 clone.has(1) && clone.has('hello') && clone.has(true)",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_map_nested_objects() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var inner = {v: 42};
+                 var orig = new Map([['k', inner]]);
+                 var clone = structuredClone(orig);
+                 clone.get('k').v = 99;
+                 inner.v === 42",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_set_nested_objects() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var orig = new Set([new Date(5000), new RegExp('x', 'i')]);
+                 var clone = structuredClone(orig);
+                 var items = [];
+                 clone.forEach(function(v) { items.push(v); });
+                 clone instanceof Set && clone.size === 2 &&
+                 items[0] instanceof Date && items[0].getTime() === 5000 &&
+                 items[1] instanceof RegExp && items[1].source === 'x'",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn structured_clone_regexp() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "var orig = /hello/gi;
+                 var clone = structuredClone(orig);
+                 clone instanceof RegExp && clone.source === 'hello' && clone.flags === 'gi'",
+            )
+            .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
