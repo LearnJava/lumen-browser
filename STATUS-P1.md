@@ -6,8 +6,7 @@
 
 ## In progress
 
-M-5: `structuredClone()` improvements  branch: p1-m5-structured-clone
-Next step: cargo clippy + tests  crates/js/src/dom.rs:9126
+_(нет)_
 
 ---
 
@@ -51,7 +50,7 @@ Next step: cargo clippy + tests  crates/js/src/dom.rs:9126
 | ~~M-2~~ | ~~**DOMParser + XMLSerializer**~~ — **выполнено** | M | `lumen-js` |
 | ~~M-3~~ | ~~**SVG DOM API stubs**~~ — **выполнено** | M | `lumen-js` |
 | ~~M-4~~ | ~~**`<input type=file>` file picker**~~ — **выполнено** | S | `lumen-js`, `lumen-shell` |
-| M-5 | **`structuredClone()` improvements** — поддержка Map/Set/Date/RegExp в клонировании | XS | `lumen-js` |
+| ~~M-5~~ | ~~**`structuredClone()` improvements**~~ — **выполнено** | XS | `lumen-js` |
 
 ### K — Web Platform APIs Phase 4
 
@@ -108,6 +107,7 @@ Next step: cargo clippy + tests  crates/js/src/dom.rs:9126
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | M-5: `structuredClone()` improvements | lumen-js: structuredClone добавлена поддержка Map и Set (глубокое клонирование ключей/значений). Date и RegExp уже были реализованы. +6 тестов (map, set, map_nested_objects, set_nested_objects, regexp + window_alias). 1674 тестов lumen-js (+5 vs 1669). Clippy чист. |
 | 2026-06-09 | M-4: `<input type=file>` file picker | lumen-js: новый модуль file_input.rs — File (name/size/type/lastModified, text()/arrayBuffer()/slice()), FileList (length/item/indexed/Symbol.iterator). _lumen_deliver_file_list(nid, json) — monkey-patch _lumen_make_element добавляет .files геттер для type=file. lumen-shell: platform/file_dialog.rs — open_file_dialog (Windows: PowerShell OpenFileDialog), entries_to_json. forms.rs: FormClickAction::OpenFilePicker + classify_click для InputType::File. main.rs: open_file_picker(id). 1669 тестов lumen-js (+9). Clippy чист. |
 | 2026-06-09 | M-3: SVG DOM API stubs | lumen-js: новый модуль svg.rs — полная иерархия SVGElement/SVGGraphicsElement/SVGGeometryElement, 40+ конкретных элементов (SVGSVGElement, SVGRectElement, SVGCircleElement, SVGPathElement, SVGTextElement и др.), типы SVGRect/Point/Length/Matrix/Transform, createElementNS SVG namespace wiring (47 тегов). getBBox()→zeros Phase 0. Исправлен pre-existing doc-comment баг в lib.rs. 1660 тестов lumen-js (+21). Clippy чист. |
 | 2026-06-09 | P-1: Selector rule index | lumen-layout: rule_index.rs — RuleIndex::build/candidates, бакетизация по id/class/type/universal. compute_style: thread_local RULE_IDX_CACHE, brute-force O(N×R) → O(N×кандидаты). 2489 тестов lumen-layout (+8), 66 CPU snapshots identical. Clippy чист. |
