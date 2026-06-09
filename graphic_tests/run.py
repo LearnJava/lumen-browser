@@ -416,10 +416,11 @@ def run_one(tid: str, html: str, threshold: float, label: str,
         print(f'TEST-{tid}: FAIL (no HTML: {test_path})')
         return False, crop_offset, -1.0, None
 
-    edge_png   = os.path.join(SHOTS, f'{tid}-edge.png')
-    lumen_raw  = os.path.join(SHOTS, f'{tid}-lumen.png')
-    lumen_crop = os.path.join(SHOTS, f'{tid}-lumen-cropped.png')
-    diff_png   = os.path.join(SHOTS, f'{tid}-diff.png')
+    stem = html[:-5]  # '00-calibration.html' → '00-calibration'
+    edge_png   = os.path.join(SHOTS, f'{stem}-edge.png')
+    lumen_raw  = os.path.join(SHOTS, f'{stem}-lumen.png')
+    lumen_crop = os.path.join(SHOTS, f'{stem}-lumen-cropped.png')
+    diff_png   = os.path.join(SHOTS, f'{stem}-diff.png')
 
     capture_edge(test_path, edge_png, force=no_cache)
     if not os.path.exists(edge_png):
@@ -545,9 +546,10 @@ def _write_html_report(path: str, data: dict) -> None:
 
         # показываем скриншоты только для FAIL и ERROR
         if status in ('FAIL', 'ERROR'):
-            ep = f'../screenshots/{tid}-edge.png'
-            lp = f'../screenshots/{tid}-lumen-cropped.png'
-            dp = f'../screenshots/{tid}-diff.png'
+            stem = r.get('stem', tid)
+            ep = f'../screenshots/{stem}-edge.png'
+            lp = f'../screenshots/{stem}-lumen-cropped.png'
+            dp = f'../screenshots/{stem}-diff.png'
             imgs = (
                 f'<div class="imgs">'
                 f'<figure><img src="{ep}" loading="lazy"><figcaption>Edge</figcaption></figure>'
@@ -766,6 +768,7 @@ def main() -> int:
             status = 'FAIL'
         results.append({
             'id': tid,
+            'stem': html[:-5],
             'label': label,
             'html': html,
             'threshold': threshold,
