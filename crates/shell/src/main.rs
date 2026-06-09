@@ -448,6 +448,7 @@ fn run_window_mode(
         a11y_store: lumen_storage::A11yPrefs::open_in_memory()
             .expect("a11y_prefs in-memory"),
         a11y_panel: panels::a11y_panel::A11yPanel::new(),
+        platform_bridge: lumen_a11y::platform::platform_bridge(),
         print_panel: panels::print_panel::PrintPanel::new(),
         settings_store: lumen_storage::BrowserSettings::open_in_memory()
             .expect("settings in-memory"),
@@ -4041,6 +4042,11 @@ struct Lumen {
     /// A centred 300×260 px modal. Holds a working draft; on close the draft
     /// is persisted to `a11y_store` and media changes are re-delivered to JS.
     a11y_panel: panels::a11y_panel::A11yPanel,
+    /// Platform accessibility bridge (O-5).
+    ///
+    /// Receives `AXTree` updates after every page load and focus change.
+    /// Routes them to the OS accessibility API (UIA / NSAccessibility / AT-SPI2).
+    platform_bridge: Box<dyn lumen_a11y::platform::PlatformBridge>,
     /// Print dialog overlay (task E-1, `Ctrl+P`).
     ///
     /// A centred 560×400 px modal with paper size, orientation, margins,
@@ -4813,6 +4819,9 @@ impl Lumen {
             js.notify_window_loaded();
         }
 
+        // Rebuild accessibility tree and push to OS platform bridge (O-5).
+        self.update_platform_ax_tree();
+
         // If zoom or <meta viewport initial-scale> is active, relayout with the
         // correct effective viewport. The initial load used the raw physical size.
         let zoom = self.zoom_factor;
@@ -4820,6 +4829,16 @@ impl Lumen {
         if (zoom - 1.0).abs() > 0.001 || (meta_scale - 1.0).abs() > 0.001 {
             self.relayout();
         }
+    }
+
+    /// Rebuild the platform accessibility tree from the current DOM and push it to
+    /// the OS bridge. Called after every full page load.
+    fn update_platform_ax_tree(&mut self) {
+        let Some(src) = &self.layout_source else { return };
+        let Ok(doc) = src.document.lock() else { return };
+        let flat_tree = lumen_dom::build_flat_tree(&doc);
+        let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
+        self.platform_bridge.update(&ax_tree);
     }
 }
 
@@ -7665,6 +7684,8 @@ impl Lumen {
         // Trigger relayout if :focus state changed so :focus / :focus-within rules update.
         if focus_changed {
             self.relayout();
+            // Notify platform accessibility bridge so screen readers can track focus.
+            self.platform_bridge.focused_node_changed(new_focused);
         }
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so
@@ -10741,6 +10762,8 @@ impl Lumen {
         self.current_history_state_json = snap.current_history_state_json;
         self.reader_original_source = snap.reader_original_source;
         self.cert_info = snap.cert_info;
+        // Notify platform bridge with the restored tab's accessibility tree.
+        self.update_platform_ax_tree();
     }
 
     /// Reset all per-page fields to blank-tab defaults.

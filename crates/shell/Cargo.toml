@@ -31,6 +31,7 @@ backend-wgpu = ["lumen-paint/backend-wgpu"]
 
 [dependencies]
 lumen-core.workspace = true
+lumen-a11y.workspace = true
 lumen-devtools.workspace = true
 lumen-knowledge.workspace = true
 lumen-storage.workspace = true
