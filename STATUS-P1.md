@@ -6,8 +6,7 @@
 
 ## In progress
 
-V-1: Declarative Shadow DOM (`<template shadowrootmode>`)  branch: p1-declarative-shadow-dom
-Next step: implement in tree_builder.rs  crates/engine/html-parser/src/tree_builder.rs:476
+_(нет)_
 
 ---
 
@@ -17,7 +16,7 @@ Next step: implement in tree_builder.rs  crates/engine/html-parser/src/tree_buil
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| V-1 | **Declarative Shadow DOM** (`<template shadowrootmode="open\|closed">`) | S | `lumen-html-parser`, `lumen-dom` |
+| ~~V-1~~ | ~~**Declarative Shadow DOM** (`<template shadowrootmode="open\|closed">`)~~ — **выполнено** | S | `lumen-html-parser`, `lumen-dom` |
 | V-2 | **`@starting-style` CSS at-rule algorithm stub** — enter animations | S | `lumen-layout` |
 | V-3 | **`inert` attribute layout algorithm** — non-interactive subtrees | XS | `lumen-layout`, `lumen-js` |
 | V-4 | **`CSS image-set()` selection algorithm stub** — responsive images | S | `lumen-layout` |
@@ -150,6 +149,7 @@ Next step: implement in tree_builder.rs  crates/engine/html-parser/src/tree_buil
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | V-1: Declarative Shadow DOM | lumen-html-parser tree_builder.rs: когда парсер встречает `<template shadowrootmode="open\|closed">`, вместо DocumentFragment создаёт shadow root на хост-элементе и парсит контент шаблона прямо в него. Сам `<template>` отсоединяется при `</template>`. Поле `declarative_shadow_templates: HashSet<NodeId>` в `IncrementalTreeBuilder`; `current_insertion_parent()` перенаправляет в shadow root через `set_template_content(template, shadow_root)`; `process_template_end_tag()` вызывает `doc.detach(template)` для декларативных шаблонов. 7 unit-тестов (open/closed mode, content in SR, template removed from host, regular template unaffected, invalid mode fallback, in-body). lumen-html-parser: 386 тестов (+7 vs 379). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | U-1–U-5: ES2026 Float16Array + Web Platform APIs 2025 | lumen-js es2026_proposals.rs: Float16Array (Proxy-based, full TypedArray API), Math.f16round, DataView.getFloat16/setFloat16 (ES2025). Symbol.dispose/asyncDispose, SuppressedError, DisposableStack/AsyncDisposableStack (ES2024 Explicit Resource Management). speculation_rules.rs: document.prerendering=false, document.getSpeculationRules()→[], _lumen_deliver_speculation_rules hook. soft_navigation.rs: PerformanceSoftNavigationEntry, _lumen_deliver_soft_nav. content_index.rs: ContentIndex.add/getAll/delete, ServiceWorkerRegistration.prototype.index. digital_credentials.rs: DigitalCredential, navigator.credentials.get({digital:…})→NotSupportedError. 33 новых тестов. lumen-js: 1804 тестов (+33 vs 1771). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | T-1: ES2025 Binary Data + misc TC39 APIs | lumen-js tc39_proposals.rs: Uint8Array.prototype.toBase64(opts) / Uint8Array.fromBase64(str, opts) — base64 encode/decode с alphabet (standard/url) и omitPadding/lastChunkHandling; Uint8Array.prototype.toHex() / Uint8Array.fromHex(str) — hex encode/decode. RegExp.escape(str) shim-guard (QuickJS 0.11 имеет native impl — guard не перетирает). Error.isError(value) — кросс-реальная проверка Error через toString. Atomics.pause() — no-op power-hint для spinloop-ов. 18 новых unit-тестов. lumen-js: 1771 тестов (+18 vs 1753). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | S-5: Launch Handler API | lumen-js: новый модуль launch_handler.rs — WICG Web App Launch Handler Phase 0. window.launchQueue (LaunchQueue singleton), LaunchQueue.setConsumer(fn) — регистрирует обработчик параметров запуска; LaunchParams {targetURL, files[]} — объект запуска. _lumen_deliver_launch_params(url, filesJson) — shell-хук для Phase 1 (OS file associations + URL activation). setConsumer() сразу сбрасывает очередь ранее накопленных params. window.LaunchParams экспортирован для feature detection. 9 unit-тестов. lumen-js: 1753 тестов (+9 vs 1744). Clippy чист. Без новых зависимостей. |
