@@ -31,8 +31,23 @@ thread_local! {
     /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count) to
     /// detect stylesheet changes between layout passes. Rebuilt only when the
     /// key changes; reused for every node in the same pass (O(1) amortised).
+    ///
+    /// SAFETY: raw-pointer keys are vulnerable to address reuse across sessions
+    /// (freed sheet → new session → same address). Call `invalidate_rule_idx_cache`
+    /// at the start of every layout pass to prevent stale hits.
     static RULE_IDX_CACHE: RefCell<(usize, usize, RuleIndex)> =
         RefCell::new((0, 0, RuleIndex::empty()));
+}
+
+/// Invalidate the thread-local rule-index cache.
+///
+/// Must be called at the start of every layout pass (`layout_measured_hyp`).
+/// Without this call the raw-pointer key can match a freed stylesheet when a
+/// new one is allocated at the same address, returning a stale index.
+pub fn invalidate_rule_idx_cache() {
+    RULE_IDX_CACHE.with(|cell| {
+        cell.borrow_mut().0 = 0; // pointer 0 never matches a real sheet
+    });
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
