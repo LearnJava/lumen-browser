@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+S-5: Launch Handler API  branch: p1-s5-launch-handler
+Next step: commit + merge  crates/js/src/launch_handler.rs
 
 ---
 
