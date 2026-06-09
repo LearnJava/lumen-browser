@@ -410,12 +410,12 @@
 | 10J.1 | ✅ DOM arena → bincode → deflate → SQLite blob | `storage/src/tab_snapshot.rs` (`compress_blob`/`decompress_blob`, magic `LZD1`, прозрачно в store/fetch; flate2/miniz_oxide, 3-5× shrink) | p1-hibernate-compress |
 | 10J.2 | ✅ `TabMetadata { url, title, scroll, favicon }` остаётся в RAM | `shell/src/tab_lifecycle/restore.rs` (`TabMetadata`), scroll в SQLite | p1-session-persist |
 | 10J.3 | ✅ Restore: deserialize → re-run scripts → full layout+paint + new `PersistentJs` | `shell/src/tab_lifecycle/hibernate.rs` (`restore_js_context`) + `restore_hibernated_tab` | p1-tab-auto-archive |
-| 10K | ⬜ **`[P3]` UI affordance: индикация tier'а в tab strip** (Phase 2) | Пользователь видит, что вкладка спит | `shell/src/tabs/strip_ui.rs` |
-| 10K.1 | ⬜ Иконка "Z" / fade-opacity на T2/T3 tabs | `shell/src/tabs/strip_ui.rs` | — |
-| 10K.2 | ⬜ Tooltip "Вкладка спит — клик восстановит за ~1 сек" с показом tier'а | `shell/src/tabs/tooltip.rs` | — |
-| 10K.3 | ⬜ Loading-spinner при restore > 200 ms | `shell/src/tabs/restore_ui.rs` | — |
-| 10L | ⬜ **`[P3]` JS heap GC tuning per tier** (Phase 2) | Активная — мягкий GC, idle — агрессивный | `js/src/gc_policy.rs` |
-| 10M | ⬜ **`[P3]` `samples/heavy.html`** — Habr-style тестовая страница для бенчей T0-heavy | `samples/heavy.html` | используется в `lumen-bench` |
+| 10K | ✅ **`[P3]` UI affordance: индикация tier'а в tab strip** (Phase 2) | Пользователь видит, что вкладка спит | `shell/src/tabs/strip.rs` |
+| 10K.1 | ✅ Иконка "Z" / fade-opacity на T2/T3 tabs | `shell/src/tabs/strip.rs` (BADGE_HIBERNATE_COLOR/BADGE_SLEEP_COLOR, TAB_T2_BG/TAB_T3_BG) | p1-o12-restore-spinner |
+| 10K.2 | ✅ Tooltip "Вкладка спит — клик восстановит за ~1 сек" с показом tier'а | `shell/src/tabs/strip.rs` (`build_tab_tooltip`) | p1-o12-restore-spinner |
+| 10K.3 | ✅ Loading-spinner при restore > 200 ms | `shell/src/panels/restore_spinner.rs` (`build_spinner`, THRESHOLD_MS=200) | p1-o12-restore-spinner |
+| 10L | ✅ **`[P1]` JS heap GC tuning per tier** (Phase 2) | Активная — мягкий GC, idle — агрессивный | `js/src/gc_policy.rs` (`GcLevel`; soft/moderate/aggressive) |
+| 10M | ✅ **`[P2]` `samples/heavy.html`** — Habr-style тестовая страница для бенчей T0-heavy | `samples/heavy.html` | используется в `lumen-bench` |
 
 ---
 
