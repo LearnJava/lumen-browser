@@ -4,16 +4,31 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 **Usage:** grep for a symbol → get `file:line` → `Read file offset=N limit=30`.
 
-## lumen-a11y  (12 symbols)
+## lumen-a11y  (27 symbols)
 
-`crates/engine/a11y/src/lib.rs:24` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
-`crates/engine/a11y/src/lib.rs:33` **enum** `AriaCurrent` — `aria-current` values per WAI-ARIA §5.4.1
-`crates/engine/a11y/src/lib.rs:52` **struct** `AXState` — ARIA state and property flags for one accessibility node
-`crates/engine/a11y/src/lib.rs:113` **struct** `AXNode` — One node in the accessibility tree
-`crates/engine/a11y/src/lib.rs:145` **struct** `AXTree` — Accessibility tree rooted at a document node
-`crates/engine/a11y/src/lib.rs:160` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
+`crates/engine/a11y/src/lib.rs:25` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
+`crates/engine/a11y/src/lib.rs:34` **enum** `AriaCurrent` — `aria-current` values per WAI-ARIA §5.4.1
+`crates/engine/a11y/src/lib.rs:53` **struct** `AXState` — ARIA state and property flags for one accessibility node
+`crates/engine/a11y/src/lib.rs:114` **struct** `AXNode` — One node in the accessibility tree
+`crates/engine/a11y/src/lib.rs:146` **struct** `AXTree` — Accessibility tree rooted at a document node
+`crates/engine/a11y/src/lib.rs:161` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
 `crates/engine/a11y/src/names.rs:18` **fn** `compute_name` — Compute the accessible name for a DOM node (ACCNAME-1.2 §4.3)
 `crates/engine/a11y/src/names.rs:176` **fn** `compute_description` — Compute the accessible description for a DOM node (ACCNAME-1.2 §4.3.2)
+`crates/engine/a11y/src/platform/linux.rs:32` **struct** `AtSpiBridge` — Linux AT-SPI2 accessibility bridge
+`crates/engine/a11y/src/platform/linux.rs:41` **fn** `new` — Create a new, uninitialized AT-SPI2 bridge
+`crates/engine/a11y/src/platform/linux.rs:46` **fn** `last_tree` — Return the last-received accessibility tree, if any
+`crates/engine/a11y/src/platform/linux.rs:51` **fn** `focused_node` — Return the currently focused node, if any
+`crates/engine/a11y/src/platform/macos.rs:26` **struct** `MacA11yBridge` — macOS NSAccessibility bridge
+`crates/engine/a11y/src/platform/macos.rs:35` **fn** `new` — Create a new, uninitialized NSAccessibility bridge
+`crates/engine/a11y/src/platform/macos.rs:40` **fn** `last_tree` — Return the last-received accessibility tree, if any
+`crates/engine/a11y/src/platform/macos.rs:45` **fn** `focused_node` — Return the currently focused node, if any
+`crates/engine/a11y/src/platform/mod.rs:24` **trait** `PlatformBridge` — Trait for platform-specific accessibility bridges
+`crates/engine/a11y/src/platform/mod.rs:42` **struct** `NullBridge` — No-op bridge for headless runs, tests, and unsupported platforms
+`crates/engine/a11y/src/platform/mod.rs:56` **fn** `platform_bridge` — Create the platform bridge appropriate for the current OS
+`crates/engine/a11y/src/platform/windows.rs:25` **struct** `WinUiaBridge` — Windows UI Automation bridge
+`crates/engine/a11y/src/platform/windows.rs:34` **fn** `new` — Create a new, uninitialized UIA bridge
+`crates/engine/a11y/src/platform/windows.rs:39` **fn** `last_tree` — Return the last-received accessibility tree, if any
+`crates/engine/a11y/src/platform/windows.rs:44` **fn** `focused_node` — Return the currently focused node, if any
 `crates/engine/a11y/src/roles.rs:14` **enum** `AXRole` — All WAI-ARIA 1.2 roles
 `crates/engine/a11y/src/roles.rs:185` **fn** `as_str` — Canonical lowercase WAI-ARIA role string
 `crates/engine/a11y/src/roles.rs:266` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
@@ -3448,4 +3463,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3383 symbols in 20 crates*
+*Total: 3398 symbols in 20 crates*

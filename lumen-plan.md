@@ -184,7 +184,7 @@
 
 | # | Задача | impl / Разблокирует | Дата |
 |---|---|---|---|
-| 6+ | 🟡 **`[P1+P3]` Shadow DOM / Accessibility / Forms / GC extended** | Advanced contenteditable, form validation, accessibility full integration | Phase 2-3. P1: Shadow DOM ✅, Forms ✅, GC ✅, Selection API ✅ (2026-05-30). P3: native pickers, validation tooltip UI, platform a11y bridges |
+| 6+ | 🟡 **`[P1+P3]` Shadow DOM / Accessibility / Forms / GC extended** | Advanced contenteditable, form validation, accessibility full integration | Phase 2-3. P1: Shadow DOM ✅, Forms ✅, GC ✅, Selection API ✅ (2026-05-30), platform a11y bridges Phase 0 ✅ (2026-06-09). P3: native pickers, validation tooltip UI, Phase 1 native UIA/NSAccessibility/AT-SPI2 bindings |
 | 6.1 | ✅ contenteditable drag-drop + paste + undo/redo | Input dispatch coordination with shell | Phase 2 ✅ P1 done (2026-05-28); Phase 3 P3 shell integration pending |
 | 6.2 | ✅ accessibility forms validation + visualization | Constraint validation in accessibility tree | Phase 1-3 ✅ P1 done (2026-05-28); P3 pending |
 | 6.3 | ✅ ime-input composition events + ranges | Keyboard input for CJK/Cyrillic | Phase 1-3 ✅ P1 done (2026-05-31); Phase 2-3 P3 shell integration pending |
