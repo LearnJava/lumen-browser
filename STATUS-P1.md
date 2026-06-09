@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+O-2: 6.9 PerformanceObserver generic callback delivery  branch: p1-perf-observer
+Next step: add _lumen_deliver_perf_entry JS binding + BrowserSession::deliver_perf_entry trait method  crates/js/src/dom.rs:7521
 
 ---
 
