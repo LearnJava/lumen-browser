@@ -6,8 +6,7 @@
 
 ## In progress
 
-**R-1: Overflow scroll wheel routing + scroll events**  branch: p1-overflow-scroll-events
-Next step: add `find_scroll_container_at` to lumen-layout/src/lib.rs, then `_lumen_fire_element_scroll` in lumen-js
+_(нет)_
 
 ---
 
@@ -17,7 +16,7 @@ Next step: add `find_scroll_container_at` to lumen-layout/src/lib.rs, then `_lum
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| R-1 | **Overflow scroll wheel routing + scroll events** — wheel routes to overflow containers; `scroll` event; unblocks P4 #7 | M | `lumen-layout`, `lumen-js`, `lumen-shell` |
+| ~~R-1~~ | ~~**Overflow scroll wheel routing + scroll events**~~ — **выполнено** | M | `lumen-layout`, `lumen-js`, `lumen-shell` |
 
 ### N — Закрытие Phase 1 (выполнить первыми)
 
@@ -114,6 +113,7 @@ Next step: add `find_scroll_container_at` to lumen-layout/src/lib.rs, then `_lum
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | R-1: Overflow scroll wheel routing + scroll events | lumen-layout: `find_scroll_container_at(containers, x, y)` — находит самый глубокий overflow-контейнер под курсором (+5 тестов). lumen-js: `_lumen_fire_scroll_on_element(nid)` + `_lumen_fire_window_scroll_event()` JS-хелперы в WEB_API_SHIM (non-bubbling scroll Event, WHATWG HTML §8.1.6.2); `QuickJsRuntime::fire_element_scroll(nid)` / `fire_window_scroll()` (+3 теста). lumen-shell: `scroll_containers` Vec + `update_scroll_containers()`; `try_scroll_overflow_container(dx, dy)` — маршрутизация ColесаМыши к overflow-контейнеру; `PersistentJs` +fire_element_scroll/fire_window_scroll. 2494 тестов lumen-layout (+5), 1693 тестов lumen-js (+3). Clippy чист. Снимает блокировку P4 #7. |
 | 2026-06-09 | Q-1: DOM completeness — ChildNode/ParentNode + TreeWalker/NodeIterator | lumen-js: ChildNode mixin (remove/before/after/replaceWith), ParentNode extensions (prepend/replaceChildren) на всех DOM-элементах. TreeWalker (DOM LS §4.5): createTreeWalker, nextNode/previousNode/nextSibling/previousSibling/parentNode/firstChild/lastChild, фильтр (функция или NodeFilter-объект). NodeIterator (DOM LS §4.4): createNodeIterator, nextNode/previousNode/detach. NodeFilter константы (FILTER_ACCEPT/REJECT/SKIP, SHOW_ALL/ELEMENT/TEXT/COMMENT/…). document.adoptNode (Phase 0 no-op) + document.importNode (deep clone). window.NodeFilter/TreeWalker/NodeIterator экспортированы. +16 тестов, 1690 итого (+16 vs 1674). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | M-5: `structuredClone()` improvements | lumen-js: structuredClone добавлена поддержка Map и Set (глубокое клонирование ключей/значений). Date и RegExp уже были реализованы. +6 тестов (map, set, map_nested_objects, set_nested_objects, regexp + window_alias). 1674 тестов lumen-js (+5 vs 1669). Clippy чист. |
 | 2026-06-09 | M-4: `<input type=file>` file picker | lumen-js: новый модуль file_input.rs — File (name/size/type/lastModified, text()/arrayBuffer()/slice()), FileList (length/item/indexed/Symbol.iterator). _lumen_deliver_file_list(nid, json) — monkey-patch _lumen_make_element добавляет .files геттер для type=file. lumen-shell: platform/file_dialog.rs — open_file_dialog (Windows: PowerShell OpenFileDialog), entries_to_json. forms.rs: FormClickAction::OpenFilePicker + classify_click для InputType::File. main.rs: open_file_picker(id). 1669 тестов lumen-js (+9). Clippy чист. |
