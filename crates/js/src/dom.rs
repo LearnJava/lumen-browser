@@ -7520,6 +7520,28 @@ function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms) {
     _perf_observer_notify([entry]);
 }
 
+// Generic entry delivery — called by Rust shell for any PerformanceEntry type.
+// entry_type: W3C entryType string (e.g. 'longtask', 'element', 'event').
+// detail_json: optional JSON string; its properties are merged into the entry.
+function _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, detail_json) {
+    var entry = {
+        entryType: String(entry_type),
+        name: String(name),
+        startTime: Number(start_ms),
+        duration: Number(duration_ms),
+    };
+    if (detail_json) {
+        try {
+            var extra = JSON.parse(String(detail_json));
+            for (var k in extra) {
+                if (Object.prototype.hasOwnProperty.call(extra, k)) entry[k] = extra[k];
+            }
+        } catch(e) {}
+    }
+    _perf_entries.push(entry);
+    _perf_observer_notify([entry]);
+}
+
 // ── scheduler (Prioritized Task Scheduling API — W3C §2) ─────────────────────
 // scheduler.postTask(fn, {priority?, delay?}) → Promise
 // Priorities: 'user-blocking' (microtask-like), 'user-visible' (default,
@@ -19714,6 +19736,75 @@ mod tests {
             _lumen_record_resource_timing('https://example.com/3.css', 'link', 300, 5);
             var all = performance.getEntriesByType('resource');
             all.length === 3 && all[2].name === 'https://example.com/3.css' && all[2].initiatorType === 'link'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── _lumen_deliver_perf_entry generic binding tests (O-2) ──────────────────
+
+    #[test]
+    fn deliver_perf_entry_basic_fields() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_deliver_perf_entry('longtask', 'self', 500.0, 75.0, null);
+            var e = performance.getEntriesByType('longtask')[0];
+            e.entryType === 'longtask' && e.name === 'self' && e.startTime === 500 && e.duration === 75
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn deliver_perf_entry_detail_json_merged() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_deliver_perf_entry('element', 'img', 200.0, 0.0, '{"renderTime":210,"loadTime":205,"identifier":"hero"}');
+            var e = performance.getEntriesByType('element')[0];
+            e.renderTime === 210 && e.loadTime === 205 && e.identifier === 'hero'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn deliver_perf_entry_notifies_observer() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
+            po.observe({entryTypes: ['longtask']});
+            _lumen_deliver_perf_entry('longtask', 'self', 100.0, 60.0, null);
+            got.length === 1 && got[0].entryType === 'longtask'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn deliver_perf_entry_invalid_json_still_delivers() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_deliver_perf_entry('event', 'click', 300.0, 5.0, '{not valid json}');
+            var e = performance.getEntriesByType('event')[0];
+            e !== undefined && e.entryType === 'event' && e.startTime === 300
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn deliver_perf_entry_empty_detail_json_string() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_deliver_perf_entry('navigation', 'https://example.com/', 0.0, 800.0, '{}');
+            var e = performance.getEntriesByType('navigation')[0];
+            e.entryType === 'navigation' && e.duration === 800
             "#
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
