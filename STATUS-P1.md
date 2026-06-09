@@ -6,8 +6,7 @@
 
 ## In progress
 
-U-1: ES2026 Float16Array + Math.f16round + DataView.getFloat16/setFloat16 + Explicit Resource Management  branch: p1-float16array
-Next step: новый модуль `crates/js/src/float16_and_disposable.rs`, установка в `install_dom`
+_(нет)_
 
 ---
 
@@ -17,11 +16,11 @@ Next step: новый модуль `crates/js/src/float16_and_disposable.rs`, у
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| U-1 | **ES2026 Float16Array + DataView extensions + Explicit Resource Management** — `Float16Array`, `Math.f16round`, `DataView.getFloat16/setFloat16`, `DisposableStack`/`AsyncDisposableStack`/`SuppressedError`, `Symbol.dispose`/`Symbol.asyncDispose` | S | `lumen-js` |
-| U-2 | **Speculation Rules API Phase 0** — `<script type="speculationrules">`, `document.prerendering`, `prerenderingchange` event stub | XS | `lumen-js`, `lumen-html-parser` |
-| U-3 | **Soft Navigation Timing API** — `PerformanceSoftNavigationEntry`, `_lumen_deliver_soft_nav` binding | XS | `lumen-js` |
-| U-4 | **Content Index API (PWA)** — `ServiceWorkerRegistration.index.add()/.getAll()/.delete()` stub | XS | `lumen-js` |
-| U-5 | **Digital Credentials API stub** — `navigator.credentials.get({digital: ...})` → reject NotSupportedError | XS | `lumen-js` |
+| ~~U-1~~ | ~~**ES2026 Float16Array + DataView extensions + Explicit Resource Management**~~ — **выполнено** | S | `lumen-js` |
+| ~~U-2~~ | ~~**Speculation Rules API Phase 0**~~ — **выполнено** | XS | `lumen-js` |
+| ~~U-3~~ | ~~**Soft Navigation Timing API**~~ — **выполнено** | XS | `lumen-js` |
+| ~~U-4~~ | ~~**Content Index API (PWA)**~~ — **выполнено** | XS | `lumen-js` |
+| ~~U-5~~ | ~~**Digital Credentials API stub**~~ — **выполнено** | XS | `lumen-js` |
 
 ### T — TC39 Stage 4 ES2025 APIs (новые, не реализованы)
 
@@ -140,6 +139,7 @@ Next step: новый модуль `crates/js/src/float16_and_disposable.rs`, у
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | U-1–U-5: ES2026 Float16Array + Web Platform APIs 2025 | lumen-js es2026_proposals.rs: Float16Array (Proxy-based, full TypedArray API), Math.f16round, DataView.getFloat16/setFloat16 (ES2025). Symbol.dispose/asyncDispose, SuppressedError, DisposableStack/AsyncDisposableStack (ES2024 Explicit Resource Management). speculation_rules.rs: document.prerendering=false, document.getSpeculationRules()→[], _lumen_deliver_speculation_rules hook. soft_navigation.rs: PerformanceSoftNavigationEntry, _lumen_deliver_soft_nav. content_index.rs: ContentIndex.add/getAll/delete, ServiceWorkerRegistration.prototype.index. digital_credentials.rs: DigitalCredential, navigator.credentials.get({digital:…})→NotSupportedError. 33 новых тестов. lumen-js: 1804 тестов (+33 vs 1771). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | T-1: ES2025 Binary Data + misc TC39 APIs | lumen-js tc39_proposals.rs: Uint8Array.prototype.toBase64(opts) / Uint8Array.fromBase64(str, opts) — base64 encode/decode с alphabet (standard/url) и omitPadding/lastChunkHandling; Uint8Array.prototype.toHex() / Uint8Array.fromHex(str) — hex encode/decode. RegExp.escape(str) shim-guard (QuickJS 0.11 имеет native impl — guard не перетирает). Error.isError(value) — кросс-реальная проверка Error через toString. Atomics.pause() — no-op power-hint для spinloop-ов. 18 новых unit-тестов. lumen-js: 1771 тестов (+18 vs 1753). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | S-5: Launch Handler API | lumen-js: новый модуль launch_handler.rs — WICG Web App Launch Handler Phase 0. window.launchQueue (LaunchQueue singleton), LaunchQueue.setConsumer(fn) — регистрирует обработчик параметров запуска; LaunchParams {targetURL, files[]} — объект запуска. _lumen_deliver_launch_params(url, filesJson) — shell-хук для Phase 1 (OS file associations + URL activation). setConsumer() сразу сбрасывает очередь ранее накопленных params. window.LaunchParams экспортирован для feature detection. 9 unit-тестов. lumen-js: 1753 тестов (+9 vs 1744). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-4: Long Animation Frames API (LoAF) | lumen-js: новый модуль long_animation_frames.rs — W3C Long Animation Frames API. PerformanceLongAnimationFrameTiming (entryType='long-animation-frame', поля startTime/duration/renderStart/styleAndLayoutStart/firstUIEventTimestamp/blockingDuration/scripts[]). PerformanceScriptTiming (entryType='script', invoker/invokerType/windowAttribution/executionStart/forcedStyleAndLayoutDuration/pauseDuration/sourceURL/sourceFunctionName/sourceCharPosition). _lumen_deliver_long_animation_frame(start,duration,renderStart,styleLayoutStart,firstUIEventTs,blockingDuration,scripts_json) — delivery binding + уведомление PerformanceObserver. QuickJsRuntime::deliver_long_animation_frame() для shell Phase 1. 10 unit-тестов. lumen-js: 1744 тестов (+10 vs 1734). Clippy чист. Без новых зависимостей. |
