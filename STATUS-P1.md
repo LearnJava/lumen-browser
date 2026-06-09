@@ -6,11 +6,21 @@
 
 ## In progress
 
-_(нет)_
+S-1: TC39 Stage 4 collection APIs — branch: p1-tc39-stage4-collections
 
 ---
 
 ## Next
+
+### S — TC39 Stage 4 JS APIs (не реализованы в QuickJS)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| S-1 | **TC39 Stage 4 collection APIs** — `Object.groupBy`, `Map.groupBy`, `Set` methods (union/intersection/difference/symmetricDifference/isSubsetOf/isSupersetOf/isDisjointFrom), `Promise.withResolvers`, `Promise.try`, Iterator helpers (map/filter/reduce/take/drop/flatMap/toArray/forEach/some/every/find/from) | M | `lumen-js` |
+| S-2 | **Window Management API** — `window.screen.isExtended`, `getScreenDetails()` → `ScreenDetails { screens, currentScreen }`, `ScreenDetailed extends Screen` | S | `lumen-js` |
+| S-3 | **Local Font Access API** — `navigator.fonts.query()` Phase 0 stub → `[]` | XS | `lumen-js` |
+| S-4 | **Long Animation Frames API (LoAF)** — `PerformanceLongAnimationFrameTiming`, `PerformanceScriptTiming`, PerformanceObserver `long-animation-frame` | S | `lumen-js` |
+| S-5 | **Launch Handler API** — `window.launchQueue`, `LaunchParams`, `LaunchQueue.setConsumer()` | XS | `lumen-js` |
 
 ### R — Scroll Infrastructure
 
