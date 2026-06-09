@@ -216,8 +216,10 @@ pub enum SettingsHit {
     ToggleDoh,
     /// Click on a fingerprint mode option.
     SetFingerprintMode(String),
-    /// Click on a theme option.
+    /// Click on a base theme option (`"dark"`, `"light"`, `"system"`).
     SetTheme(String),
+    /// Click on an accent-colour swatch.
+    SetAccent(String),
     /// Click on the font-size decrease (−2 px) button.
     FontSizeDecrease,
     /// Click on the font-size increase (+2 px) button.
@@ -323,7 +325,7 @@ fn ht_appearance(lx: f32, ly: f32) -> SettingsHit {
         }
         return SettingsHit::Inside;
     }
-    // Row 1: theme options
+    // Row 1: base theme options (dark / light / system)
     if ly < ROW_H * 2.0 {
         let options = ["dark", "light", "system"];
         let right_start = PANEL_W / 2.0;
@@ -332,6 +334,22 @@ fn ht_appearance(lx: f32, ly: f32) -> SettingsHit {
             let ox = right_start + i as f32 * option_w;
             if lx >= ox && lx < ox + option_w {
                 return SettingsHit::SetTheme(opt.to_owned());
+            }
+        }
+        return SettingsHit::Inside;
+    }
+    // Row 2: accent colour swatches (6 circles)
+    if ly < ROW_H * 3.0 {
+        use crate::panels::themes::AccentPreset;
+        let swatch_sz = 22.0;
+        let gap = 8.0;
+        let total_w = AccentPreset::ALL.len() as f32 * (swatch_sz + gap) - gap;
+        let start_x = PANEL_W / 2.0;
+        let _ = total_w; // positioned from right-half start, left-to-right
+        for (i, preset) in AccentPreset::ALL.iter().enumerate() {
+            let sx = start_x + i as f32 * (swatch_sz + gap);
+            if lx >= sx && lx < sx + swatch_sz {
+                return SettingsHit::SetAccent(preset.key().to_owned());
             }
         }
     }
@@ -597,14 +615,45 @@ fn render_appearance(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f
             btn_w - 8.0, 13.0, FontWeight::BOLD, TOGGLE_TEXT));
     }
 
-    // Row 1: theme options.
+    // Row 1: base theme options.
     push_row(list, x, by + ROW_H, 1);
     push_label(list, x, by + ROW_H, "Тема");
+    // Parse current base from draft.theme (before the '+' if present).
+    let current_base = panel.draft.theme.split('+').next().unwrap_or("system");
     push_options(
         list, x, by + ROW_H,
         &[("dark", "Тёмная"), ("light", "Светлая"), ("system", "Система")],
-        &panel.draft.theme,
+        current_base,
     );
+
+    // Row 2: accent colour swatches.
+    push_row(list, x, by + ROW_H * 2.0, 2);
+    push_label(list, x, by + ROW_H * 2.0, "Акцент");
+    {
+        use crate::panels::themes::AccentPreset;
+        let current_accent = panel.draft.theme.split('+').nth(1).unwrap_or("blue");
+        let swatch_sz = 22.0;
+        let gap = 8.0;
+        let sy = by + ROW_H * 2.0 + (ROW_H - swatch_sz) * 0.5;
+        let start_x = x + PANEL_W / 2.0;
+        for (i, preset) in AccentPreset::ALL.iter().enumerate() {
+            let sx = start_x + i as f32 * (swatch_sz + gap);
+            let is_active = preset.key() == current_accent;
+            if is_active {
+                // White ring drawn first (below the swatch).
+                list.push(DisplayCommand::FillRoundedRect {
+                    rect: Rect::new(sx - 2.0, sy - 2.0, swatch_sz + 4.0, swatch_sz + 4.0),
+                    radii: radii((swatch_sz + 4.0) * 0.5),
+                    color: Color { r: 255, g: 255, b: 255, a: 200 },
+                });
+            }
+            list.push(DisplayCommand::FillRoundedRect {
+                rect: Rect::new(sx, sy, swatch_sz, swatch_sz),
+                radii: radii(swatch_sz * 0.5),
+                color: preset.color(),
+            });
+        }
+    }
 }
 
 fn render_downloads(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32) {

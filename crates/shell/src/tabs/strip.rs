@@ -19,10 +19,18 @@ use crate::tabs::containers::ContainerKind;
 /// Height of the tab bar in CSS px. Subtracted from `viewport_height_css()`.
 pub const TAB_BAR_HEIGHT: f32 = 36.0;
 
+/// Pixels the cursor must travel before a press becomes a drag.
+pub const DRAG_THRESHOLD: f32 = 6.0;
+
+/// Width of the drop-indicator bar rendered between tabs during a drag.
+const DROP_INDICATOR_W: f32 = 3.0;
+
+/// Colour of the vertical drop-indicator bar.
+const DROP_INDICATOR_COLOR: Color = Color { r: 255, g: 255, b: 255, a: 180 };
+
 const BAR_BG: Color = Color { r: 22, g: 22, b: 26, a: 255 };
 const TAB_INACTIVE_BG: Color = Color { r: 32, g: 33, b: 36, a: 255 };
 const TAB_ACTIVE_BG: Color = Color { r: 18, g: 18, b: 22, a: 255 };
-const TAB_ACTIVE_ACCENT: Color = Color { r: 100, g: 160, b: 255, a: 255 };
 const TAB_TEXT: Color = Color { r: 218, g: 218, b: 228, a: 255 };
 const TAB_TEXT_DIM: Color = Color { r: 140, g: 140, b: 148, a: 255 };
 const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
@@ -214,6 +222,55 @@ impl TabStrip {
             tab.tab_state = state;
         }
     }
+
+    /// Reorder: move the tab currently at `src` so that it ends up at `dst`.
+    ///
+    /// Out-of-bounds indices and `src == dst` are no-ops.  `active` is updated
+    /// so the same logical tab remains selected after the move.
+    pub fn move_tab(&mut self, src: usize, dst: usize) {
+        if src == dst || src >= self.tabs.len() || dst >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(src);
+        self.tabs.insert(dst, tab);
+        self.active = if self.active == src {
+            dst
+        } else if src < dst && src < self.active && self.active <= dst {
+            self.active - 1
+        } else if src > dst && dst <= self.active && self.active < src {
+            self.active + 1
+        } else {
+            self.active
+        };
+    }
+}
+
+// ── Drag state ────────────────────────────────────────────────────────────────
+
+/// State for an in-progress tab drag-and-drop.
+///
+/// Created when the user presses on a tab; transitions to `active` after the
+/// cursor crosses [`DRAG_THRESHOLD`] CSS px.
+pub struct TabDragState {
+    /// Index of the tab being dragged.
+    pub src_idx: usize,
+    /// X position where the mouse was first pressed (CSS px).
+    pub press_x: f32,
+    /// Current cursor X (CSS px) — drives the drop-indicator position.
+    pub ghost_x: f32,
+    /// Whether the drag crossed the threshold and should be rendered visually.
+    pub active: bool,
+}
+
+impl TabDragState {
+    /// Compute the tab index where the dragged tab would be dropped if the
+    /// mouse were released at the current [`ghost_x`].
+    pub fn drop_target(&self, n_tabs: usize, window_w: f32) -> usize {
+        if n_tabs == 0 { return 0; }
+        let tab_w = (window_w / n_tabs as f32).clamp(TAB_MIN_W, TAB_MAX_W);
+        let raw = (self.ghost_x / tab_w).round() as usize;
+        raw.min(n_tabs.saturating_sub(1))
+    }
 }
 
 // ── Hit-testing ───────────────────────────────────────────────────────────────
@@ -264,6 +321,9 @@ pub fn hit_test(strip: &TabStrip, x: f32, y: f32, window_w: f32) -> TabHit {
 
 /// Build a viewport-locked display list for the tab bar.
 ///
+/// `accent` overrides the active-tab indicator colour (bottom 2 px bar).
+/// Pass `drag` during a drag-and-drop operation to render the drop indicator.
+///
 /// Appended to the overlay buffer each frame; rendered on top of page content
 /// at y = 0..`TAB_BAR_HEIGHT`.
 ///
@@ -271,7 +331,12 @@ pub fn hit_test(strip: &TabStrip, x: f32, y: f32, window_w: f32) -> TabHit {
 /// - `TabState::BackgroundOld` → amber dot at top-right corner of the tab button.
 /// - `TabState::Hibernated`    → grey dot at top-right corner of the tab button.
 /// - All other states          → no badge rendered.
-pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
+pub fn build_tab_bar(
+    strip: &TabStrip,
+    window_w: f32,
+    accent: Color,
+    drag: Option<&TabDragState>,
+) -> DisplayList {
     let n = strip.tabs.len();
     let mut out = DisplayList::with_capacity(4 + n * 6);
 
@@ -304,7 +369,7 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
         if is_active {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(left, TAB_BAR_HEIGHT - 2.0, right - left, 2.0),
-                color: TAB_ACTIVE_ACCENT,
+                color: accent,
             });
         }
 
@@ -385,6 +450,19 @@ pub fn build_tab_bar(strip: &TabStrip, window_w: f32) -> DisplayList {
             highlight_name: None,
         });
     }
+
+    // Drop indicator: vertical bar at the target insertion gap, shown only
+    // while a drag is active (cursor moved past threshold).
+    if let Some(d) = drag
+        && d.active {
+            let tab_w = (window_w / n as f32).clamp(TAB_MIN_W, TAB_MAX_W);
+            let target = d.drop_target(n, window_w);
+            let ix = target as f32 * tab_w - DROP_INDICATOR_W * 0.5;
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(ix, 2.0, DROP_INDICATOR_W, TAB_BAR_HEIGHT - 4.0),
+                color: DROP_INDICATOR_COLOR,
+            });
+        }
 
     out
 }
@@ -534,7 +612,7 @@ mod tests {
     #[test]
     fn build_tab_bar_emits_commands() {
         let s = TabStrip::new();
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         assert!(!dl.is_empty());
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
@@ -545,7 +623,7 @@ mod tests {
     #[test]
     fn build_tab_bar_no_badge_for_active() {
         let s = TabStrip::new(); // single Active tab
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         // Active tab must not emit a sleep-icon badge (no "Z"/"z" glyph).
         let has_sleep_badge = dl.iter().any(|c| match c {
             DisplayCommand::DrawText { text, .. } => text == "Z" || text == "z",
@@ -559,7 +637,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         // Amber "z" glyph badge for BackgroundOld tier.
         let has_z = dl.iter().any(|c| match c {
             DisplayCommand::DrawText { text, color, .. } => {
@@ -575,7 +653,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         // Grey "Z" glyph badge for Hibernated tier.
         let has_z = dl.iter().any(|c| match c {
             DisplayCommand::DrawText { text, color, .. } => {
@@ -592,7 +670,7 @@ mod tests {
         s.push_blank(0.0); // index 0 — active
         s.push_blank(0.0); // index 1 — inactive BackgroundOld
         s.set_tab_state(1, TabState::BackgroundOld);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         // T2 background must be TAB_T2_BG, not TAB_INACTIVE_BG.
         let has_t2_bg = dl.iter().any(|c| match c {
             DisplayCommand::FillRect { color, .. } => *color == TAB_T2_BG,
@@ -607,7 +685,7 @@ mod tests {
         s.push_blank(0.0); // index 0 — active
         s.push_blank(0.0); // index 1 — inactive Hibernated
         s.set_tab_state(1, TabState::Hibernated);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         // T3 background must be TAB_T3_BG.
         let has_t3_bg = dl.iter().any(|c| match c {
             DisplayCommand::FillRect { color, .. } => *color == TAB_T3_BG,
@@ -674,7 +752,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_work() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Work);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         let expected = ContainerKind::Work.border_color().expect("Work has colour");
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -683,7 +761,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_personal() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Personal);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         let expected = ContainerKind::Personal.border_color().expect("Personal has colour");
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -692,7 +770,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_finance() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Finance);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         let expected = ContainerKind::Finance.border_color().expect("Finance has colour");
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -701,7 +779,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_shopping() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Shopping);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         let expected = ContainerKind::Shopping.border_color().expect("Shopping has colour");
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -710,7 +788,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_custom_rgb() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Custom(200, 50, 100));
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         let expected = Color { r: 200, g: 50, b: 100, a: 255 };
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -718,7 +796,7 @@ mod tests {
     #[test]
     fn build_tab_bar_no_strip_for_none_container() {
         let s = TabStrip::new(); // single tab, ContainerKind::None
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         // No FillRect of CONTAINER_STRIP_HEIGHT may exist when container is None.
         let strips = dl
             .iter()
@@ -739,7 +817,7 @@ mod tests {
         s.push_blank(0.0);
         s.push_blank(0.0);
         s.set_tab_container(1, ContainerKind::Work);
-        let dl = build_tab_bar(&s, 1024.0);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
         let work_color = ContainerKind::Work.border_color().expect("Work has colour");
         // Exactly one Work-coloured strip (tab 1); tabs 0 and 2 have None.
         assert_eq!(count_container_strips(&dl, work_color), 1);
@@ -785,5 +863,144 @@ mod tests {
             last_activated_ms: 0.0,
         };
         assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_some());
+    }
+
+    // ── move_tab tests ───────────────────────────────────────────────────────
+
+    /// Helper: extract tab ids from the strip in order.
+    fn ids(s: &TabStrip) -> Vec<usize> {
+        s.tabs.iter().map(|t| t.id).collect()
+    }
+
+    fn strip_with_n(n: usize) -> TabStrip {
+        let mut s = TabStrip::new(); // id=0
+        for _ in 1..n { s.push_blank(0.0); }
+        s
+    }
+
+    #[test]
+    fn move_tab_forward() {
+        let mut s = strip_with_n(5);
+        // ids: [0,1,2,3,4], move id=1 (idx=1) to idx=3
+        s.move_tab(1, 3);
+        assert_eq!(ids(&s), vec![0, 2, 3, 1, 4]);
+    }
+
+    #[test]
+    fn move_tab_backward() {
+        let mut s = strip_with_n(5);
+        // ids: [0,1,2,3,4], move id=3 (idx=3) to idx=1
+        s.move_tab(3, 1);
+        assert_eq!(ids(&s), vec![0, 3, 1, 2, 4]);
+    }
+
+    #[test]
+    fn move_tab_same_index_noop() {
+        let mut s = strip_with_n(3);
+        s.move_tab(1, 1);
+        assert_eq!(ids(&s), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn move_tab_out_of_bounds_noop() {
+        let mut s = strip_with_n(3);
+        s.move_tab(0, 99);
+        assert_eq!(ids(&s), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn move_tab_active_tracks_src() {
+        let mut s = strip_with_n(5);
+        s.active = 1; // id=1
+        s.move_tab(1, 3);
+        assert_eq!(s.active, 3, "active tab moved from 1 to 3");
+    }
+
+    #[test]
+    fn move_tab_active_shifts_left_when_src_before() {
+        let mut s = strip_with_n(5);
+        s.active = 2; // id=2
+        s.move_tab(1, 3);
+        // id=1 moved forward past id=2, so active shifts left
+        assert_eq!(s.active, 1);
+    }
+
+    #[test]
+    fn move_tab_active_shifts_right_when_src_after() {
+        let mut s = strip_with_n(5);
+        s.active = 2; // id=2
+        s.move_tab(3, 1);
+        // id=3 moved backward past id=2, so active shifts right
+        assert_eq!(s.active, 3);
+    }
+
+    #[test]
+    fn move_tab_active_unaffected_outside_range() {
+        let mut s = strip_with_n(5);
+        s.active = 4;
+        s.move_tab(1, 3);
+        assert_eq!(s.active, 4);
+    }
+
+    // ── TabDragState::drop_target tests ──────────────────────────────────────
+
+    #[test]
+    fn drop_target_first_tab() {
+        let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 10.0, active: true };
+        // 5 tabs, each 200px wide in 1000px window → ghost at 10 → target 0
+        assert_eq!(drag.drop_target(5, 1000.0), 0);
+    }
+
+    #[test]
+    fn drop_target_last_tab() {
+        let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 950.0, active: true };
+        assert_eq!(drag.drop_target(5, 1000.0), 4);
+    }
+
+    #[test]
+    fn drop_target_middle() {
+        let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 400.0, active: true };
+        // ghost at 400 / 200 = 2 → target 2
+        assert_eq!(drag.drop_target(5, 1000.0), 2);
+    }
+
+    #[test]
+    fn build_tab_bar_drop_indicator_when_active_drag() {
+        let mut s = TabStrip::new();
+        s.push_blank(0.0);
+        let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 100.0, active: true };
+        let accent = Color { r: 100, g: 128, b: 255, a: 255 };
+        let dl = build_tab_bar(&s, 1024.0, accent, Some(&drag));
+        // Drop indicator must produce a FillRect
+        let has_indicator = dl.iter().any(|c| match c {
+            DisplayCommand::FillRect { color, .. } => *color == DROP_INDICATOR_COLOR,
+            _ => false,
+        });
+        assert!(has_indicator, "active drag must render a drop indicator");
+    }
+
+    #[test]
+    fn build_tab_bar_no_indicator_when_drag_not_active() {
+        let s = TabStrip::new();
+        let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 100.0, active: false };
+        let accent = Color { r: 100, g: 128, b: 255, a: 255 };
+        let dl = build_tab_bar(&s, 1024.0, accent, Some(&drag));
+        let has_indicator = dl.iter().any(|c| match c {
+            DisplayCommand::FillRect { color, .. } => *color == DROP_INDICATOR_COLOR,
+            _ => false,
+        });
+        assert!(!has_indicator, "inactive drag must not render a drop indicator");
+    }
+
+    #[test]
+    fn build_tab_bar_accent_color_used_for_active_tab() {
+        let s = TabStrip::new(); // one active tab
+        let custom_accent = Color { r: 230, g: 59, b: 111, a: 255 }; // rose
+        let dl = build_tab_bar(&s, 1024.0, custom_accent, None);
+        let has_accent = dl.iter().any(|c| match c {
+            DisplayCommand::FillRect { color, .. } => *color == custom_accent,
+            _ => false,
+        });
+        assert!(has_accent, "active tab must use the provided accent color");
     }
 }

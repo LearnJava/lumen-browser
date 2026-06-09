@@ -471,6 +471,8 @@ fn run_window_mode(
         archive: tabs::archive::TabArchive::new(),
         restore_spinner_start_ms: None,
         resize_active: None,
+        tab_drag: None,
+        shell_theme: panels::themes::ShellTheme::default(),
         reader_original_source: None,
         cert_info: None,
         cert_panel: panels::cert_panel::CertPanel::new(),
@@ -4138,6 +4140,20 @@ struct Lumen {
     /// Set on MouseInput Pressed over a resize grip, cleared on MouseInput Released.
     /// During CursorMoved, width/height are updated via JS binding.
     resize_active: Option<(lumen_dom::NodeId, f32, f32)>,
+    /// In-progress tab drag-and-drop (§O-9).
+    ///
+    /// `Some` from the moment the user presses on a tab until they release.
+    /// Transitions to `active = true` after the cursor crosses
+    /// [`tabs::strip::DRAG_THRESHOLD`] px.  On release, calls
+    /// `tab_strip.move_tab` if the drag was active.
+    tab_drag: Option<tabs::strip::TabDragState>,
+    /// Shell UI theme: base brightness + accent colour (§O-9).
+    ///
+    /// Initialised from `BrowserSettings` on startup.  Updated when the user
+    /// changes the theme or accent in the settings panel (Appearance section).
+    /// The accent drives the active-tab indicator colour passed to
+    /// `build_tab_bar`.
+    shell_theme: panels::themes::ShellTheme,
     /// Original page source stored when Reader View (§D-3) is active.
     ///
     /// `Some` when the current page is showing the clean reader HTML (F9 toggle);
@@ -5420,6 +5436,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         (position.y as f32) / dpr,
                     );
                 }
+                // Tab drag-and-drop (§O-9): update ghost position; activate after threshold.
+                if let Some(ref mut tab_drag) = self.tab_drag {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    tab_drag.ghost_x = x_css;
+                    if !tab_drag.active
+                        && (x_css - tab_drag.press_x).abs() >= tabs::strip::DRAG_THRESHOLD
+                    {
+                        tab_drag.active = true;
+                    }
+                    if tab_drag.active {
+                        self.request_redraw();
+                    }
+                }
                 // Активный drag — пересчитать scroll по новой позиции.
                 if let Some(drag) = self.scroll_drag {
                     let dpr = self
@@ -5745,7 +5779,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let tab_area_w =
                             win_w - tabs::archive::ARCHIVE_BTN_W;
                         match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
-                            tabs::strip::TabHit::Tab(idx) => self.switch_tab(idx),
+                            tabs::strip::TabHit::Tab(idx) => {
+                                // Record a potential drag; switch tab only if no drag occurs
+                                // (resolved on MouseInput Release).
+                                self.tab_drag = Some(tabs::strip::TabDragState {
+                                    src_idx: idx,
+                                    press_x: x_css,
+                                    ghost_x: x_css,
+                                    active: false,
+                                });
+                                self.switch_tab(idx);
+                            }
                             tabs::strip::TabHit::Close(idx) => {
                                 self.close_tab(idx, event_loop);
                             }
@@ -6148,6 +6192,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         match hit {
                             SettingsHit::Close => {
                                 let draft = self.settings_panel.apply_draft();
+                                // Apply theme & accent from draft when panel closes.
+                                self.shell_theme =
+                                    panels::themes::ShellTheme::parse(&draft.theme);
+                                // Mirror explicit dark/light lock to dark_mode so that
+                                // @media prefers-color-scheme reflects the user choice.
+                                // For System theme, is_dark(self.dark_mode) = self.dark_mode
+                                // (no change); for Dark/Light it overrides.
+                                let new_dark = self.shell_theme.is_dark(self.dark_mode);
+                                if new_dark != self.dark_mode {
+                                    self.dark_mode = new_dark;
+                                    self.relayout();
+                                }
                                 let _ = self.settings_store.apply_snapshot(&draft);
                                 self.settings_panel.visible = false;
                             }
@@ -6166,8 +6222,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             SettingsHit::SetFingerprintMode(mode) => {
                                 self.settings_panel.draft.fingerprint_mode = mode;
                             }
-                            SettingsHit::SetTheme(theme) => {
-                                self.settings_panel.draft.theme = theme;
+                            SettingsHit::SetTheme(base) => {
+                                // Preserve the existing accent when changing the base.
+                                let current = panels::themes::ShellTheme::parse(
+                                    &self.settings_panel.draft.theme,
+                                );
+                                let new_theme = panels::themes::ShellTheme {
+                                    base: panels::themes::ShellTheme::parse(&base).base,
+                                    accent: current.accent,
+                                };
+                                self.settings_panel.draft.theme = new_theme.to_settings_str();
+                                self.shell_theme = new_theme;
+                            }
+                            SettingsHit::SetAccent(accent_key) => {
+                                // Preserve the existing base when changing the accent.
+                                let current = panels::themes::ShellTheme::parse(
+                                    &self.settings_panel.draft.theme,
+                                );
+                                let new_theme = panels::themes::ShellTheme {
+                                    base: current.base,
+                                    accent: panels::themes::AccentPreset::from_key(&accent_key),
+                                };
+                                self.settings_panel.draft.theme = new_theme.to_settings_str();
+                                self.shell_theme = new_theme;
                             }
                             SettingsHit::FontSizeDecrease => {
                                 self.settings_panel.draft.font_size =
@@ -6446,6 +6523,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.js_pointer_event(nid, "pointerup", xu, yu, 0, 0);
                         self.js_mouse_event(nid, "mouseup", xu, yu, 0, 0);
                     }
+                    // Tab drag-and-drop (§O-9): resolve the drop and reorder.
+                    if let Some(drag) = self.tab_drag.take()
+                        && drag.active {
+                            let dpr = self
+                                .renderer
+                                .as_ref()
+                                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                                .max(1e-6);
+                            let win_w = self.viewport_width_css();
+                            let tab_area_w = win_w - tabs::archive::ARCHIVE_BTN_W;
+                            let release_x = self.cursor_position
+                                .map(|p| (p.x as f32) / dpr)
+                                .unwrap_or(drag.ghost_x);
+                            let updated = tabs::strip::TabDragState {
+                                ghost_x: release_x,
+                                ..drag
+                            };
+                            let dst = updated.drop_target(self.tab_strip.len(), tab_area_w);
+                            if dst != updated.src_idx {
+                                self.tab_strip.move_tab(updated.src_idx, dst);
+                            }
+                            self.request_redraw();
+                        }
                     // Bookmark drag-and-drop: if a bookmark drag is in progress,
                     // resolve the drop target. Dropping on a folder re-files the
                     // bookmark; dropping anywhere else opens it (a plain click).
@@ -7249,8 +7349,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_w = self.viewport_width_css();
                     // Tab strip uses the area to the left of the archive button.
                     let tab_area_w = win_w - tabs::archive::ARCHIVE_BTN_W;
-                    let mut tab_cmds =
-                        tabs::strip::build_tab_bar(&self.tab_strip, tab_area_w);
+                    let mut tab_cmds = tabs::strip::build_tab_bar(
+                        &self.tab_strip,
+                        tab_area_w,
+                        self.shell_theme.accent_color(),
+                        self.tab_drag.as_ref(),
+                    );
                     overlay_buf.append(&mut tab_cmds);
                     // Tab tier tooltip on hover.
                     if let Some(idx) = self.hovered_tab_idx
