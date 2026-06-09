@@ -15,16 +15,19 @@
 //! Реализовано: §12.2 аннотации/заметки ([`notes`], своя FTS5-таблица),
 //! §12.3 read-later ([`read_later`], snapshot HTML + текст), §12.4 поиск
 //! по открытым вкладкам ([`open_tabs`], live-индекс без disk-persistence).
-//! Общий контракт `KnowledgeStore` (`lumen-core::ext`) — отдельная задача.
+//! §12.1–12.4 объединены в [`DefaultKnowledgeStore`] через трейт
+//! [`lumen_core::ext::KnowledgeStore`] — единый фасад для shell и omnibox.
 
 pub mod fts;
 pub mod history;
 pub mod notes;
 pub mod open_tabs;
 pub mod read_later;
+pub mod store;
 
 pub use fts::{HistoryFts, SearchHit};
 pub use history::HistoryWithFts;
 pub use notes::{Note, NoteSearchHit, Notes};
 pub use open_tabs::{OpenTabHit, OpenTabsIndex};
 pub use read_later::{ReadLater, ReadLaterEntry, ReadLaterSearchHit, ReadStatus};
+pub use store::DefaultKnowledgeStore;

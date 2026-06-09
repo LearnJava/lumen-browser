@@ -366,6 +366,9 @@ fn run_window_mode(
         form_state: HashMap::new(),
         validation_tooltip: None,
         color_picker_node: None,
+        date_picker_node: None,
+        date_picker_year: 0,
+        date_picker_month: 0,
         select_dropdown_node: None,
         ls_storage: HashMap::new(),
         idb_dir: lumen_idb_dir(),
@@ -378,6 +381,7 @@ fn run_window_mode(
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
         history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
+        notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
         next_history_id: 1,
         hyp_provider: KnuthLiangHyphenation::new(),
@@ -2474,6 +2478,8 @@ struct PageSnapshot {
     form_state: forms::FormState,
     validation_tooltip: Option<(Rect, String)>,
     color_picker_node: Option<NodeId>,
+    /// NodeId of the `<input type="date/…">` whose calendar picker is open in this tab snapshot.
+    date_picker_node: Option<NodeId>,
     /// NodeId of the `<select>` whose dropdown is open in this tab snapshot.
     select_dropdown_node: Option<NodeId>,
     ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
@@ -3723,6 +3729,13 @@ struct Lumen {
     /// NodeId of the `<input type="color">` whose picker is currently open.
     /// The picker overlay is viewport-locked; clicking a swatch closes it.
     color_picker_node: Option<NodeId>,
+    /// NodeId of the `<input type="date/datetime-local/time/month/week">` whose
+    /// calendar picker overlay is open. `None` when no picker is visible.
+    date_picker_node: Option<NodeId>,
+    /// Calendar year currently displayed in the open date picker (1-based).
+    date_picker_year: i32,
+    /// Calendar month currently displayed in the open date picker (1-based, 1=January).
+    date_picker_month: u8,
     /// NodeId of the `<select>` whose dropdown is currently open.
     /// The dropdown overlay is viewport-locked; clicking an option closes it.
     select_dropdown_node: Option<NodeId>,
@@ -3761,6 +3774,9 @@ struct Lumen {
     /// FTS5-индекс по тексту посещённых страниц — используется omnibox (@history).
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     history_fts: HistoryFts,
+    /// Хранилище пользовательских заметок (§12.2) — omnibox `@notes <query>`.
+    /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
+    notes_store: lumen_knowledge::Notes,
     /// История поисковых запросов для prefix-match autocomplete в omnibox.
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     search_history: SearchHistory,
@@ -4717,6 +4733,9 @@ impl Lumen {
         self.form_state.clear();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        self.date_picker_node = None;
+        self.date_picker_year = 0;
+        self.date_picker_month = 0;
         self.select_dropdown_node = None;
         // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
         self.first_paint_delivered = false;
@@ -6861,6 +6880,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     picker.append(&mut overlay_buf);
                     overlay_buf = picker;
                 }
+                if let (Some(dp_node), Some(lb)) =
+                    (self.date_picker_node, &self.layout_box)
+                    && let Some(anchor) = forms::find_box_rect(lb, dp_node)
+                {
+                    let mut dp = forms::build_date_picker(anchor, self.scroll_y, vp_w, self.date_picker_year, self.date_picker_month);
+                    dp.append(&mut overlay_buf);
+                    overlay_buf = dp;
+                }
                 if let (Some(sel_node), Some(lb)) =
                     (self.select_dropdown_node, &self.layout_box)
                     && let Some(anchor) = forms::find_box_rect(lb, sel_node)
@@ -7577,6 +7604,48 @@ impl Lumen {
         // Any click outside the picker closes it.
         self.color_picker_node = None;
 
+        // ── Date picker hit ──────────────────────────────
+        let date_hit: Option<(NodeId, forms::DatePickerHit)> = {
+            let dp_node = self.date_picker_node;
+            dp_node.and_then(|dn| {
+                let anchor = forms::find_box_rect(self.layout_box.as_ref()?, dn)?;
+                let vp_w2 = self.viewport_width_css();
+                let hit = forms::hit_date_picker(anchor, scroll_y, vp_w2, self.date_picker_year, self.date_picker_month, x_css, y_css);
+                Some((dn, hit))
+            })
+        };
+        if let Some((dn, hit)) = date_hit {
+            match hit {
+                forms::DatePickerHit::Prev => {
+                    let (ny, nm) = forms::advance_month(self.date_picker_year, self.date_picker_month, -1);
+                    self.date_picker_year = ny;
+                    self.date_picker_month = nm;
+                    self.request_redraw();
+                    return;
+                }
+                forms::DatePickerHit::Next => {
+                    let (ny, nm) = forms::advance_month(self.date_picker_year, self.date_picker_month, 1);
+                    self.date_picker_year = ny;
+                    self.date_picker_month = nm;
+                    self.request_redraw();
+                    return;
+                }
+                forms::DatePickerHit::Day(day) => {
+                    self.date_picker_node = None;
+                    let date_str = forms::format_date_value(self.date_picker_year, self.date_picker_month, day);
+                    if let Some(src) = self.layout_source.as_mut() {
+                        forms::set_value(&mut src.document.lock().unwrap(), dn, &date_str);
+                    }
+                    self.form_state.entry(dn).or_default().value = date_str;
+                    self.relayout();
+                    return;
+                }
+                forms::DatePickerHit::None => {}
+            }
+        }
+        // Any click outside the date picker closes it.
+        self.date_picker_node = None;
+
         // ── Select dropdown option hit ───────────────────
         // Check if click lands on an open <select> dropdown.
         let select_hit: Option<(NodeId, usize)> = {
@@ -7747,6 +7816,13 @@ impl Lumen {
                         outcome: click_log::ClickOutcome::FormAction("OpenColorPicker"),
                     });
                 }
+                forms::FormClickAction::OpenDatePicker(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenDatePicker"),
+                    });
+                }
                 forms::FormClickAction::OpenSelectDropdown(_) => {
                     click_log::log_click(&click_log::ClickInfo {
                         win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
@@ -7796,6 +7872,21 @@ impl Lumen {
             }
             forms::FormClickAction::OpenColorPicker(id) => {
                 self.color_picker_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::OpenDatePicker(id) => {
+                let (y, m) = self.layout_source.as_ref()
+                    .and_then(|src| {
+                        let doc = src.document.lock().ok()?;
+                        let val = doc.get(id).get_attr("value").unwrap_or("").to_owned();
+                        forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
+                    })
+                    .unwrap_or_else(forms::today_year_month);
+                self.date_picker_node = Some(id);
+                self.date_picker_year = y;
+                self.date_picker_month = m;
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -8896,6 +8987,7 @@ impl Lumen {
     /// Запрашивает подсказки для текущего ввода в адресной строке.
     ///
     /// `@history <query>` → FTS5-поиск по истории страниц.
+    /// `@notes <query>` → FTS5-поиск по заметкам (§12.2).
     /// Обычный ввод → prefix-match по search_history + FTS5.
     fn query_omnibox_suggestions(&self) -> Vec<address_bar::OmniboxSuggestion> {
         use address_bar::{OmniboxPrefix, OmniboxSuggestion, parse_omnibox_prefix};
@@ -8916,6 +9008,18 @@ impl Lumen {
                         suggestions.push(OmniboxSuggestion::HistoryFts {
                             url: hit.url,
                             title: hit.title,
+                            snippet: hit.snippet,
+                        });
+                    }
+                }
+            }
+            OmniboxPrefix::Notes => {
+                // @notes <query> — FTS5-поиск по заметкам §12.2.
+                if !query.is_empty() && let Ok(hits) = self.notes_store.search(query, 7) {
+                    for hit in hits {
+                        suggestions.push(OmniboxSuggestion::Note {
+                            url: hit.note.url,
+                            selection: hit.note.selection,
                             snippet: hit.snippet,
                         });
                     }
@@ -9268,6 +9372,21 @@ impl Lumen {
             }
             forms::FormClickAction::OpenColorPicker(id) => {
                 self.color_picker_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::OpenDatePicker(id) => {
+                let (y, m) = self.layout_source.as_ref()
+                    .and_then(|src| {
+                        let doc = src.document.lock().ok()?;
+                        let val = doc.get(id).get_attr("value").unwrap_or("").to_owned();
+                        forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
+                    })
+                    .unwrap_or_else(forms::today_year_month);
+                self.date_picker_node = Some(id);
+                self.date_picker_year = y;
+                self.date_picker_month = m;
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -10684,6 +10803,7 @@ impl Lumen {
             form_state: std::mem::take(&mut self.form_state),
             validation_tooltip: self.validation_tooltip.take(),
             color_picker_node: self.color_picker_node.take(),
+            date_picker_node: self.date_picker_node.take(),
             select_dropdown_node: self.select_dropdown_node.take(),
             ls_storage: std::mem::take(&mut self.ls_storage),
             idb_dir: self.idb_dir.clone(),
@@ -10747,6 +10867,7 @@ impl Lumen {
         self.form_state = snap.form_state;
         self.validation_tooltip = snap.validation_tooltip;
         self.color_picker_node = snap.color_picker_node;
+        self.date_picker_node = snap.date_picker_node;
         self.select_dropdown_node = snap.select_dropdown_node;
         self.ls_storage = snap.ls_storage;
         self.idb_dir = snap.idb_dir;
@@ -10801,6 +10922,9 @@ impl Lumen {
         self.form_state = HashMap::new();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        self.date_picker_node = None;
+        self.date_picker_year = 0;
+        self.date_picker_month = 0;
         self.select_dropdown_node = None;
         self.ls_storage = HashMap::new();
         // idb_dir is session-level — intentionally not reset here.
