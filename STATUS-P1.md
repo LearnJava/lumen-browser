@@ -6,8 +6,7 @@
 
 ## In progress
 
-S-4: Long Animation Frames API (LoAF)  branch: p1-s4-loaf-api
-Next step: создать crates/js/src/long_animation_frames.rs — шим + тесты
+_(нет)_
 
 ---
 
@@ -20,7 +19,7 @@ Next step: создать crates/js/src/long_animation_frames.rs — шим + т
 | ~~S-1~~ | ~~**TC39 Stage 4 collection APIs**~~ — **выполнено** | M | `lumen-js` |
 | ~~S-2~~ | ~~**Window Management API**~~ — **выполнено** | S | `lumen-js` |
 | ~~S-3~~ | ~~**Local Font Access API**~~ — **выполнено** | XS | `lumen-js` |
-| S-4 | **Long Animation Frames API (LoAF)** — `PerformanceLongAnimationFrameTiming`, `PerformanceScriptTiming`, PerformanceObserver `long-animation-frame` | S | `lumen-js` |
+| ~~S-4~~ | ~~**Long Animation Frames API (LoAF)**~~ — **выполнено** | S | `lumen-js` |
 | S-5 | **Launch Handler API** — `window.launchQueue`, `LaunchParams`, `LaunchQueue.setConsumer()` | XS | `lumen-js` |
 
 ### R — Scroll Infrastructure
@@ -124,6 +123,7 @@ Next step: создать crates/js/src/long_animation_frames.rs — шим + т
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | S-4: Long Animation Frames API (LoAF) | lumen-js: новый модуль long_animation_frames.rs — W3C Long Animation Frames API. PerformanceLongAnimationFrameTiming (entryType='long-animation-frame', поля startTime/duration/renderStart/styleAndLayoutStart/firstUIEventTimestamp/blockingDuration/scripts[]). PerformanceScriptTiming (entryType='script', invoker/invokerType/windowAttribution/executionStart/forcedStyleAndLayoutDuration/pauseDuration/sourceURL/sourceFunctionName/sourceCharPosition). _lumen_deliver_long_animation_frame(start,duration,renderStart,styleLayoutStart,firstUIEventTs,blockingDuration,scripts_json) — delivery binding + уведомление PerformanceObserver. QuickJsRuntime::deliver_long_animation_frame() для shell Phase 1. 10 unit-тестов. lumen-js: 1744 тестов (+10 vs 1734). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-3: Local Font Access API | lumen-js: новый модуль local_font_access.rs — WICG Local Font Access. navigator.fonts (FontAccessManager). query() → Promise<[]> в Phase 0 (OS шрифты не перечисляем). FontData класс (postscriptName/fullName/family/style + blob()→Promise<Blob>). _lumen_local_fonts_query() / _lumen_local_font_blob() зарезервированы для Phase 1. 8 unit-тестов. lumen-js: 1734 тестов (+8 vs 1726). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-2: Window Management API | lumen-js: новый модуль window_management.rs — W3C Multi-Screen Window Placement Level 1. screen.isExtended (Phase 0: false), navigator.getScreenDetails() → Promise<ScreenDetails>. ScreenDetailed extends Screen с полями left/top/availLeft/availTop/isPrimary/isInternal/devicePixelRatio/label. ScreenDetails.screens[] + currentScreen. _lumen_get_screen_details() native binding stub для Phase 1 (OS multi-screen). 8 unit-тестов. lumen-js: 1726 тестов (+8 vs 1718). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-1: TC39 Stage 4 collection APIs | lumen-js: новый модуль tc39_proposals.rs — Object.groupBy/Map.groupBy (ES2024 Array Grouping), Set.prototype.union/intersection/difference/symmetricDifference/isSubsetOf/isSupersetOf/isDisjointFrom (ES2025 Set Methods), Promise.withResolvers (ES2024), Promise.try (ES2025), Array.fromAsync (ES2024), Iterator.prototype.map/filter/take/drop/flatMap/reduce/toArray/forEach/some/every/find + Iterator.from() (ES2025 Iterator Helpers). Все шимы проверяют нативную поддержку и скипают при наличии. 25 unit-тестов. lumen-js: 1718 тестов (+25 vs 1693). Clippy чист. Без новых зависимостей. |
