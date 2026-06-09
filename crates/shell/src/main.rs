@@ -3328,35 +3328,69 @@ fn collect_import_map_impl(
     None
 }
 
-/// Применить sandbox-ограничения для всех `<iframe sandbox>` элементов документа.
+/// Apply sandbox restrictions for all `<iframe sandbox>` elements in the document.
 ///
-/// Для каждого sandboxed iframe вызывает соответствующие gate-функции:
-/// - [`check_form_gate`] с `SandboxFlags::FORMS` если формы запрещены
-/// - [`check_navigation_gate`] с `SandboxFlags::NAVIGATION` если навигация запрещена
-/// - [`check_popup_gate`] с `SandboxFlags::AUXILIARY_NAVIGATION` если popups запрещены
+/// Two paths depending on whether the iframe has a `srcdoc` attribute:
+/// - **`srcdoc` iframes** — inline HTML is parsed and sandbox gates are applied to
+///   the inner document: scripts blocked (if `SCRIPTS`), forms blocked (if `FORMS`),
+///   navigation blocked (if `NAVIGATION`), popups blocked (if `AUXILIARY_NAVIGATION`).
+/// - **URL-based iframes** — Phase 0: sub-document is not loaded; logs each active
+///   restriction to stderr without applying gates to the host document.
 ///
-/// Phase 0: iframe sub-документы не загружаются; гейты применяются к самому
-/// iframe-элементу через его sandbox-флаги. Логируют ограничения в stderr.
-fn apply_iframe_sandbox_gates(doc: &Document) {
+/// Returns the total number of blocked capabilities across all sandboxed iframes
+/// (script count + form count + navigation link count + popup gate hits).
+fn apply_iframe_sandbox_gates(doc: &Document) -> usize {
     let iframes = collect_iframes(doc);
+    let mut blocked = 0usize;
     for info in &iframes {
         if !info.is_sandboxed {
             continue;
         }
         let sb = info.sandbox;
-        let src = info.src.as_deref().unwrap_or("<no src>");
-        if sb.contains(lumen_core::SandboxFlags::SCRIPTS) {
-            eprintln!("sandbox: iframe '{src}' — скрипты запрещены (sandbox=scripts)");
+
+        if let Some(html) = &info.srcdoc {
+            // srcdoc iframe: parse inline HTML and apply gates to the inner document.
+            let inner = lumen_html_parser::parse(html);
+
+            if sb.contains(lumen_core::SandboxFlags::SCRIPTS) {
+                let mut scripts = Vec::new();
+                let mut modules = Vec::new();
+                collect_inline_scripts(&inner, inner.root(), &mut scripts, &mut modules);
+                let n = scripts.len() + modules.len();
+                if n > 0 {
+                    eprintln!(
+                        "sandbox: srcdoc iframe — заблокировано {n} скрипт(ов) (sandbox=scripts)"
+                    );
+                    blocked += n;
+                }
+            }
+            if sb.contains(lumen_core::SandboxFlags::FORMS) {
+                blocked += check_form_gate(&inner, sb);
+            }
+            if sb.contains(lumen_core::SandboxFlags::NAVIGATION) {
+                blocked += check_navigation_gate(&inner, sb);
+            }
+            if check_popup_gate(sb) {
+                blocked += 1;
+            }
+        } else {
+            // URL-based iframe: Phase 0 — sub-document not loaded, log restrictions only.
+            let src = info.src.as_deref().unwrap_or("<no src>");
+            if sb.contains(lumen_core::SandboxFlags::SCRIPTS) {
+                eprintln!("sandbox: iframe '{src}' — скрипты запрещены (sandbox=scripts)");
+            }
+            if sb.contains(lumen_core::SandboxFlags::FORMS) {
+                eprintln!("sandbox: iframe '{src}' — формы запрещены (sandbox=forms)");
+            }
+            if sb.contains(lumen_core::SandboxFlags::NAVIGATION) {
+                eprintln!(
+                    "sandbox: iframe '{src}' — навигация запрещена (sandbox=top-navigation)"
+                );
+            }
+            check_popup_gate(sb);
         }
-        if sb.contains(lumen_core::SandboxFlags::FORMS) {
-            eprintln!("sandbox: iframe '{src}' — формы запрещены (sandbox=forms)");
-            check_form_gate(doc, sb);
-        }
-        if sb.contains(lumen_core::SandboxFlags::NAVIGATION) {
-            check_navigation_gate(doc, sb);
-        }
-        check_popup_gate(sb);
     }
+    blocked
 }
 
 /// Выполнить inline `<script>` блоки с DOM-доступом (QuickJS + install_dom).
@@ -12587,5 +12621,67 @@ mod tests {
             r#"<html><body><p>no links</p></body></html>"#,
         );
         assert_eq!(check_navigation_gate(&doc, lumen_core::SandboxFlags::NAVIGATION), 0);
+    }
+
+    // ── apply_iframe_sandbox_gates ───────────────────────────────────────────
+
+    #[test]
+    fn iframe_sandbox_no_iframes_returns_zero() {
+        let doc = lumen_html_parser::parse(r#"<html><body><p>hello</p></body></html>"#);
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
+    }
+
+    #[test]
+    fn iframe_sandbox_url_based_no_blocking() {
+        // URL-based iframes are Phase 0 (not loaded); gate returns 0 blocked.
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe src="http://example.com" sandbox></iframe></body></html>"#,
+        );
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_scripts_blocked() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe sandbox srcdoc="<script>x=1;</script><script>y=2;</script>"></iframe></body></html>"#,
+        );
+        // 2 scripts + 1 popup capability (AUXILIARY_NAVIGATION set in full sandbox).
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 3);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_scripts_allowed() {
+        // allow-scripts lifts SCRIPTS; AUXILIARY_NAVIGATION still set → popup blocked (+1).
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe sandbox="allow-scripts" srcdoc="<script>x=1;</script>"></iframe></body></html>"#,
+        );
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 1);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_forms_blocked() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe sandbox srcdoc="<form action='/submit'><input type='submit'></form>"></iframe></body></html>"#,
+        );
+        // 1 form + 1 popup capability (full sandbox).
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 2);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_navigation_blocked() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe sandbox srcdoc="<a href='/page1'>link1</a><a href='/page2'>link2</a>"></iframe></body></html>"#,
+        );
+        // 2 navigation links + 1 popup capability (full sandbox).
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 3);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_no_sandbox_attr_no_blocking() {
+        // iframe without sandbox attribute: is_sandboxed = false, no blocking.
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe srcdoc="<script>x=1;</script>"></iframe></body></html>"#,
+        );
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
     }
 }

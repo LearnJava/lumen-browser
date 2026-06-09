@@ -236,7 +236,7 @@
 | # | Задача | impl / Разблокирует | НЕ блокирует |
 |---|---|---|---|
 | 1B | ✅ **`[P3]` rquickjs integration scaffold** | Forms, Animations, SWs, DevTools | `crates/js/` |
-| 2A | 🟡 **`[P3]` SOP/CORS/mixed-content/sandbox** | Публичная сеть | Только network + shell |
+| 2A | ✅ **`[P3]` SOP/CORS/mixed-content/sandbox** | Публичная сеть | Только network + shell |
 | 2A.1 | ✅ block blockable in HttpClient::fetch | `network/src/lib.rs:1478` | — |
 | 2A.2 | ✅ sandbox_flags on iframe DOM element | `dom/src/lib.rs` | — |
 | 2A.3 | ✅ script execution gate in shell | `shell/src/main.rs:752` | — |
@@ -699,7 +699,7 @@
 - **`cors-preflight`**: `lumen-network::cors` — pure-логика preflight classifier + cache.
 - **`cors-preflight-enforcement`**: `HttpClient::with_cors_cache(Arc<PreflightCache>)` + `fetch_cors(CorsRequest)`. OPTIONS preflight через `fetch_single`, evaluate_preflight_response, cache.insert. Actual-response validation per hop. Phase 0: GET-only, без cookie-jar integration.
 
-**Осталось:** sandbox-application в DOM-загрузчике shell-я.
+- **`srcdoc-sandbox-application`**: `apply_iframe_sandbox_gates` в shell — для `srcdoc`-iframe-ов парсит inline HTML и применяет gates (scripts/forms/navigation/popup) к внутреннему документу; для URL-based iframe-ов (Phase 0, не загружаются) логирует ограничения. 7 unit-тестов.
 
 #### 3A — DPR + scroll в shell
 
