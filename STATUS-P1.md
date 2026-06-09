@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+O-6: KnowledgeStore — trait в lumen-core::ext, DefaultKnowledgeStore в lumen-knowledge, @notes omnibox  branch: p1-o6-knowledge-store
+Next step: добавить KnowledgeStore trait + result types в crates/core/src/ext.rs
 
 ---
 
