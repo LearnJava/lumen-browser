@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+O-12: 10K.3 Loading-spinner при restore >200ms  branch: p1-o12-restore-spinner
+Next step: обновить lumen-plan.md (10K/10K.1/10K.2/10K.3/10L/10M ⬜→✅) — реализация уже в panels/restore_spinner.rs
 
 ---
 
