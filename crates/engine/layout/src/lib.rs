@@ -13905,6 +13905,65 @@ mod tests {
         assert!(!first_p_style(&root2).column_fill_balance, "auto should set column_fill_balance=false");
     }
 
+    #[test]
+    fn multicol_balance_does_not_skip_first_column() {
+        // Regression (BUG-117): with column-count:3 and items each taller than the
+        // balanced target height, the greedy assigner advanced past the EMPTY first
+        // column (height_overflow fires on column 0 because item height > target),
+        // placing items in columns 1 and 2 and leaving column 0 blank. Items must
+        // fill column 0 first (CSS Multicol §3.4 — columns filled in order).
+        let root = lay_measured(
+            "<div id='c'><div id='a'></div><div id='b'></div></div>",
+            "#c { width: 300px; column-count: 3; column-gap: 0px; } \
+             #a { height: 40px; } #b { height: 40px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        let a = &container.children[0];
+        let b = &container.children[1];
+        // col_w = 300/3 = 100. col0 at content_x, col1 at content_x + 100.
+        assert!(
+            (a.rect.x - container.rect.x).abs() < 1.0,
+            "first item must be in column 0 (a.x={}, container.x={})",
+            a.rect.x, container.rect.x
+        );
+        assert!(
+            (b.rect.x - a.rect.x - 100.0).abs() < 1.0,
+            "second item must be in column 1, not column 2 (b.x={}, a.x={})",
+            b.rect.x, a.rect.x
+        );
+    }
+
+    #[test]
+    fn multicol_fill_auto_ignores_count_cap() {
+        // Regression (BUG-117): column-fill:auto must fill a column purely by height.
+        // The per-column count cap (a balance-mode anti-starvation guard) wrongly forced
+        // one item per column even in auto mode. With 3 short items and a tall container,
+        // all three must stack in column 0.
+        let root = lay_measured(
+            "<div id='c'><div id='a'></div><div id='b'></div><div id='d'></div></div>",
+            "#c { width: 300px; column-count: 3; column-gap: 0px; height: 100px; column-fill: auto; } \
+             #a { height: 10px; } #b { height: 10px; } #d { height: 10px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        let a = &container.children[0];
+        let b = &container.children[1];
+        let d = &container.children[2];
+        // All three fit in column 0 (30px < 100px) → identical x.
+        assert!(
+            (a.rect.x - b.rect.x).abs() < 1.0 && (a.rect.x - d.rect.x).abs() < 1.0,
+            "auto must stack all items in col0 (xs: {} {} {})",
+            a.rect.x, b.rect.x, d.rect.x
+        );
+        // And they stack vertically within the column.
+        assert!(
+            b.rect.y > a.rect.y && d.rect.y > b.rect.y,
+            "items must stack vertically in col0 (ys: {} {} {})",
+            a.rect.y, b.rect.y, d.rect.y
+        );
+    }
+
     // ── ::marker box (BUG-011) ───────────────────────────────────────────
 
     #[test]

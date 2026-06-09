@@ -5015,7 +5015,9 @@ fn lay_out_multicol_children(
             } else {
                 container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
             };
-            // Count-based per-column cap prevents starvation when content heights are equal.
+            // Count-based per-column cap prevents starvation when content heights are
+            // equal — but only in balance mode. column-fill:auto fills purely by height
+            // (a column may hold many short items), so the count cap must not apply there.
             let per_col_cap = seg_idxs.len().div_ceil(n_cols as usize);
 
             // Greedy column assignment (height + count guard).
@@ -5025,8 +5027,13 @@ fn lay_out_multicol_children(
             let mut cur_col = 0usize;
             for (j, &oh) in outer_hs.iter().enumerate() {
                 let height_overflow = col_fill[cur_col] + oh > target_h && oh > 0.0;
-                let count_overflow = col_count[cur_col] >= per_col_cap;
-                if cur_col + 1 < n_cols as usize && (height_overflow || count_overflow) {
+                let count_overflow = balance && col_count[cur_col] >= per_col_cap;
+                // Never advance past an empty column: a column must hold at least one item
+                // before overflowing to the next, otherwise an item taller than target_h
+                // would skip column 0 and leave it blank (CSS Multicol §3.4 — every column
+                // box is filled in order, starting from the first).
+                let col_nonempty = col_count[cur_col] > 0;
+                if cur_col + 1 < n_cols as usize && col_nonempty && (height_overflow || count_overflow) {
                     cur_col += 1;
                 }
                 col_assignment[j] = cur_col;
