@@ -36,6 +36,12 @@ _(нет)_
 | O-11 | **2A remaining: SOP/CORS mixed-content enforcement** — HttpClient блокирует blockable-ресурсы до TCP-соединения; DOM-применение `sandbox`-флагов `<iframe>` в shell. `network/src/lib.rs` + `shell/src/main.rs` | S | `lumen-network`, `lumen-shell` |
 | O-12 | **10K.3: Loading-spinner при restore >200ms** — UI-спиннер при восстановлении T2→T0 если > 200 мс. `shell/src/tabs/restore_ui.rs` | XS | `lumen-shell` |
 
+### P — Performance (движок)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| P-1 | **Selector rule index** — `compute_style` сейчас прогоняет brute-force ВСЕ правила на каждый узел (O(узлы × правила), [style.rs:4957](crates/engine/layout/src/style.rs)). На реальной странице с CSS-фреймворком (Bootstrap: 1661 правило) это 6.88 M match-попыток при hit-rate 0.1% → layout 1948 мс. Бакетизация правил по правому простому селектору (id/class/type/universal) даёт O(узлы × кандидаты), ожидаемо ×50–100. Чистый perf, пиксели не меняются. → [docs/tasks/p1-selector-rule-index.md](docs/tasks/p1-selector-rule-index.md) | M | `lumen-layout` |
+
 ### M — Web Platform Completeness Phase 5
 
 | # | Задача | Размер | Крейты |
