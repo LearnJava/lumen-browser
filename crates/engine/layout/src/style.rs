@@ -14,8 +14,10 @@
 //! вложенными `a`-предками могут промахнуться — это известное упрощение, до
 //! фазы со «честным» Selectors-движком.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+
+use crate::rule_index::RuleIndex;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
@@ -24,6 +26,14 @@ use lumen_css_parser::{
     Stylesheet, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
+
+thread_local! {
+    /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count) to
+    /// detect stylesheet changes between layout passes. Rebuilt only when the
+    /// key changes; reused for every node in the same pass (O(1) amortised).
+    static RULE_IDX_CACHE: RefCell<(usize, usize, RuleIndex)> =
+        RefCell::new((0, 0, RuleIndex::empty()));
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Display {
@@ -4932,7 +4942,29 @@ pub fn compute_style(
         if imp { -layer_idx } else { layer_idx }
     };
     let mut matched: Vec<(bool, bool, i32, Specificity, usize, usize, &Declaration)> = Vec::new();
-    for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+
+    // Build or reuse a per-stylesheet rule index (thread-local, keyed by
+    // pointer+length). Amortised O(1): rebuilt only when the sheet changes.
+    let node_data = doc.get(node);
+    let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
+    let node_id = node_data.get_attr("id");
+    let class_attr = node_data.get_attr("class").unwrap_or("");
+    let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
+
+    let sheet_ptr = sheet as *const Stylesheet as usize;
+    let sheet_rules_len = sheet.rules.len();
+    RULE_IDX_CACHE.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len {
+            *cached = (sheet_ptr, sheet_rules_len, RuleIndex::build(sheet));
+        }
+    });
+    let cands = RULE_IDX_CACHE.with(|cell| {
+        cell.borrow().2.candidates(node_tag, node_id, &node_classes)
+    });
+
+    for &rule_idx in &cands {
+        let rule = &sheet.rules[rule_idx];
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
             if matches_complex(complex, doc, node) {
