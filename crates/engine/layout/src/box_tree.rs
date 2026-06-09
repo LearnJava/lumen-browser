@@ -1675,6 +1675,9 @@ pub fn layout_measured_hyp(
     hp: &dyn HyphenationProvider,
     dark_mode: bool,
 ) -> LayoutBox {
+    // Invalidate the rule-index cache before each layout pass to prevent
+    // stale hits when a new stylesheet lands at the same pointer as a freed one.
+    crate::style::invalidate_rule_idx_cache();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
