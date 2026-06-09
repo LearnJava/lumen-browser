@@ -6,8 +6,8 @@
 
 ## In progress
 
-BUG-080: border-style dashed/dotted/double в femtovg-бэкенде  branch: p3-bug080-border-style
-Next step: `draw_border_side` рендерит pattern по стилю стороны  crates/engine/paint/src/backends/femtovg_backend.rs:805
+BUG-116: auto table column widths — CSS 2.1 §17.5.2 content-based sizing  branch: p3-bug116-table-col-widths
+Next step: CPU snapshot regeneration + merge  crates/engine/layout/src/box_tree.rs:4670
 
 ## Next
 

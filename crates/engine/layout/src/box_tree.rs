@@ -4404,7 +4404,7 @@ fn lay_out_table(
     let h_spacing = b.style.border_spacing_h;
     let v_spacing = b.style.border_spacing_v;
 
-    let col_widths = compute_table_col_widths(b, content_width, viewport);
+    let col_widths = compute_table_col_widths(b, content_width, viewport, measurer);
 
     // First row starts after the top outer v_spacing slot.
     let mut cur_y = content_y + v_spacing;
@@ -4658,16 +4658,158 @@ fn table_intrinsic_content_width(b: &LayoutBox, viewport: Size) -> f32 {
     total_explicit + (n_cols + 1) as f32 * h_spacing
 }
 
+/// CSS 2.1 §17.5.2 — min-content and max-content widths for a slice of boxes.
+///
+/// Traverses block containers recursively. Block-level items stack vertically —
+/// the container's min/max is the max of its children's widths. `InlineRun`
+/// items accumulate segments left-to-right for max-content and take the widest
+/// whitespace-separated token for min-content.
+///
+/// Returns `(min_content_width, max_content_width)` as content-box widths
+/// (the caller must add the container's own padding + border).
+fn box_min_max_content_w(boxes: &[LayoutBox], m: &dyn TextMeasurer, vp: Size) -> (f32, f32) {
+    let mut min_w = 0.0f32;
+    let mut max_w = 0.0f32;
+    for b in boxes {
+        let (bmin, bmax) = match &b.kind {
+            BoxKind::InlineRun { segments, .. } => {
+                let mut line_w = 0.0f32;
+                let mut run_max = 0.0f32;
+                let mut run_min = 0.0f32;
+                for seg in segments {
+                    if seg.forced_break {
+                        run_max = run_max.max(line_w);
+                        line_w = 0.0;
+                        continue;
+                    }
+                    let fs = seg.style.font_size;
+                    let ls = seg.style.letter_spacing;
+                    if seg.img_src.is_some() {
+                        let w = seg.pre_space + seg.img_width + seg.post_space;
+                        line_w += w;
+                        run_min = run_min.max(w);
+                    } else {
+                        line_w += seg.pre_space
+                            + measure_text_w(&seg.text, fs, ls, 0.0, m)
+                            + seg.post_space;
+                        for word in seg.text.split_ascii_whitespace() {
+                            run_min = run_min
+                                .max(seg.pre_space + measure_text_w(word, fs, ls, 0.0, m) + seg.post_space);
+                        }
+                    }
+                }
+                run_max = run_max.max(line_w);
+                (run_min, run_max)
+            }
+            BoxKind::Block | BoxKind::FlowRoot | BoxKind::InlineBlockRow => {
+                let em = b.style.font_size;
+                let pl = b.style.padding_left.resolve_or_zero(em, 0.0, vp);
+                let pr = b.style.padding_right.resolve_or_zero(em, 0.0, vp);
+                let bw = b.style.border_left_width + b.style.border_right_width;
+                let (cmin, cmax) = box_min_max_content_w(&b.children, m, vp);
+                (cmin + pl + pr + bw, cmax + pl + pr + bw)
+            }
+            BoxKind::Skip
+            | BoxKind::TableRow
+            | BoxKind::TableRowGroup
+            | BoxKind::InlineSpace
+            | BoxKind::Marker { .. }
+            | BoxKind::Contents => (0.0, 0.0),
+            // Replaced elements (Image, FormControl, Video, …): use explicit width if set.
+            _ => {
+                let em = b.style.font_size;
+                if let Some(wl) = &b.style.width
+                    && let Some(w) = wl.resolve(em, None, vp)
+                    && w > 0.0
+                {
+                    (w, w)
+                } else {
+                    (0.0, 0.0)
+                }
+            }
+        };
+        min_w = min_w.max(bmin);
+        max_w = max_w.max(bmax);
+    }
+    (min_w, max_w)
+}
+
+/// Returns `(min_content_border_box, max_content_border_box)` for a single table cell,
+/// including the cell's own horizontal padding and border.
+fn cell_min_max_border_box_w(cell: &LayoutBox, m: &dyn TextMeasurer, vp: Size) -> (f32, f32) {
+    let em = cell.style.font_size;
+    let pl = cell.style.padding_left.resolve_or_zero(em, 0.0, vp);
+    let pr = cell.style.padding_right.resolve_or_zero(em, 0.0, vp);
+    let bw = cell.style.border_left_width + cell.style.border_right_width;
+    let horiz = pl + pr + bw;
+    let (cmin, cmax) = box_min_max_content_w(&cell.children, m, vp);
+    (cmin + horiz, cmax + horiz)
+}
+
+/// Scans `row`'s cells and updates `col_min`/`col_max` with per-column content-based widths.
+/// Colspan cells distribute their content width evenly across the spanned columns.
+/// Rowspan occupancy is tracked in `rowspan_map` (same semantics as `scan_row_explicit_widths`).
+fn scan_row_content_widths(
+    row: &LayoutBox,
+    col_min: &mut Vec<f32>,
+    col_max: &mut Vec<f32>,
+    rowspan_map: &mut Vec<u32>,
+    m: &dyn TextMeasurer,
+    vp: Size,
+) {
+    let mut col_pos = 0usize;
+    for cell in row.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)) {
+        while col_pos < rowspan_map.len() && rowspan_map[col_pos] > 0 {
+            col_pos += 1;
+        }
+        let span = cell.col_span.max(1) as usize;
+        let end_col = col_pos + span;
+        if end_col > col_min.len() {
+            col_min.resize(end_col, 0.0);
+            col_max.resize(end_col, 0.0);
+        }
+        if end_col > rowspan_map.len() {
+            rowspan_map.resize(end_col, 0);
+        }
+        let (cmin, cmax) = cell_min_max_border_box_w(cell, m, vp);
+        let per_min = cmin / span as f32;
+        let per_max = cmax / span as f32;
+        for i in col_pos..end_col {
+            col_min[i] = col_min[i].max(per_min);
+            col_max[i] = col_max[i].max(per_max);
+        }
+        if cell.row_span > 1 {
+            let rs = cell.row_span;
+            for v in rowspan_map.iter_mut().skip(col_pos).take(span) {
+                if *v < rs {
+                    *v = rs;
+                }
+            }
+        }
+        col_pos = end_col;
+    }
+}
+
 /// Computes per-column widths for a `BoxKind::Table` element by scanning all rows
 /// (direct and inside `TableRowGroup` children). Colspan/rowspan-aware: cells with
 /// `colspan > 1` distribute their width across columns; `rowspan > 1` cells block
 /// subsequent rows from reusing those columns. Returns a `Vec<f32>` of border-box
 /// widths, one per column.
 ///
+/// When `measurer` is provided, uses CSS 2.1 §17.5.2 content-based auto sizing:
+/// each auto column gets at least its min-content width, with the remaining space
+/// distributed proportionally to max-content widths. Without a measurer, falls back
+/// to equal distribution among auto columns.
+///
 /// In Separate border mode, `(n_cols + 1) * h_spacing` is reserved for inter-cell and
 /// outer gaps before distributing the remaining width among auto-width columns.
 /// CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
-fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -> Vec<f32> {
+fn compute_table_col_widths(
+    b: &LayoutBox,
+    content_width: f32,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+) -> Vec<f32> {
     let h_spacing = b.style.border_spacing_h;
 
     let mut col_explicit: Vec<Option<f32>> = Vec::new();
@@ -4699,13 +4841,74 @@ fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -
     // Subtract spacing slots from available width before distributing to auto columns.
     let total_h_spacing = (n_cols + 1) as f32 * h_spacing;
     let total_explicit: f32 = col_explicit.iter().filter_map(|w| *w).sum();
+    let available = (content_width - total_h_spacing - total_explicit).max(0.0);
     let auto_count = col_explicit.iter().filter(|w| w.is_none()).count();
-    let auto_share = if auto_count > 0 {
-        ((content_width - total_h_spacing - total_explicit) / auto_count as f32).max(0.0)
-    } else {
-        0.0
-    };
 
+    if auto_count == 0 {
+        return col_explicit.iter().map(|w| w.unwrap_or(0.0)).collect();
+    }
+
+    // CSS 2.1 §17.5.2: content-based auto column sizing when a text measurer is available.
+    if let Some(m) = measurer {
+        let mut col_min = vec![0.0f32; n_cols];
+        let mut col_max = vec![0.0f32; n_cols];
+        let mut rs_map: Vec<u32> = Vec::new();
+        for child in &b.children {
+            match &child.kind {
+                BoxKind::TableRow => {
+                    scan_row_content_widths(child, &mut col_min, &mut col_max, &mut rs_map, m, viewport);
+                    decrement_rowspan_map(&mut rs_map);
+                }
+                BoxKind::TableRowGroup => {
+                    for row in &child.children {
+                        if matches!(row.kind, BoxKind::TableRow) {
+                            scan_row_content_widths(row, &mut col_min, &mut col_max, &mut rs_map, m, viewport);
+                            decrement_rowspan_map(&mut rs_map);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let auto_min_total: f32 = (0..n_cols)
+            .filter(|&i| col_explicit[i].is_none())
+            .map(|i| col_min[i])
+            .sum();
+        // Use col_max as the proportional weight; clamp at col_min so weight is always ≥ min.
+        let total_weight: f32 = (0..n_cols)
+            .filter(|&i| col_explicit[i].is_none())
+            .map(|i| col_max[i].max(col_min[i]))
+            .sum();
+
+        return (0..n_cols)
+            .map(|i| {
+                col_explicit[i].unwrap_or_else(|| {
+                    if auto_min_total >= available {
+                        // Not enough space for min-content: distribute proportionally to min.
+                        if auto_min_total > 0.0 {
+                            (available * col_min[i] / auto_min_total).max(0.0)
+                        } else {
+                            available / auto_count as f32
+                        }
+                    } else {
+                        // Enough for min; distribute extra proportionally to max-content weight.
+                        let extra = available - auto_min_total;
+                        let weight = col_max[i].max(col_min[i]);
+                        col_min[i]
+                            + if total_weight > 0.0 {
+                                extra * weight / total_weight
+                            } else {
+                                extra / auto_count as f32
+                            }
+                    }
+                })
+            })
+            .collect();
+    }
+
+    // Fallback without measurer: equal distribution.
+    let auto_share = (available / auto_count as f32).max(0.0);
     col_explicit.iter().map(|w| w.unwrap_or(auto_share)).collect()
 }
 
