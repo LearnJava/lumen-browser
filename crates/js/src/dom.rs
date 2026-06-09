@@ -10553,6 +10553,22 @@ function _lumen_apply_resize(nid, delta_x, delta_y) {
         window.browser = { runtime: _rt };
     }
 })();
+
+// ── scroll events helpers ──────────────────────────────────────────────────────
+// Called from Rust (QuickJsRuntime::fire_element_scroll / fire_window_scroll)
+// after scroll position changes.  Per WHATWG HTML §8.1.6.2 scroll events are
+// non-bubbling (bubbles:false) and non-cancelable.
+function _lumen_fire_scroll_on_element(nid) {
+    var el = _lumen_make_element(nid);
+    if (!el) return;
+    var ev = new Event('scroll', { bubbles: false, cancelable: false });
+    el.dispatchEvent(ev);
+}
+function _lumen_fire_window_scroll_event() {
+    var ev = new Event('scroll', { bubbles: false, cancelable: false });
+    if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
+    if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
+}
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -14218,6 +14234,54 @@ mod tests {
         assert_eq!(reqs.len(), 1);
         assert!((reqs[0].1 - 60.0).abs() < 0.1);
         assert!((reqs[0].2 - 80.0).abs() < 0.1);
+    }
+
+    // ── scroll events ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn fire_element_scroll_dispatches_event() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        // Register a listener and call fire_element_scroll
+        rt.eval(&format!(
+            "var fired = false; \
+             var el = document.body || _lumen_make_element({nid}); \
+             el.addEventListener('scroll', function() {{ fired = true; }});"
+        )).unwrap();
+        rt.fire_element_scroll(nid);
+        let result = rt.eval("fired").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true), "scroll event should fire on element");
+    }
+
+    #[test]
+    fn fire_element_scroll_event_is_non_bubbling() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        // A document-level listener should NOT fire (bubbles: false)
+        rt.eval(
+            "var doc_fired = false; \
+             document.addEventListener('scroll', function() { doc_fired = true; });"
+        ).unwrap();
+        rt.fire_element_scroll(nid);
+        let result = rt.eval("doc_fired").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(false), "scroll event must not bubble to document");
+    }
+
+    #[test]
+    fn fire_window_scroll_dispatches_event() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var win_fired = false; window.addEventListener('scroll', function() { win_fired = true; });").unwrap();
+        rt.fire_window_scroll();
+        let result = rt.eval("win_fired").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true), "window scroll event should fire");
     }
 
     // ── Lazy image loading ────────────────────────────────────────────────────

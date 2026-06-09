@@ -1012,6 +1012,31 @@ pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32
     false
 }
 
+/// Find the innermost scroll container whose `clip_rect` contains `(x, y)`.
+///
+/// Returns the `NodeId` of the topmost (in DOM order, last in the list wins for nesting)
+/// overflow container whose clip rectangle contains the given document-space coordinate.
+/// Shell uses this to route `MouseWheel` events to the correct overflow container
+/// instead of always scrolling the page.
+///
+/// `x` and `y` are in CSS px, document-relative (same coordinate space as
+/// `ScrollContainer::clip_rect`).
+pub fn find_scroll_container_at(
+    containers: &[ScrollContainer],
+    x: f32,
+    y: f32,
+) -> Option<lumen_dom::NodeId> {
+    // Iterate in reverse so later (deeper, visually on top) containers win.
+    containers.iter().rev().find_map(|c| {
+        let r = &c.clip_rect;
+        if x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height {
+            Some(c.node)
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -15626,6 +15651,58 @@ mod tests {
             }
         }
         None
+    }
+
+    // ── find_scroll_container_at ──────────────────────────────────────────────
+
+    fn make_scroll_container(node_idx: usize, x: f32, y: f32, w: f32, h: f32) -> ScrollContainer {
+        use lumen_core::geom::Rect;
+        ScrollContainer {
+            node: lumen_dom::NodeId::from_index(node_idx),
+            clip_rect: Rect::new(x, y, w, h),
+            scroll_width: w + 200.0,
+            scroll_height: h + 400.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        }
+    }
+
+    #[test]
+    fn find_scroll_container_at_hit() {
+        let c = make_scroll_container(1, 10.0, 20.0, 100.0, 200.0);
+        let result = find_scroll_container_at(&[c], 50.0, 80.0);
+        assert_eq!(result, Some(lumen_dom::NodeId::from_index(1)));
+    }
+
+    #[test]
+    fn find_scroll_container_at_miss() {
+        let c = make_scroll_container(1, 10.0, 20.0, 100.0, 200.0);
+        // Point outside the container
+        assert_eq!(find_scroll_container_at(&[c], 5.0, 80.0), None);
+    }
+
+    #[test]
+    fn find_scroll_container_at_empty() {
+        assert_eq!(find_scroll_container_at(&[], 50.0, 50.0), None);
+    }
+
+    #[test]
+    fn find_scroll_container_at_innermost_wins() {
+        // Outer container covers (0,0,200,200), inner covers (50,50,50,50).
+        // A point inside both should return the inner (last in list = deeper in DOM).
+        let outer = make_scroll_container(1, 0.0, 0.0, 200.0, 200.0);
+        let inner = make_scroll_container(2, 50.0, 50.0, 50.0, 50.0);
+        let result = find_scroll_container_at(&[outer, inner], 60.0, 60.0);
+        assert_eq!(result, Some(lumen_dom::NodeId::from_index(2)));
+    }
+
+    #[test]
+    fn find_scroll_container_at_only_outer_when_point_outside_inner() {
+        let outer = make_scroll_container(1, 0.0, 0.0, 200.0, 200.0);
+        let inner = make_scroll_container(2, 50.0, 50.0, 50.0, 50.0);
+        // Point in outer but not in inner
+        let result = find_scroll_container_at(&[outer, inner], 10.0, 10.0);
+        assert_eq!(result, Some(lumen_dom::NodeId::from_index(1)));
     }
 
 }

@@ -77,9 +77,9 @@ use lumen_dom::{
 };
 use std::collections::HashMap;
 use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, TransitionScheduler};
-use lumen_layout::{collect_snap_containers, find_snap_target};
+use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
 #[cfg(feature = "quickjs")]
-use lumen_layout::{collect_computed_styles, collect_scroll_containers, set_scroll_position};
+use lumen_layout::collect_computed_styles;
 use lumen_layout::style::ComputedStyle;
 use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
 use lumen_layout::Cursor as CssCursor;
@@ -333,6 +333,7 @@ fn run_window_mode(
         anim_frame: None,
         layout_box: None,
         snap_containers: Vec::new(),
+        scroll_containers: Vec::new(),
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
@@ -1328,6 +1329,20 @@ pub(crate) trait PersistentJs {
     /// CSS Scroll-Driven Animations L1 §3 (CSS Scroll-Driven Animations Level 1).
     #[allow(dead_code)]
     fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32);
+
+    /// Fire a non-bubbling `scroll` Event on the element identified by `nid`.
+    ///
+    /// Called after every overflow-container scroll-position change (both
+    /// wheel-driven and JS-programmatic). Per WHATWG HTML §8.1.6.2.
+    #[allow(dead_code)]
+    fn fire_element_scroll(&self, nid: u32);
+
+    /// Fire a non-bubbling `scroll` Event on the `window` object.
+    ///
+    /// Called whenever the page-level scroll position changes.
+    /// Per WHATWG HTML §8.1.6.2.
+    #[allow(dead_code)]
+    fn fire_window_scroll(&self);
 }
 
 #[cfg(feature = "quickjs")]
@@ -1532,6 +1547,12 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32) {
         self.rt.deliver_scroll_progress(progress_y, progress_x);
+    }
+    fn fire_element_scroll(&self, nid: u32) {
+        self.rt.fire_element_scroll(nid);
+    }
+    fn fire_window_scroll(&self) {
+        self.rt.fire_window_scroll();
     }
 }
 
@@ -3650,6 +3671,12 @@ struct Lumen {
     /// `scroll-snap-type` declarations. Cleared on navigation, recomputed on
     /// relayout / tab switch.
     snap_containers: Vec<SnapContainer>,
+    /// Overflow scroll containers collected from `layout_box` after every layout
+    /// update. Used by `MouseWheel` handler to route wheel events into the correct
+    /// overflow container instead of always scrolling the page. Also used to fire
+    /// `scroll` events after position changes. Cleared on navigation, recomputed on
+    /// relayout / tab switch.
+    scroll_containers: Vec<lumen_layout::ScrollContainer>,
     /// Эпоха для rAF-timestamp-ов в миллисекундах от старта shell-а
     /// (DOMHighResTimeStamp — HTML §8.1.5.1: «timestamp passed to callback
     /// should be the current high resolution time»).
@@ -4330,6 +4357,7 @@ impl Lumen {
             promote_will_change_layers(lb_ref, r.as_mut());
         }
         self.update_snap_containers();
+        self.update_scroll_containers();
         self.animation_scheduler.clear();
         // Do NOT reset transition_scheduler here: active transitions must survive
         // relayout (viewport resize, DOM mutations) so that in-flight animations
@@ -4571,6 +4599,7 @@ impl Lumen {
                 collect_box_styles(&page.layout_box, &mut self.prev_styles);
                 self.layout_box = Some(page.layout_box);
                 self.update_snap_containers();
+        self.update_scroll_containers();
                 // Push initial layout geometry so JS can query bounding rects
                 // immediately after page load (before the first relayout).
                 #[cfg(feature = "quickjs")]
@@ -4783,6 +4812,7 @@ impl Lumen {
         self.display_list = dl;
         self.layout_box = Some(layout);
         self.update_snap_containers();
+        self.update_scroll_containers();
 
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
@@ -4808,6 +4838,7 @@ impl Lumen {
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
         self.update_snap_containers();
+        self.update_scroll_containers();
         self.title = page.title.clone();
         if let Some(t) = &self.title {
             self.tab_strip.set_active_title(t.as_str());
@@ -5320,9 +5351,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 && let Some(lb) = self.layout_box.as_mut()
             {
                 let mut changed = false;
+                let mut scrolled_nids: Vec<u32> = Vec::new();
                 for (nid, x, y) in scroll_reqs {
                     if set_scroll_position(lb, NodeId::from_index(nid as usize), x, y) {
                         changed = true;
+                        scrolled_nids.push(nid);
                     }
                 }
                 if changed {
@@ -5336,6 +5369,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                         .collect();
                     js.update_scroll_states(states);
+                    // Fire non-bubbling scroll events on each scrolled container.
+                    for nid in scrolled_nids {
+                        js.fire_element_scroll(nid);
+                    }
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
@@ -6775,9 +6812,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 }
                             }
                             self.request_redraw();
+                        } else if self.try_scroll_overflow_container(dx_css, dy_css) {
+                            // Wheel was consumed by an overflow container — do not
+                            // scroll the page.
                         } else {
                             if dx_css != 0.0 { self.scroll_x_by(dx_css); }
                             self.scroll_by_smooth(dy_css);
+                            #[cfg(feature = "quickjs")]
+                            if let Some(js) = &self.js_ctx {
+                                js.fire_window_scroll();
+                            }
                         }
                     }
                     MouseScrollDelta::PixelDelta(p) => {
@@ -6817,6 +6861,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                             (sv.right.scroll_y + dy_css).clamp(0.0, max);
                                     }
                                     self.request_redraw();
+                                } else if self.try_scroll_overflow_container(dx_css, dy_css) {
+                                    // Touchpad gesture started over overflow container.
                                 } else {
                                     if dx_css != 0.0 { self.scroll_x_by(dx_css); }
                                     self.scroll_by_smooth(dy_css);
@@ -6848,6 +6894,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                             (sv.right.scroll_y + dy_css).clamp(0.0, max);
                                     }
                                     self.request_redraw();
+                                } else if self.try_scroll_overflow_container(dx_css, dy_css) {
+                                    // Touchpad move over overflow container.
                                 } else {
                                     if dx_css != 0.0 { self.scroll_x_by(dx_css); }
                                     self.scroll_by_smooth(dy_css);
@@ -10193,6 +10241,77 @@ impl Lumen {
         match &self.layout_box {
             Some(lb) => self.snap_containers = collect_snap_containers(lb),
             None => self.snap_containers.clear(),
+        }
+    }
+
+    /// Rebuild `scroll_containers` from the current `layout_box`.
+    ///
+    /// Called whenever `layout_box` changes (relayout, page load, tab switch).
+    /// Used by the wheel handler to route scroll events to overflow containers.
+    fn update_scroll_containers(&mut self) {
+        match &self.layout_box {
+            Some(lb) => self.scroll_containers = collect_scroll_containers(lb),
+            None => self.scroll_containers.clear(),
+        }
+    }
+
+    /// Try to scroll an overflow container under the cursor by `(dx, dy)` CSS px.
+    ///
+    /// Returns `true` if a container was found and scrolled, `false` if no
+    /// overflow container is under the cursor (caller should scroll the page).
+    ///
+    /// The cursor position is converted from physical pixels to document-space
+    /// CSS px (adds page scroll offsets so hit-testing works on scrolled pages).
+    fn try_scroll_overflow_container(&mut self, dx: f32, dy: f32) -> bool {
+        let Some(cursor) = self.cursor_position else { return false };
+        if self.layout_box.is_none() { return false; }
+
+        let dpr = self.renderer.as_ref().map_or(1.0_f32, |r| r.scale_factor() as f32);
+        let x_css = (cursor.x as f32) / dpr + self.scroll_x;
+        let y_css = (cursor.y as f32) / dpr + self.scroll_y;
+
+        let Some(target) = find_scroll_container_at(&self.scroll_containers, x_css, y_css) else {
+            return false;
+        };
+        let target_nid = target.index() as u32;
+
+        // Find current position and compute new target.
+        let current = self.scroll_containers.iter()
+            .find(|c| c.node == target)
+            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height));
+        let Some((cur_x, cur_y, sw, sh)) = current else { return false };
+
+        let clip = self.scroll_containers.iter()
+            .find(|c| c.node == target)
+            .map(|c| (c.clip_rect.width, c.clip_rect.height));
+        let Some((clip_w, clip_h)) = clip else { return false };
+
+        let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
+        let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
+
+        // Borrow layout_box mutably after releasing the immutable scroll_containers borrow.
+        let scrolled = if let Some(lb) = self.layout_box.as_mut() {
+            set_scroll_position(lb, target, new_x, new_y)
+        } else {
+            false
+        };
+        if scrolled {
+            // Rebuild display list and update JS scroll state cache.
+            let new_dl = paint_ordered(self.layout_box.as_ref().unwrap());
+            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+            self.display_list = new_dl;
+            self.update_scroll_containers();
+            let states: std::collections::HashMap<_, _> = self.scroll_containers.iter()
+                .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                .collect();
+            if let Some(js) = &self.js_ctx {
+                js.update_scroll_states(states);
+                js.fire_element_scroll(target_nid);
+            }
+            self.request_redraw();
+            true
+        } else {
+            false
         }
     }
 

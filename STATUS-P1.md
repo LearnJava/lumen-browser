@@ -6,11 +6,18 @@
 
 ## In progress
 
-_(нет)_
+**R-1: Overflow scroll wheel routing + scroll events**  branch: p1-overflow-scroll-events
+Next step: add `find_scroll_container_at` to lumen-layout/src/lib.rs, then `_lumen_fire_element_scroll` in lumen-js
 
 ---
 
 ## Next
+
+### R — Scroll Infrastructure
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| R-1 | **Overflow scroll wheel routing + scroll events** — wheel routes to overflow containers; `scroll` event; unblocks P4 #7 | M | `lumen-layout`, `lumen-js`, `lumen-shell` |
 
 ### N — Закрытие Phase 1 (выполнить первыми)
 
