@@ -101,7 +101,7 @@ BUG-085 | OPEN   | paint          | linear/radial gradient 12% deviation — TES
 BUG-086 | FIXED 2026-06-09 | paint | conic-gradient: femtovg triangle-fan не обрезался по box (гигантские круги) + игнорировал repeating; TEST-40 56.53%→15.92% (остаток — AA/тесселяция, класс BUG-085) | crates/engine/paint/src/backends/femtovg_backend.rs
 BUG-087 | OPEN   | paint/layout   | multiple CSS background layers not rendered — TEST-45: 17.29%; CSS Backgrounds L3 §3 layer stack | crates/engine/paint/src/renderer.rs
 BUG-088 | OPEN   | css-parser/layout | individual CSS transform properties (translate/rotate/scale) not applied — TEST-46: 9.57%; CSS Transforms L2 § | crates/engine/layout/src/style.rs
-BUG-089 | OPEN   | paint          | SVG basic shapes not rendered (rect/circle/ellipse/line) — TEST-47: 21.71%; Phase 1 | crates/engine/paint/src/display_list.rs
+BUG-089 | FIXED 2026-06-09 | paint          | SVG basic shapes not rendered (rect/circle/ellipse/line) — TEST-47: 21.71%; ordered build path no-op'd SvgRoot/SvgShape/SvgText (only walk painted them) | crates/engine/paint/src/display_list.rs
 BUG-090 | OPEN   | layout         | -webkit-line-clamp multi-line truncation not working — TEST-48: 23.89%; CSS Overflow L4 §3.2 | crates/engine/layout/src/box_tree.rs
 BUG-091 | FIXED 2026-06-08 | paint | background-blend-mode: bottom layer wrapped in PushBlendMode (should be suppressed per CSS Compositing L1 §8.3) — TEST-49: 30.62% | crates/engine/paint/src/display_list.rs
 BUG-092 | OPEN   | css-parser/layout | CSS variables var() not propagating correctly through cascade — TEST-50: 17.26%; values appear resolved but rendering wrong | crates/engine/layout/src/style.rs
@@ -183,7 +183,7 @@ TEST-43: PASS  0.00%   intrinsic-sizing
 TEST-44: PASS  0.00%   media-queries
 TEST-45: FAIL 17.29%   multiple-backgrounds    ← BUG-087
 TEST-46: FAIL  9.57%   individual-transforms   ← BUG-088
-TEST-47: FAIL 21.71%   svg-basic               ← BUG-089 (Phase 1)
+TEST-47: FIXED 2026-06-09 svg-basic             ← BUG-089 (ordered path SVG paint)
 TEST-48: FAIL 23.89%   line-clamp              ← BUG-090
 TEST-49: FAIL 30.62%   background-blend-mode   ← BUG-091
 TEST-50: FAIL 17.26%   css-variables           ← BUG-092
@@ -756,7 +756,7 @@ CSS-фильтры `grayscale`, `sepia`, `brightness`, `invert`, `contrast`, `sa
 | `contain:` CSS containment | Phase 1 | TEST-28: 1.82% → BUG (Phase 1) |
 | Form controls UA styles | Phase 1 | TEST-34: 4.78% → BUG (Phase 1) |
 | `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 8.85% (bbox работает) |
-| SVG rendering | Phase 1 | TEST-47: 21.71% → BUG-089 |
+| SVG rendering | Phase 1 | TEST-47: FIXED 2026-06-09 → BUG-089 |
 | SVG `<path>` stroke | Phase 1 | TEST-54: 9.50% → BUG-096 |
 | SVG stroke advanced | Phase 1 | TEST-60: 11.51% → BUG-102 |
 | `<canvas>` 2D context | Phase 2 | TEST-57: 28.66% → BUG-099 |

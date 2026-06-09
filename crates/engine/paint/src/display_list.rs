@@ -3982,8 +3982,24 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
             });
             emit_outline(b, out);
         }
-        // SVG elements: second-pass self-paint not needed (handled in walk).
-        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. } => {}
+        // SVG elements: in the ordered (stacking-context) path `fill_buckets`
+        // already recurses into children, so each box paints only its own
+        // content here — no child recursion, unlike `walk` (which descends
+        // SvgRoot's shape/text children itself).
+        BoxKind::SvgRoot { .. } => {
+            if is_paint_visible(b)
+                && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+            }
+        }
+        BoxKind::SvgShape { shape, .. } => {
+            emit_svg_shape(b, shape, out);
+        }
+        BoxKind::SvgText { text, text_anchor, dominant_baseline, .. } => {
+            emit_svg_text(b, text, *text_anchor, *dominant_baseline, out);
+        }
     }
     emit_resize_grip(b, out);
 }
@@ -10323,6 +10339,35 @@ mod tests {
         let dl = build("<svg><text>Hello</text></svg>", "");
         let texts = texts(&dl);
         assert!(texts.iter().any(|t| t.contains("Hello")), "should emit text 'Hello'");
+    }
+
+    #[test]
+    fn ordered_svg_shape_emits_fill() {
+        // BUG-089: the ordered (stacking-context) path must paint SVG shapes.
+        // `emit_box_self` previously no-op'd SvgShape, so shapes vanished in the
+        // shell's ordered pipeline (only `walk` painted them). A <rect> with an
+        // explicit fill must produce a FillRect via `build_display_list_ordered`.
+        let dl = build_ordered(
+            "<svg width='100' height='100'><rect x='0' y='0' width='50' height='50' style='fill:#ff0000;'/></svg>",
+            "",
+        );
+        let has_red_fill = dl.iter().any(|c| matches!(
+            c,
+            DisplayCommand::FillRect { color, .. }
+                if color.r == 255 && color.g == 0 && color.b == 0
+        ));
+        assert!(has_red_fill, "ordered path must emit FillRect for SVG <rect>, got {dl:?}");
+    }
+
+    #[test]
+    fn ordered_svg_text_emits_drawtext() {
+        // BUG-089 companion: ordered path must also paint SVG <text>.
+        let dl = build_ordered("<svg><text>Hi</text></svg>", "");
+        let has_text = dl.iter().any(|c| matches!(
+            c,
+            DisplayCommand::DrawText { text, .. } if text.contains("Hi")
+        ));
+        assert!(has_text, "ordered path must emit DrawText for SVG <text>");
     }
 
     #[test]
