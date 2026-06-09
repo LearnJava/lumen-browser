@@ -42,7 +42,7 @@ use winit::window::Window;
 
 use lumen_core::ext::FontProvider;
 use lumen_core::geom::Size;
-use lumen_image::Image;
+use lumen_image::{Image, resize_area_avg};
 use lumen_layout::Color;
 
 use lumen_layout::{GradientStop, Length};
@@ -273,7 +273,19 @@ pub struct FemtovgBackend {
     /// ID bundled-шрифта (Inter Regular) в femtovg atlas.
     font_id: Option<femtovg::FontId>,
     /// Зарегистрированные изображения: src URL → femtovg ImageId.
+    ///
+    /// Помимо ключа `src` (исходное разрешение) здесь же кешируются
+    /// предварительно уменьшенные варианты под ключом `"src@WxH"` (см.
+    /// [`Self::resolve_image_for_rect`]) — нужны для качественного downscale
+    /// (BUG-077): femtovg сэмплит текстуру билинейно, что даёт алиасинг при
+    /// сильном уменьшении; вместо этого рисуем заранее area-averaged картинку.
     images: HashMap<String, femtovg::ImageId>,
+    /// Декодированные пиксели исходных изображений: src URL → `Image`.
+    ///
+    /// Храним рядом с GPU-текстурами, чтобы пересэмплировать на CPU
+    /// (`resize_area_avg`) при downscale. Зеркалит `Renderer::raw_images`
+    /// (wgpu-бэкенд).
+    raw_images: HashMap<String, Image>,
     /// Зарегистрированные layer snapshots: id → femtovg ImageId.
     snapshots: HashMap<u64, femtovg::ImageId>,
     /// Провайдер шрифтов для multi-family рендера (опциональный).
@@ -437,6 +449,7 @@ impl FemtovgBackend {
             scale,
             font_id,
             images: HashMap::new(),
+            raw_images: HashMap::new(),
             snapshots: HashMap::new(),
             font_provider: None,
             layer_stack_depth: 0,
@@ -552,7 +565,7 @@ impl FemtovgBackend {
     ///
     /// Если изображение не зарегистрировано — рисует серый placeholder.
     fn draw_image_in_rect(&mut self, rect: &Rect, src: &str) {
-        if let Some(&img_id) = self.images.get(src) {
+        if let Some(img_id) = self.resolve_image_for_rect(src, rect) {
             let paint = femtovg::Paint::image(
                 img_id,
                 rect.x, rect.y, rect.width, rect.height,
@@ -565,6 +578,47 @@ impl FemtovgBackend {
             // Placeholder — светло-серый прямоугольник.
             self.draw_fill_rect(rect.x, rect.y, rect.width, rect.height, Color { r: 200, g: 200, b: 200, a: 255 });
         }
+    }
+
+    /// Возвращает femtovg `ImageId` для отрисовки `src` в `rect`, при сильном
+    /// уменьшении подменяя исходную текстуру area-averaged уменьшенной копией.
+    ///
+    /// femtovg сэмплит текстуру билинейно — при downscale в несколько раз это
+    /// даёт алиасинг (BUG-077): один выходной пиксель усредняет лишь 2×2
+    /// соседей вместо всей покрываемой области. Зеркалим `Renderer` (wgpu):
+    /// если целевой размер в device-пикселях (`rect × scale`) меньше исходного
+    /// хотя бы по одной оси — пересэмплируем `resize_area_avg` до этого размера
+    /// и кешируем под `"src@WxH"`. Upscale/точное совпадение → исходная текстура
+    /// (билинейная фильтрация femtovg здесь корректна). Если у `src` нет
+    /// декодированных пикселей (не зарегистрирован) — возвращаем то, что есть в
+    /// кеше текстур, либо `None` (рисуется placeholder).
+    fn resolve_image_for_rect(&mut self, src: &str, rect: &Rect) -> Option<femtovg::ImageId> {
+        let (rw, rh) = match self.raw_images.get(src) {
+            Some(raw) => (raw.width, raw.height),
+            None => return self.images.get(src).copied(),
+        };
+
+        let (tw, th) = match downscale_target(rw, rh, rect.width, rect.height, self.scale) {
+            Some(target) => target,
+            // Не downscale (upscale или точное совпадение) — отдаём исходник.
+            None => return self.images.get(src).copied(),
+        };
+
+        let key = format!("{src}@{tw}x{th}");
+        if let Some(&id) = self.images.get(&key) {
+            return Some(id);
+        }
+
+        let raw = self.raw_images.get(src)?.clone();
+        let resized = resize_area_avg(&raw, tw, th);
+        let rgba = image_to_rgba8_vec(&resized);
+        let img = imgref::ImgRef::new(&rgba, resized.width as usize, resized.height as usize);
+        let id = self
+            .canvas
+            .create_image(femtovg::ImageSource::Rgba(img), femtovg::ImageFlags::empty())
+            .ok()?;
+        self.images.insert(key, id);
+        Some(id)
     }
 
     /// Рисует conic gradient как веер треугольников, обрезанный по box rect.
@@ -1099,6 +1153,8 @@ impl RenderBackend for FemtovgBackend {
             .canvas
             .create_image(ImageSource::Rgba(img), ImageFlags::empty())
             .map_err(|e| format!("femtovg register_image: {e:?}"))?;
+        // Keep the decoded pixels for on-demand area-averaged downscale (BUG-077).
+        self.raw_images.insert(src.clone(), image.clone());
         self.images.insert(src, id);
         Ok(())
     }
@@ -1110,6 +1166,7 @@ impl RenderBackend for FemtovgBackend {
         for (_, id) in self.snapshots.drain() {
             self.canvas.delete_image(id);
         }
+        self.raw_images.clear();
     }
 
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
@@ -1129,6 +1186,24 @@ impl RenderBackend for FemtovgBackend {
 }
 
 // ─── Image conversion helper ─────────────────────────────────────────────────
+
+/// Решает, нужно ли area-averaged уменьшение для отрисовки изображения
+/// `raw_w × raw_h` в прямоугольник `rect_w × rect_h` CSS-пикселей при device
+/// `scale`, и если да — возвращает целевой размер в device-пикселях.
+///
+/// `Some((tw, th))` — целевой размер меньше исходного хотя бы по одной оси
+/// (downscale): нужно пересэмплировать `resize_area_avg` чтобы избежать
+/// алиасинга от билинейного сэмплинга femtovg (BUG-077). `None` — upscale или
+/// точное совпадение: исходную текстуру можно сэмплить напрямую.
+fn downscale_target(raw_w: u32, raw_h: u32, rect_w: f32, rect_h: f32, scale: f64) -> Option<(u32, u32)> {
+    let tw = (f64::from(rect_w) * scale).round().max(1.0) as u32;
+    let th = (f64::from(rect_h) * scale).round().max(1.0) as u32;
+    if tw >= raw_w && th >= raw_h {
+        None
+    } else {
+        Some((tw, th))
+    }
+}
 
 /// Конвертирует `lumen_image::Image` в вектор `RGBA8` пикселей для femtovg.
 fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
@@ -1163,6 +1238,34 @@ fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downscale_target_triggers_on_large_downscale() {
+        // 800×600 source drawn into 200×150 CSS px at scale 1 → downscale to 200×150.
+        assert_eq!(downscale_target(800, 600, 200.0, 150.0, 1.0), Some((200, 150)));
+    }
+
+    #[test]
+    fn downscale_target_none_on_upscale_or_exact() {
+        // Exact match → no resample.
+        assert_eq!(downscale_target(100, 100, 100.0, 100.0, 1.0), None);
+        // Upscale in both axes → no resample (bilinear upscale by femtovg is fine).
+        assert_eq!(downscale_target(100, 100, 300.0, 300.0, 1.0), None);
+    }
+
+    #[test]
+    fn downscale_target_triggers_when_one_axis_shrinks() {
+        // Squished horizontally only → still area-average (the shrunk axis aliases).
+        assert_eq!(downscale_target(400, 100, 100.0, 100.0, 1.0), Some((100, 100)));
+    }
+
+    #[test]
+    fn downscale_target_accounts_for_device_scale() {
+        // 2× HiDPI: 200 CSS px → 400 device px, so a 300px source is upscaled, not down.
+        assert_eq!(downscale_target(300, 300, 200.0, 200.0, 2.0), None);
+        // But a 500px source into 200 CSS px @2× = 400 device px → downscale to 400.
+        assert_eq!(downscale_target(500, 500, 200.0, 200.0, 2.0), Some((400, 400)));
+    }
 
     #[test]
     fn lumen_to_fvg_converts_rgba() {
