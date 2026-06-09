@@ -236,6 +236,21 @@ fn interp_conic_color(resolved: &[(f32, femtovg::Color)], t: f32) -> Color {
     }
 }
 
+/// CSS Images L4 §3.7 — отображает долю оборота `t` ∈ [0,1) в позицию сэмпла
+/// внутри диапазона stop-ов градиента.
+///
+/// Для `repeating-conic-gradient` паттерн повторяется каждые (last − first) доли
+/// оборота: `t` сворачивается в `[first, first+span)` через `rem_euclid`.
+/// Для не-repeating (или вырожденного нулевого span) возвращает `t` без изменений.
+fn conic_sample_t(t: f32, repeating: bool, first_pos: f32, last_pos: f32) -> f32 {
+    let span = last_pos - first_pos;
+    if repeating && span > 1e-6 {
+        first_pos + (t - first_pos).rem_euclid(span)
+    } else {
+        t
+    }
+}
+
 // ─── FemtovgBackend ──────────────────────────────────────────────────────────
 
 /// femtovg/OpenGL рендер-бэкенд (Phase 2, ADR-010).
@@ -552,10 +567,13 @@ impl FemtovgBackend {
         }
     }
 
-    /// Рисует conic gradient как веер треугольников.
+    /// Рисует conic gradient как веер треугольников, обрезанный по box rect.
     ///
     /// femtovg не поддерживает conic gradient нативно. Аппроксимируем через
-    /// triangle fan с интерполяцией цвета между stop-ами.
+    /// triangle fan с интерполяцией цвета между stop-ами. CSS Images L4 §3.7:
+    /// conic-gradient заливает прямоугольник элемента, поэтому веер (диск,
+    /// достающий до углов box) обрезается scissor-ом по `rect`. Без обрезки
+    /// диск выходит далеко за пределы box (BUG-086 — гигантские круги).
     fn draw_conic_gradient(
         &mut self,
         rect: &Rect,
@@ -563,7 +581,7 @@ impl FemtovgBackend {
         center_y_pct: f32,
         from_angle_deg: f32,
         stops: &[GradientStop],
-        _repeating: bool,
+        repeating: bool,
     ) {
         if stops.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
@@ -571,22 +589,36 @@ impl FemtovgBackend {
 
         let cx = rect.x + center_x_pct * rect.width;
         let cy = rect.y + center_y_pct * rect.height;
-        let radius = rect.width.hypot(rect.height) / 2.0 * 1.5;
+        // Радиус должен доставать до самого дальнего угла box, чтобы веер покрыл
+        // весь прямоугольник; излишек срезается scissor-ом ниже. Центр может быть
+        // смещён (`at <pos>`), поэтому берём полную диагональ как верхнюю границу.
+        let radius = rect.width.hypot(rect.height);
 
         let resolved = resolve_stops(stops, 1.0);
         if resolved.len() < 2 {
             return;
         }
 
-        let segments = (resolved.len() * 8).max(36);
+        // repeating-conic-gradient: паттерн повторяется каждые (last − first)
+        // доли оборота (см. `conic_sample_t`).
+        let first_pos = resolved[0].0;
+        let last_pos = resolved[resolved.len() - 1].0;
+
+        let segments = (resolved.len() * 32).max(360);
         let base_angle = from_angle_deg.to_radians() - std::f32::consts::FRAC_PI_2;
+
+        // Обрезаем веер по box rect, пересекая с активным scissor (например,
+        // overflow:hidden контейнером), чтобы не затереть соседние элементы.
+        self.canvas.save();
+        self.canvas.intersect_scissor(rect.x, rect.y, rect.width, rect.height);
 
         for i in 0..segments {
             let t0 = i as f32 / segments as f32;
             let t1 = (i + 1) as f32 / segments as f32;
             let t_mid = (t0 + t1) / 2.0;
 
-            let c_mid = interp_conic_color(&resolved, t_mid);
+            let t_sample = conic_sample_t(t_mid, repeating, first_pos, last_pos);
+            let c_mid = interp_conic_color(&resolved, t_sample);
             let avg_color = femtovg::Color::rgba(c_mid.r, c_mid.g, c_mid.b, c_mid.a);
 
             let a0 = base_angle + t0 * std::f32::consts::TAU;
@@ -605,6 +637,8 @@ impl FemtovgBackend {
 
             self.canvas.fill_path(&path, &femtovg::Paint::color(avg_color));
         }
+
+        self.canvas.restore();
     }
 
     // ─── Command dispatch ─────────────────────────────────────────────────────
@@ -1292,6 +1326,43 @@ mod tests {
         let c = interp_conic_color(&stops, 0.5);
         assert_eq!(c.r, 100);
         assert_eq!(c.g, 50);
+    }
+
+    #[test]
+    fn conic_sample_t_non_repeating_is_identity() {
+        // Не-repeating: t возвращается как есть на всём обороте.
+        assert!((conic_sample_t(0.0, false, 0.0, 0.25) - 0.0).abs() < 1e-6);
+        assert!((conic_sample_t(0.7, false, 0.0, 0.25) - 0.7).abs() < 1e-6);
+        assert!((conic_sample_t(1.0, false, 0.0, 0.25) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn conic_sample_t_repeating_tiles_pattern() {
+        // BUG-086: repeating-conic-gradient с span=0.25 (45deg×2 паттерн)
+        // должен повторяться 4 раза за оборот, а не оставлять 3/4 заливкой
+        // последнего цвета. t за пределами первого span сворачивается в него.
+        let (first, last) = (0.0_f32, 0.25_f32);
+        assert!((conic_sample_t(0.05, true, first, last) - 0.05).abs() < 1e-6);
+        // 0.30 → 0.30 mod 0.25 = 0.05
+        assert!((conic_sample_t(0.30, true, first, last) - 0.05).abs() < 1e-6);
+        // 0.55 → 0.55 mod 0.25 = 0.05
+        assert!((conic_sample_t(0.55, true, first, last) - 0.05).abs() < 1e-6);
+        // 0.875 (7/8 оборота) → 0.875 mod 0.25 = 0.125 (середина паттерна)
+        assert!((conic_sample_t(0.875, true, first, last) - 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn conic_sample_t_repeating_zero_span_is_identity() {
+        // Вырожденный span (все stop-ы в одной точке) — не делим, возвращаем t.
+        assert!((conic_sample_t(0.6, true, 0.5, 0.5) - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn conic_sample_t_repeating_nonzero_first() {
+        // Паттерн со смещённым first_pos: span = 0.4 - 0.1 = 0.3.
+        // t=0.75 → 0.1 + (0.75-0.1) mod 0.3 = 0.1 + 0.65 mod 0.3 = 0.1 + 0.05 = 0.15
+        let v = conic_sample_t(0.75, true, 0.1, 0.4);
+        assert!((v - 0.15).abs() < 1e-6, "v={v}");
     }
 
     #[test]
