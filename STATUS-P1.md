@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+M-4: `<input type=file>` file picker  branch: p1-m4-file-picker
+Next step: file_input.rs в lumen-js + OpenFilePicker в forms.rs + shell wiring
 
 ---
 
