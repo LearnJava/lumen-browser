@@ -6,8 +6,7 @@
 
 ## In progress
 
-**O-3: 7D.1 Passkeys CTAP2-over-USB**  branch: p1-ctap2-usb
-Next step: тесты, коммит, merge  `crates/network/src/ctap2.rs`
+_(нет)_
 
 ---
 
@@ -26,7 +25,7 @@ Next step: тесты, коммит, merge  `crates/network/src/ctap2.rs`
 |---|--------|--------|--------|
 | ~~O-1~~ | ~~**8H.1/8H.2: BiDi transport + модули**~~ — **выполнено** | M | `lumen-shell` |
 | ~~O-2~~ | ~~**6.9: Performance-observer JS binding**~~ — **выполнено** | S | `lumen-js` |
-| O-3 | **7D.1: Passkeys CTAP2-over-USB** — roaming authenticator transport (CTAP2 over HID); software `VirtualAuthenticator` уже готов, нужен реальный USB-транспорт. `network/src/webauthn.rs` | M | `lumen-network`, `lumen-js` |
+| ~~O-3~~ | ~~**7D.1: Passkeys CTAP2-over-USB**~~ — **выполнено** | M | `lumen-network` |
 | O-4 | **10L: JS heap GC tuning per tier** — активная вкладка: мягкий GC (`gc_level=0`), idle: агрессивный (`gc_level=2`). `js/src/gc_policy.rs` | S | `lumen-js` |
 | O-5 | **6+ (a11y bridges): Platform a11y bridges** — macOS Accessibility API, Windows UI Automation, Linux AT-SPI2; P1 владеет `lumen-a11y`. `a11y/src/platform/` | M | `lumen-a11y`, `lumen-shell` |
 | O-6 | **KnowledgeStore** — FTS / read-later / notes (§12.1); базируется на уже готовом `HistoryFts`. `crates/knowledge/` | L | `lumen-knowledge`, `lumen-storage`, `lumen-shell` |
@@ -102,6 +101,7 @@ Next step: тесты, коммит, merge  `crates/network/src/ctap2.rs`
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | O-3: 7D.1 CTAP2-over-USB roaming authenticator transport | lumen-network: новый модуль ctap2.rs — полный стек CTAP2-over-HID: HidDevice trait, CtapHidChannel (CTAPHID_INIT handshake + packet fragmentation/reassembly + KEEPALIVE skip), CBOR encoder/decoder (uint/bstr/tstr/map), CTAP2 authenticatorMakeCredential + authenticatorGetAssertion builders/parsers, CtapRoamingTransport (CredentialProvider, Phase 0: probe_usb_fido_devices() → empty), CompositeCredentialProvider (roaming → software fallback chain), MockHidDevice (scripted response queue). 15 unit-тестов. Никаких новых зависимостей. Phase 1: платформенный HID backend (Windows HidD_*/SetupDi, Linux hidraw, macOS IOHIDDevice). |
 | 2026-06-09 | O-2: 6.9 PerformanceObserver generic callback delivery | lumen-js: _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, detail_json) — generic JS биндинг для доставки любого PerformanceEntry типа с опциональным JSON-мержем. BrowserSession trait: +deliver_perf_entry() с default no-op. InProcessSession реализует через JS eval. +5 тестов. Попутно: удалён пустой test-блок в navigation_api.rs (pre-existing clippy ошибки). |
 | 2026-06-08 | O-1: 8H.1/8H.2 BiDi transport + модули | lumen-shell bidi/: transport.rs (новый) — WS-framing выделен из server.rs. Новые команды: script.disown/getRealms, network.addIntercept/removeIntercept/continueRequest/continueResponse/continueWithAuth/failRequest/setCacheBehavior, input.performActions/releaseActions/setFiles. BidiState: intercepts + cache_behavior. +15 тестов (56 BiDi итого). Clippy чист. |
 | 2026-06-08 | N-2: 8F Deterministic mode | lumen-core: ClockMode::Monotonic { step_ms }. lumen-driver: driver/src/determinism.rs (DeterministicConfig, seed_from_url), SessionContext::set_clock_mode/read_clock_ms (monotonic counter), BrowserSession trait +set_clock/+set_rng_seed/+freeze_fingerprint, InProcessSession + WinitSession реализуют, 7 новых тестов (66 total). lumen-js: QuickJsRuntime::freeze_fingerprint() — JS шим: AnalyserNode zeros + document.fonts.check=true. lumen-shell: DetConfig struct, --rng-seed/--monotonic-clock CLI флаги. lumen-plan.md: 8F/8F.1/8F.2/8F.3 ⬜→✅. |
