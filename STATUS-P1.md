@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+O-4: 10L JS heap GC tuning per tier  branch: p1-gc-policy
+Next step: создать gc_policy.rs + run_gc_pass() на QuickJsRuntime  crates/js/src/gc_policy.rs
 
 ---
 

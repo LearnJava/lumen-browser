@@ -84,6 +84,7 @@ pub mod web_midi;
 pub mod storage_manager;
 pub mod xhr;
 pub mod dom_parser;
+pub mod gc_policy;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -1283,6 +1284,30 @@ impl QuickJsRuntime {
             ctx.eval::<(), _>("_lumen_apply_ready_state('complete')").ok();
         });
     }
+
+    /// Tune the QuickJS GC based on the tab's lifecycle tier (10L).
+    ///
+    /// - `Soft` (T0 active): reset `gc_threshold` to 1 MiB so the heap can
+    ///   grow freely while the tab is in the foreground.
+    /// - `Moderate` (T1): run one full collection cycle; threshold unchanged.
+    /// - `Aggressive` (T2): run one full cycle + lower `gc_threshold` to
+    ///   64 KiB so subsequent allocations trigger GC much sooner, keeping
+    ///   the retained heap small during long background stays.
+    pub fn run_gc_pass(&self, level: gc_policy::GcLevel) {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match level {
+            gc_policy::GcLevel::Soft => {
+                guard._rt.set_gc_threshold(gc_policy::GC_THRESHOLD_ACTIVE);
+            }
+            gc_policy::GcLevel::Moderate => {
+                guard._rt.run_gc();
+            }
+            gc_policy::GcLevel::Aggressive => {
+                guard._rt.run_gc();
+                guard._rt.set_gc_threshold(gc_policy::GC_THRESHOLD_IDLE);
+            }
+        }
+    }
 }
 
 impl Default for QuickJsRuntime {
@@ -1707,5 +1732,59 @@ mod tests {
         // Either resolved immediately (QuickJS synchronous promise resolution) or still pending.
         // Both outcomes are valid; the key is no panic/error.
         let _ = val;
+    }
+
+    // ── gc_policy tests (10L) ─────────────────────────────────────────────────
+
+    #[test]
+    fn gc_level_soft_does_not_panic() {
+        let rt = rt();
+        // Soft: resets gc_threshold, no panic.
+        rt.run_gc_pass(gc_policy::GcLevel::Soft);
+    }
+
+    #[test]
+    fn gc_level_moderate_does_not_panic() {
+        let rt = rt();
+        rt.eval("var arr = new Array(1000).fill(0);").unwrap();
+        // Moderate: runs one GC cycle, heap still valid after.
+        rt.run_gc_pass(gc_policy::GcLevel::Moderate);
+        // Verify JS context still works post-GC.
+        let v = rt.eval("typeof arr").unwrap();
+        assert_eq!(v, JsValue::String("object".into()));
+    }
+
+    #[test]
+    fn gc_level_aggressive_does_not_panic() {
+        let rt = rt();
+        rt.eval("var obj = {a:1, b:2};").unwrap();
+        // Aggressive: GC + lowered threshold, heap still valid after.
+        rt.run_gc_pass(gc_policy::GcLevel::Aggressive);
+        let v = rt.eval("obj.a").unwrap();
+        assert_eq!(v, JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn gc_level_sequence_active_idle_active() {
+        // Simulate T0 → T1 → T2 → T0 lifecycle.
+        let rt = rt();
+        rt.eval("globalThis.counter = 42;").unwrap();
+        rt.run_gc_pass(gc_policy::GcLevel::Moderate);   // T0 → T1
+        rt.run_gc_pass(gc_policy::GcLevel::Aggressive); // T1 → T2
+        rt.run_gc_pass(gc_policy::GcLevel::Soft);       // T2 → T0
+        // Counter survives all transitions.
+        let v = rt.eval("globalThis.counter").unwrap();
+        assert_eq!(v, JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn gc_level_constants_ordering() {
+        use gc_policy::{GC_THRESHOLD_ACTIVE, GC_THRESHOLD_IDLE, GcLevel};
+        // Active threshold is larger than idle (checked at compile time too).
+        const _: () = assert!(GC_THRESHOLD_ACTIVE > GC_THRESHOLD_IDLE);
+        // Enum discriminants follow the spec ordering.
+        assert_eq!(GcLevel::Soft as u8, 0);
+        assert_eq!(GcLevel::Moderate as u8, 1);
+        assert_eq!(GcLevel::Aggressive as u8, 2);
     }
 }
