@@ -6,8 +6,7 @@
 
 ## In progress
 
-T-1: ES2025 Binary Data + misc TC39 APIs  branch: p1-t1-es2025-binary-apis
-Next step: реализовать в crates/js/src/tc39_proposals.rs — Uint8Array.toBase64/fromBase64/toHex/fromHex, RegExp.escape(), Error.isError(), Atomics.pause()
+_(нет)_
 
 ---
 
@@ -17,7 +16,7 @@ Next step: реализовать в crates/js/src/tc39_proposals.rs — Uint8Ar
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| T-1 | **ES2025 Binary Data APIs** — `Uint8Array.toBase64/fromBase64/toHex/fromHex`, `RegExp.escape()`, `Error.isError()`, `Atomics.pause()` | S | `lumen-js` |
+| ~~T-1~~ | ~~**ES2025 Binary Data APIs**~~ — **выполнено** | S | `lumen-js` |
 
 ### S — TC39 Stage 4 JS APIs (не реализованы в QuickJS)
 
@@ -130,6 +129,7 @@ Next step: реализовать в crates/js/src/tc39_proposals.rs — Uint8Ar
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | T-1: ES2025 Binary Data + misc TC39 APIs | lumen-js tc39_proposals.rs: Uint8Array.prototype.toBase64(opts) / Uint8Array.fromBase64(str, opts) — base64 encode/decode с alphabet (standard/url) и omitPadding/lastChunkHandling; Uint8Array.prototype.toHex() / Uint8Array.fromHex(str) — hex encode/decode. RegExp.escape(str) shim-guard (QuickJS 0.11 имеет native impl — guard не перетирает). Error.isError(value) — кросс-реальная проверка Error через toString. Atomics.pause() — no-op power-hint для spinloop-ов. 18 новых unit-тестов. lumen-js: 1771 тестов (+18 vs 1753). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | S-5: Launch Handler API | lumen-js: новый модуль launch_handler.rs — WICG Web App Launch Handler Phase 0. window.launchQueue (LaunchQueue singleton), LaunchQueue.setConsumer(fn) — регистрирует обработчик параметров запуска; LaunchParams {targetURL, files[]} — объект запуска. _lumen_deliver_launch_params(url, filesJson) — shell-хук для Phase 1 (OS file associations + URL activation). setConsumer() сразу сбрасывает очередь ранее накопленных params. window.LaunchParams экспортирован для feature detection. 9 unit-тестов. lumen-js: 1753 тестов (+9 vs 1744). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-4: Long Animation Frames API (LoAF) | lumen-js: новый модуль long_animation_frames.rs — W3C Long Animation Frames API. PerformanceLongAnimationFrameTiming (entryType='long-animation-frame', поля startTime/duration/renderStart/styleAndLayoutStart/firstUIEventTimestamp/blockingDuration/scripts[]). PerformanceScriptTiming (entryType='script', invoker/invokerType/windowAttribution/executionStart/forcedStyleAndLayoutDuration/pauseDuration/sourceURL/sourceFunctionName/sourceCharPosition). _lumen_deliver_long_animation_frame(start,duration,renderStart,styleLayoutStart,firstUIEventTs,blockingDuration,scripts_json) — delivery binding + уведомление PerformanceObserver. QuickJsRuntime::deliver_long_animation_frame() для shell Phase 1. 10 unit-тестов. lumen-js: 1744 тестов (+10 vs 1734). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | S-3: Local Font Access API | lumen-js: новый модуль local_font_access.rs — WICG Local Font Access. navigator.fonts (FontAccessManager). query() → Promise<[]> в Phase 0 (OS шрифты не перечисляем). FontData класс (postscriptName/fullName/family/style + blob()→Promise<Blob>). _lumen_local_fonts_query() / _lumen_local_font_blob() зарезервированы для Phase 1. 8 unit-тестов. lumen-js: 1734 тестов (+8 vs 1726). Clippy чист. Без новых зависимостей. |
