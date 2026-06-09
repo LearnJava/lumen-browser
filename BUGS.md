@@ -125,7 +125,8 @@ BUG-109 | OPEN   | css-parser/font | font-variation-settings: wght/wdth/slnt axi
 BUG-110 | OPEN   | layout/paint   | object-fit: SVG viewBox scaling (fill/contain/cover/none/scale-down) ~8% deviation — TEST-70: 8.03% | crates/engine/layout/src/box_tree.rs
 BUG-111 | FIXED 2026-06-08 | paint/shell | lumen-paint/shell не компилировались после мержа A-2 CSS Custom Highlight API: (1) дубликат `emit_text_with_highlights` (stub 3-arg vs новый 11-arg), (2) 71× `DrawText` struct initializer missing `highlight_name: None` (display_list, renderer, shell/*, main.rs), (3) осиротевший `///`-блок в style.rs, (4) collapsible_if в тест | crates/engine/paint/src/display_list.rs + crates/shell/src/*
 BUG-112 | FIXED 2026-06-08 | driver | test_32_list_markers регрессия: P4 добавил 2 `@counter-style` списка по 3 items в 32-list-markers.html → 32 li (было 26), 30 маркеров (было 24). Тест не обновлён. | crates/driver/tests/test_32.rs
-BUG-113 | OPEN   | layout         | TEST-53 row-2 vertical drift ~30px: second `.row` (background-position: 100% 100%) is positioned lower in Lumen than Edge — cumulative vertical height of row-1 (h3 + flex-row of box+label) differs. Discovered fixing BUG-095; was masked by 32% stretched-image error. | crates/engine/layout/src/box_tree.rs
+BUG-113 | FIXED 2026-06-09 | layout         | TEST-53 row-2 vertical drift ~24px: single-line row flex container leaked the trailing `row-gap` (from `gap:24px`) into its own cross size (height). `lay_out_flex` adds `line_cross + cross_gap` per line but only removed the surplus trailing gap when `n_lines > 1`; single-line containers kept it. Fix: always drop one trailing `cross_gap`. Row-2 moved up 24px; 15 single-line-flex+gap CPU snapshots regenerated. Residual TEST-53 ~4px = BUG-114 (`font` shorthand size). | crates/engine/layout/src/box_tree.rs:5229
+BUG-114 | OPEN   | css-parser     | `font` shorthand drops font-size/line-height: `font: 700 13px/1.4 sans-serif` and `font: 11px/1.5 monospace` render at 16px (default), only font-weight applied — TEST-53 residual ~4px vertical + text width drift. font-size/line-height components of the shorthand not parsed into ComputedStyle. | crates/engine/css-parser/src/lib.rs
 ```
 
 ---
@@ -189,7 +190,7 @@ TEST-49: FAIL 30.62%   background-blend-mode   ← BUG-091
 TEST-50: FAIL 17.26%   css-variables           ← BUG-092
 TEST-51: FAIL  1.39%   scrollbar-rendering     ← BUG-093
 TEST-52: FAIL  6.82%   text-shadow-blur        ← BUG-094 (thr 4.0%)
-TEST-53: FAIL 11.55%   background-origin       ← BUG-095 FIXED (origin/clip ok; residual ← BUG-113 drift + AA)
+TEST-53: FAIL 11.55%   background-origin       ← BUG-095 + BUG-113 FIXED (origin/clip + row drift ok; residual ← BUG-114 font shorthand + AA)
 TEST-54: FAIL  9.50%   svg-path-stroke         ← BUG-096 (Phase 1)
 TEST-55: FAIL 26.65%   video-placeholder       ← BUG-097
 TEST-56: FAIL 14.12%   mix-blend-mode          ← BUG-098
