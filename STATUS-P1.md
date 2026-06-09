@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+M-5: `structuredClone()` improvements  branch: p1-m5-structured-clone
+Next step: cargo clippy + tests  crates/js/src/dom.rs:9126
 
 ---
 
