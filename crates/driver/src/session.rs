@@ -696,6 +696,25 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
         self.eval(&script)?;
         Ok(())
     }
+
+    fn deliver_perf_entry(
+        &mut self,
+        entry_type: &str,
+        name: &str,
+        start_ms: f64,
+        duration_ms: f64,
+        detail_json: Option<&str>,
+    ) -> Result<()> {
+        let detail = detail_json.unwrap_or("null");
+        // {:?} produces a Rust Debug string which is a valid JS double-quoted literal
+        // for the ASCII/UTF-8 entry type and name values used in practice.
+        let script = format!(
+            "_lumen_deliver_perf_entry({:?}, {:?}, {}, {}, {})",
+            entry_type, name, start_ms, duration_ms, detail
+        );
+        self.eval(&script)?;
+        Ok(())
+    }
 }
 
 // ── Вспомогательные функции ─────────────────────────────────────────────────
