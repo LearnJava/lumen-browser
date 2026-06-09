@@ -3845,17 +3845,23 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Phase 0: poster image if available, otherwise unregistered src → grey placeholder.
+            // Phase 0: only a `poster` image is painted (registered by shell, or
+            // unregistered → grey placeholder). An empty `<video>` with no poster
+            // and no decoded frame paints nothing — the element box is transparent,
+            // matching Chromium/Edge (which show the page background through it).
+            // The grey image placeholder is reserved for `<img>`, not media.
             // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale poster/video frame.
-            let img_src = if !poster.is_empty() { poster.clone() } else { src.clone() };
-            out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
-                src: img_src,
-                alt: String::new(),
-                object_fit: b.style.object_fit,
-                object_position: b.style.object_position,
-                image_rendering: b.style.image_rendering,
-            });
+            let _ = src;
+            if !poster.is_empty() {
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: poster.clone(),
+                    alt: String::new(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
             emit_outline(b, out);
         }
         BoxKind::Canvas { .. } => {
@@ -4488,17 +4494,23 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Phase 0: poster → DrawImage (registered by shell); no poster or unregistered src → grey placeholder.
+            // Phase 0: only a `poster` image is painted (registered by shell, or
+            // unregistered → grey placeholder). An empty `<video>` with no poster
+            // and no decoded frame paints nothing — the element box is transparent,
+            // matching Chromium/Edge (which show the page background through it).
+            // The grey image placeholder is reserved for `<img>`, not media.
             // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale poster/video frame.
-            let img_src = if !poster.is_empty() { poster.clone() } else { src.clone() };
-            out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
-                src: img_src,
-                alt: String::new(),
-                object_fit: b.style.object_fit,
-                object_position: b.style.object_position,
-                image_rendering: b.style.image_rendering,
-            });
+            let _ = src;
+            if !poster.is_empty() {
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: poster.clone(),
+                    alt: String::new(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
             emit_outline(b, out);
         }
         BoxKind::Canvas { .. } => {
@@ -6309,15 +6321,17 @@ mod tests {
     // ── Тесты <video> / DrawImage placeholder ───────────────────────────────
 
     #[test]
-    fn video_emits_draw_image_with_src() {
-        // <video src="clip.mp4"> → DrawImage with src="clip.mp4" (grey placeholder).
+    fn video_without_poster_emits_no_draw_image() {
+        // BUG-097: an empty <video> (no poster, no decoded frame) paints nothing —
+        // the element box is transparent, matching Chromium/Edge. The grey image
+        // placeholder is reserved for <img>, not media.
         let dl = build(r#"<video src="clip.mp4"></video>"#, "");
         let imgs = images(&dl);
-        assert_eq!(imgs.len(), 1, "video should emit exactly one DrawImage");
-        if let DisplayCommand::DrawImage { src, alt, .. } = imgs[0] {
-            assert_eq!(src, "clip.mp4");
-            assert_eq!(alt, "");
-        }
+        assert!(
+            imgs.is_empty(),
+            "posterless video should emit no DrawImage, got {}",
+            imgs.len()
+        );
     }
 
     #[test]
@@ -6333,7 +6347,8 @@ mod tests {
 
     #[test]
     fn video_ua_default_rect_300_by_150() {
-        let dl = build(r#"<video src="clip.mp4"></video>"#, "");
+        // Poster present so the replaced box paints a DrawImage at the UA-default rect.
+        let dl = build(r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#, "");
         let imgs = images(&dl);
         assert_eq!(imgs.len(), 1);
         if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
@@ -6345,7 +6360,7 @@ mod tests {
     #[test]
     fn video_css_dimensions_override_ua_default() {
         let dl = build(
-            r#"<video src="clip.mp4"></video>"#,
+            r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#,
             "video { width: 640px; height: 360px; }",
         );
         let imgs = images(&dl);
