@@ -6,8 +6,7 @@
 
 ## In progress
 
-**O-10: CSS Scroll-Driven Animations Phase 1 shell wiring**  branch: p1-o10-scroll-driven-anim
-Next step: создать scroll_timeline.rs в lumen-js + deliver_scroll_progress в shell  crates/js/src/scroll_timeline.rs
+_(нет)_
 
 ---
 
@@ -33,7 +32,7 @@ Next step: создать scroll_timeline.rs в lumen-js + deliver_scroll_progre
 | ~~O-7~~ | ~~**10M: `samples/heavy.html`**~~ — **выполнено (P2)** | XS | — |
 | ~~O-8~~ | ~~**6+ (forms): Native form pickers + validation tooltip UI**~~ — **выполнено** | M | `lumen-shell`, `lumen-js` |
 | ~~O-9~~ | ~~**Кастомизация UI**~~ — **выполнено** | L | `lumen-shell` |
-| O-10 | **CSS Scroll-Driven Animations Phase 1 shell wiring** — shell-wiring scroll-driven animations (алгоритм в layout уже есть); `@scroll-timeline` → viewport-progress. `shell/src/scroll/` + `lumen-layout` | M | `lumen-shell`, `lumen-layout` |
+| ~~O-10~~ | ~~**CSS Scroll-Driven Animations Phase 1 shell wiring**~~ — **выполнено** | M | `lumen-js`, `lumen-shell` |
 | O-11 | **2A remaining: SOP/CORS mixed-content enforcement** — HttpClient блокирует blockable-ресурсы до TCP-соединения; DOM-применение `sandbox`-флагов `<iframe>` в shell. `network/src/lib.rs` + `shell/src/main.rs` | S | `lumen-network`, `lumen-shell` |
 | O-12 | **10K.3: Loading-spinner при restore >200ms** — UI-спиннер при восстановлении T2→T0 если > 200 мс. `shell/src/tabs/restore_ui.rs` | XS | `lumen-shell` |
 
@@ -102,6 +101,7 @@ Next step: создать scroll_timeline.rs в lumen-js + deliver_scroll_progre
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | O-10: CSS Scroll-Driven Animations Phase 1 | lumen-js: новый модуль scroll_timeline.rs — ScrollTimeline/ViewTimeline классы (W3C CSS Scroll-Driven Animations L1 §3–4). _lumen_deliver_scroll_progress(py, px) обновляет currentTime (0–100%) у всех корневых ScrollTimeline. QuickJsRuntime::deliver_scroll_progress(). lumen-shell: PersistentJs::deliver_scroll_progress трейт + impl; RedrawRequested шаг 1.5 — вычисляем block/inline прогресс через lumen_layout::resolve_scroll_progress, доставляем в JS. 14 unit-тестов. Clippy чист. |
 | 2026-06-09 | O-9: Кастомизация UI — drag&drop + темы | panels/themes.rs: ShellTheme {ThemeBase, AccentPreset} — 6 пресетов (Blue/Purple/Teal/Green/Orange/Rose), parse/to_settings_str, is_dark(). tabs/strip.rs: TabDragState, move_tab(src, dst) с корректировкой active-индекса, build_tab_bar(accent, drag) — drop-indicator + кастомный акцент. settings_panel.rs: SetAccent hit, ряд 6 акцент-свотчей в Appearance. main.rs: tab_drag + shell_theme поля; CursorMoved активирует drag после 6px; MouseInput Release → move_tab; Settings Close → is_dark() синхронизирует dark_mode. 1221 тест. Clippy чист. |
 | 2026-06-09 | O-8: 6+ forms date picker overlay | forms.rs: FormClickAction::OpenDatePicker, DatePickerHit enum, build_date_picker (calendar overlay с навигацией Prev/Next + day grid), hit_date_picker, advance_month, days_in_month, first_weekday_of_month (Zeller), parse/format_date_value (YYYY-MM-DD), today_year_month (Howard Hinnant). classify_click: Date/DateTimeLocal/Time/Month/Week → OpenDatePicker. main.rs: date_picker_node/year/month поля в Lumen + PageSnapshot, render path, click path (Prev/Next/Day), два обработчика OpenDatePicker. O-7 (heavy.html) зафиксирован как выполненный P2. 15 новых тестов. 1195 тестов итого. Clippy чист. |
 | 2026-06-09 | O-5: 6+ platform a11y bridges | lumen-a11y: новый модуль platform/ — PlatformBridge trait, NullBridge, platform_bridge() factory. WinUiaBridge (Phase 0: хранит последнее AXTree; Phase 1: UIA COM IRawElementProviderSimple). MacA11yBridge (Phase 0; Phase 1: NSAccessibility + NSAccessibilityPostNotification). AtSpiBridge (Phase 0; Phase 1: AT-SPI2 D-Bus via atspi+zbus). lumen-shell: lumen-a11y добавлен в зависимости; Lumen::platform_bridge поле; update_platform_ax_tree() вызывается после apply_loaded_page и restore_page_snapshot; focused_node_changed() при смене фокуса. 6 unit-тестов. Clippy чист. |
