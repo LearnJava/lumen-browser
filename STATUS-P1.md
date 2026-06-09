@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+P-1: Selector rule index  branch: p1-selector-rule-index
+Next step: cargo check + tests  crates/engine/layout/src/rule_index.rs + style.rs
 
 ---
 

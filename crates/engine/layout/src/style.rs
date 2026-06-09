@@ -14,8 +14,10 @@
 //! вложенными `a`-предками могут промахнуться — это известное упрощение, до
 //! фазы со «честным» Selectors-движком.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+
+use crate::rule_index::RuleIndex;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
@@ -24,6 +26,14 @@ use lumen_css_parser::{
     Stylesheet, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
+
+thread_local! {
+    /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count) to
+    /// detect stylesheet changes between layout passes. Rebuilt only when the
+    /// key changes; reused for every node in the same pass (O(1) amortised).
+    static RULE_IDX_CACHE: RefCell<(usize, usize, RuleIndex)> =
+        RefCell::new((0, 0, RuleIndex::empty()));
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Display {
@@ -4932,7 +4942,29 @@ pub fn compute_style(
         if imp { -layer_idx } else { layer_idx }
     };
     let mut matched: Vec<(bool, bool, i32, Specificity, usize, usize, &Declaration)> = Vec::new();
-    for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+
+    // Build or reuse a per-stylesheet rule index (thread-local, keyed by
+    // pointer+length). Amortised O(1): rebuilt only when the sheet changes.
+    let node_data = doc.get(node);
+    let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
+    let node_id = node_data.get_attr("id");
+    let class_attr = node_data.get_attr("class").unwrap_or("");
+    let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
+
+    let sheet_ptr = sheet as *const Stylesheet as usize;
+    let sheet_rules_len = sheet.rules.len();
+    RULE_IDX_CACHE.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len {
+            *cached = (sheet_ptr, sheet_rules_len, RuleIndex::build(sheet));
+        }
+    });
+    let cands = RULE_IDX_CACHE.with(|cell| {
+        cell.borrow().2.candidates(node_tag, node_id, &node_classes)
+    });
+
+    for &rule_idx in &cands {
+        let rule = &sheet.rules[rule_idx];
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
             if matches_complex(complex, doc, node) {
@@ -24645,4 +24677,108 @@ mod tests {
         assert_eq!(c.b, 0,   "blue component");
     }
 
+}
+
+/// Regression: indexed compute_style produces identical results to brute-force.
+///
+/// These tests verify that the `RuleIndex` optimisation in `compute_style`
+/// does not change which declarations are applied or their cascade order.
+#[cfg(test)]
+mod rule_index_regression {
+    use super::*;
+    use lumen_core::geom::Size;
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    fn first_child_style(html: &str, css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let child = doc.get(body).children.first().copied().expect("child");
+        compute_style(&doc, child, &sheet, &root, VP, false)
+    }
+
+    #[test]
+    fn id_selector_applies_correctly() {
+        let s = first_child_style(r#"<div id="hero"></div>"#, "#hero { color: red; }");
+        // `color` field on ComputedStyle is Color (plain struct, not CssColor)
+        assert_eq!((s.color.r, s.color.g, s.color.b), (255, 0, 0));
+    }
+
+    #[test]
+    fn class_selector_applies_correctly() {
+        let s = first_child_style(
+            r#"<div class="card active"></div>"#,
+            ".card { width: 200px; } .active { background-color: blue; }",
+        );
+        assert_eq!(s.width, Some(Length::Px(200.0)));
+        let bg = s.background_color.expect("bg").resolve(s.color);
+        assert_eq!((bg.r, bg.g, bg.b), (0, 0, 255));
+    }
+
+    #[test]
+    fn type_selector_applies_correctly() {
+        let s = first_child_style("<p></p>", "p { color: green; }");
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 128, 0));
+    }
+
+    #[test]
+    fn descendant_selector_applies_via_index() {
+        // `.card .title` — subject is `.title`; only `.title` nodes are candidates.
+        let doc = lumen_html_parser::parse(r#"<div class="card"><span class="title"></span></div>"#);
+        let sheet = lumen_css_parser::parse(".card .title { color: red; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().unwrap();
+        let card = doc.get(body).children[0];
+        let title = doc.get(card).children[0];
+        // `.card` alone must NOT pick up the rule (no .title class)
+        let card_style = compute_style(&doc, card, &sheet, &root, VP, false);
+        assert_ne!((card_style.color.r, card_style.color.g, card_style.color.b), (255, 0, 0),
+            "card must not pick up .card .title rule");
+        // `.title` inside `.card` MUST pick up the rule
+        let title_style = compute_style(&doc, title, &sheet, &root, VP, false);
+        assert_eq!((title_style.color.r, title_style.color.g, title_style.color.b), (255, 0, 0),
+            "title inside card must match .card .title");
+    }
+
+    #[test]
+    fn multi_class_compound_not_false_positive() {
+        // `.a.b` must match only nodes with BOTH classes; node with only `.a` must not match.
+        let doc = lumen_html_parser::parse(r#"<div class="a"></div>"#);
+        let sheet = lumen_css_parser::parse(".a.b { color: red; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().unwrap();
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_ne!((s.color.r, s.color.g, s.color.b), (255, 0, 0),
+            "node with only .a must not match .a.b");
+    }
+
+    #[test]
+    fn universal_applies_to_all() {
+        let s = first_child_style("<span></span>", "* { color: blue; }");
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 255));
+    }
+
+    #[test]
+    fn specificity_order_preserved() {
+        // `.card` (0,1,0) overrides `div` (0,0,1).
+        let s = first_child_style(
+            r#"<div class="card"></div>"#,
+            "div { color: blue; } .card { color: red; }",
+        );
+        assert_eq!((s.color.r, s.color.g, s.color.b), (255, 0, 0), ".card must win over div");
+    }
+
+    #[test]
+    fn source_order_preserved_within_same_specificity() {
+        // Two class rules, same specificity → later wins.
+        let s = first_child_style(
+            r#"<div class="a b"></div>"#,
+            ".a { color: red; } .b { color: blue; }",
+        );
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 255),
+            "later same-specificity rule must win");
+    }
 }
