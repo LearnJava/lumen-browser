@@ -45,7 +45,9 @@ use lumen_core::geom::Size;
 use lumen_image::{Image, resize_area_avg};
 use lumen_layout::Color;
 
-use lumen_layout::{GradientStop, Length};
+use lumen_layout::{
+    BackgroundRepeat, BackgroundSize, GradientStop, Length, ObjectPosition, PositionComponent,
+};
 
 use lumen_core::geom::Rect;
 
@@ -580,6 +582,96 @@ impl FemtovgBackend {
         }
     }
 
+    /// Рисует `background-image: url(...)` с учётом `background-size`,
+    /// `background-position`, `background-repeat`, `background-origin` и
+    /// `background-clip` (CSS Backgrounds L3 §3.3–3.5/§3.7/§3.8).
+    ///
+    /// `rect` — painting area (`background-clip`): плитки клипируются по ней.
+    /// `origin_rect` — positioning area (`background-origin`): относительно неё
+    /// считаются размер плитки и её позиция. Ранее femtovg-бэкенд игнорировал
+    /// всё это и растягивал картинку на весь `rect` (BUG-095) — теперь
+    /// геометрия плиток зеркалит wgpu `Renderer`.
+    ///
+    /// Незарегистрированный `src` → визуальный no-op (в отличие от `<img>`,
+    /// фоновая картинка не рисует серый placeholder).
+    fn draw_background_image(
+        &mut self,
+        rect: &Rect,
+        origin_rect: &Rect,
+        src: &str,
+        size: BackgroundSize,
+        position: &ObjectPosition,
+        repeat: BackgroundRepeat,
+    ) {
+        let (img_w, img_h) = match self.raw_images.get(src) {
+            Some(raw) => (raw.width as f32, raw.height as f32),
+            None => return,
+        };
+        if img_w <= 0.0 || img_h <= 0.0 {
+            return;
+        }
+
+        let (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y) = bg_tile_geometry(
+            size,
+            position,
+            repeat,
+            img_w,
+            img_h,
+            origin_rect.width,
+            origin_rect.height,
+            origin_rect.x,
+            origin_rect.y,
+        );
+        if tile_w <= 0.0 || tile_h <= 0.0 {
+            return;
+        }
+
+        // Разрешаем текстуру под размер плитки (area-averaged downscale при
+        // уменьшении, как в draw_image_in_rect — BUG-077).
+        let tile_rect = Rect::new(0.0, 0.0, tile_w, tile_h);
+        let Some(img_id) = self.resolve_image_for_rect(src, &tile_rect) else {
+            return;
+        };
+
+        // Плитки клипируются по painting area через scissor (пересекает
+        // активный clip-стек, например overflow:hidden контейнер).
+        self.canvas.save();
+        self.canvas.intersect_scissor(rect.x, rect.y, rect.width, rect.height);
+
+        let x_end = rect.x + rect.width;
+        let y_end = rect.y + rect.height;
+        let mut ty = tile_y_start;
+        loop {
+            if ty >= y_end {
+                break;
+            }
+            if ty + tile_h > rect.y {
+                let mut tx = tile_x_start;
+                loop {
+                    if tx >= x_end {
+                        break;
+                    }
+                    if tx + tile_w > rect.x {
+                        let paint =
+                            femtovg::Paint::image(img_id, tx, ty, tile_w, tile_h, 0.0, 1.0);
+                        let mut path = femtovg::Path::new();
+                        path.rect(tx, ty, tile_w, tile_h);
+                        self.canvas.fill_path(&path, &paint);
+                    }
+                    if !repeat_x {
+                        break;
+                    }
+                    tx += tile_w;
+                }
+            }
+            if !repeat_y {
+                break;
+            }
+            ty += tile_h;
+        }
+        self.canvas.restore();
+    }
+
     /// Возвращает femtovg `ImageId` для отрисовки `src` в `rect`, при сильном
     /// уменьшении подменяя исходную текстуру area-averaged уменьшенной копией.
     ///
@@ -780,9 +872,10 @@ impl FemtovgBackend {
             DisplayCommand::DrawImage { rect, src, .. } => {
                 self.draw_image_in_rect(rect, src);
             }
-            DisplayCommand::DrawBackgroundImage { rect, src, .. } => {
-                // Phase 2: repeat/size/position аппроксимируются как stretch.
-                self.draw_image_in_rect(rect, src);
+            DisplayCommand::DrawBackgroundImage {
+                rect, origin_rect, src, size, position, repeat, ..
+            } => {
+                self.draw_background_image(rect, origin_rect, src, *size, position, *repeat);
             }
 
             // ── Gradients ───────────────────────────────────────────────────
@@ -1205,6 +1298,73 @@ fn downscale_target(raw_w: u32, raw_h: u32, rect_w: f32, rect_h: f32, scale: f64
     }
 }
 
+/// Считает геометрию плиток фоновой картинки из `background-size` /
+/// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
+///
+/// Чистая функция (без GL) — зеркалит tiling-математику wgpu `Renderer`, чтобы
+/// femtovg-бэкенд (default) давал тот же результат. `img_w`/`img_h` — размер
+/// исходной картинки; `oarea_*` — positioning area (`background-origin`).
+///
+/// Возвращает `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x,
+/// repeat_y)`: размер одной плитки, координату левого-верхнего угла первой
+/// плитки и флаги повтора по осям.
+#[allow(clippy::too_many_arguments)]
+fn bg_tile_geometry(
+    size: BackgroundSize,
+    position: &ObjectPosition,
+    repeat: BackgroundRepeat,
+    img_w: f32,
+    img_h: f32,
+    oarea_w: f32,
+    oarea_h: f32,
+    oarea_x: f32,
+    oarea_y: f32,
+) -> (f32, f32, f32, f32, bool, bool) {
+    let (tile_w, tile_h) = match size {
+        BackgroundSize::Auto => (img_w, img_h),
+        BackgroundSize::Cover => {
+            let s = (oarea_w / img_w).max(oarea_h / img_h);
+            (img_w * s, img_h * s)
+        }
+        BackgroundSize::Contain => {
+            let s = (oarea_w / img_w).min(oarea_h / img_h);
+            (img_w * s, img_h * s)
+        }
+        BackgroundSize::Length(w, h) => {
+            let tw = w.max(1.0);
+            let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
+            (tw, th)
+        }
+    };
+
+    let off_x = match position.x {
+        PositionComponent::Px(px) => px,
+        PositionComponent::Percent(p) => (oarea_w - tile_w) * p,
+    };
+    let off_y = match position.y {
+        PositionComponent::Px(py) => py,
+        PositionComponent::Percent(p) => (oarea_h - tile_h) * p,
+    };
+    let tile_x0 = oarea_x + off_x;
+    let tile_y0 = oarea_y + off_y;
+
+    let (tile_x_start, repeat_x, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
+        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
+        BackgroundRepeat::RepeatY => (tile_x0, false, true),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
+            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+        }
+    };
+    let tile_y_start = if repeat_y {
+        tile_y0 - (off_y / tile_h).ceil() * tile_h
+    } else {
+        tile_y0
+    };
+
+    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)
+}
+
 /// Конвертирует `lumen_image::Image` в вектор `RGBA8` пикселей для femtovg.
 fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
     use lumen_image::PixelFormat;
@@ -1265,6 +1425,97 @@ mod tests {
         assert_eq!(downscale_target(300, 300, 200.0, 200.0, 2.0), None);
         // But a 500px source into 200 CSS px @2× = 400 device px → downscale to 400.
         assert_eq!(downscale_target(500, 500, 200.0, 200.0, 2.0), Some((400, 400)));
+    }
+
+    #[test]
+    fn bg_tile_geometry_length_no_repeat_top_left() {
+        // background-size: 80×60; no-repeat; position 0% 0%; origin area at (30,30).
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(0.0),
+            y: PositionComponent::Percent(0.0),
+        };
+        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+            BackgroundSize::Length(80.0, Some(60.0)),
+            &pos,
+            BackgroundRepeat::NoRepeat,
+            100.0,
+            100.0,
+            180.0,
+            120.0,
+            30.0,
+            30.0,
+        );
+        assert_eq!((tw, th), (80.0, 60.0));
+        // Anchored to top-left of the positioning area.
+        assert_eq!((x0, y0), (30.0, 30.0));
+        assert!(!rx && !ry);
+    }
+
+    #[test]
+    fn bg_tile_geometry_position_bottom_right() {
+        // position 100% 100% anchors tile to the far corner of the origin area.
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(1.0),
+            y: PositionComponent::Percent(1.0),
+        };
+        let (tw, th, x0, y0, ..) = bg_tile_geometry(
+            BackgroundSize::Length(80.0, Some(60.0)),
+            &pos,
+            BackgroundRepeat::NoRepeat,
+            100.0,
+            100.0,
+            180.0,
+            120.0,
+            30.0,
+            30.0,
+        );
+        assert_eq!((tw, th), (80.0, 60.0));
+        // x0 = 30 + (180 - 80) = 130; y0 = 30 + (120 - 60) = 90.
+        assert!((x0 - 130.0).abs() < 1e-3);
+        assert!((y0 - 90.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn bg_tile_geometry_cover_scales_to_fill() {
+        // Cover: scale = max(180/100, 120/100) = 1.8 → tile 180×180.
+        let pos = ObjectPosition::default();
+        let (tw, th, ..) = bg_tile_geometry(
+            BackgroundSize::Cover,
+            &pos,
+            BackgroundRepeat::NoRepeat,
+            100.0,
+            100.0,
+            180.0,
+            120.0,
+            0.0,
+            0.0,
+        );
+        assert!((tw - 180.0).abs() < 1e-3);
+        assert!((th - 180.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn bg_tile_geometry_repeat_sets_flags() {
+        // Repeat with position 0% 0% → both axes repeat; start aligned to origin.
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(0.0),
+            y: PositionComponent::Percent(0.0),
+        };
+        let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
+            BackgroundSize::Length(40.0, Some(40.0)),
+            &pos,
+            BackgroundRepeat::Repeat,
+            100.0,
+            100.0,
+            200.0,
+            200.0,
+            0.0,
+            0.0,
+        );
+        assert!(rx && ry);
+        // off_x = 0 → ceil(0/40)*40 = 0 → start = origin.
+        assert_eq!((x0, y0), (0.0, 0.0));
+        assert_eq!((tw, th), (40.0, 40.0));
     }
 
     #[test]

@@ -107,7 +107,7 @@ BUG-091 | FIXED 2026-06-08 | paint | background-blend-mode: bottom layer wrapped
 BUG-092 | OPEN   | css-parser/layout | CSS variables var() not propagating correctly through cascade — TEST-50: 17.26%; values appear resolved but rendering wrong | crates/engine/layout/src/style.rs
 BUG-093 | OPEN   | paint          | scrollbar rendering: DrawScrollbar track+thumb deviation — TEST-51: 1.39% | crates/engine/paint/src/display_list.rs
 BUG-094 | OPEN   | paint          | text-shadow with blur PushFilter wrapper ~7% deviation — TEST-52: 6.82% (thr 4.0%) | crates/engine/paint/src/display_list.rs
-BUG-095 | OPEN   | layout/paint   | background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78%; border-box/padding-box/content-box not respected | crates/engine/layout/src/style.rs
+BUG-095 | FIXED 2026-06-09 | layout/paint   | background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78%→11.55%; femtovg (default) backend stretched bg-image over whole box, ignoring background-size/position/repeat/origin/clip. Ported wgpu tiling math to femtovg `draw_background_image`. Residual 11.55% = BUG-113 row drift + image resample/text AA | crates/engine/paint/src/backends/femtovg_backend.rs
 BUG-096 | OPEN   | paint          | SVG <path> stroke tessellation not rendered — TEST-54: 9.50%; Phase 1 | crates/engine/paint/src/display_list.rs
 BUG-097 | FIXED 2026-06-09 | layout/paint   | <video> placeholder: posterless video painted grey placeholder; Edge renders empty media transparent → suppress DrawImage when no poster | crates/engine/paint/src/display_list.rs
 BUG-098 | OPEN   | paint          | mix-blend-mode: PushBlendMode/PopBlendMode layers ~14% deviation — TEST-56: 14.12%; compositing order or blending formula | crates/engine/paint/src/renderer.rs
@@ -125,6 +125,7 @@ BUG-109 | OPEN   | css-parser/font | font-variation-settings: wght/wdth/slnt axi
 BUG-110 | OPEN   | layout/paint   | object-fit: SVG viewBox scaling (fill/contain/cover/none/scale-down) ~8% deviation — TEST-70: 8.03% | crates/engine/layout/src/box_tree.rs
 BUG-111 | FIXED 2026-06-08 | paint/shell | lumen-paint/shell не компилировались после мержа A-2 CSS Custom Highlight API: (1) дубликат `emit_text_with_highlights` (stub 3-arg vs новый 11-arg), (2) 71× `DrawText` struct initializer missing `highlight_name: None` (display_list, renderer, shell/*, main.rs), (3) осиротевший `///`-блок в style.rs, (4) collapsible_if в тест | crates/engine/paint/src/display_list.rs + crates/shell/src/*
 BUG-112 | FIXED 2026-06-08 | driver | test_32_list_markers регрессия: P4 добавил 2 `@counter-style` списка по 3 items в 32-list-markers.html → 32 li (было 26), 30 маркеров (было 24). Тест не обновлён. | crates/driver/tests/test_32.rs
+BUG-113 | OPEN   | layout         | TEST-53 row-2 vertical drift ~30px: second `.row` (background-position: 100% 100%) is positioned lower in Lumen than Edge — cumulative vertical height of row-1 (h3 + flex-row of box+label) differs. Discovered fixing BUG-095; was masked by 32% stretched-image error. | crates/engine/layout/src/box_tree.rs
 ```
 
 ---
@@ -188,7 +189,7 @@ TEST-49: FAIL 30.62%   background-blend-mode   ← BUG-091
 TEST-50: FAIL 17.26%   css-variables           ← BUG-092
 TEST-51: FAIL  1.39%   scrollbar-rendering     ← BUG-093
 TEST-52: FAIL  6.82%   text-shadow-blur        ← BUG-094 (thr 4.0%)
-TEST-53: FAIL 31.78%   background-origin       ← BUG-095
+TEST-53: FAIL 11.55%   background-origin       ← BUG-095 FIXED (origin/clip ok; residual ← BUG-113 drift + AA)
 TEST-54: FAIL  9.50%   svg-path-stroke         ← BUG-096 (Phase 1)
 TEST-55: FAIL 26.65%   video-placeholder       ← BUG-097
 TEST-56: FAIL 14.12%   mix-blend-mode          ← BUG-098
