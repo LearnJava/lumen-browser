@@ -6,7 +6,7 @@
 
 ## In progress
 
-S-1: TC39 Stage 4 collection APIs — branch: p1-tc39-stage4-collections
+_(нет)_
 
 ---
 
@@ -16,7 +16,7 @@ S-1: TC39 Stage 4 collection APIs — branch: p1-tc39-stage4-collections
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| S-1 | **TC39 Stage 4 collection APIs** — `Object.groupBy`, `Map.groupBy`, `Set` methods (union/intersection/difference/symmetricDifference/isSubsetOf/isSupersetOf/isDisjointFrom), `Promise.withResolvers`, `Promise.try`, Iterator helpers (map/filter/reduce/take/drop/flatMap/toArray/forEach/some/every/find/from) | M | `lumen-js` |
+| ~~S-1~~ | ~~**TC39 Stage 4 collection APIs**~~ — **выполнено** | M | `lumen-js` |
 | S-2 | **Window Management API** — `window.screen.isExtended`, `getScreenDetails()` → `ScreenDetails { screens, currentScreen }`, `ScreenDetailed extends Screen` | S | `lumen-js` |
 | S-3 | **Local Font Access API** — `navigator.fonts.query()` Phase 0 stub → `[]` | XS | `lumen-js` |
 | S-4 | **Long Animation Frames API (LoAF)** — `PerformanceLongAnimationFrameTiming`, `PerformanceScriptTiming`, PerformanceObserver `long-animation-frame` | S | `lumen-js` |
@@ -123,6 +123,7 @@ S-1: TC39 Stage 4 collection APIs — branch: p1-tc39-stage4-collections
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | S-1: TC39 Stage 4 collection APIs | lumen-js: новый модуль tc39_proposals.rs — Object.groupBy/Map.groupBy (ES2024 Array Grouping), Set.prototype.union/intersection/difference/symmetricDifference/isSubsetOf/isSupersetOf/isDisjointFrom (ES2025 Set Methods), Promise.withResolvers (ES2024), Promise.try (ES2025), Array.fromAsync (ES2024), Iterator.prototype.map/filter/take/drop/flatMap/reduce/toArray/forEach/some/every/find + Iterator.from() (ES2025 Iterator Helpers). Все шимы проверяют нативную поддержку и скипают при наличии. 25 unit-тестов. lumen-js: 1718 тестов (+25 vs 1693). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | R-1: Overflow scroll wheel routing + scroll events | lumen-layout: `find_scroll_container_at(containers, x, y)` — находит самый глубокий overflow-контейнер под курсором (+5 тестов). lumen-js: `_lumen_fire_scroll_on_element(nid)` + `_lumen_fire_window_scroll_event()` JS-хелперы в WEB_API_SHIM (non-bubbling scroll Event, WHATWG HTML §8.1.6.2); `QuickJsRuntime::fire_element_scroll(nid)` / `fire_window_scroll()` (+3 теста). lumen-shell: `scroll_containers` Vec + `update_scroll_containers()`; `try_scroll_overflow_container(dx, dy)` — маршрутизация ColесаМыши к overflow-контейнеру; `PersistentJs` +fire_element_scroll/fire_window_scroll. 2494 тестов lumen-layout (+5), 1693 тестов lumen-js (+3). Clippy чист. Снимает блокировку P4 #7. |
 | 2026-06-09 | Q-1: DOM completeness — ChildNode/ParentNode + TreeWalker/NodeIterator | lumen-js: ChildNode mixin (remove/before/after/replaceWith), ParentNode extensions (prepend/replaceChildren) на всех DOM-элементах. TreeWalker (DOM LS §4.5): createTreeWalker, nextNode/previousNode/nextSibling/previousSibling/parentNode/firstChild/lastChild, фильтр (функция или NodeFilter-объект). NodeIterator (DOM LS §4.4): createNodeIterator, nextNode/previousNode/detach. NodeFilter константы (FILTER_ACCEPT/REJECT/SKIP, SHOW_ALL/ELEMENT/TEXT/COMMENT/…). document.adoptNode (Phase 0 no-op) + document.importNode (deep clone). window.NodeFilter/TreeWalker/NodeIterator экспортированы. +16 тестов, 1690 итого (+16 vs 1674). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | M-5: `structuredClone()` improvements | lumen-js: structuredClone добавлена поддержка Map и Set (глубокое клонирование ключей/значений). Date и RegExp уже были реализованы. +6 тестов (map, set, map_nested_objects, set_nested_objects, regexp + window_alias). 1674 тестов lumen-js (+5 vs 1669). Clippy чист. |
