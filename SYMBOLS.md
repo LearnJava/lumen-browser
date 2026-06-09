@@ -76,7 +76,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
 `crates/engine/canvas/src/rasterize.rs:41` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
 
-## lumen-core  (193 symbols)
+## lumen-core  (198 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -186,6 +186,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:2182` **fn** `clear_all` — Evict all entries in every registered cache
 `crates/core/src/ext.rs:2189` **fn** `len` — Number of registered caches
 `crates/core/src/ext.rs:2194` **fn** `is_empty` — `true` if no caches are registered
+`crates/core/src/ext.rs:2577` **struct** `KnowledgeHistoryHit` — Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
+`crates/core/src/ext.rs:2593` **struct** `KnowledgeNoteHit` — Result of a full-text notes search
+`crates/core/src/ext.rs:2610` **struct** `KnowledgeReadLaterHit` — Result of a full-text read-later search
+`crates/core/src/ext.rs:2625` **struct** `KnowledgeTabHit` — Result of a live open-tabs search
+`crates/core/src/ext.rs:2646` **trait** `KnowledgeStore` — Unified knowledge-store interface covering the §12 feature set:
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -1146,7 +1151,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/worker.rs:118` **fn** `install_worker_bindings` — Install native bindings (`_lumen_create_worker`, `_lumen_worker_post`,
 `crates/js/src/xhr.rs:38` **fn** `install_xhr_bindings` — Install the XMLHttpRequest API into the QuickJS context
 
-## lumen-knowledge  (54 symbols)
+## lumen-knowledge  (59 symbols)
 
 `crates/knowledge/src/fts.rs:28` **struct** `SearchHit` — Результат полнотекстового поиска
 `crates/knowledge/src/fts.rs:43` **struct** `HistoryFts` — FTS5-индекс над `(url, title, text)`. Открывается отдельной БД-файлом
@@ -1202,6 +1207,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/read_later.rs:296` **fn** `search` — Полнотекстовый поиск
 `crates/knowledge/src/read_later.rs:346` **fn** `delete`
 `crates/knowledge/src/read_later.rs:356` **fn** `count`
+`crates/knowledge/src/store.rs:33` **struct** `DefaultKnowledgeStore` — SQLite-backed [`KnowledgeStore`]. One instance per browser process
+`crates/knowledge/src/store.rs:52` **fn** `open` — Open (or create) a `DefaultKnowledgeStore` in `base_dir`
+`crates/knowledge/src/store.rs:65` **fn** `open_in_memory` — Create an in-memory `DefaultKnowledgeStore` (tests only)
+`crates/knowledge/src/store.rs:77` **fn** `read_later` — Direct access to the read-later store for status / touch operations
+`crates/knowledge/src/store.rs:83` **fn** `notes` — Direct access to the notes store for URL-based note listing and
 
 ## lumen-layout  (481 symbols)
 
@@ -2269,28 +2279,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 ## lumen-shell  (729 symbols)
 
-`crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
-`crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
-`crates/shell/src/address_bar.rs:79` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
-`crates/shell/src/address_bar.rs:101` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
-`crates/shell/src/address_bar.rs:109` **fn** `label` — Основной текст строки dropdown
-`crates/shell/src/address_bar.rs:121` **fn** `sub_label` — Дополнительный текст под основным label
-`crates/shell/src/address_bar.rs:154` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
-`crates/shell/src/address_bar.rs:169` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
-`crates/shell/src/address_bar.rs:177` **fn** `close`
-`crates/shell/src/address_bar.rs:185` **fn** `is_open`
-`crates/shell/src/address_bar.rs:189` **fn** `input`
-`crates/shell/src/address_bar.rs:194` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
-`crates/shell/src/address_bar.rs:199` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
-`crates/shell/src/address_bar.rs:205` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
-`crates/shell/src/address_bar.rs:211` **fn** `select_next` — Перейти к следующей (вниз) подсказке
-`crates/shell/src/address_bar.rs:222` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
-`crates/shell/src/address_bar.rs:230` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
-`crates/shell/src/address_bar.rs:244` **fn** `backspace` — Backspace — удалить последний Unicode-символ
-`crates/shell/src/address_bar.rs:254` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
-`crates/shell/src/address_bar.rs:271` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
-`crates/shell/src/address_bar.rs:279` **struct** `BarOverlay` — Параметры для сборки overlay display list
-`crates/shell/src/address_bar.rs:287` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
+`crates/shell/src/address_bar.rs:56` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
+`crates/shell/src/address_bar.rs:70` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
+`crates/shell/src/address_bar.rs:85` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
+`crates/shell/src/address_bar.rs:116` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
+`crates/shell/src/address_bar.rs:125` **fn** `label` — Основной текст строки dropdown
+`crates/shell/src/address_bar.rs:139` **fn** `sub_label` — Дополнительный текст под основным label
+`crates/shell/src/address_bar.rs:175` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
+`crates/shell/src/address_bar.rs:190` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
+`crates/shell/src/address_bar.rs:198` **fn** `close`
+`crates/shell/src/address_bar.rs:206` **fn** `is_open`
+`crates/shell/src/address_bar.rs:210` **fn** `input`
+`crates/shell/src/address_bar.rs:215` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
+`crates/shell/src/address_bar.rs:220` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
+`crates/shell/src/address_bar.rs:226` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
+`crates/shell/src/address_bar.rs:232` **fn** `select_next` — Перейти к следующей (вниз) подсказке
+`crates/shell/src/address_bar.rs:243` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
+`crates/shell/src/address_bar.rs:251` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
+`crates/shell/src/address_bar.rs:265` **fn** `backspace` — Backspace — удалить последний Unicode-символ
+`crates/shell/src/address_bar.rs:275` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
+`crates/shell/src/address_bar.rs:292` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
+`crates/shell/src/address_bar.rs:300` **struct** `BarOverlay` — Параметры для сборки overlay display list
+`crates/shell/src/address_bar.rs:308` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
 `crates/shell/src/animation_scheduler.rs:49` **struct** `AnimationScheduler` — Планировщик CSS-анимаций. Хранит timing-состояние между кадрами
 `crates/shell/src/animation_scheduler.rs:54` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
@@ -3463,4 +3473,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3398 symbols in 20 crates*
+*Total: 3408 symbols in 20 crates*
