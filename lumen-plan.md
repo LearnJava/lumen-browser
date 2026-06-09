@@ -80,7 +80,7 @@
 - ✅ Tab UX: вертикальные/tree-style вкладки, workspaces, split view, auto-archive (§12.13) — vertical/tree/workspaces/split view ✅; auto-archive (7A.5) ✅ 2026-06-03
 - ✅ Power-user input: vim-keys, gestures, omnibox-алиасы, regex find, click-hint overlay (§12.14) — все 5 пунктов 7B.1–7B.5 ✅
 - ✅ Privacy UX: встроенный блокировщик, per-site контролы, cookie-banner dismiss (§12.15) — block list engine + permission panel + cookie-banner dismiss + shields widget (7C.1–7C.4) ✅
-- 🟡 Web platform baseline: Passkeys/WebAuthn, контейнеры, sidebar web panels (§12.16) — контейнеры (7D.2) + sidebar (7D.3) ✅; WebAuthn (7D.1) 🟡 (software authenticator готов, roaming CTAP2 — future)
+- 🟡 Web platform baseline: Passkeys/WebAuthn, контейнеры, sidebar web panels (§12.16) — контейнеры (7D.2) + sidebar (7D.3) ✅; WebAuthn (7D.1) 🟡 (software authenticator + CTAP2-over-USB protocol stack готовы; Phase 1: platform HID enumeration)
 
 ### Локализация / RU (§10)
 - ✅ DOM держит кириллицу (UTF-8) — зафиксировано тестами
@@ -288,7 +288,7 @@
 | 7C.3 | ✅ Cookie-banner auto-dismiss | `js/src/cookie_banner.rs` | P2 done 2026-06-01 (p2-cookie-banner-dismiss): 30+ EasyList consent-селекторов, MutationObserver, Ctrl+Shift+K |
 | 7C.4 | ✅ Shields toolbar widget (счётчик блокировок) | `shell/src/panels/shields_panel.rs` | P2 done 2026-06-01 (p2-shields-panel): blocked-счётчик, Ctrl+Shift+S |
 | 7D | 🟡 **`[P3]` Web platform baseline** (§12.16, Phase 2-3) | Современная авторизация и изоляция; 7D.2/7D.3 ✅, 7D.1 🟡 | `lumen-network` + `shell` |
-| 7D.1 | 🟡 Passkeys / WebAuthn (CTAP2 client + navigator.credentials) — **`navigator.credentials` + software platform authenticator готовы** (trait `CredentialProvider`, `VirtualAuthenticator` ES256, full JS API); roaming CTAP2-over-USB транспорт — future | `network/src/webauthn.rs` + `js/src/credentials.rs` | новый trait `CredentialProvider` ✅ |
+| 7D.1 | 🟡 Passkeys / WebAuthn (CTAP2 client + navigator.credentials) — **`navigator.credentials` + software authenticator + CTAP2-over-USB protocol stack готовы** (trait `CredentialProvider`, `VirtualAuthenticator` ES256, `CtapRoamingTransport`, `CompositeCredentialProvider`; HID framing + CBOR + CTAP2 commands; Phase 1: platform HID enumeration); 15 тестов. | `network/src/ctap2.rs` + `network/src/webauthn.rs` | `CtapRoamingTransport` + `CompositeCredentialProvider` ✅ |
 | 7D.2 | ✅ Tab containers (storage partitioning) | `shell/src/tabs/containers.rs` + `shell` | P2 done 2026-06-01 (p2-tab-containers): ContainerKind + ContainerStore (origin→store_id), цветной border-top |
 | 7D.3 | ✅ Sidebar web panels (мини-страница в sidebar) | `shell/src/panels/sidebar_panel.rs` | P2 done 2026-06-01 (p2-sidebar-panel): 300px right dock, `sidebar:<url>`, Ctrl+Shift+A |
 | 7E | 🟡 **`[P3]` DevTools полный** (§12.12, Phase 4+) | Поверх существующего CDP-минимума (5C); 7E.1/7E.3/7E.4/7E.5 ✅, 7E.2 ⬜ (P4) | `crates/devtools/` + `shell/src/devtools/` |
