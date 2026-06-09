@@ -6,8 +6,7 @@
 
 ## In progress
 
-Q-1: DOM API completeness — ChildNode/ParentNode + TreeWalker/NodeIterator  branch: p1-dom-api-completeness
-Next step: implement JS shims in crates/js/src/dom.rs
+_(нет)_
 
 ---
 
@@ -108,6 +107,7 @@ Next step: implement JS shims in crates/js/src/dom.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | Q-1: DOM completeness — ChildNode/ParentNode + TreeWalker/NodeIterator | lumen-js: ChildNode mixin (remove/before/after/replaceWith), ParentNode extensions (prepend/replaceChildren) на всех DOM-элементах. TreeWalker (DOM LS §4.5): createTreeWalker, nextNode/previousNode/nextSibling/previousSibling/parentNode/firstChild/lastChild, фильтр (функция или NodeFilter-объект). NodeIterator (DOM LS §4.4): createNodeIterator, nextNode/previousNode/detach. NodeFilter константы (FILTER_ACCEPT/REJECT/SKIP, SHOW_ALL/ELEMENT/TEXT/COMMENT/…). document.adoptNode (Phase 0 no-op) + document.importNode (deep clone). window.NodeFilter/TreeWalker/NodeIterator экспортированы. +16 тестов, 1690 итого (+16 vs 1674). Clippy чист. Без новых зависимостей. |
 | 2026-06-09 | M-5: `structuredClone()` improvements | lumen-js: structuredClone добавлена поддержка Map и Set (глубокое клонирование ключей/значений). Date и RegExp уже были реализованы. +6 тестов (map, set, map_nested_objects, set_nested_objects, regexp + window_alias). 1674 тестов lumen-js (+5 vs 1669). Clippy чист. |
 | 2026-06-09 | M-4: `<input type=file>` file picker | lumen-js: новый модуль file_input.rs — File (name/size/type/lastModified, text()/arrayBuffer()/slice()), FileList (length/item/indexed/Symbol.iterator). _lumen_deliver_file_list(nid, json) — monkey-patch _lumen_make_element добавляет .files геттер для type=file. lumen-shell: platform/file_dialog.rs — open_file_dialog (Windows: PowerShell OpenFileDialog), entries_to_json. forms.rs: FormClickAction::OpenFilePicker + classify_click для InputType::File. main.rs: open_file_picker(id). 1669 тестов lumen-js (+9). Clippy чист. |
 | 2026-06-09 | M-3: SVG DOM API stubs | lumen-js: новый модуль svg.rs — полная иерархия SVGElement/SVGGraphicsElement/SVGGeometryElement, 40+ конкретных элементов (SVGSVGElement, SVGRectElement, SVGCircleElement, SVGPathElement, SVGTextElement и др.), типы SVGRect/Point/Length/Matrix/Transform, createElementNS SVG namespace wiring (47 тегов). getBBox()→zeros Phase 0. Исправлен pre-existing doc-comment баг в lib.rs. 1660 тестов lumen-js (+21). Clippy чист. |
