@@ -378,6 +378,7 @@ fn run_window_mode(
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
         history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
+        notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
         next_history_id: 1,
         hyp_provider: KnuthLiangHyphenation::new(),
@@ -3761,6 +3762,9 @@ struct Lumen {
     /// FTS5-индекс по тексту посещённых страниц — используется omnibox (@history).
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     history_fts: HistoryFts,
+    /// Хранилище пользовательских заметок (§12.2) — omnibox `@notes <query>`.
+    /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
+    notes_store: lumen_knowledge::Notes,
     /// История поисковых запросов для prefix-match autocomplete в omnibox.
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     search_history: SearchHistory,
@@ -8896,6 +8900,7 @@ impl Lumen {
     /// Запрашивает подсказки для текущего ввода в адресной строке.
     ///
     /// `@history <query>` → FTS5-поиск по истории страниц.
+    /// `@notes <query>` → FTS5-поиск по заметкам (§12.2).
     /// Обычный ввод → prefix-match по search_history + FTS5.
     fn query_omnibox_suggestions(&self) -> Vec<address_bar::OmniboxSuggestion> {
         use address_bar::{OmniboxPrefix, OmniboxSuggestion, parse_omnibox_prefix};
@@ -8916,6 +8921,18 @@ impl Lumen {
                         suggestions.push(OmniboxSuggestion::HistoryFts {
                             url: hit.url,
                             title: hit.title,
+                            snippet: hit.snippet,
+                        });
+                    }
+                }
+            }
+            OmniboxPrefix::Notes => {
+                // @notes <query> — FTS5-поиск по заметкам §12.2.
+                if !query.is_empty() && let Ok(hits) = self.notes_store.search(query, 7) {
+                    for hit in hits {
+                        suggestions.push(OmniboxSuggestion::Note {
+                            url: hit.note.url,
+                            selection: hit.note.selection,
                             snippet: hit.snippet,
                         });
                     }
