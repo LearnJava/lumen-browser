@@ -2649,6 +2649,102 @@ pub fn select_image_set_url(value: &str, dpr: f32) -> &str {
     best.map_or("", |(u, _)| u)
 }
 
+/// CSS Backgrounds L3 §3.3–3.5 — прямоугольники-плитки для градиентного слоя с
+/// явным `background-size`.
+///
+/// У градиента нет ни внутреннего размера, ни соотношения сторон (CSS Images),
+/// поэтому при `background-size: <length>` он рисуется плитками этого размера,
+/// размещёнными по `background-position` и повторёнными по `background-repeat`;
+/// `auto`-ось разрешается в размер positioning area по этой оси (не
+/// пропорциональное масштабирование — соотношения нет). Возвращает по одному
+/// rect на плитку: каждый отображает цветовую линию/окружность градиента в свою
+/// плитку. Геометрия зеркалит [`super::backends`] image-tiling
+/// (`bg_tile_geometry` + loop), чтобы градиенты и картинки плитковались
+/// одинаково. Вызывается только для `BackgroundSize::Length`;
+/// auto/cover/contain заливают всю area одной командой.
+fn gradient_tile_rects(
+    tile_w: f32,
+    tile_h: f32,
+    position: ObjectPosition,
+    repeat: BackgroundRepeat,
+    origin: Rect,
+    clip: Rect,
+) -> Vec<Rect> {
+    if tile_w <= 0.0 || tile_h <= 0.0 {
+        return Vec::new();
+    }
+    let off_x = position.x.resolve(origin.width - tile_w);
+    let off_y = position.y.resolve(origin.height - tile_h);
+    let tile_x0 = origin.x + off_x;
+    let tile_y0 = origin.y + off_y;
+
+    let (tile_x_start, repeat_x, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
+        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
+        BackgroundRepeat::RepeatY => (tile_x0, false, true),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
+            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+        }
+    };
+    let tile_y_start = if repeat_y {
+        tile_y0 - (off_y / tile_h).ceil() * tile_h
+    } else {
+        tile_y0
+    };
+
+    // Cap, чтобы крошечная плитка с repeat не породила взрывное число команд.
+    const MAX_TILES: usize = 4096;
+    let mut rects = Vec::new();
+    let x_end = clip.x + clip.width;
+    let y_end = clip.y + clip.height;
+    let mut ty = tile_y_start;
+    loop {
+        if ty >= y_end || rects.len() >= MAX_TILES {
+            break;
+        }
+        if ty + tile_h > clip.y {
+            let mut tx = tile_x_start;
+            loop {
+                if tx >= x_end || rects.len() >= MAX_TILES {
+                    break;
+                }
+                if tx + tile_w > clip.x {
+                    rects.push(Rect::new(tx, ty, tile_w, tile_h));
+                }
+                if !repeat_x {
+                    break;
+                }
+                tx += tile_w;
+            }
+        }
+        if !repeat_y {
+            break;
+        }
+        ty += tile_h;
+    }
+    rects
+}
+
+/// CSS Backgrounds L3 §3.3–3.5 — список rect-ов, в которые рисуется градиентный
+/// слой, и нужно ли клипировать их по painting area.
+///
+/// `BackgroundSize::Length` → плитки через [`gradient_tile_rects`] (требуют клипа
+/// по `clip`, т.к. плитка может выходить за painting area). Auto/Cover/Contain
+/// (у градиента нет внутреннего размера/ratio) → одна команда на всю painting
+/// area (`clip`) — историческое поведение, клип не нужен.
+fn gradient_paint_rects(layer: &BackgroundLayer, origin: Rect, clip: Rect) -> (Vec<Rect>, bool) {
+    match layer.size {
+        BackgroundSize::Length(w, h) => {
+            let tile_w = w.max(1.0);
+            let tile_h = h.unwrap_or(origin.height).max(1.0);
+            let tiles =
+                gradient_tile_rects(tile_w, tile_h, layer.position, layer.repeat, origin, clip);
+            (tiles, true)
+        }
+        _ => (vec![clip], false),
+    }
+}
+
 /// Эмитит одну background-layer команду.
 ///
 /// CSS Compositing L1 §8.3: если `layer.blend_mode != Normal`, оборачивает
@@ -2703,33 +2799,60 @@ fn emit_background_layer(
             }
         }
         BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
-            out.push(DisplayCommand::DrawLinearGradient {
-                rect: clip,
-                angle_deg: *angle_deg,
-                stops: stops.clone(),
-                repeating: *repeating,
-            });
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PushClipRect { rect: clip });
+            }
+            for r in &rects {
+                out.push(DisplayCommand::DrawLinearGradient {
+                    rect: *r,
+                    angle_deg: *angle_deg,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                });
+            }
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PopClip);
+            }
         }
         BackgroundImage::Gradient(ParsedGradient::Radial { center_x_pct, center_y_pct, stops, repeating }) => {
-            out.push(DisplayCommand::DrawRadialGradient {
-                rect: clip,
-                center_x_pct: *center_x_pct,
-                center_y_pct: *center_y_pct,
-                stops: stops.clone(),
-                repeating: *repeating,
-            });
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PushClipRect { rect: clip });
+            }
+            for r in &rects {
+                out.push(DisplayCommand::DrawRadialGradient {
+                    rect: *r,
+                    center_x_pct: *center_x_pct,
+                    center_y_pct: *center_y_pct,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                });
+            }
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PopClip);
+            }
         }
         BackgroundImage::Gradient(ParsedGradient::Conic {
             center_x_pct, center_y_pct, from_angle_deg, stops, repeating
         }) => {
-            out.push(DisplayCommand::DrawConicGradient {
-                rect: clip,
-                center_x_pct: *center_x_pct,
-                center_y_pct: *center_y_pct,
-                from_angle_deg: *from_angle_deg,
-                stops: stops.clone(),
-                repeating: *repeating,
-            });
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PushClipRect { rect: clip });
+            }
+            for r in &rects {
+                out.push(DisplayCommand::DrawConicGradient {
+                    rect: *r,
+                    center_x_pct: *center_x_pct,
+                    center_y_pct: *center_y_pct,
+                    from_angle_deg: *from_angle_deg,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                });
+            }
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PopClip);
+            }
         }
         BackgroundImage::CrossFade { a, b, t } => {
             // CSS Images L4 §4 — emit DrawCrossFade for two-URL cross-fade.
@@ -6549,6 +6672,111 @@ mod tests {
             assert!((from_angle_deg - 90.0).abs() < 0.1);
             assert_eq!(stops.len(), 2);
             assert!(!repeating);
+        }
+    }
+
+    // ── BUG-087: sized/positioned/repeated gradient background layers ──────────
+
+    fn linear_grads(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn gradient_tile_rects_single_no_repeat() {
+        // 80×80 tile, centered (50% 50%) inside a 200×120 area, no-repeat → 1 rect.
+        let origin = Rect::new(0.0, 0.0, 200.0, 120.0);
+        let rects = gradient_tile_rects(
+            80.0,
+            80.0,
+            ObjectPosition { x: PositionComponent::Percent(0.5), y: PositionComponent::Percent(0.5) },
+            BackgroundRepeat::NoRepeat,
+            origin,
+            origin,
+        );
+        assert_eq!(rects.len(), 1);
+        // off = (200-80)*0.5 = 60 ; (120-80)*0.5 = 20
+        assert!((rects[0].x - 60.0).abs() < 0.01, "x={}", rects[0].x);
+        assert!((rects[0].y - 20.0).abs() < 0.01, "y={}", rects[0].y);
+        assert!((rects[0].width - 80.0).abs() < 0.01);
+        assert!((rects[0].height - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn gradient_tile_rects_repeat_x_covers_area() {
+        // 20px-wide tiles, full height, repeat-x across a 200px area → tiles span it.
+        let origin = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let rects = gradient_tile_rects(
+            20.0,
+            100.0,
+            ObjectPosition { x: PositionComponent::Percent(0.0), y: PositionComponent::Percent(0.0) },
+            BackgroundRepeat::RepeatX,
+            origin,
+            origin,
+        );
+        // 200/20 = 10 tiles, single row.
+        assert_eq!(rects.len(), 10, "expected 10 stripes, got {}", rects.len());
+        assert!(rects.iter().all(|r| (r.height - 100.0).abs() < 0.01));
+        // Tiles span from left to right edge.
+        assert!((rects[0].x - 0.0).abs() < 0.01);
+        assert!((rects[9].x - 180.0).abs() < 0.01, "last x={}", rects[9].x);
+    }
+
+    #[test]
+    fn sized_gradient_layer_emits_tile_not_full_box() {
+        // BUG-087: a gradient with explicit `background-size` must paint a tile of
+        // that size (clipped to the box), not stretch across the whole box.
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 200px; height: 120px; \
+             background: linear-gradient(to right, red, blue) center / 80px 80px no-repeat; }",
+        );
+        let grads = linear_grads(&dl);
+        assert_eq!(grads.len(), 1, "one gradient tile expected");
+        if let DisplayCommand::DrawLinearGradient { rect, .. } = grads[0] {
+            assert!((rect.width - 80.0).abs() < 0.1, "tile width should be 80, got {}", rect.width);
+            assert!((rect.height - 80.0).abs() < 0.1, "tile height should be 80, got {}", rect.height);
+        }
+        // Sized tiling must be wrapped in a clip to the painting area.
+        assert!(
+            dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. })),
+            "sized gradient must be clipped to the box"
+        );
+    }
+
+    #[test]
+    fn repeat_x_gradient_layer_emits_multiple_tiles() {
+        // BUG-087: repeat-x sized gradient emits one command per visible stripe.
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 100px; height: 50px; \
+             background: linear-gradient(to bottom, red, blue) left top / 20px 100% repeat-x; }",
+        );
+        let grads = linear_grads(&dl);
+        assert!(grads.len() >= 5, "expected ≥5 stripes for 100px/20px, got {}", grads.len());
+        for g in &grads {
+            if let DisplayCommand::DrawLinearGradient { rect, .. } = g {
+                assert!((rect.width - 20.0).abs() < 0.1, "stripe width 20, got {}", rect.width);
+            }
+        }
+    }
+
+    #[test]
+    fn unsized_gradient_layer_still_fills_box() {
+        // Regression guard: a gradient WITHOUT background-size keeps the historical
+        // single full-box command (no tiling, no extra clip) so existing snapshots
+        // stay byte-identical.
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 200px; height: 120px; \
+             background: linear-gradient(to right, red, blue); }",
+        );
+        let grads = linear_grads(&dl);
+        assert_eq!(grads.len(), 1, "single full-box gradient");
+        if let DisplayCommand::DrawLinearGradient { rect, .. } = grads[0] {
+            assert!((rect.width - 200.0).abs() < 0.1, "full box width, got {}", rect.width);
+            assert!((rect.height - 120.0).abs() < 0.1, "full box height, got {}", rect.height);
         }
     }
 
