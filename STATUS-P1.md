@@ -34,7 +34,7 @@ _(нет)_
 | ~~O-9~~ | ~~**Кастомизация UI**~~ — **выполнено** | L | `lumen-shell` |
 | ~~O-10~~ | ~~**CSS Scroll-Driven Animations Phase 1 shell wiring**~~ — **выполнено** | M | `lumen-js`, `lumen-shell` |
 | ~~O-11~~ | ~~**2A remaining: SOP/CORS mixed-content enforcement**~~ — **выполнено** | S | `lumen-shell` |
-| O-12 | **10K.3: Loading-spinner при restore >200ms** — UI-спиннер при восстановлении T2→T0 если > 200 мс. `shell/src/tabs/restore_ui.rs` | XS | `lumen-shell` |
+| ~~O-12~~ | ~~**10K.3: Loading-spinner при restore >200ms**~~ — **выполнено** | XS | `lumen-shell` |
 
 ### P — Performance (движок)
 
@@ -107,6 +107,7 @@ _(нет)_
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | O-12: 10K.3 Loading-spinner restore + 10K/10L/10M doc | lumen-plan.md: 10K/10K.1/10K.2/10K.3/10L/10M ⬜→✅ (реализация в panels/restore_spinner.rs + tabs/strip.rs существовала, не была задокументирована). subsystems/shell.md: добавлена запись 10K (tier badges + spinner). |
 | 2026-06-09 | O-11: 2A remaining — sandbox-application | lumen-shell: apply_iframe_sandbox_gates переписан — для srcdoc-iframe-ов парсит inline HTML и применяет sandbox gates (scripts/forms/navigation/popup) к внутреннему документу; для URL-based iframe-ов (Phase 0) логирует ограничения без применения к top-level doc. Возвращает usize (кол-во заблокированных единиц). lumen-plan.md: 2A 🟡 → ✅. 7 unit-тестов, 1228 тестов итого. Clippy чист. |
 | 2026-06-09 | O-10: CSS Scroll-Driven Animations Phase 1 | lumen-js: новый модуль scroll_timeline.rs — ScrollTimeline/ViewTimeline классы (W3C CSS Scroll-Driven Animations L1 §3–4). _lumen_deliver_scroll_progress(py, px) обновляет currentTime (0–100%) у всех корневых ScrollTimeline. QuickJsRuntime::deliver_scroll_progress(). lumen-shell: PersistentJs::deliver_scroll_progress трейт + impl; RedrawRequested шаг 1.5 — вычисляем block/inline прогресс через lumen_layout::resolve_scroll_progress, доставляем в JS. 14 unit-тестов. Clippy чист. |
 | 2026-06-09 | O-9: Кастомизация UI — drag&drop + темы | panels/themes.rs: ShellTheme {ThemeBase, AccentPreset} — 6 пресетов (Blue/Purple/Teal/Green/Orange/Rose), parse/to_settings_str, is_dark(). tabs/strip.rs: TabDragState, move_tab(src, dst) с корректировкой active-индекса, build_tab_bar(accent, drag) — drop-indicator + кастомный акцент. settings_panel.rs: SetAccent hit, ряд 6 акцент-свотчей в Appearance. main.rs: tab_drag + shell_theme поля; CursorMoved активирует drag после 6px; MouseInput Release → move_tab; Settings Close → is_dark() синхронизирует dark_mode. 1221 тест. Clippy чист. |
