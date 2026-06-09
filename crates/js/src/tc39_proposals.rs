@@ -12,6 +12,10 @@
 //!   toArray,forEach,some,every,find}` + `Iterator.from()` — ECMAScript 2025
 //! * **Array.fromAsync** — ECMAScript 2024
 //! * **`Promise.try`** — ECMAScript 2025
+//! * **Uint8Array Base64/Hex** — `toBase64`, `fromBase64`, `toHex`, `fromHex` — ECMAScript 2025
+//! * **`RegExp.escape`** — static escape utility — ECMAScript 2025
+//! * **`Error.isError`** — cross-realm error test — ECMAScript 2026 (Stage 4)
+//! * **`Atomics.pause`** — spinlock power hint (no-op shim) — ECMAScript 2025
 //!
 //! Each shim checks for native support first (no-op when the engine already has it).
 
@@ -404,6 +408,165 @@ const TC39_PROPOSALS_SHIM: &str = r#"(function(global) {
     // Expose as global `Iterator`
     global.Iterator = IteratorCtor;
   })();
+
+  // ── 7. Uint8Array Base64 / Hex methods (ES2025) ────────────────────────────
+  // https://tc39.es/proposal-arraybuffer-base64/
+  (function() {
+    var B64_STD  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var B64_URL  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+    // Build a reverse lookup: charCode → 6-bit value (0xff = invalid).
+    function mkLookup(alpha) {
+      var t = new Uint8Array(128).fill(255);
+      for (var i = 0; i < 64; i++) t[alpha.charCodeAt(i)] = i;
+      return t;
+    }
+    var LU_STD = mkLookup(B64_STD);
+    var LU_URL = mkLookup(B64_URL);
+
+    if (!Uint8Array.prototype.toBase64) {
+      Object.defineProperty(Uint8Array.prototype, 'toBase64', {
+        value: function toBase64(options) {
+          var alpha = (options && options.alphabet === 'base64url') ? B64_URL : B64_STD;
+          var omit  = !!(options && options.omitPadding);
+          var out = '', len = this.length;
+          for (var i = 0; i < len; i += 3) {
+            var b0 = this[i];
+            var b1 = i + 1 < len ? this[i + 1] : 0;
+            var b2 = i + 2 < len ? this[i + 2] : 0;
+            out += alpha[b0 >> 2];
+            out += alpha[((b0 & 3) << 4) | (b1 >> 4)];
+            if (i + 1 < len)   { out += alpha[((b1 & 15) << 2) | (b2 >> 6)]; }
+            else if (!omit)    { out += '='; }
+            if (i + 2 < len)   { out += alpha[b2 & 63]; }
+            else if (!omit)    { out += '='; }
+          }
+          return out;
+        },
+        writable: true, configurable: true
+      });
+    }
+
+    if (!Uint8Array.fromBase64) {
+      Object.defineProperty(Uint8Array, 'fromBase64', {
+        value: function fromBase64(str, options) {
+          if (typeof str !== 'string') throw new TypeError('fromBase64 requires a string');
+          var lu     = (options && options.alphabet === 'base64url') ? LU_URL : LU_STD;
+          var strict = options && options.lastChunkHandling === 'strict';
+          // Strip ASCII whitespace (CR LF SP TAB)
+          str = str.replace(/[\t\n\r ]/g, '');
+          // Strip trailing '=' padding
+          str = str.replace(/=+$/, '');
+          var bytes = [], buf = 0, bits = 0;
+          for (var i = 0; i < str.length; i++) {
+            var cc = str.charCodeAt(i);
+            if (cc >= 128) throw new SyntaxError('Invalid base64 character: ' + str[i]);
+            var v = lu[cc];
+            if (v === 255) throw new SyntaxError('Invalid base64 character: ' + str[i]);
+            buf = (buf << 6) | v;
+            bits += 6;
+            if (bits >= 8) { bits -= 8; bytes.push((buf >> bits) & 0xff); }
+          }
+          if (strict && bits > 0 && (buf & ((1 << bits) - 1)) !== 0) {
+            throw new SyntaxError('Unexpected non-zero trailing bits');
+          }
+          return new Uint8Array(bytes);
+        },
+        writable: true, configurable: true
+      });
+    }
+
+    if (!Uint8Array.prototype.toHex) {
+      Object.defineProperty(Uint8Array.prototype, 'toHex', {
+        value: function toHex() {
+          var HEX = '0123456789abcdef';
+          var out = '';
+          for (var i = 0; i < this.length; i++) {
+            var b = this[i];
+            out += HEX[b >> 4] + HEX[b & 15];
+          }
+          return out;
+        },
+        writable: true, configurable: true
+      });
+    }
+
+    if (!Uint8Array.fromHex) {
+      Object.defineProperty(Uint8Array, 'fromHex', {
+        value: function fromHex(str) {
+          if (typeof str !== 'string') throw new TypeError('fromHex requires a string');
+          if (str.length & 1) throw new SyntaxError('fromHex: odd-length string');
+          var bytes = new Uint8Array(str.length >> 1);
+          for (var i = 0; i < str.length; i += 2) {
+            var hi = parseInt(str[i],     16);
+            var lo = parseInt(str[i + 1], 16);
+            if (hi !== hi || lo !== lo) {   // NaN check
+              throw new SyntaxError('Invalid hex character at position ' + i);
+            }
+            bytes[i >> 1] = (hi << 4) | lo;
+          }
+          return bytes;
+        },
+        writable: true, configurable: true
+      });
+    }
+  })();
+
+  // ── 8. RegExp.escape (ES2025) ───────────────────────────────────────────────
+  // https://tc39.es/proposal-regex-escaping/
+  // Escapes a string so it can be used verbatim inside a RegExp pattern.
+  if (typeof RegExp.escape !== 'function') {
+    Object.defineProperty(RegExp, 'escape', {
+      value: function escape(str) {
+        if (typeof str !== 'string') throw new TypeError('RegExp.escape requires a string');
+        // Escape all SyntaxCharacters + / and whitespace control chars
+        return str
+          .replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
+          .replace(/\//g, '\\/')
+          .replace(/\0/g, '\\0')
+          .replace(/\n/g, '\\n')
+          .replace(/\r/g, '\\r')
+          .replace(/\t/g, '\\t')
+          .replace(/\v/g, '\\v')
+          .replace(/\f/g, '\\f');
+      },
+      writable: true, configurable: true
+    });
+  }
+
+  // ── 9. Error.isError (ES2026 Stage 4) ─────────────────────────────────────
+  // https://tc39.es/proposal-is-error/
+  // Returns true iff value has the internal [[ErrorData]] slot.
+  // In pure JS we use toString (reliable within a realm; cross-realm via the
+  // [object Error] tag that all built-in Error objects produce).
+  if (typeof Error.isError !== 'function') {
+    Object.defineProperty(Error, 'isError', {
+      value: function isError(value) {
+        if (value == null || typeof value !== 'object') return false;
+        try {
+          // Object.prototype.toString returns '[object Error]' for all
+          // native Error instances including subclasses.
+          var tag = Object.prototype.toString.call(value);
+          return tag === '[object Error]' || value instanceof Error;
+        } catch (e) {
+          return false;
+        }
+      },
+      writable: true, configurable: true
+    });
+  }
+
+  // ── 10. Atomics.pause (ES2025) ──────────────────────────────────────────────
+  // https://tc39.es/proposal-atomics-microwait/
+  // Power-reduction hint for spinloops.  A pure-JS shim is necessarily a no-op.
+  if (typeof Atomics !== 'undefined' && typeof Atomics.pause !== 'function') {
+    Object.defineProperty(Atomics, 'pause', {
+      value: function pause() {
+        // No-op: the PAUSE/yield instruction is a CPU-level hint unavailable in JS.
+      },
+      writable: true, configurable: true
+    });
+  }
 
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
@@ -821,6 +984,311 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(result, "[10,20,30]");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    // ── Uint8Array Base64 / Hex ───────────────────────────────────────────────
+
+    #[test]
+    fn uint8array_to_hex_encodes() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let hex: String = ctx
+                .eval("new Uint8Array([0x00, 0x0f, 0x10, 0xff]).toHex()")
+                .unwrap();
+            assert_eq!(hex, "000f10ff");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn uint8array_from_hex_decodes() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let result: String = ctx
+                .eval(r#"JSON.stringify(Array.from(Uint8Array.fromHex("deadbeef")))"#)
+                .unwrap();
+            assert_eq!(result, "[222,173,190,239]");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn uint8array_hex_roundtrip() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let ok: bool = ctx
+                .eval(
+                    r#"
+            var orig = new Uint8Array([1, 2, 3, 255, 0, 128]);
+            var hex  = orig.toHex();
+            var back = Uint8Array.fromHex(hex);
+            orig.every((v, i) => v === back[i])
+          "#,
+                )
+                .unwrap();
+            assert!(ok, "hex roundtrip must be lossless");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn uint8array_to_base64_encodes_standard() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // "Man" in ASCII = 77 97 110 → base64 "TWFu"
+            let b64: String = ctx
+                .eval("new Uint8Array([77, 97, 110]).toBase64()")
+                .unwrap();
+            assert_eq!(b64, "TWFu");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn uint8array_to_base64_with_padding() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // Single byte → 2 encoded chars + 2 padding
+            let b64: String = ctx.eval("new Uint8Array([0]).toBase64()").unwrap();
+            assert_eq!(b64, "AA==");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn uint8array_to_base64_omit_padding() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let b64: String = ctx
+                .eval("new Uint8Array([0]).toBase64({ omitPadding: true })")
+                .unwrap();
+            assert_eq!(b64, "AA");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn uint8array_from_base64_decodes() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let result: String = ctx
+                .eval(r#"JSON.stringify(Array.from(Uint8Array.fromBase64("TWFu")))"#)
+                .unwrap();
+            assert_eq!(result, "[77,97,110]");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn uint8array_base64_roundtrip() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let ok: bool = ctx
+                .eval(
+                    r#"
+            var orig = new Uint8Array([72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100]);
+            var b64  = orig.toBase64();
+            var back = Uint8Array.fromBase64(b64);
+            orig.length === back.length && orig.every((v, i) => v === back[i])
+          "#,
+                )
+                .unwrap();
+            assert!(ok, "base64 roundtrip must be lossless");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn uint8array_to_base64url_alphabet() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // 0xfb 0xff → standard "+/" → URL "-_"
+            let b64url: String = ctx
+                .eval(r#"new Uint8Array([0xfb, 0xff]).toBase64({ alphabet: 'base64url', omitPadding: true })"#)
+                .unwrap();
+            // 0xfb = 11111011, 0xff = 11111111
+            // groups: 111110 110111 1111xx → 62,55,... → '-', '3', ...
+            assert!(!b64url.contains('+'), "base64url must not contain '+'");
+            assert!(!b64url.contains('/'), "base64url must not contain '/'");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    // ── RegExp.escape ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn regexp_escape_exists() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let ok: bool = ctx.eval("typeof RegExp.escape === 'function'").unwrap();
+            assert!(ok, "RegExp.escape must be a function");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn regexp_escape_metacharacters() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // Each metachar must be escaped
+            let ok: bool = ctx
+                .eval(
+                    r#"
+            var special = ['\\', '^', '$', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|'];
+            special.every(function(c) {
+              var escaped = RegExp.escape(c);
+              return escaped[0] === '\\' && escaped[1] === c;
+            })
+          "#,
+                )
+                .unwrap();
+            assert!(ok, "all metacharacters must be backslash-escaped");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn regexp_escape_plain_string_matches() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // The escaped pattern must match the original string literally,
+            // regardless of what exact escape form is chosen by the engine.
+            let ok: bool = ctx
+                .eval(
+                    r#"
+            var original = 'hello123';
+            var pattern  = new RegExp(RegExp.escape(original));
+            pattern.test(original)
+          "#,
+                )
+                .unwrap();
+            assert!(ok, "escaped pattern must match the original string");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn regexp_escape_use_in_pattern() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let matches: bool = ctx
+                .eval(
+                    r#"
+            var needle = 'a.b*c';
+            var pattern = new RegExp(RegExp.escape(needle));
+            pattern.test('a.b*c') && !pattern.test('axbbc')
+          "#,
+                )
+                .unwrap();
+            assert!(matches, "escaped pattern should match literal string only");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    // ── Error.isError ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn error_is_error_exists() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let ok: bool = ctx.eval("typeof Error.isError === 'function'").unwrap();
+            assert!(ok, "Error.isError must be a function");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn error_is_error_true_for_errors() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let ok: bool = ctx
+                .eval(
+                    r#"
+            Error.isError(new Error('e')) &&
+            Error.isError(new TypeError('t')) &&
+            Error.isError(new RangeError('r'))
+          "#,
+                )
+                .unwrap();
+            assert!(ok, "Error.isError must return true for Error instances");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn error_is_error_false_for_non_errors() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let ok: bool = ctx
+                .eval(
+                    r#"
+            !Error.isError(null) &&
+            !Error.isError(undefined) &&
+            !Error.isError(42) &&
+            !Error.isError({message:'fake'}) &&
+            !Error.isError('string error')
+          "#,
+                )
+                .unwrap();
+            assert!(ok, "Error.isError must return false for non-Error values");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    // ── Atomics.pause ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn atomics_pause_is_function() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // Atomics may or may not be present in QuickJS default context;
+            // if present, pause must be a function.
+            let ok: bool = ctx
+                .eval(
+                    r#"
+            typeof Atomics === 'undefined' ||
+            typeof Atomics.pause === 'function'
+          "#,
+                )
+                .unwrap();
+            assert!(ok, "Atomics.pause must be a function if Atomics is defined");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn atomics_pause_returns_undefined() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let ok: bool = ctx
+                .eval(
+                    r#"
+            typeof Atomics === 'undefined' ||
+            Atomics.pause() === undefined
+          "#,
+                )
+                .unwrap();
+            assert!(ok, "Atomics.pause() must return undefined");
         });
         drop(ctx);
         drop(rt);
