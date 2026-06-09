@@ -108,7 +108,7 @@ BUG-092 | OPEN   | css-parser/layout | CSS variables var() not propagating corre
 BUG-093 | OPEN   | paint          | scrollbar rendering: DrawScrollbar track+thumb deviation — TEST-51: 1.39% | crates/engine/paint/src/display_list.rs
 BUG-094 | OPEN   | paint          | text-shadow with blur PushFilter wrapper ~7% deviation — TEST-52: 6.82% (thr 4.0%) | crates/engine/paint/src/display_list.rs
 BUG-095 | FIXED 2026-06-09 | layout/paint   | background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78%→11.55%; femtovg (default) backend stretched bg-image over whole box, ignoring background-size/position/repeat/origin/clip. Ported wgpu tiling math to femtovg `draw_background_image`. Residual 11.55% = BUG-113 row drift + image resample/text AA | crates/engine/paint/src/backends/femtovg_backend.rs
-BUG-096 | OPEN   | paint          | SVG <path> stroke tessellation not rendered — TEST-54: 9.50%; Phase 1 | crates/engine/paint/src/display_list.rs
+BUG-096 | FIXED 2026-06-09 | paint/layout | SVG <path> stroke tessellation not rendered — TEST-54: 9.50%. Two causes: (1) `emit_svg_shape` 0×0 guard dropped every `<path>` (path bbox is deferred to paint, so the box rect is zero) → exempted Path from the guard; (2) SVG presentation attributes (`fill`/`stroke`/`stroke-width` as XML attrs) were never read into ComputedStyle, so `fill="none" stroke="#e94560"` paths painted as black blobs → added `apply_svg_presentational_hints`. | crates/engine/paint/src/display_list.rs:4811 + crates/engine/layout/src/style.rs
 BUG-097 | FIXED 2026-06-09 | layout/paint   | <video> placeholder: posterless video painted grey placeholder; Edge renders empty media transparent → suppress DrawImage when no poster | crates/engine/paint/src/display_list.rs
 BUG-098 | OPEN   | paint          | mix-blend-mode: PushBlendMode/PopBlendMode layers ~14% deviation — TEST-56: 14.12%; compositing order or blending formula | crates/engine/paint/src/renderer.rs
 BUG-099 | OPEN   | js/paint       | <canvas> 2D context not implemented — TEST-57: 28.66%; getContext("2d") stub; Phase 2 | crates/js/src/dom.rs
@@ -192,7 +192,7 @@ TEST-50: FAIL 17.26%   css-variables           ← BUG-092
 TEST-51: FAIL  1.39%   scrollbar-rendering     ← BUG-093
 TEST-52: FAIL  6.82%   text-shadow-blur        ← BUG-094 (thr 4.0%)
 TEST-53: FAIL 11.55%   background-origin       ← BUG-095 + BUG-113 FIXED (origin/clip + row drift ok; residual ← BUG-114 font shorthand + AA)
-TEST-54: FAIL  9.50%   svg-path-stroke         ← BUG-096 (Phase 1)
+TEST-54: FAIL  9.50%   svg-path-stroke         ← BUG-096 FIXED (paths now tessellate + presentation-attr colours; CPU snapshot regenerated)
 TEST-55: FAIL 26.65%   video-placeholder       ← BUG-097
 TEST-56: FAIL 14.12%   mix-blend-mode          ← BUG-098
 TEST-57: FAIL 28.66%   canvas-2d               ← BUG-099 (Phase 2)
@@ -759,7 +759,7 @@ CSS-фильтры `grayscale`, `sepia`, `brightness`, `invert`, `contrast`, `sa
 | Form controls UA styles | Phase 1 | TEST-34: 4.78% → BUG (Phase 1) |
 | `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 8.85% (bbox работает) |
 | SVG rendering | Phase 1 | TEST-47: FIXED 2026-06-09 → BUG-089 |
-| SVG `<path>` stroke | Phase 1 | TEST-54: 9.50% → BUG-096 |
+| SVG `<path>` stroke | Phase 1 | TEST-54: FIXED 2026-06-09 → BUG-096 |
 | SVG stroke advanced | Phase 1 | TEST-60: 11.51% → BUG-102 |
 | `<canvas>` 2D context | Phase 2 | TEST-57: 28.66% → BUG-099 |
 | View Transitions API | Phase 2 | TEST-61: 99.53% → BUG-103 |

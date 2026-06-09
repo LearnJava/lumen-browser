@@ -5143,6 +5143,14 @@ pub fn compute_style(
     // `inherited` целиком — для CSS-wide keywords (CSS Cascade L4 §7).
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
+
+    // SVG 2 §6.4: presentation attributes act as author rules of the lowest
+    // priority. Apply them before the matched-declaration loop so any CSS rule
+    // (stylesheet or inline) overrides them.
+    apply_svg_presentational_hints(
+        doc, node, &mut style, em_basis, viewport, parent_weight, inherited, is_quirks,
+    );
+
     for (_, _, _, _, _, _, decl) in &matched {
         // CSS Values L4 §7.7: expand attr() typed references before applying.
         let attr_buf;
@@ -7332,6 +7340,75 @@ fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut Co
             }
         }
     }
+}
+
+/// SVG 2 §6.4 — SVG presentation attributes. Geometry and paint properties on
+/// SVG elements may be given as plain XML attributes (e.g. `<path fill="none"
+/// stroke="#e94560" stroke-width="8">`) instead of CSS. Each maps onto the
+/// corresponding CSS property, but with the **lowest author-origin priority**:
+/// any matching CSS rule (stylesheet selector or inline `style=""`) overrides it.
+///
+/// We therefore apply them *before* the matched-declaration cascade loop, reusing
+/// `apply_declaration` for parsing so the attribute and the CSS form share one
+/// code path. Gated by SVG tag name so HTML attributes coincidentally named
+/// `fill`/`stroke`/`color` on non-SVG elements are not reinterpreted as paint.
+#[allow(clippy::too_many_arguments)]
+fn apply_svg_presentational_hints(
+    doc: &Document,
+    node: NodeId,
+    style: &mut ComputedStyle,
+    em_basis: f32,
+    viewport: Size,
+    parent_weight: FontWeight,
+    inherited: &ComputedStyle,
+    is_quirks: bool,
+) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if !is_svg_presentational_element(name.local.as_ref()) {
+        return;
+    }
+    // Presentation attributes recognised by `apply_declaration`
+    // (SVG §11 paint + §13 stroke geometry, plus `color` for `currentColor`).
+    const ATTRS: &[&str] = &[
+        "fill",
+        "fill-opacity",
+        "fill-rule",
+        "stroke",
+        "stroke-opacity",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-miterlimit",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "color",
+        "opacity",
+    ];
+    let node_ref = doc.get(node);
+    for &attr in ATTRS {
+        let Some(val) = node_ref.get_attr(attr) else { continue };
+        if val.trim().is_empty() {
+            continue;
+        }
+        let decl = Declaration {
+            property: attr.to_string(),
+            value: val.to_string(),
+            important: false,
+        };
+        apply_declaration(style, &decl, em_basis, viewport, parent_weight, inherited, is_quirks);
+    }
+}
+
+/// True for SVG element local names that accept SVG presentation attributes.
+/// Covers the shapes/containers Lumen lays out plus text elements.
+fn is_svg_presentational_element(local: &str) -> bool {
+    matches!(
+        local,
+        "svg" | "g" | "rect" | "circle" | "ellipse" | "line" | "path"
+            | "polygon" | "polyline" | "text" | "tspan" | "textPath" | "use"
+    )
 }
 
 /// HTML5 §15: `bgcolor` атрибут на `<body>` / table-related элементах
@@ -24177,6 +24254,66 @@ mod tests {
 
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.custom_props.get("--size").map(String::as_str), Some("10px"));
+    }
+
+    #[test]
+    fn svg_presentation_attributes_applied() {
+        // BUG-096: SVG presentation attributes (fill / stroke / stroke-width as
+        // plain XML attributes) must map onto the SVG paint properties. Without
+        // this, `<path fill="none" stroke="#e94560">` kept the default black fill
+        // and no stroke, so every <path> painted as a black blob.
+        let doc = lumen_html_parser::parse(
+            "<svg><path d='M 0 0 L 10 10' fill='none' stroke='#e94560' stroke-width='8'/></svg>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+
+        // Locate the <path> element wherever the HTML parser placed it.
+        fn find_path(doc: &Document, id: NodeId) -> Option<NodeId> {
+            if doc.get(id).element_name().is_some_and(|n| n.local.as_str() == "path") {
+                return Some(id);
+            }
+            for &c in &doc.get(id).children {
+                if let Some(found) = find_path(doc, c) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let path = find_path(&doc, doc.root()).expect("path element present");
+
+        let style = compute_style(&doc, path, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(matches!(style.svg_fill, SvgPaint::None), "fill=none must map to SvgPaint::None");
+        assert!(
+            matches!(style.svg_stroke, SvgPaint::Color(c) if c.r == 233 && c.g == 69 && c.b == 96),
+            "stroke=#e94560 must map to its colour, got {:?}",
+            style.svg_stroke,
+        );
+        assert_eq!(style.svg_stroke_width, 8.0, "stroke-width attribute must apply");
+    }
+
+    #[test]
+    fn svg_presentation_attribute_overridden_by_css() {
+        // SVG 2 §6.4: a presentation attribute has the lowest author priority —
+        // any matching CSS rule wins. `style="stroke:#00ff00"` overrides stroke="red".
+        let doc = lumen_html_parser::parse(
+            "<svg><path d='M 0 0 L 10 10' stroke='red' style='stroke:#00ff00'/></svg>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        fn find_path(doc: &Document, id: NodeId) -> Option<NodeId> {
+            if doc.get(id).element_name().is_some_and(|n| n.local.as_str() == "path") {
+                return Some(id);
+            }
+            doc.get(id).children.iter().find_map(|&c| find_path(doc, c))
+        }
+        let path = find_path(&doc, doc.root()).expect("path element present");
+        let style = compute_style(&doc, path, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(
+            matches!(style.svg_stroke, SvgPaint::Color(c) if c.r == 0 && c.g == 255 && c.b == 0),
+            "inline CSS stroke must override the stroke presentation attribute, got {:?}",
+            style.svg_stroke,
+        );
     }
 
     #[test]

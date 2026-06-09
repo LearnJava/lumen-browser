@@ -4803,7 +4803,12 @@ fn apply_opacity_to_color(color: Color, opacity: f32) -> Color {
 /// Reads `svg_fill` / `svg_stroke` / `svg_fill_opacity` / `svg_stroke_opacity` /
 /// `svg_stroke_width` from `ComputedStyle` — wired by P4 per SVG §11.2/11.3/11.4.
 fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
-    if b.rect.width <= 0.0 && b.rect.height <= 0.0 {
+    // A zero-size box bbox means "nothing to paint" for the geometry-driven shapes
+    // (rect/circle/ellipse/line), whose painted extent equals `b.rect`. Paths are the
+    // exception: layout cannot compute a path bbox (it requires full `d` parsing, so
+    // `svg_shape_bbox` returns `Rect::ZERO`), and the path is painted from its `d`
+    // segments offset by `b.rect.x/y`. Bailing here would drop every `<path>` element.
+    if b.rect.width <= 0.0 && b.rect.height <= 0.0 && !matches!(shape, SvgShapeKind::Path { .. }) {
         return;
     }
     let current_color = b.style.color;
@@ -10596,6 +10601,33 @@ mod tests {
             DisplayCommand::DrawText { text, .. } if text.contains("Hi")
         ));
         assert!(has_text, "ordered path must emit DrawText for SVG <text>");
+    }
+
+    #[test]
+    fn ordered_svg_path_stroke_emits_drawsvgpath() {
+        // BUG-096: an SVG <path> has a zero-size layout rect (path bbox is deferred
+        // to paint), so `emit_svg_shape`'s 0×0 guard used to drop every path in the
+        // ordered pipeline → TEST-54 painted nothing. The path must now emit a
+        // DrawSvgPath tessellated in its stroke colour (#e94560 = 233,69,96), and
+        // `fill="none"` (an SVG presentation attribute) must suppress the fill so no
+        // black fill leaks in.
+        let dl = build_ordered(
+            "<svg width='200' height='160'>\
+                <path d='M 20 140 L 180 20' fill='none' stroke='#e94560' stroke-width='8'/>\
+             </svg>",
+            "",
+        );
+        let svg_paths: Vec<&Color> = dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect();
+        assert!(!svg_paths.is_empty(), "ordered path must emit DrawSvgPath for <path>, got {dl:?}");
+        assert!(
+            svg_paths.iter().all(|c| c.r == 233 && c.g == 69 && c.b == 96),
+            "path must paint in stroke colour #e94560, not a default black fill; got {svg_paths:?}",
+        );
     }
 
     #[test]
