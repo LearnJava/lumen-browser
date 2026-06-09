@@ -6,8 +6,7 @@
 
 ## In progress
 
-P-1: Selector rule index  branch: p1-selector-rule-index
-Next step: cargo check + tests  crates/engine/layout/src/rule_index.rs + style.rs
+_(нет)_
 
 ---
 
@@ -41,7 +40,7 @@ Next step: cargo check + tests  crates/engine/layout/src/rule_index.rs + style.r
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| P-1 | **Selector rule index** — `compute_style` сейчас прогоняет brute-force ВСЕ правила на каждый узел (O(узлы × правила), [style.rs:4957](crates/engine/layout/src/style.rs)). На реальной странице с CSS-фреймворком (Bootstrap: 1661 правило) это 6.88 M match-попыток при hit-rate 0.1% → layout 1948 мс. Бакетизация правил по правому простому селектору (id/class/type/universal) даёт O(узлы × кандидаты), ожидаемо ×50–100. Чистый perf, пиксели не меняются. → [docs/tasks/p1-selector-rule-index.md](docs/tasks/p1-selector-rule-index.md) | M | `lumen-layout` |
+| ~~P-1~~ | ~~**Selector rule index**~~ — **выполнено** | M | `lumen-layout` |
 
 ### M — Web Platform Completeness Phase 5
 
@@ -108,6 +107,7 @@ Next step: cargo check + tests  crates/engine/layout/src/rule_index.rs + style.r
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-09 | P-1: Selector rule index | lumen-layout: rule_index.rs — RuleIndex::build/candidates, бакетизация по id/class/type/universal. compute_style: thread_local RULE_IDX_CACHE, brute-force O(N×R) → O(N×кандидаты). 2489 тестов lumen-layout (+8), 66 CPU snapshots identical. Clippy чист. |
 | 2026-06-09 | O-12: 10K.3 Loading-spinner restore + 10K/10L/10M doc | lumen-plan.md: 10K/10K.1/10K.2/10K.3/10L/10M ⬜→✅ (реализация в panels/restore_spinner.rs + tabs/strip.rs существовала, не была задокументирована). subsystems/shell.md: добавлена запись 10K (tier badges + spinner). |
 | 2026-06-09 | O-11: 2A remaining — sandbox-application | lumen-shell: apply_iframe_sandbox_gates переписан — для srcdoc-iframe-ов парсит inline HTML и применяет sandbox gates (scripts/forms/navigation/popup) к внутреннему документу; для URL-based iframe-ов (Phase 0) логирует ограничения без применения к top-level doc. Возвращает usize (кол-во заблокированных единиц). lumen-plan.md: 2A 🟡 → ✅. 7 unit-тестов, 1228 тестов итого. Clippy чист. |
 | 2026-06-09 | O-10: CSS Scroll-Driven Animations Phase 1 | lumen-js: новый модуль scroll_timeline.rs — ScrollTimeline/ViewTimeline классы (W3C CSS Scroll-Driven Animations L1 §3–4). _lumen_deliver_scroll_progress(py, px) обновляет currentTime (0–100%) у всех корневых ScrollTimeline. QuickJsRuntime::deliver_scroll_progress(). lumen-shell: PersistentJs::deliver_scroll_progress трейт + impl; RedrawRequested шаг 1.5 — вычисляем block/inline прогресс через lumen_layout::resolve_scroll_progress, доставляем в JS. 14 unit-тестов. Clippy чист. |
