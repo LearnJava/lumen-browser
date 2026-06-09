@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Q-1: DOM API completeness — ChildNode/ParentNode + TreeWalker/NodeIterator  branch: p1-dom-api-completeness
+Next step: implement JS shims in crates/js/src/dom.rs
 
 ---
 
