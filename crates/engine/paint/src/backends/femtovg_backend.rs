@@ -46,7 +46,8 @@ use lumen_image::{Image, resize_area_avg};
 use lumen_layout::Color;
 
 use lumen_layout::{
-    BackgroundRepeat, BackgroundSize, GradientStop, Length, ObjectPosition, PositionComponent,
+    BackgroundRepeat, BackgroundSize, BorderStyle, GradientStop, Length, ObjectPosition,
+    PositionComponent,
 };
 
 use lumen_core::geom::Rect;
@@ -190,6 +191,63 @@ fn sticky_offset_dx(
         }
     }
     dx
+}
+
+// ─── Border dash / dot geometry ───────────────────────────────────────────────
+
+/// Returns `(offset, length)` pairs along a border side of length `total` for a
+/// `dashed` border of thickness `width`. Mirrors the wgpu `emit_border_side`
+/// dashed pattern (BUG-080) so both backends match Edge/Skia: dash size is fixed
+/// at `max(6, 2·width)`, gap at `max(4, width)`; `n = round(total / period)`
+/// dashes are laid out with the step adjusted so the last dash ends at `total`.
+/// Offsets use `floor()` to match Edge pixel-snapping. Empty when `total <= 0`.
+fn dashed_border_offsets(total: f32, width: f32) -> Vec<(f32, f32)> {
+    if total <= 0.0 {
+        return Vec::new();
+    }
+    let target_dash = (width * 2.0).max(6.0);
+    let target_gap = width.max(4.0);
+    let n = ((total / (target_dash + target_gap)).round() as usize).max(1);
+    let step = if n > 1 { (total - target_dash) / (n - 1) as f32 } else { 0.0 };
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let offset = (i as f32 * step).floor();
+        let seg_end = (offset + target_dash).min(total);
+        if seg_end > offset {
+            out.push((offset, seg_end - offset));
+        }
+    }
+    out
+}
+
+/// Returns `(offset, length)` pairs along a border side of length `total` for a
+/// `dotted` border of thickness `width`. Mirrors the wgpu `emit_border_side`
+/// dotted pattern: `n = floor(total / (2·dot)) + 1` dots, symmetric placement
+/// (short gaps at both ends, equal middle gaps). `dot = max(1, width)`. The
+/// caller decides square (≤2px) vs round rendering. Empty when `total <= 0`.
+fn dotted_border_offsets(total: f32, width: f32) -> Vec<(f32, f32)> {
+    if total <= 0.0 {
+        return Vec::new();
+    }
+    let dot_len = width.max(1.0);
+    let n = ((total / (dot_len * 2.0)).floor() as usize + 1).max(1);
+    let span = total - dot_len;
+    let step = if n > 1 { span / (n - 1) as f32 } else { 0.0 };
+    let mid = (n - 1) / 2;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let offset = if i <= mid {
+            (i as f32 * step).floor()
+        } else {
+            let j = (n - 1 - i) as f32;
+            span.floor() - (j * step).floor()
+        };
+        let seg_end = (offset + dot_len).min(total);
+        if seg_end > offset {
+            out.push((offset, seg_end - offset));
+        }
+    }
+    out
 }
 
 // ─── BlendMode → CompositeOperation ──────────────────────────────────────────
@@ -472,6 +530,83 @@ impl FemtovgBackend {
         path.rect(x, y, w, h);
         let paint = femtovg::Paint::color(lumen_to_fvg(color));
         self.canvas.fill_path(&path, &paint);
+    }
+
+    /// Fills a circle (used for dotted borders wider than 2px, where Edge renders
+    /// round dots rather than squares).
+    fn draw_fill_circle(&mut self, cx: f32, cy: f32, r: f32, color: Color) {
+        let mut path = femtovg::Path::new();
+        path.circle(cx, cy, r);
+        let paint = femtovg::Paint::color(lumen_to_fvg(color));
+        self.canvas.fill_path(&path, &paint);
+    }
+
+    /// Renders one border side (top/right/bottom/left) honoring its `BorderStyle`.
+    /// `horizontal` = true for top/bottom (pattern runs along X), false for
+    /// left/right (along Y). `width` is the side thickness in CSS px. Geometry
+    /// mirrors the wgpu `emit_border_side` so the femtovg (default) backend draws
+    /// the same dash/dot/double pattern Edge produces (BUG-080). Solid/None fall
+    /// back to a single filled quad — unchanged from the previous behavior.
+    fn draw_border_side(
+        &mut self,
+        side_rect: Rect,
+        horizontal: bool,
+        width: f32,
+        color: Color,
+        style: BorderStyle,
+    ) {
+        let total = if horizontal { side_rect.width } else { side_rect.height };
+        match style {
+            BorderStyle::Dashed => {
+                for (offset, len) in dashed_border_offsets(total, width) {
+                    if horizontal {
+                        self.draw_fill_rect(side_rect.x + offset, side_rect.y, len, side_rect.height, color);
+                    } else {
+                        self.draw_fill_rect(side_rect.x, side_rect.y + offset, side_rect.width, len, color);
+                    }
+                }
+            }
+            BorderStyle::Dotted => {
+                // dot_len ≤ 2px → squares (no AA circle); otherwise round dots.
+                let use_rect = width.max(1.0) <= 2.0;
+                for (offset, len) in dotted_border_offsets(total, width) {
+                    if use_rect {
+                        if horizontal {
+                            self.draw_fill_rect(side_rect.x + offset, side_rect.y, len, side_rect.height, color);
+                        } else {
+                            self.draw_fill_rect(side_rect.x, side_rect.y + offset, side_rect.width, len, color);
+                        }
+                    } else if horizontal {
+                        let cx = side_rect.x + offset + len / 2.0;
+                        let cy = side_rect.y + side_rect.height / 2.0;
+                        self.draw_fill_circle(cx, cy, side_rect.height / 2.0, color);
+                    } else {
+                        let cx = side_rect.x + side_rect.width / 2.0;
+                        let cy = side_rect.y + offset + len / 2.0;
+                        self.draw_fill_circle(cx, cy, side_rect.width / 2.0, color);
+                    }
+                }
+            }
+            BorderStyle::Double => {
+                // CSS Backgrounds L3 §4.2: two solid lines ~1/3 width, gap ~1/3.
+                // width < 3px → no room for a gap, fall back to solid.
+                if width < 3.0 {
+                    self.draw_fill_rect(side_rect.x, side_rect.y, side_rect.width, side_rect.height, color);
+                    return;
+                }
+                let line = (width / 3.0).max(1.0);
+                if horizontal {
+                    self.draw_fill_rect(side_rect.x, side_rect.y, side_rect.width, line, color);
+                    self.draw_fill_rect(side_rect.x, side_rect.y + width - line, side_rect.width, line, color);
+                } else {
+                    self.draw_fill_rect(side_rect.x, side_rect.y, line, side_rect.height, color);
+                    self.draw_fill_rect(side_rect.x + width - line, side_rect.y, line, side_rect.height, color);
+                }
+            }
+            BorderStyle::Solid | BorderStyle::None => {
+                self.draw_fill_rect(side_rect.x, side_rect.y, side_rect.width, side_rect.height, color);
+            }
+        }
     }
 
     /// Рисует залитый прямоугольник с разными радиусами углов.
@@ -802,24 +937,34 @@ impl FemtovgBackend {
                     rect.x, rect.y, rect.width, rect.height, *radii, *color,
                 );
             }
-            DisplayCommand::DrawBorder { rect, widths, colors, .. } => {
+            DisplayCommand::DrawBorder { rect, widths, colors, styles, .. } => {
+                // Side rect order: [top, right, bottom, left]. Each side is rendered
+                // according to its `BorderStyle` (Solid → full quad, Dashed/Dotted →
+                // segment pattern, Double → two thin lines). Geometry mirrors the wgpu
+                // `emit_border_side` so both backends match Edge's pattern (BUG-080).
                 if widths[0] > 0.0 {
-                    self.draw_fill_rect(rect.x, rect.y, rect.width, widths[0], colors[0]);
+                    self.draw_border_side(
+                        Rect::new(rect.x, rect.y, rect.width, widths[0]),
+                        true, widths[0], colors[0], styles[0],
+                    );
                 }
                 if widths[1] > 0.0 {
-                    self.draw_fill_rect(
-                        rect.x + rect.width - widths[1], rect.y,
-                        widths[1], rect.height, colors[1],
+                    self.draw_border_side(
+                        Rect::new(rect.x + rect.width - widths[1], rect.y, widths[1], rect.height),
+                        false, widths[1], colors[1], styles[1],
                     );
                 }
                 if widths[2] > 0.0 {
-                    self.draw_fill_rect(
-                        rect.x, rect.y + rect.height - widths[2],
-                        rect.width, widths[2], colors[2],
+                    self.draw_border_side(
+                        Rect::new(rect.x, rect.y + rect.height - widths[2], rect.width, widths[2]),
+                        true, widths[2], colors[2], styles[2],
                     );
                 }
                 if widths[3] > 0.0 {
-                    self.draw_fill_rect(rect.x, rect.y, widths[3], rect.height, colors[3]);
+                    self.draw_border_side(
+                        Rect::new(rect.x, rect.y, widths[3], rect.height),
+                        false, widths[3], colors[3], styles[3],
+                    );
                 }
             }
             DisplayCommand::DrawText { rect, text, font_size, color, .. } => {
@@ -1631,6 +1776,51 @@ mod tests {
     fn blend_to_composite_lighter() {
         let op = blend_to_composite(BlendMode::PlusLighter);
         assert!(matches!(op, femtovg::CompositeOperation::Lighter));
+    }
+
+    #[test]
+    fn dashed_offsets_match_edge_dash_counts() {
+        // BUG-080: on a 180px side, Edge produces n = 18/15/8/4 dashes for
+        // 2/4/8/16px widths (the wgpu emit_border_side reference values).
+        assert_eq!(dashed_border_offsets(180.0, 2.0).len(), 18);
+        assert_eq!(dashed_border_offsets(180.0, 4.0).len(), 15);
+        assert_eq!(dashed_border_offsets(180.0, 8.0).len(), 8);
+        assert_eq!(dashed_border_offsets(180.0, 16.0).len(), 4);
+    }
+
+    #[test]
+    fn dashed_offsets_anchor_first_and_last() {
+        // First dash starts at 0; last dash ends exactly at total.
+        let segs = dashed_border_offsets(180.0, 4.0);
+        assert_eq!(segs.first().unwrap().0, 0.0);
+        let (last_off, last_len) = *segs.last().unwrap();
+        assert!((last_off + last_len - 180.0).abs() < 1.0, "last end {}", last_off + last_len);
+    }
+
+    #[test]
+    fn dotted_offsets_match_edge_dot_counts() {
+        // BUG-080: 180px side → n = 46/23/12/6 dots for 2/4/8/16px widths.
+        assert_eq!(dotted_border_offsets(180.0, 2.0).len(), 46);
+        assert_eq!(dotted_border_offsets(180.0, 4.0).len(), 23);
+        assert_eq!(dotted_border_offsets(180.0, 8.0).len(), 12);
+        assert_eq!(dotted_border_offsets(180.0, 16.0).len(), 6);
+    }
+
+    #[test]
+    fn dotted_offsets_symmetric_and_bounded() {
+        let segs = dotted_border_offsets(180.0, 8.0);
+        // First dot at 0, last dot ends at total.
+        assert_eq!(segs.first().unwrap().0, 0.0);
+        let (last_off, last_len) = *segs.last().unwrap();
+        assert!((last_off + last_len - 180.0).abs() < 1.0, "last end {}", last_off + last_len);
+        // Every dot length equals dot_len (= width here).
+        assert!(segs.iter().all(|&(_, len)| (len - 8.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn border_offsets_empty_for_zero_total() {
+        assert!(dashed_border_offsets(0.0, 4.0).is_empty());
+        assert!(dotted_border_offsets(-5.0, 4.0).is_empty());
     }
 
     #[test]
