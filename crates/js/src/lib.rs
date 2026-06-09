@@ -91,6 +91,7 @@ pub mod file_input;
 pub mod tc39_proposals;
 pub mod window_management;
 pub mod local_font_access;
+pub mod long_animation_frames;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -799,6 +800,15 @@ impl QuickJsRuntime {
                 eprintln!("Scroll-Driven Animations bindings init failed: {}", e);
             }
 
+            // Install Long Animation Frames API (W3C LoAF §3–4) — after DOM so that
+            // PerformanceObserver and _perf_entries are in scope.
+            // Phase 0: PerformanceLongAnimationFrameTiming + PerformanceScriptTiming classes
+            // and _lumen_deliver_long_animation_frame delivery binding.
+            // Phase 1: shell rendering loop auto-reports frames > 50 ms.
+            if let Err(e) = long_animation_frames::install_long_animation_frames_bindings(&ctx) {
+                eprintln!("Long Animation Frames API init failed: {}", e);
+            }
+
             // Install Sanitizer API (W3C Sanitizer API §3) — after DOM so `document`,
             // `Element`, and DOM methods are available.
             // Phase 0: Simple removal of <script> tags and event handler attributes.
@@ -1381,6 +1391,43 @@ impl QuickJsRuntime {
                 "if(typeof _lumen_fire_window_scroll_event==='function')\
                  _lumen_fire_window_scroll_event();"
             ).ok();
+        });
+    }
+
+    /// Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers.
+    ///
+    /// Call from the shell frame-timing path when a frame exceeds 50 ms.
+    /// `start_ms` and `duration_ms` are in milliseconds (performance.now() scale).
+    /// `scripts_json` is an optional JSON array of `PerformanceScriptTiming` initialisers.
+    /// Pass `None` for `scripts_json` and the entry will have an empty `scripts` array.
+    ///
+    /// No-op when the runtime has not been initialised yet.
+    pub fn deliver_long_animation_frame(
+        &self,
+        start_ms: f64,
+        duration_ms: f64,
+        render_start: f64,
+        style_layout_start: f64,
+        first_ui_event_ts: f64,
+        scripts_json: Option<&str>,
+    ) {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.ctx.with(|ctx| {
+            let blocking = (duration_ms - 50.0_f64).max(0.0);
+            let scripts_arg = match scripts_json {
+                Some(s) => {
+                    // Escape single quotes inside the JSON string for safe JS embedding.
+                    let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+                    format!("'{escaped}'")
+                }
+                None => "null".to_string(),
+            };
+            let script = format!(
+                "if(typeof _lumen_deliver_long_animation_frame==='function')\
+                 _lumen_deliver_long_animation_frame\
+                 ({start_ms},{duration_ms},{render_start},{style_layout_start},{first_ui_event_ts},{blocking},{scripts_arg});"
+            );
+            ctx.eval::<(), _>(script.as_str()).ok();
         });
     }
 

@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+S-4: Long Animation Frames API (LoAF)  branch: p1-s4-loaf-api
+Next step: создать crates/js/src/long_animation_frames.rs — шим + тесты
 
 ---
 
