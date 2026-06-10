@@ -5611,6 +5611,57 @@ fn lay_out_grid(
         &s.grid_template_columns
     };
 
+    // CSS Grid L3 §14: masonry layout — early dispatch before normal grid placement.
+    // `masonry` as grid_template_rows → column-masonry (most common, Pinterest-style).
+    // `masonry` as grid_template_columns → row-masonry (transposed).
+    // // CSS: masonry-auto-flow (P4 handoff: controls placement order — definite-first/next/ordered)
+    let col_is_masonry = eff_col_template.first() == Some(&GridTrackSize::Masonry);
+    let row_is_masonry = s.grid_template_rows.first() == Some(&GridTrackSize::Masonry);
+
+    if col_is_masonry || row_is_masonry {
+        let (track_count, track_gap) = if row_is_masonry {
+            // Grid axis = columns (defined by grid_template_columns), masonry axis = rows.
+            (eff_col_template.len().max(1), col_gap)
+        } else {
+            // Grid axis = rows (defined by grid_template_rows), masonry axis = columns.
+            (s.grid_template_rows.len().max(1), row_gap)
+        };
+        let total_track_gap = track_gap * track_count.saturating_sub(1) as f32;
+        let track_size = ((content_width - total_track_gap) / track_count as f32).max(0.0);
+        let item_gap = if row_is_masonry { row_gap } else { col_gap };
+
+        // Step 1: lay out all items at track_size to establish their intrinsic height.
+        for &i in &item_idxs {
+            lay_out(&mut children[i], content_x, content_y, track_size, None, measurer, viewport, pcb, hp);
+        }
+
+        // Step 2: greedy waterfall placement — each item placed in the track with minimum height.
+        let mut track_heights = vec![0.0_f32; track_count];
+        for &i in &item_idxs {
+            let min_track = track_heights
+                .iter()
+                .enumerate()
+                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+
+            if row_is_masonry {
+                children[i].rect.x = content_x + min_track as f32 * (track_size + track_gap);
+                children[i].rect.y = content_y + track_heights[min_track];
+            } else {
+                // Row-masonry: column positions waterfall, row positions from explicit tracks.
+                children[i].rect.x = content_x + track_heights[min_track];
+                children[i].rect.y = content_y + min_track as f32 * (track_size + track_gap);
+            }
+            children[i].rect.width = track_size;
+            track_heights[min_track] += children[i].rect.height + item_gap;
+        }
+
+        // Total height = max track accumulation (subtract trailing gap).
+        let total_h = track_heights.iter().cloned().fold(0.0_f32, f32::max);
+        return (total_h - item_gap).max(0.0);
+    }
+
     // Determine explicit track counts.
     // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
     // for placement purposes use the number of inherited tracks (or 1 for auto-placement).
