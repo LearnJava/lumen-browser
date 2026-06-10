@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-gap-rule влит 2026-06-10
+`font-stretch` wiring — wdth axis injection в DrawText  branch: p4-font-stretch
+Next step: commit + merge
 
 ## Workflow
 
