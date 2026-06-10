@@ -1842,6 +1842,25 @@ fn is_html_element_named(doc: &Document, id: NodeId, want: &str) -> bool {
 
 /// Является ли DOM-узел inline-контентом (non-whitespace текст или inline-элемент).
 ///
+/// True for Unicode control characters (Cc: C0, DEL, C1) that browsers render as
+/// invisible zero-advance — EXCEPT tab/LF/CR, which carry white-space semantics
+/// (CSS Text L3 §4.1). Such characters are stripped at the inline-item level so a
+/// stray control byte never produces a visible line box (BUG-120: Edge renders
+/// U+0001 invisible, Lumen drew a 19.2px text line shifting content below).
+fn is_invisible_control(c: char) -> bool {
+    c.is_control() && c != '\t' && c != '\n' && c != '\r'
+}
+
+/// Removes invisible control characters (see [`is_invisible_control`]) from `s`.
+/// Borrows the input unchanged when no such characters are present (common case).
+fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains(is_invisible_control) {
+        std::borrow::Cow::Owned(s.chars().filter(|&c| !is_invisible_control(c)).collect())
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// `<img>` в Phase 0 — block-level replaced element, не inline-контент:
 /// он порождает собственный `BoxKind::Image`, а не вливается в `InlineRun`.
 /// Inline-replaced (картинка внутри строки текста) — отдельная задача;
@@ -1855,7 +1874,9 @@ fn is_inline_content(
     dark_mode: bool,
 ) -> bool {
     match &doc.get(id).data {
-        NodeData::Text(s) => !s.chars().all(char::is_whitespace),
+        // Control-only text (after BUG-120 stripping) is no more inline content
+        // than whitespace-only text: it must not open an inline run / line box.
+        NodeData::Text(s) => !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)),
         NodeData::Element { .. } => {
             if is_image_element(doc, id) || is_form_control_element(doc, id) {
                 return false;
@@ -2041,9 +2062,12 @@ fn collect_inline_segments(
                     });
                     byte_offset += 1; // the \n character
                 }
-                if !line.is_empty() {
+                // BUG-120: drop invisible controls (Cc except tab) — they must
+                // not occupy advance width even in white-space: pre.
+                let text = strip_invisible_controls(line);
+                if !text.is_empty() {
                     out.push(InlineSegment {
-                        text: line.to_string(),
+                        text: text.into_owned(),
                         style: style.clone(),
                         pre_space: 0.0,
                         post_space: 0.0,
@@ -2059,10 +2083,13 @@ fn collect_inline_segments(
                 byte_offset += line.len() as u32;
             }
         }
-        NodeData::Text(s) if !s.chars().all(char::is_whitespace) => {
+        NodeData::Text(s) if !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) => {
+            // BUG-120: strip invisible controls before transform/measure — Edge
+            // renders them zero-advance, they must not contribute glyphs.
+            let s = strip_invisible_controls(s);
             // text-transform применяется здесь, до wrapping и paint —
             // measurer считает ширину уже после преобразования.
-            let text = inherited.text_transform.apply(s);
+            let text = inherited.text_transform.apply(&s);
             // CSS Pseudo-elements L4 §5.1: the first text segment in this inline run
             // is the candidate for ::first-letter. Mark it so P4 can look up the
             // ::first-letter rule and extract the first grapheme at render time.
@@ -2783,8 +2810,13 @@ fn build_box(
                     }
                     let cid = dom_children[i];
                     match &doc.get(cid).data {
-                        NodeData::Text(s) if s.chars().all(char::is_whitespace) => {
-                            had_ws = true;
+                        // BUG-120: control-only text is skipped like whitespace-only,
+                        // but contributes an inter-segment space only if it actually
+                        // contains whitespace (a bare U+0001 is zero-advance in Edge).
+                        NodeData::Text(s)
+                            if s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) =>
+                        {
+                            had_ws |= s.chars().any(char::is_whitespace);
                             i += 1;
                             continue;
                         }
@@ -3931,13 +3963,24 @@ fn lay_out(
                         match position {
                             ListStylePosition::Outside => {
                                 // Out of flow: does not advance child_y.
-                                child.rect = Rect::new(content_x - marker_w, child_y, marker_w, line_h);
+                                // Snap to integer CSS pixels — em*1.5 is often fractional (BUG-083).
+                                child.rect = Rect::new(
+                                    (content_x - marker_w).round(),
+                                    child_y.round(),
+                                    marker_w.round(),
+                                    line_h.round(),
+                                );
                             }
                             ListStylePosition::Inside => {
                                 // CSS Lists L3 §2.4: inside marker shares the first line with
                                 // content. Place at content_x; record indent for the next child.
-                                child.rect = Rect::new(content_x, child_y, marker_w, line_h);
-                                inside_marker_w = marker_w;
+                                child.rect = Rect::new(
+                                    content_x.round(),
+                                    child_y.round(),
+                                    marker_w.round(),
+                                    line_h.round(),
+                                );
+                                inside_marker_w = marker_w.round();
                                 // Do NOT advance child_y — marker is inline with content.
                             }
                         }
@@ -4268,7 +4311,10 @@ fn lay_out(
                 }
             }
             for (idx, dy) in adjustments {
-                shift_y_box(&mut b.children[idx], dy);
+                // Round dy to integer CSS pixels so vertical-aligned children land on
+                // whole-pixel boundaries, matching the .round() applied to IFC row y-positions
+                // above (line ~4219). Fractional dy causes 0.99% deviation vs Edge (BUG-081).
+                shift_y_box(&mut b.children[idx], dy.round());
             }
         }
         BoxKind::TableRow => {
@@ -9650,6 +9696,82 @@ mod tests {
             "single-line flex height must equal the tallest item (120), not 120+gap; got {}",
             flex.rect.height
         );
+    }
+
+    /// Returns the first `InlineRun` box in `b`'s subtree (depth-first).
+    fn find_inline_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if matches!(b.kind, super::BoxKind::InlineRun { .. }) {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_inline_run)
+    }
+
+    #[test]
+    fn control_only_text_node_creates_no_line_box() {
+        // BUG-120: a text node consisting only of a C0 control char must not
+        // open an inline run — Edge renders U+0001 invisible with no line box.
+        let html = "<div id=\"wrap\">\u{0001}</div>";
+        let css = "body{margin:0} #wrap{width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let wrap = find_by_id_all(&root, &doc, "wrap").expect("wrap");
+        assert_eq!(
+            wrap.rect.height, 0.0,
+            "control-only text must not produce a line box, got height {}",
+            wrap.rect.height
+        );
+    }
+
+    #[test]
+    fn control_char_text_does_not_shift_following_block() {
+        // BUG-120 / BUG-119 scenario: a stray U+0001 in body text shifted all
+        // following content down by one line height (~19.2px) in Lumen,
+        // while Edge keeps it at y=0.
+        let html = "\u{0001}<div id=\"x\"></div>";
+        let css = "body{margin:0} #x{width:100px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let x = find_by_id_all(&root, &doc, "x").expect("x");
+        assert_eq!(
+            x.rect.y, 0.0,
+            "block after control-only text must stay at y=0, got {}",
+            x.rect.y
+        );
+    }
+
+    #[test]
+    fn control_chars_stripped_from_inline_text() {
+        // BUG-120: embedded C0 controls are zero-advance in Edge — strip them
+        // from inline segments so they contribute no glyphs or width.
+        let html = "<div id=\"t\">a\u{0001}b\u{0002}c</div>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("t");
+        let run = find_inline_run(t).expect("inline run");
+        let super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            unreachable!()
+        };
+        assert_eq!(segments[0].text, "abc", "controls must be stripped, got {:?}", segments[0].text);
+    }
+
+    #[test]
+    fn control_chars_stripped_in_preserved_whitespace() {
+        // BUG-120: white-space:pre keeps tab/LF (CSS Text L3 §4.1) but other
+        // Cc controls are still invisible and must be stripped.
+        let html = "<div id=\"p\">a\u{0001}b\tc</div>";
+        let css = "#p{white-space:pre}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let p = find_by_id_all(&root, &doc, "p").expect("p");
+        let run = find_inline_run(p).expect("inline run");
+        let super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            unreachable!()
+        };
+        assert_eq!(segments[0].text, "ab\tc", "tab preserved, U+0001 stripped; got {:?}", segments[0].text);
     }
 
     #[test]
