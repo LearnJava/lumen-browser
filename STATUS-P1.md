@@ -6,8 +6,7 @@
 
 ## In progress
 
-W-1: Shared Storage API Phase 0  branch: p1-w1-shared-storage
-Next step: создать crates/js/src/shared_storage.rs, добавить mod в lib.rs
+_(нет)_
 
 ---
 
@@ -160,6 +159,7 @@ Next step: создать crates/js/src/shared_storage.rs, добавить mod 
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | W-1: Shared Storage API Phase 0 | lumen-js shared_storage.rs: WICG Privacy Sandbox `window.sharedStorage`. In-memory key-value store (Phase 0). set/get/append/delete/clear/keys/values/entries/length/remainingBudget/run/selectURL. SharedStorageWorklet stub (addModule→resolved). ignoreIfPresent option. Async iterators через asyncIter() helper. Phase 1: _lumen_shared_storage_* нативные биндинги для SQLite per-origin. 13 unit-тестов (включая microtask drain через ctx.execute_pending_job()). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | V-4: CSS image-set() selection algorithm stub | lumen-layout image_set.rs: типизированный CSS Images L4 §5 API. `ImageSetOption {url, resolution_dppx, mime_type}`. `SupportedTypes` (Phase 0: all()). `parse_image_set(value) -> Vec<ImageSetOption>` — парсит image-set()/-webkit-image-set() или plain URL (→ 1× без типа); поддерживает resolution-единицы x/dppx/dpi/dpcm и `type(...)` дескриптор в любом порядке. `select_image_set_candidate(candidates, dpr, supported)` — CSS L4 §5 алгоритм (type-фильтр → ближайший dpr, тай → выше). `select_image_set_url(value, dpr) -> String` — convenience. P4-handoff обновлён в STATUS-P4.md. 17 unit-тестов. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | V-3: inert attribute layout algorithm stub | lumen-layout inert.rs: is_inert(doc, node) — обходит цепочку родителей (HTML LS §6.7); InertRegion { node_id, rect }; collect_inert_regions(root, doc) — возвращает только корни inert-поддеревьев (вложенные не дублируются); collect_clickable_rec: проверка is_inert исключает inert-элементы из hit-test. Точки для P4: `// CSS: inert` (UA-правило `[inert] { pointer-events: none; }`), для P3 (shell): collect_inert_regions для фильтрации событий. 10 unit-тестов. lumen-js inert.rs: HTMLElement.prototype.inert getter/setter + _lumen_set_inert Phase-0-stub. 8 unit-тестов. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | V-2: @starting-style algorithm stub | lumen-layout starting_style.rs: StartingStyleTracker (mark_entered/is_entered/consume/remove) — HashSet<NodeId> для узлов, только что вошедших в DOM. resolve_starting_style(node, doc, sheet) — сопоставляет @starting-style блоки с узлом через matches_complex (тот же путь, что каскад), возвращает объединённые декларации. Точка интеграции для P4 — TransitionScheduler::sync (// CSS: @starting-style). Экспортировано из lib.rs. 11 unit-тестов. Clippy чист. Без новых зависимостей. |
