@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Y-3 — CSS `scrollbar-width`/`scrollbar-color` algorithm stub  branch: p1-y3-scrollbar
+Next step: implement `scrollbar_gutter_inline()` in box_tree.rs  crates/engine/layout/src/box_tree.rs:3548
 
 ---
 
