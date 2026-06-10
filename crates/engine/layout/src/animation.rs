@@ -1103,6 +1103,13 @@ impl TransitionScheduler {
 
     /// Detect value changes between `old` and `new` style for properties listed
     /// in `new.transition_properties` and start (or update) transitions.
+    ///
+    /// # CSS: @starting-style
+    /// When `node` has just entered the document (check `StartingStyleTracker::is_entered`),
+    /// substitute `old` with a style built from `resolve_starting_style(node, doc, sheet)`
+    /// instead of the node's prior computed style. After substitution call
+    /// `tracker.consume(node)`. This enables enter-animations per CSS Transitions L2 §3.4.
+    /// See `crate::starting_style::{StartingStyleTracker, resolve_starting_style}`.
     pub fn sync(&mut self, node: NodeId, old: &ComputedStyle, new: &ComputedStyle, now: f32) {
         if new.transition_properties.is_empty() {
             return;
