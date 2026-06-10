@@ -6,8 +6,7 @@
 
 ## In progress
 
-Z-1: CSS Shapes L1 `shape-outside: inset()`  branch: p1-shape-inset
-Next step: реализовать parse_shape_inset_px + ShapeInset + wiring  box_tree.rs
+_(нет)_
 
 ---
 
@@ -183,6 +182,7 @@ Next step: реализовать parse_shape_inset_px + ShapeInset + wiring  bo
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | Z-1: CSS Shapes L1 shape-outside: inset() | lumen-layout box_tree.rs: `parse_shape_inset_px` — разбор `inset(<top> <right> <bottom> <left> [round <r>])` с margin-shorthand развёрткой 1–4 значений + одиночный радиус скругления. `ShapeInset { top_y, bottom_y, is_left, left_x, right_x, radius }` + `inset_corner_inward` (четверть-окружность в полосах скруглённых углов). `FloatContext.shape_insets` + wiring в обе ветки float (left/right), margin-box как reference box. `left_edge_at`/`right_edge_at` учитывают inset-границу. 6 новых layout-тестов (2653 всего). CSS-SPECS.md #43: исправлен устаревший polygon/ellipse ⬜→✅, inset() ✅; path() остаётся ⬜. Clippy чист, без новых зависимостей. |
 | 2026-06-10 | Y-5: Scroll Snap L2 snapchanging/snapchanged | lumen-layout lib.rs: `SnapTargets { block, inline }` (NodeId per axis) + `find_snapped_nodes(container, scroll)` — для каждой оси, на которую снапит контейнер, выбирает snap-area с ближайшим offset к текущей позиции скролла. block↔y, inline↔x (horizontal-tb). 5 layout-тестов. lumen-js lib.rs: `QuickJsRuntime::fire_snap_changing(nid, block, inline)` / `fire_snap_changed(...)` — резолвят block/inline nid в элементы через `_lumen_make_element` и диспатчат `SnapChangeEvent` (snapTargetBlock/Inline). JS-класс `SnapChangeEvent` + биндинги `_lumen_fire_snap_changing/changed` уже были (A-19 P2). 2 новых dom-теста. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | Y-3: scrollbar-gutter layout algorithm | lumen-layout box_tree.rs: scrollbar_gutter_inline()/scrollbar_gutter_block() — вычитают ширину gutter из content_width при scrollbar-gutter:stable. Константы SCROLLBAR_GUTTER_AUTO=12, SCROLLBAR_GUTTER_THIN=6 синхронизированы с display_list.rs. stable→1×gutter, stable both-edges→2×gutter, none→0, auto→0. // CSS: scrollbar-width handoff для P4. 6 новых layout-тестов. Clippy чист. |
 | 2026-06-10 | Y-2: @font-face unicode-range descriptor | lumen-font: новый модуль unicode_range — `UnicodeRange { start, end: u32 }`, `parse_unicode_ranges(s)` (кодепоинт/диапазон/wildcard U+??), `codepoint_in_ranges(cp, &[])`. 13 unit-тестов. lumen-paint: `MultiFontMeasurer` переведён с `HashMap<String, OwnedFontMetrics>` на `HashMap<String, Vec<FontFaceSlot>>`. Добавлен `FontFaceSlot { metrics, unicode_ranges }`. `register_family_with_ranges()` добавляет слот без замены предыдущих — поддержка нескольких @font-face с разными unicode-range на одну семью. `char_width_with_families`/`char_width_varied` пропускают слот если cp вне диапазона (CSS Fonts L4 §5.1). 4 новых unit-теста. lumen-shell: `measurer.register_family_with_ranges()` с `parse_unicode_ranges(rule.unicode_range)`. Clippy чист. |
