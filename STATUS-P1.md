@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+PS-1: единая политика pixel snapping  branch: p1-ps1-pixel-snap
+Next step: snap dy в vertical-align (box_tree.rs:4270), маркеры (box_tree.rs:3934/3939), shadow/border (display_list.rs:2319/3026)
 
 ---
 
