@@ -6,8 +6,7 @@
 
 ## In progress
 
-W-7: `pointer-events: none` hit-test filtering algorithm  branch: p1-w7-pointer-events
-Next step: добавить проверку pointer_events == None в collect_clickable_rec  crates/engine/layout/src/lib.rs:265
+_(нет)_
 
 ---
 
@@ -23,7 +22,7 @@ Next step: добавить проверку pointer_events == None в collect_c
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| **W-7** | **`pointer-events: none` hit-test filtering** — `collect_clickable_rec` не проверяет `pointer_events`; элементы с `pointer-events: none` должны быть исключены из hit-test, но дочерние элементы продолжают участвовать. CSS-поле уже в ComputedStyle (P4). | XS | `lumen-layout` |
+| ~~W-7~~ | ~~**`pointer-events: none` hit-test filtering**~~ — **выполнено** | XS | `lumen-layout` |
 
 ### V — Web Platform Phase 2 (новые)
 
@@ -172,6 +171,7 @@ Next step: добавить проверку pointer_events == None в collect_c
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | W-7: pointer-events:none hit-test filtering | lumen-layout collect_clickable_rec: Block/FormControl boxes пропускаются при pointer_events=None (дети обходятся). InlineRun: frag.style.pointer_events=None → link=None (frag.style содержит ComputedStyle <a>-элемента, не контейнера). 4 новых unit-теста (+4 vs 2545). Clippy чист. W-6 отмечена выполненной (реализована в R-1). |
 | 2026-06-10 | W-5: CSS hyphens: auto алгоритм-стаб | lumen-layout hyphenation.rs: SoftHyphenPoint { byte_offset } — позиция в display-строке (U+00AD stripped). collect_hyphen_points(word, locale, hyphens, provider): None→пусто, Manual→U+00AD scan, Auto→Manual+provider.hyphenate(). Сортировка+dedup. Публичный API поверх внутренней логики box_tree.rs. P4 wiring point для wrap_inline_run. 14 unit-тестов + 1 doctest. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-4: Attribution Reporting API stub | lumen-js attribution_reporting.rs: Privacy Sandbox Attribution Reporting API Phase 0. window.attributionReporting: registerSource({}) → Promise<undefined>; registerTrigger({}) → Promise<undefined>; оба — no-op. AttributionReportingEligibility константы (EMPTY/EVENT_SOURCE/NAVIGATION_SOURCE/TRIGGER). attributionSrc IDL-атрибут на HTMLAnchorElement, HTMLImageElement, HTMLScriptElement (mirrors attributionsrc content attribute). Phase 1: _lumen_attribution_register_source/_lumen_attribution_register_trigger нативные хуки. 8 unit-тестов. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-3: Topics API stub | lumen-js topics_api.rs: Privacy Sandbox Topics API Phase 0. document.browsingTopics([options]) → Promise<[]>; DeprecatedTopicsButton с статическим browsingTopics() → Promise<[]>; конструктор бросает TypeError. Phase 1: _lumen_topics_get_topics нативный хук для per-origin хранилища. 6 unit-тестов (с execute_pending_job() drain). Clippy чист. Без новых зависимостей. |
