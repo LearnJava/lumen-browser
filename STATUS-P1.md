@@ -6,8 +6,7 @@
 
 ## In progress
 
-Y-3 — CSS `scrollbar-width`/`scrollbar-color` algorithm stub  branch: p1-y3-scrollbar
-Next step: implement `scrollbar_gutter_inline()` in box_tree.rs  crates/engine/layout/src/box_tree.rs:3548
+_(нет)_
 
 ---
 
@@ -26,7 +25,7 @@ Next step: implement `scrollbar_gutter_inline()` in box_tree.rs  crates/engine/l
 |---|--------|--------|--------|
 | ~~Y-1~~ | ~~**CSS Masonry layout stub** (CSS Grid L2/L3 §14) — `masonry` keyword в `grid-template-columns/rows`; greedy placement algorithm; `// CSS: masonry-auto-flow` handoff для P4~~ — **выполнено** | M | `lumen-layout` |
 | ~~Y-2~~ | ~~**`@font-face` unicode-range descriptor** — layout stub: `unicode-range` дескриптор в `FontFaceRule`, фильтрация при выборе face для символа~~ — **выполнено** (p1-font-unicode-range, 2026-06-10) | S | `lumen-font`, `lumen-paint` |
-| Y-3 | **CSS `scrollbar-width`/`scrollbar-color` algorithm stub** — CSS Scrollbars Styling L1; `// CSS: scrollbar-width` handoff для P4 | XS | `lumen-layout` |
+| ~~Y-3~~ | ~~**CSS `scrollbar-width`/`scrollbar-color` algorithm stub** — CSS Scrollbars Styling L1; `// CSS: scrollbar-width` handoff для P4~~ — **выполнено** (p1-y3-scrollbar, 2026-06-10) | XS | `lumen-layout` |
 | Y-4 | **CSS `color-scheme: dark light` UA switching algorithm** — полный switch: `prefers-color-scheme` влияет на `color-scheme` у root, system-color резолв | S | `lumen-layout` |
 | Y-5 | **CSS Scroll Snap L2 `snapChanging`/`snapChanged` event JS stubs** — `Element.addEventListener('snapchanging'/'snapchanged')` + dispatch при scroll-snap завершении | XS | `lumen-js`, `lumen-layout` |
 
@@ -183,6 +182,7 @@ Next step: implement `scrollbar_gutter_inline()` in box_tree.rs  crates/engine/l
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | Y-3: scrollbar-gutter layout algorithm | lumen-layout box_tree.rs: scrollbar_gutter_inline()/scrollbar_gutter_block() — вычитают ширину gutter из content_width при scrollbar-gutter:stable. Константы SCROLLBAR_GUTTER_AUTO=12, SCROLLBAR_GUTTER_THIN=6 синхронизированы с display_list.rs. stable→1×gutter, stable both-edges→2×gutter, none→0, auto→0. // CSS: scrollbar-width handoff для P4. 6 новых layout-тестов. Clippy чист. |
 | 2026-06-10 | Y-2: @font-face unicode-range descriptor | lumen-font: новый модуль unicode_range — `UnicodeRange { start, end: u32 }`, `parse_unicode_ranges(s)` (кодепоинт/диапазон/wildcard U+??), `codepoint_in_ranges(cp, &[])`. 13 unit-тестов. lumen-paint: `MultiFontMeasurer` переведён с `HashMap<String, OwnedFontMetrics>` на `HashMap<String, Vec<FontFaceSlot>>`. Добавлен `FontFaceSlot { metrics, unicode_ranges }`. `register_family_with_ranges()` добавляет слот без замены предыдущих — поддержка нескольких @font-face с разными unicode-range на одну семью. `char_width_with_families`/`char_width_varied` пропускают слот если cp вне диапазона (CSS Fonts L4 §5.1). 4 новых unit-теста. lumen-shell: `measurer.register_family_with_ranges()` с `parse_unicode_ranges(rule.unicode_range)`. Clippy чист. |
 | 2026-06-10 | O-13: DevTools Computed Styles panel | lumen-shell inspector.rs: InspectorTab enum (Elements/Computed). SelectedNode + computed_props. click_tab_at() — таб-переключатель (panel UI intercept). scroll_up/scroll_down скроллят активную вкладку. build_inspector_panel рисует tab row: синяя линия подчёркивает активный таб. main.rs: computed_style_to_map (~55 свойств, алфавитно) передаётся при клике на node. MouseWheel перехватывается инспектором. 13 новых unit-тестов. 62 теста итого, clippy чист. |
 | 2026-06-10 | Y-1: CSS Masonry layout stub | lumen-layout masonry.rs: GridTrackSize::Masonry + parse_track_list("masonry") → sentinel. lay_out_grid ранний dispatch: row-masonry (grid-template-rows: masonry) + col-masonry. Greedy waterfall: каждый item → трек с минимальной высотой. lay_out_masonry() + min_track_idx() публичные для unit-тестирования. // CSS: masonry-auto-flow handoff для P4. 7 unit-тестов (+7 vs 2559). CSS-SPECS.md masonry ⬜→🟡. STATUS-P4.md: добавлен handoff masonry-auto-flow/align-tracks/justify-tracks. Clippy чист. Без новых зависимостей. |
