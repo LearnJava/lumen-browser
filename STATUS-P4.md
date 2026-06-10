@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-text-underline влит 2026-06-10
+`border-collapse` (CSS Tables L2 §17.6) — branch: p4-border-collapse
+Next step: add `border_collapse: BorderCollapse` to ComputedStyle in style.rs, parse, wire to lay_out_table + display_list
 
 ## Workflow
 
@@ -31,6 +32,8 @@ _(none)_ — p4-text-underline влит 2026-06-10
 Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подробный пошаговый файл для Haiku.
 
 ### Phase 2 — делать первыми (блокируют закрытие фазы)
+
+> **⚠️ ОБЯЗАТЕЛЬНО:** Пока в этой секции есть незачёркнутые задачи — брать только их. Не CSS-SPECS.md, не "Needs wiring".
 
 | # | Property / Feature | Effort | Blocker | Task file |
 |---|-------------------|--------|---------|-----------|
