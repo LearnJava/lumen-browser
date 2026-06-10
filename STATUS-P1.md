@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+W-5: CSS `hyphens: auto` algorithm stub  branch: p1-w5-hyphens
+Next step: create `crates/engine/layout/src/hyphenation.rs` with `SoftHyphenPoint` + `collect_hyphen_points`
 
 ---
 
@@ -26,7 +27,7 @@ _(нет)_
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| W-1 | **Shared Storage API Phase 0** — Privacy Sandbox `window.sharedStorage` (set/get/append/delete/clear/keys/values/entries/length/remainingBudget/selectURL/run/worklet stub) | S | `lumen-js` |
+| ~~W-1~~ | ~~**Shared Storage API Phase 0** — Privacy Sandbox `window.sharedStorage` (set/get/append/delete/clear/keys/values/entries/length/remainingBudget/selectURL/run/worklet stub)~~ — **выполнено** | S | `lumen-js` |
 | ~~W-2~~ | ~~**Idle Detection API stub** — WICG `IdleDetector.requestPermission()`, `start({threshold})`, `userState`/`screenState`, `'change'` event~~ — **выполнено** | XS | `lumen-js` |
 | ~~W-3~~ | ~~**Topics API stub** — Privacy Sandbox `document.browsingTopics()` → Promise<[]>, `DeprecatedTopicsButton` Phase 0~~ — **выполнено** | XS | `lumen-js` |
 | ~~W-4~~ | ~~**Attribution Reporting API stub** — `attributionsrc` attribute parsing, `window.attributionReporting` Phase 0~~ — **выполнено** | XS | `lumen-js` |
