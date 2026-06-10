@@ -55,6 +55,16 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
+### `@starting-style` entry transitions (P1 V-2, 2026-06-10)
+- **Status:** Algorithm ready. `StartingStyleTracker` and `resolve_starting_style()` in `lumen-layout/src/starting_style.rs`. `TransitionScheduler::sync` has `// CSS: @starting-style` doc comment at `animation.rs:1104`.
+- **P4 task:**
+  1. In `TransitionScheduler::sync`, check `tracker.is_entered(node)`. If true, call `resolve_starting_style(node, doc, sheet)` to get entry declarations.
+  2. Build a `ComputedStyle` from those declarations (via `apply_declaration` on a fresh `ComputedStyle::default()`).
+  3. Pass that style as the `old` argument to `sync` (before-change style) — the transition starts from the `@starting-style` state.
+  4. Call `tracker.consume(node)` after transitions are registered.
+  5. Call `tracker.mark_entered(node)` from the shell / JS runtime whenever a node is inserted into the DOM or `display` changes from `none` → non-`none`.
+- **Entry points:** `crates/engine/layout/src/animation.rs:1104` — `// CSS: @starting-style`; `crates/engine/layout/src/starting_style.rs`.
+
 ### ✅ `object-fit` / `object-position` — **ВЫПОЛНЕНО** (p4-object-fit, 2026-06-08)
 `compute_object_fit_transform()` добавлена в `box_tree.rs`; при Fill (CSS default) сохраняется поведение SVG `preserveAspectRatio`; для Contain/Cover/None/ScaleDown применяется CSS Images L3 §5.5 семантика. `object-position` управляет выравниванием через free-space фракции. 6 unit-тестов + graphic test 70.
 
