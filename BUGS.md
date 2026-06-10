@@ -93,9 +93,9 @@ BUG-077 | FIXED 2026-06-09 | image/paint | femtovg-бэкенд (default) сэм
 BUG-078 | OPEN   | layout/paint   | object-fit contain/cover image quality ~13% deviation — same scaling issue as BUG-077; TEST-19: 12.68%
 BUG-079 | OPEN   | html-parser    | quirks-bgcolor: TEST-20 still 8.79% after BUG-021+022 fix — bgcolor on table cells with named/legacy colors not applied; garbage-color legacy parsing missing
 BUG-080 | OPEN   | paint          | border-style: residual dotted/dashed 3% deviation vs Edge — TEST-21: 3.02% | crates/engine/paint/src/display_list.rs
-BUG-081 | OPEN   | layout         | vertical-align: sub-pixel 0.99% deviation exceeds 0.5% threshold — TEST-24: 0.99% | crates/engine/layout/src/box_tree.rs
+BUG-081 | FIXED 2026-06-11 | layout | vertical-align: sub-pixel 0.99% deviation — snap dy.round() перед shift_y_box (P1 PS-1) | crates/engine/layout/src/box_tree.rs
 BUG-082 | OPEN   | paint          | css-filter 33% deviation — TEST-30: 33.07%; backdrop + filter rendering incorrect after BUG-037 fix; linear-gradient inside filter layers | crates/engine/paint/src/renderer.rs
-BUG-083 | OPEN   | layout/paint   | list-markers residual 3.4% deviation — TEST-32: 3.40%; marker sub-pixel positioning or size mismatch | crates/engine/layout/src/box_tree.rs
+BUG-083 | FIXED 2026-06-11 | layout/paint | list-markers residual 3.4% deviation — snap marker rect .round() (P1 PS-1) | crates/engine/layout/src/box_tree.rs
 BUG-084 | OPEN   | paint          | border-radius residual 1.5% deviation after BUG-036 fix — TEST-36: 1.50%; AA on %-based corners | crates/engine/paint/src/cpu_raster.rs
 BUG-085 | OPEN   | paint          | linear/radial gradient 12% deviation — TEST-39: 12.05%; stop interpolation or AA mismatch with Edge | crates/engine/paint/src/display_list.rs
 BUG-086 | FIXED 2026-06-09 | paint | conic-gradient: femtovg triangle-fan не обрезался по box (гигантские круги) + игнорировал repeating; TEST-40 56.53%→15.92% (остаток — AA/тесселяция, класс BUG-085) | crates/engine/paint/src/backends/femtovg_backend.rs
