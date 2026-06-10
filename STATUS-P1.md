@@ -18,7 +18,7 @@ _(нет)_
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PS-1 | **Единая политика pixel snapping при эмиссии**: снапить rect.y после vertical-align dy (`box_tree.rs:4270`), позиции list-маркеров, прямоугольники shadow/border в display_list emission (`display_list.rs:3040, 2348`). Сейчас каждый примитив округляет по-своему (IFC-строки round, inline-run X нет, conic floor) → кластер 1-3% отклонений. Закрывает BUG-081, BUG-083, частично BUG-084. ~30 строк | S | `lumen-layout`, `lumen-paint` |
+| ~~PS-1~~ | ~~**Единая политика pixel snapping при эмиссии**~~ — **выполнено** (p1-ps1-pixel-snap, 2026-06-11): dy.round() вертикальный align, snap маркеров, snap shadow/border rect. BUG-081 ✅, BUG-083 ✅, BUG-084 частично | S | `lumen-layout`, `lumen-paint` |
 
 ### Phase 2 — делать первыми (блокируют закрытие фазы)
 
