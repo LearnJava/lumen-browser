@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Y-4: CSS `color-scheme` UA switching algorithm  branch: p1-y4-color-scheme
+Next step: `ColorScheme::used_dark` + `system_color()` + form-control wiring  crates/engine/layout/src/style.rs:655
 
 ---
 

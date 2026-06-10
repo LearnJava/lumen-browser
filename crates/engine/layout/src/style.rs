@@ -631,8 +631,9 @@ pub enum ForcedColorAdjust {
 
 /// CSS Color Adjustment L1 §3 — `color-scheme`. Inherited. Initial: `Normal`.
 /// Подсказывает UA, какую цветовую тему поддерживает элемент.
-/// Phase 0: parse + store; реальное переключение системных цветов / UA-тем
-/// (`Canvas`, `ButtonFace` и т.д.) — отдельная задача с согласованием P2.
+/// Используется через [`ColorScheme::used_dark`] для определения «used
+/// color scheme» (§2.3) и через [`system_color`] для резолва системных
+/// цветовых ключевых слов (`Canvas`, `ButtonFace` и т.д.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorScheme {
     /// `normal` — элемент не заявляет предпочтений; UA выбирает самостоятельно.
@@ -650,6 +651,31 @@ pub enum ColorScheme {
     OnlyLight,
     /// `only dark` — только тёмная тема.
     OnlyDark,
+}
+
+impl ColorScheme {
+    /// CSS Color Adjustment L1 §2.3 — резолвит «used color scheme» элемента
+    /// в булев флаг «тёмная тема».
+    ///
+    /// `prefer_dark` — предпочтение пользователя / ОС (`@media
+    /// (prefers-color-scheme: dark)`, в shell — `Lumen.dark_mode`).
+    ///
+    /// Алгоритм:
+    /// - `light` / `only light` → всегда светлая (форсирует тему, игнорируя ОС);
+    /// - `dark` / `only dark` → всегда тёмная;
+    /// - `normal` / `light dark` / `dark light` → следуют предпочтению ОС.
+    ///   `normal` рендерится в дефолтной теме UA, которая у Lumen совпадает
+    ///   с предпочтением ОС (страница без `color-scheme` темнеет в dark-mode).
+    ///
+    /// Возвращает `true`, если элемент должен рендериться в тёмной теме.
+    #[must_use]
+    pub fn used_dark(self, prefer_dark: bool) -> bool {
+        match self {
+            ColorScheme::Light | ColorScheme::OnlyLight => false,
+            ColorScheme::Dark | ColorScheme::OnlyDark => true,
+            ColorScheme::Normal | ColorScheme::LightDark | ColorScheme::DarkLight => prefer_dark,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5039,9 +5065,20 @@ pub fn compute_style(
     apply_ua_hr_style(doc, node, &mut style);
     // UA stylesheet: form controls — display, intrinsic dimensions, border,
     // background, and foreground color. HTML5 §15.5. Author CSS поверх перекроет.
-    // CSS: color-scheme — P4 wires ComputedStyle.color_scheme here for full
-    // system-color keyword support; for now dark_mode drives UA theming directly.
-    apply_ua_form_controls(doc, node, &mut style, dark_mode);
+    //
+    // CSS Color Adjustment L1 §2.3: тема UA-виджета определяется «used color
+    // scheme» элемента, а не сырым предпочтением ОС. `color-scheme` наследуется,
+    // поэтому на этапе UA-фазы (до author-каскада) берём inherited-значение —
+    // оно покрывает типовой паттерн `:root { color-scheme: dark }`, спускающийся
+    // к контролам. Так `color-scheme: light` форсирует светлый виджет даже в
+    // OS-dark, а `dark` — тёмный в OS-light.
+    //
+    // CSS: system-color — P4 wires `system_color()` into the color cascade
+    // (a `CssColor::System(name)` variant resolved at used-value time against
+    // the element's used color scheme) for `Canvas`/`CanvasText`/`ButtonFace`/…
+    // keyword support. The resolution table already lives in `system_color()`.
+    let widget_dark = inherited.color_scheme.used_dark(dark_mode);
+    apply_ua_form_controls(doc, node, &mut style, widget_dark);
     // UA stylesheet: <dialog> without `open` → display:none. HTML5 §15.3.9.
     apply_ua_dialog_display(doc, node, &mut style);
 
@@ -16493,6 +16530,71 @@ fn named_color(name_lc: &str) -> Option<Color> {
         })
 }
 
+/// CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+/// (`Canvas`, `CanvasText`, `ButtonFace` и т.д.) в конкретный RGB.
+///
+/// `name_lc` — имя ключевого слова уже в нижнем регистре. `dark` — «used
+/// color scheme» элемента (см. [`ColorScheme::used_dark`]): системные цвета
+/// контекстно-зависимы и резолвятся против темы элемента, а не глобально.
+///
+/// Значения подобраны под штатные light/dark палитры современных UA
+/// (близко к Chrome/Edge). Возвращает `None` для не-системного имени —
+/// caller трактует это как «не системный цвет» и идёт по обычному пути
+/// `named_color` / hex / функция.
+///
+/// Этот резолвер — алгоритмическая часть; подключение к каскаду (вариант
+/// `CssColor::System`, резолв на used-value time) — за P4 (`// CSS:
+/// system-color` в `compute_style`).
+#[must_use]
+pub fn system_color(name_lc: &str, dark: bool) -> Option<Color> {
+    let rgb = |r: u8, g: u8, b: u8| Color { r, g, b, a: 255 };
+    Some(match (name_lc, dark) {
+        // App content background / text.
+        ("canvas", false) | ("window", false) => rgb(255, 255, 255),
+        ("canvas", true) | ("window", true) => rgb(30, 30, 30),
+        ("canvastext", false) | ("windowtext", false) | ("fieldtext", false) => rgb(0, 0, 0),
+        ("canvastext", true) | ("windowtext", true) | ("fieldtext", true) => rgb(255, 255, 255),
+        // Input/textarea/select backgrounds.
+        ("field", false) => rgb(255, 255, 255),
+        ("field", true) => rgb(30, 30, 30),
+        // Push-button surfaces.
+        ("buttonface", false) => rgb(239, 239, 239),
+        ("buttonface", true) => rgb(58, 58, 60),
+        ("buttontext", false) => rgb(0, 0, 0),
+        ("buttontext", true) => rgb(255, 255, 255),
+        ("buttonborder", false) | ("threedface", false) => rgb(118, 118, 118),
+        ("buttonborder", true) | ("threedface", true) => rgb(97, 97, 97),
+        // Hyperlinks.
+        ("linktext", false) => rgb(0, 0, 238),
+        ("linktext", true) => rgb(158, 158, 255),
+        ("visitedtext", false) => rgb(85, 26, 139),
+        ("visitedtext", true) => rgb(209, 134, 255),
+        ("activetext", false) => rgb(255, 0, 0),
+        ("activetext", true) => rgb(255, 158, 158),
+        // Selection highlight.
+        ("highlight", false) => rgb(181, 215, 255),
+        ("highlight", true) => rgb(38, 79, 120),
+        ("highlighttext", false) => rgb(0, 0, 0),
+        ("highlighttext", true) => rgb(255, 255, 255),
+        ("selecteditem", false) => rgb(181, 215, 255),
+        ("selecteditem", true) => rgb(38, 79, 120),
+        ("selecteditemtext", false) => rgb(0, 0, 0),
+        ("selecteditemtext", true) => rgb(255, 255, 255),
+        // Disabled / placeholder text.
+        ("graytext", false) | ("greytext", false) => rgb(128, 128, 128),
+        ("graytext", true) | ("greytext", true) => rgb(124, 124, 124),
+        // <mark> highlight (CSS Color 4 §6.2 `Mark`/`MarkText`).
+        ("mark", false) => rgb(255, 255, 0),
+        ("mark", true) => rgb(255, 255, 0),
+        ("marktext", false) | ("marktext", true) => rgb(0, 0, 0),
+        // Accent colour for form controls (CSS Color 4 — `AccentColor`).
+        ("accentcolor", false) => rgb(0, 95, 204),
+        ("accentcolor", true) => rgb(76, 156, 255),
+        ("accentcolortext", false) | ("accentcolortext", true) => rgb(255, 255, 255),
+        _ => return None,
+    })
+}
+
 /// Таблица CSS3 named colors (147 имён), отсортированная по имени для
 /// бинарного поиска. `grey`-варианты и `gray`-варианты — оба перечислены.
 /// Имена из CSS Color Module Level 4 §6.1: `rebeccapurple` тоже включён.
@@ -22845,6 +22947,103 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.color_scheme, ColorScheme::Normal);
+    }
+
+    // ── color-scheme used-scheme switching (CSS Color Adjustment L1 §2.3, Y-4) ──
+
+    #[test]
+    fn used_dark_forces_light_regardless_of_os() {
+        // `light` / `only light` force the light theme even in OS dark mode.
+        assert!(!ColorScheme::Light.used_dark(true));
+        assert!(!ColorScheme::OnlyLight.used_dark(true));
+        assert!(!ColorScheme::Light.used_dark(false));
+    }
+
+    #[test]
+    fn used_dark_forces_dark_regardless_of_os() {
+        // `dark` / `only dark` force the dark theme even in OS light mode.
+        assert!(ColorScheme::Dark.used_dark(false));
+        assert!(ColorScheme::OnlyDark.used_dark(false));
+        assert!(ColorScheme::Dark.used_dark(true));
+    }
+
+    #[test]
+    fn used_dark_follows_os_for_normal_and_dual() {
+        // `normal` / `light dark` / `dark light` defer to the OS preference.
+        for cs in [ColorScheme::Normal, ColorScheme::LightDark, ColorScheme::DarkLight] {
+            assert!(cs.used_dark(true), "{cs:?} should be dark under OS dark");
+            assert!(!cs.used_dark(false), "{cs:?} should be light under OS light");
+        }
+    }
+
+    /// Computes the `<input>` style through the full html → body → input
+    /// inheritance chain so that a `:root { color-scheme }` rule propagates to
+    /// the form control. `os_dark` is the OS `prefers-color-scheme: dark` value.
+    fn input_style_with_scheme(css: &str, os_dark: bool) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<input type=\"text\">");
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let html = doc.get(doc.root()).children.iter().copied().find(|&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "html")
+        }).unwrap();
+        let html_style = compute_style(&doc, html, &sheet, &ComputedStyle::root(), vp, os_dark);
+        let body = doc.body().unwrap();
+        let body_style = compute_style(&doc, body, &sheet, &html_style, vp, os_dark);
+        let input = doc.get(body).children[0];
+        compute_style(&doc, input, &sheet, &body_style, vp, os_dark)
+    }
+
+    #[test]
+    fn color_scheme_light_forces_light_form_control_in_os_dark() {
+        // OS dark mode, but `:root { color-scheme: light }` inherits to the
+        // input → it must render with the LIGHT UA palette (white background).
+        let style = input_style_with_scheme(":root { color-scheme: light; }", true);
+        assert_eq!(
+            style.background_color,
+            Some(CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 })),
+            "light color-scheme must force light input bg in OS dark mode"
+        );
+        assert_eq!(style.color, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn color_scheme_dark_forces_dark_form_control_in_os_light() {
+        // OS light mode, but `:root { color-scheme: dark }` inherits to the
+        // input → it must render with the DARK UA palette.
+        let style = input_style_with_scheme(":root { color-scheme: dark; }", false);
+        assert_eq!(
+            style.background_color,
+            Some(CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 })),
+            "dark color-scheme must force dark input bg in OS light mode"
+        );
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 });
+    }
+
+    // ── system-color resolution (CSS Color 4 §6.2, Y-4) ──
+
+    #[test]
+    fn system_color_canvas_switches_by_scheme() {
+        assert_eq!(system_color("canvas", false), Some(Color { r: 255, g: 255, b: 255, a: 255 }));
+        assert_eq!(system_color("canvas", true), Some(Color { r: 30, g: 30, b: 30, a: 255 }));
+    }
+
+    #[test]
+    fn system_color_canvastext_switches_by_scheme() {
+        assert_eq!(system_color("canvastext", false), Some(Color { r: 0, g: 0, b: 0, a: 255 }));
+        assert_eq!(system_color("canvastext", true), Some(Color { r: 255, g: 255, b: 255, a: 255 }));
+    }
+
+    #[test]
+    fn system_color_buttonface_distinct_per_scheme() {
+        let light = system_color("buttonface", false).unwrap();
+        let dark = system_color("buttonface", true).unwrap();
+        assert_ne!(light, dark, "ButtonFace must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_unknown_returns_none() {
+        assert_eq!(system_color("notasystemcolor", false), None);
+        assert_eq!(system_color("rebeccapurple", true), None);
     }
 
     // ──────────── CSS Units ────────────
