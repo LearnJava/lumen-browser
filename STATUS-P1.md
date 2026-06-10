@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+W-1: Shared Storage API Phase 0  branch: p1-w1-shared-storage
+Next step: создать crates/js/src/shared_storage.rs, добавить mod в lib.rs
 
 ---
 
@@ -19,8 +20,18 @@ _(нет)_
 | ~~V-1~~ | ~~**Declarative Shadow DOM** (`<template shadowrootmode="open\|closed">`)~~ — **выполнено** | S | `lumen-html-parser`, `lumen-dom` |
 | ~~V-2~~ | ~~**`@starting-style` CSS at-rule algorithm stub**~~ — **выполнено** | S | `lumen-layout` |
 | ~~V-3~~ | ~~**`inert` attribute layout algorithm** — non-interactive subtrees~~ — **выполнено** | XS | `lumen-layout`, `lumen-js` |
-| V-4 | **`CSS image-set()` selection algorithm stub** — responsive images | S | `lumen-layout` |
-| V-5 | **TC39 Temporal API Phase 0 stub** — `Temporal.PlainDate/Time/DateTime/Duration` | M | `lumen-js` |
+| ~~V-4~~ | ~~**`CSS image-set()` selection algorithm stub** — responsive images~~ — **выполнено** | S | `lumen-layout` |
+| ~~V-5~~ | ~~**TC39 Temporal API Phase 0 stub** — `Temporal.PlainDate/Time/DateTime/Duration`~~ — **выполнено P2** (commit 439b4927) | M | `lumen-js` |
+
+### W — Web Platform Phase 3 (стабы и алгоритмы)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| W-1 | **Shared Storage API Phase 0** — Privacy Sandbox `window.sharedStorage` (set/get/append/delete/clear/keys/values/entries/length/remainingBudget/selectURL/run/worklet stub) | S | `lumen-js` |
+| W-2 | **Idle Detection API stub** — WICG `IdleDetector.requestPermission()`, `start({threshold})`, `userState`/`screenState`, `'change'` event | XS | `lumen-js` |
+| W-3 | **Topics API stub** — Privacy Sandbox `document.browsingTopics()` → Promise<[]>, `DeprecatedTopicsButton` Phase 0 | XS | `lumen-js` |
+| W-4 | **Attribution Reporting API stub** — `attributionsrc` attribute parsing, `window.attributionReporting` Phase 0 | XS | `lumen-js` |
+| W-5 | **CSS `hyphens: auto` algorithm stub** — `SoftHyphenPoint` type, `collect_hyphen_points(word)` stub via `HyphenationProvider` | S | `lumen-layout`, `lumen-core` |
 
 ### U — TC39 Stage 4 ES2026+ APIs (новые)
 
