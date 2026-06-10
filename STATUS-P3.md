@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**BUG-121 — snapshot_vs_edge гейт красный на main**  branch: `p3-bug121-edge-gate`
+Next step: informational-режим по умолчанию + strict через env var; гейт рендерит через wgpu fallback `Renderer`, а run.py меряет femtovg — пороги run.py неприменимы.  `crates/driver/tests/snapshot_vs_edge.rs:219`
 
 ## Next
 
