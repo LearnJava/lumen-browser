@@ -3213,6 +3213,44 @@ pub(crate) fn parse_shape_ellipse_px(s: &str) -> Option<(f32, f32, f32, f32)> {
     if rx > 0.0 && ry > 0.0 { Some((rx, ry, cx, cy)) } else { None }
 }
 
+/// CSS Shapes L1 §5.1 — parse `inset(<top> <right> <bottom> <left> [round <r>])`.
+/// Returns `(top, right, bottom, left, radius)` insets in px from the reference
+/// box edges, plus a single uniform corner radius (`0` = sharp corners).
+/// Lengths follow the margin-shorthand expansion (1–4 values). The optional
+/// `round` clause keeps only the first radius value (elliptical radii collapse
+/// to their horizontal component). Returns `None` for any unknown syntax.
+pub(crate) fn parse_shape_inset_px(s: &str) -> Option<(f32, f32, f32, f32, f32)> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("inset(")?.strip_suffix(')')?;
+    // Split off the optional `round <border-radius>` clause.
+    let (lens_part, radius) = match inner.split_once(" round ") {
+        Some((l, r)) => {
+            let rstr = r.split_whitespace().next()?;
+            let rad = rstr
+                .strip_suffix("px")
+                .unwrap_or(rstr)
+                .parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)?;
+            (l, rad)
+        }
+        None => (inner, 0.0),
+    };
+    let mut vals: Vec<f32> = Vec::new();
+    for tok in lens_part.split_whitespace() {
+        let v = tok.strip_suffix("px").unwrap_or(tok).parse::<f32>().ok()?;
+        vals.push(v);
+    }
+    let (t, r, b, l) = match vals.len() {
+        1 => (vals[0], vals[0], vals[0], vals[0]),
+        2 => (vals[0], vals[1], vals[0], vals[1]),
+        3 => (vals[0], vals[1], vals[2], vals[1]),
+        4 => (vals[0], vals[1], vals[2], vals[3]),
+        _ => return None,
+    };
+    Some((t, r, b, l, radius))
+}
+
 /// CSS Shapes L1 §5.2 — polygon shape for `shape-outside` on a float.
 /// Points are stored in content-area coordinates (same as FloatContext).
 struct ShapePolygon {
@@ -3237,6 +3275,42 @@ struct ShapeEllipse {
     ry: f32,
 }
 
+/// CSS Shapes L1 §5.1 — `inset()` rectangle shape for `shape-outside` on a float.
+/// All coordinates are in content-area space (same as FloatContext). The rectangle
+/// spans `[left_x, right_x] × [top_y, bottom_y]` with optional uniform corner
+/// rounding of `radius` px.
+struct ShapeInset {
+    top_y: f32,
+    bottom_y: f32,
+    /// `true` = left float, `false` = right float.
+    is_left: bool,
+    left_x: f32,
+    right_x: f32,
+    /// Uniform corner radius in px (`0` = sharp corners).
+    radius: f32,
+}
+
+/// CSS Shapes L1 §5.1 — horizontal inward offset of a rounded `inset()` corner
+/// at scanline `y`. Returns `0` outside the corner bands or for a `0` radius.
+/// Within `radius` px of the top/bottom edge the boundary follows a quarter
+/// circle, so the inline edge recedes by `radius − √(radius² − dy²)`.
+fn inset_corner_inward(y: f32, top_y: f32, bottom_y: f32, radius: f32) -> f32 {
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    let top_band = top_y + radius;
+    let bot_band = bottom_y - radius;
+    let dy = if y < top_band {
+        top_band - y
+    } else if y > bot_band {
+        y - bot_band
+    } else {
+        return 0.0;
+    };
+    let dy = dy.min(radius);
+    radius - (radius * radius - dy * dy).max(0.0).sqrt()
+}
+
 /// CSS 2.1 §9.5 — tracks float placements within a single block formatting
 /// context.  Simplified Phase-0 implementation: only axis-aligned rectangles,
 /// no shape-outside wrapping.  All coordinates are in the same space as the
@@ -3256,6 +3330,8 @@ struct FloatContext {
     shape_polygons: Vec<ShapePolygon>,
     /// CSS Shapes L1 — `shape-outside: ellipse(...)` overrides.
     shape_ellipses: Vec<ShapeEllipse>,
+    /// CSS Shapes L1 — `shape-outside: inset(...)` overrides.
+    shape_insets: Vec<ShapeInset>,
 }
 
 impl FloatContext {
@@ -3266,6 +3342,7 @@ impl FloatContext {
             shape_circles: Vec::new(),
             shape_polygons: Vec::new(),
             shape_ellipses: Vec::new(),
+            shape_insets: Vec::new(),
         }
     }
 
@@ -3294,7 +3371,7 @@ impl FloatContext {
             .filter_map(|p| polygon_right_edge_at_y(&p.points, y))
             .fold(after_circles, f32::max);
         // CSS Shapes L1: ellipse boundary (right edge at y).
-        self.shape_ellipses
+        let after_ellipses = self.shape_ellipses
             .iter()
             .filter(|e| e.is_left && e.top_y <= y && e.bottom_y > y)
             .filter_map(|e| {
@@ -3302,7 +3379,13 @@ impl FloatContext {
                 if norm.abs() > 1.0 { return None; }
                 Some(e.cx + e.rx * (1.0 - norm * norm).max(0.0).sqrt())
             })
-            .fold(after_polygons, f32::max)
+            .fold(after_polygons, f32::max);
+        // CSS Shapes L1: inset() boundary (right edge at y, minus rounded corner).
+        self.shape_insets
+            .iter()
+            .filter(|s| s.is_left && s.top_y <= y && s.bottom_y > y)
+            .map(|s| s.right_x - inset_corner_inward(y, s.top_y, s.bottom_y, s.radius))
+            .fold(after_ellipses, f32::max)
     }
 
     /// Right boundary of available inline space at `y` (= leftmost left-edge
@@ -3330,7 +3413,7 @@ impl FloatContext {
             .filter_map(|p| polygon_left_edge_at_y(&p.points, y))
             .fold(after_circles, f32::min);
         // CSS Shapes L1: ellipse boundary (left edge at y).
-        self.shape_ellipses
+        let after_ellipses = self.shape_ellipses
             .iter()
             .filter(|e| !e.is_left && e.top_y <= y && e.bottom_y > y)
             .filter_map(|e| {
@@ -3338,7 +3421,13 @@ impl FloatContext {
                 if norm.abs() > 1.0 { return None; }
                 Some(e.cx - e.rx * (1.0 - norm * norm).max(0.0).sqrt())
             })
-            .fold(after_polygons, f32::min)
+            .fold(after_polygons, f32::min);
+        // CSS Shapes L1: inset() boundary (left edge at y, plus rounded corner).
+        self.shape_insets
+            .iter()
+            .filter(|s| !s.is_left && s.top_y <= y && s.bottom_y > y)
+            .map(|s| s.left_x + inset_corner_inward(y, s.top_y, s.bottom_y, s.radius))
+            .fold(after_ellipses, f32::min)
     }
 
     /// Record a left float occupying `[y_top, bottom_y)` with right margin
@@ -3914,6 +4003,17 @@ fn lay_out(
                                             top_y, bottom_y: bot_y, is_left: true,
                                             cx: ecx + lx, cy: ecy + child_y, rx, ry,
                                         });
+                                    } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
+                                        // Reference box = margin box: origin (lx, child_y),
+                                        // width fml+fw+fmr, bottom bot_y.
+                                        let shape_top = (child_y + it).min(bot_y);
+                                        let shape_bot = (bot_y - ib).max(shape_top);
+                                        fc.shape_insets.push(ShapeInset {
+                                            top_y: shape_top, bottom_y: shape_bot, is_left: true,
+                                            left_x: lx + il,
+                                            right_x: lx + fml + fw + fmr - ir,
+                                            radius: irad,
+                                        });
                                     }
                                 }
                             }
@@ -3943,6 +4043,17 @@ fn lay_out(
                                         fc.shape_ellipses.push(ShapeEllipse {
                                             top_y, bottom_y: bot_y, is_left: false,
                                             cx: ecx + left_edge, cy: ecy + child_y, rx: rx_e, ry: ry_e,
+                                        });
+                                    } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
+                                        // Reference box = margin box: origin (left_edge, child_y),
+                                        // right edge rx, bottom bot_y.
+                                        let shape_top = (child_y + it).min(bot_y);
+                                        let shape_bot = (bot_y - ib).max(shape_top);
+                                        fc.shape_insets.push(ShapeInset {
+                                            top_y: shape_top, bottom_y: shape_bot, is_left: false,
+                                            left_x: left_edge + il,
+                                            right_x: rx - ir,
+                                            radius: irad,
                                         });
                                     }
                                 }
@@ -9206,6 +9317,105 @@ mod tests {
             cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0,
         });
         assert!((fc.right_edge_at(50.0, 400.0) - 150.0).abs() < 0.01);
+    }
+
+    // ── CSS Shapes L1 — shape-outside inset() ─────────────────────────────────
+
+    #[test]
+    fn parse_shape_inset_valid() {
+        // 4-value form, no rounding.
+        assert_eq!(
+            super::parse_shape_inset_px("inset(10px 20px 30px 40px)"),
+            Some((10.0, 20.0, 30.0, 40.0, 0.0))
+        );
+        // 1-value form expands to all sides.
+        assert_eq!(
+            super::parse_shape_inset_px("inset(15px)"),
+            Some((15.0, 15.0, 15.0, 15.0, 0.0))
+        );
+        // 2-value form: vertical horizontal.
+        assert_eq!(
+            super::parse_shape_inset_px("inset(10 20)"),
+            Some((10.0, 20.0, 10.0, 20.0, 0.0))
+        );
+        // 3-value form: top horizontal bottom.
+        assert_eq!(
+            super::parse_shape_inset_px("inset(5 10 15)"),
+            Some((5.0, 10.0, 15.0, 10.0, 0.0))
+        );
+        // With round clause (single radius).
+        assert_eq!(
+            super::parse_shape_inset_px("inset(10px round 8px)"),
+            Some((10.0, 10.0, 10.0, 10.0, 8.0))
+        );
+    }
+
+    #[test]
+    fn parse_shape_inset_invalid() {
+        // Not an inset.
+        assert_eq!(super::parse_shape_inset_px("circle(50px)"), None);
+        assert_eq!(super::parse_shape_inset_px("none"), None);
+        // Too many length values.
+        assert_eq!(super::parse_shape_inset_px("inset(1 2 3 4 5)"), None);
+        // `round` keyword without a radius value.
+        assert_eq!(super::parse_shape_inset_px("inset(10px round )"), None);
+    }
+
+    #[test]
+    fn float_context_inset_left_float_sharp() {
+        // Left float inset rect spanning x∈[10,90], y∈[0,100], no rounding.
+        // Content to the right must clear the inset right edge = 90 for all y in range.
+        let mut fc = super::FloatContext::new();
+        fc.shape_insets.push(super::ShapeInset {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            left_x: 10.0, right_x: 90.0, radius: 0.0,
+        });
+        assert!((fc.left_edge_at(0.0, 0.0) - 90.0).abs() < 0.01);
+        assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
+        // Outside the vertical range: falls back to default.
+        assert!((fc.left_edge_at(150.0, 0.0) - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_inset_right_float_sharp() {
+        // Right float inset rect x∈[210,290]. Content to the left clears left edge = 210.
+        let mut fc = super::FloatContext::new();
+        fc.shape_insets.push(super::ShapeInset {
+            top_y: 0.0, bottom_y: 100.0, is_left: false,
+            left_x: 210.0, right_x: 290.0, radius: 0.0,
+        });
+        assert!((fc.right_edge_at(50.0, 400.0) - 210.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_inset_rounded_corner() {
+        // Left float rect x∈[0,100], y∈[0,100], corner radius 20.
+        // At the very top (y=0), the rounded corner recedes the right edge fully
+        // by `radius` → edge = 100 - 20 = 80. At mid-height (y=50, flat band) the
+        // edge is the full right_x = 100.
+        let mut fc = super::FloatContext::new();
+        fc.shape_insets.push(super::ShapeInset {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            left_x: 0.0, right_x: 100.0, radius: 20.0,
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 100.0).abs() < 0.01);
+        assert!((fc.left_edge_at(0.0, 0.0) - 80.0).abs() < 0.01);
+        // Quarter-circle midpoint: at y=20-20*cos(45°)... use exact: dy at y where
+        // inward = radius - sqrt(r^2 - dy^2). At y = top_band - dy. top_band=20.
+        // For y=20 (band edge), inward=0 → edge=100.
+        assert!((fc.left_edge_at(20.0, 0.0) - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn inset_corner_inward_helper() {
+        // No radius → no inward offset.
+        assert_eq!(super::inset_corner_inward(0.0, 0.0, 100.0, 0.0), 0.0);
+        // Flat middle band → no offset.
+        assert_eq!(super::inset_corner_inward(50.0, 0.0, 100.0, 20.0), 0.0);
+        // Exactly at the top edge → full radius recession.
+        assert!((super::inset_corner_inward(0.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
+        // Exactly at the bottom edge → full radius recession.
+        assert!((super::inset_corner_inward(100.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
     }
 
     #[test]

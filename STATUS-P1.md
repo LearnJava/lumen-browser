@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Z-1: CSS Shapes L1 `shape-outside: inset()`  branch: p1-shape-inset
+Next step: реализовать parse_shape_inset_px + ShapeInset + wiring  box_tree.rs
 
 ---
 
