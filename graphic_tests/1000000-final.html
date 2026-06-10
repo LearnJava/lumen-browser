@@ -921,5 +921,34 @@
   <span class="ss-label">@starting-style (entry transitions)</span>
 </div>
 
+<!-- :host / ::slotted shadow DOM demo (TEST-72) -->
+<style>
+  .shadow-card { margin-top:16px; display:flex; gap:16px; align-items:stretch; }
+</style>
+<div class="card shadow-card">
+  <!-- shadow host: :host colours the container blue -->
+  <div id="shadow-demo-1" style="width:140px; height:80px;">
+    <template shadowrootmode="open">
+      <style>
+        :host { background:#3366cc; border-radius:6px; display:flex; align-items:center; justify-content:center; }
+        ::slotted(.slot-red) { width:60px; height:40px; background:#cc3300; border-radius:4px; }
+      </style>
+      <slot></slot>
+    </template>
+    <div class="slot-red"></div>
+  </div>
+  <!-- :host(.special) only matches when class is present -->
+  <div id="shadow-demo-2" class="special" style="width:140px; height:80px;">
+    <template shadowrootmode="open">
+      <style>
+        :host(.special) { background:#996600; border-radius:6px; display:flex; align-items:center; justify-content:center; }
+        ::slotted(.slot-green) { width:60px; height:40px; background:#009933; border-radius:4px; }
+      </style>
+      <slot></slot>
+    </template>
+    <div class="slot-green"></div>
+  </div>
+</div>
+
 </body>
 </html>

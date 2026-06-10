@@ -130,6 +130,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('69', '69-border-spacing.html', 0.5, 'CSS 2.1 §17.6 border-spacing: equal and asymmetric gaps between table cells; three tables showing 12px equal, 8px/24px asymmetric, and 0 spacing'),
     ('70', '70-object-fit.html', 0.5, 'CSS Images L3 §5.5 object-fit / object-position: SVG viewBox scaling modes fill/contain/cover/none/scale-down and object-position alignment'),
     ('71', '71-starting-style.html', 0.5, 'CSS Transitions L2 §3.4 @starting-style: entry animation support — @starting-style rules parse without crashing; static rendering of two coloured boxes is unaffected'),
+    ('72', '72-host-slotted.html', 0.5, 'CSS Scoping L1 §6.1-6.2 :host / ::slotted: shadow host gets blue background via :host; :host(.special) colours second host amber; :host(.missing) does not match third host; ::slotted children get coloured boxes'),
 ]
 
 # --- PNG reader (stdlib only) ---

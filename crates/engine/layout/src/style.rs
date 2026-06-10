@@ -5126,6 +5126,29 @@ pub fn compute_style(
             next_rule_idx += 1;
         }
     }
+    // CSS Scoping L1 §6.2 — `::slotted(sel)`: if this node is a slotted element
+    // (direct DOM child of a shadow host), match against all `::slotted()` rules.
+    // These declarations participate in the same cascade as author rules.
+    if is_slotted_element(doc, node) {
+        for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_slotted_complex(complex, doc, node) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((decl.important, false, lp, spec, rule_idx, decl_idx, decl));
+                }
+            }
+        }
+    }
+
     // Inline-style declarations подключаются с `is_inline = true` и
     // synthetic specificity = default (Cascade L4 §6.4.3 — реальная
     // specificity inline-стиля игнорируется в сортировке: за порядок
@@ -5854,6 +5877,80 @@ fn matches_chain(
     }
 }
 
+/// CSS Scoping L1 §6.2: true if `node` is a direct light-tree child of a shadow host,
+/// meaning it is eligible to be slotted via a `<slot>` in the shadow tree.
+fn is_slotted_element(doc: &Document, node: NodeId) -> bool {
+    doc.get(node).parent
+        .map(|p| doc.is_shadow_host(p))
+        .unwrap_or(false)
+}
+
+/// CSS Scoping L1 §6.2 — attempts to match a complex selector containing
+/// `::slotted(inner_sel)` against `node`.
+///
+/// Returns `Some(specificity)` when all conditions hold:
+/// 1. The last compound of `complex` contains `::slotted(inner_sel)`.
+/// 2. `node` is a slotted element (DOM parent is a shadow host).
+/// 3. `node` matches every selector in `inner_sel`.
+/// 4. The outer context (compound minus `::slotted`) matches the shadow host (node's parent).
+///    If the outer context is empty, no ancestor check is needed.
+pub(crate) fn matches_slotted_complex(
+    complex: &ComplexSelector,
+    doc: &Document,
+    node: NodeId,
+) -> Option<Specificity> {
+    // Locate the last compound, which must contain ::slotted.
+    let last = complex.tail.last().map(|(_, c)| c).unwrap_or(&complex.head);
+    let slotted_inner: Option<&Vec<ComplexSelector>> = last.parts.iter().find_map(|p| {
+        if let SimpleSelector::PseudoElement(PseudoElementKind::Slotted(inner)) = p {
+            Some(inner.as_ref()?)
+        } else {
+            None
+        }
+    });
+    // Rule must contain ::slotted.
+    let inner_selectors = slotted_inner?;
+
+    // Node must be a slotted element.
+    if !is_slotted_element(doc, node) {
+        return None;
+    }
+
+    // Node must match the inner selector list.
+    if !inner_selectors.iter().any(|s| matches_complex(s, doc, node)) {
+        return None;
+    }
+
+    // Build the outer complex selector (strip ::slotted from the last compound).
+    let stripped_last = CompoundSelector {
+        parts: last.parts.iter()
+            .filter(|p| !matches!(p, SimpleSelector::PseudoElement(PseudoElementKind::Slotted(_))))
+            .cloned()
+            .collect(),
+    };
+
+    // If there is no outer context at all, the rule matches.
+    if complex.tail.is_empty() && stripped_last.parts.is_empty() {
+        return Some(complex.specificity());
+    }
+
+    // Outer context: match against the shadow host (node's DOM parent).
+    let host = doc.get(node).parent.expect("is_slotted_element ensures parent");
+    let outer = if complex.tail.is_empty() {
+        ComplexSelector { head: stripped_last, tail: vec![] }
+    } else {
+        let mut tail = complex.tail.clone();
+        tail.last_mut().expect("non-empty tail").1 = stripped_last;
+        ComplexSelector { head: complex.head.clone(), tail }
+    };
+
+    if matches_complex(&outer, doc, host) {
+        Some(complex.specificity())
+    } else {
+        None
+    }
+}
+
 fn matches_compound(compound: &CompoundSelector, doc: &Document, node: NodeId) -> bool {
     let NodeData::Element { name, attrs } = &doc.get(node).data else {
         return false;
@@ -6111,7 +6208,17 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
             FOCUS_NID.with(Cell::get) == node.index() as u32
         }
         PseudoClass::Unsupported(_) => false,
-        PseudoClass::Host(_) => false,
+        // CSS Scoping L1 §6.1: `:host` matches the shadow host element from within the shadow tree.
+        // `:host` without args — any shadow host; `:host(sel)` — host must also match `sel`.
+        PseudoClass::Host(opt_list) => {
+            if !doc.is_shadow_host(node) {
+                return false;
+            }
+            match opt_list {
+                None => true,
+                Some(list) => list.iter().any(|s| matches_complex(s, doc, node)),
+            }
+        }
     }
 }
 
@@ -24813,5 +24920,108 @@ mod rule_index_regression {
         );
         assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 255),
             "later same-specificity rule must win");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shadow DOM pseudo-class / pseudo-element tests (CSS Scoping L1 §6.1-6.2)
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod shadow_dom_selectors {
+    use super::*;
+    use lumen_core::geom::Size;
+    use lumen_dom::ShadowRootMode;
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    /// Build a minimal Document: `<div id="host">` as the shadow host with an
+    /// attached open shadow root. Returned tuple: (doc, host_id).
+    fn make_shadow_host() -> (lumen_dom::Document, NodeId) {
+        let mut doc = lumen_html_parser::parse(r#"<div id="host"></div>"#);
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children[0];
+        doc.attach_shadow(host, ShadowRootMode::Open);
+        (doc, host)
+    }
+
+    /// Build a Document with shadow host + one light-tree child `<span class="item">`.
+    fn make_shadow_host_with_slotted() -> (lumen_dom::Document, NodeId, NodeId) {
+        let mut doc = lumen_html_parser::parse(
+            r#"<div id="host"><span class="item"></span></div>"#,
+        );
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children[0];
+        let slotted = doc.get(host).children[0];
+        doc.attach_shadow(host, ShadowRootMode::Open);
+        (doc, host, slotted)
+    }
+
+    #[test]
+    fn host_simple_matches_shadow_host() {
+        // `:host { background-color: red; }` must apply to the shadow host element.
+        let (doc, host) = make_shadow_host();
+        let sheet = lumen_css_parser::parse(":host { background-color: red; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, host, &sheet, &root, VP, false);
+        let bg = s.background_color.expect("background-color set").resolve(s.color);
+        assert_eq!((bg.r, bg.g, bg.b), (255, 0, 0), ":host must apply to shadow host");
+    }
+
+    #[test]
+    fn host_with_selector_matches_when_host_satisfies_inner() {
+        // `:host(#host) { background-color: blue; }` — host has id="host", must match.
+        let (doc, host) = make_shadow_host();
+        let sheet = lumen_css_parser::parse(":host(#host) { background-color: blue; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, host, &sheet, &root, VP, false);
+        let bg = s.background_color.expect("background-color set").resolve(s.color);
+        assert_eq!((bg.r, bg.g, bg.b), (0, 0, 255), ":host(#host) must match host with id=host");
+    }
+
+    #[test]
+    fn host_with_selector_does_not_match_when_inner_fails() {
+        // `:host(.missing) { background-color: red; }` — host has no class "missing".
+        let (doc, host) = make_shadow_host();
+        let sheet = lumen_css_parser::parse(":host(.missing) { background-color: red; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, host, &sheet, &root, VP, false);
+        assert!(s.background_color.is_none(), ":host(.missing) must NOT match when class absent");
+    }
+
+    #[test]
+    fn slotted_applies_to_light_tree_child_of_shadow_host() {
+        // `::slotted(.item) { color: green; }` must apply to the slotted element.
+        let (doc, _host, slotted) = make_shadow_host_with_slotted();
+        let sheet = lumen_css_parser::parse("::slotted(.item) { color: green; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, slotted, &sheet, &root, VP, false);
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 128, 0),
+            "::slotted(.item) must apply to light-tree child");
+    }
+
+    #[test]
+    fn slotted_does_not_apply_to_non_slotted_element() {
+        // Regular `<span class="item">` not inside a shadow host must not match `::slotted`.
+        let doc = lumen_html_parser::parse(r#"<span class="item"></span>"#);
+        let sheet = lumen_css_parser::parse("::slotted(.item) { color: green; }");
+        let body = doc.body().expect("body");
+        let span = doc.get(body).children[0];
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, span, &sheet, &root, VP, false);
+        // Default text color is black (0,0,0).
+        assert_ne!((s.color.r, s.color.g, s.color.b), (0, 128, 0),
+            "::slotted must not apply to non-slotted span");
+    }
+
+    #[test]
+    fn slotted_inner_selector_filters_correctly() {
+        // `::slotted(.other)` must NOT apply to `<span class="item">` (wrong class).
+        let (doc, _host, slotted) = make_shadow_host_with_slotted();
+        let sheet = lumen_css_parser::parse("::slotted(.other) { color: red; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, slotted, &sheet, &root, VP, false);
+        // Should retain default color, not red.
+        assert_ne!((s.color.r, s.color.g, s.color.b), (255, 0, 0),
+            "::slotted(.other) must not match span with class=item");
     }
 }
