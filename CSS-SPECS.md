@@ -110,7 +110,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | ⬜ | font-palette; @font-palette-values | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
-| CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ⬜ | decorative lines in gaps | **#50** |
+| CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ✅ | `gap-rule-width/style/color` shorthand+longhands; `collect_gap_segments()` in display_list.rs; flex + grid containers wired (p4-gap-rule, 2026-06-10) | **#50** |
 | CSS Env Variables L1 | [css-env-1](https://www.w3.org/TR/css-env-1/) | ✅ | `env()` + fallback + nested `calc(env(...)+...)` implemented in `style.rs:8798` (`expand_env_vars`); `safe-area-inset-*` returns fallback when not set | **#51** |
 | CSS Selectors L5 | [selectors-5](https://www.w3.org/TR/selectors-5/) | ✅ | `:nth-child(An+B of S)` selector filter implemented in `style.rs:6464` + `css-parser` parser; 4 layout tests | **#52** |
 | CSS Nesting (scope) | [css-scoping-1](https://www.w3.org/TR/css-scoping-1/) | 🟡 | @scope root matching ✅ (P1 2026-06-03); limit/inner-scope — Phase 2 | **#53** |

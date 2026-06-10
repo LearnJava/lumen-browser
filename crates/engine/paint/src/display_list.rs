@@ -19,7 +19,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
-    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
+    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
@@ -30,6 +30,8 @@ use lumen_layout::{
     TransformStyle,
     Visibility,
 };
+
+use crate::gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
 
 /// CSS Images L3 §4.3 — image-rendering filter mode (scaling algorithm).
 /// Determines how textures are sampled when an image is scaled.
@@ -4184,6 +4186,108 @@ fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
     order
 }
 
+/// Collects `GapSegment`s for `gap-rule-*` rendering in flex/grid containers.
+///
+/// Scans child box right-edges and top-edges against the container's `column_gap`
+/// and `row_gap` values; emits one `GapSegment` per actual gap found. Works for
+/// both single-line and multi-line flex, and for grid containers.
+///
+/// Returns an empty `Vec` when the container is not flex/grid, or when both gap
+/// values are zero, or when `gap_rule_style` is `None` / `gap_rule_width` ≤ 0.
+fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
+    let s = &b.style;
+    // Only flex/grid containers produce gap rules.
+    let is_flex_or_grid = matches!(
+        s.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    );
+    if !is_flex_or_grid {
+        return Vec::new();
+    }
+    if !s.gap_rule_style.is_visible() || s.gap_rule_width <= 0.0 {
+        return Vec::new();
+    }
+
+    // Content area of the container (border-box minus border+padding).
+    let em = s.font_size;
+    let cw = (b.rect.width
+        - s.border_left_width
+        - s.border_right_width
+        - s.padding_left.px()
+        - s.padding_right.px())
+    .max(0.0);
+    let ch = (b.rect.height
+        - s.border_top_width
+        - s.border_bottom_width
+        - s.padding_top.px()
+        - s.padding_bottom.px())
+    .max(0.0);
+    let cx = b.rect.x + s.border_left_width + s.padding_left.px();
+    let cy = b.rect.y + s.border_top_width + s.padding_top.px();
+    let vp = Size::new(cw, ch);
+
+    let col_gap_px = s.column_gap.resolve_or_zero(em, cw, vp);
+    let row_gap_px = s.row_gap.resolve_or_zero(em, ch, vp);
+
+    // Collect in-flow (non-absolutely-positioned, non-skip) children.
+    let children: Vec<_> = b
+        .children
+        .iter()
+        .filter(|c| {
+            !matches!(c.kind, BoxKind::Skip | BoxKind::Contents | BoxKind::Marker { .. })
+                && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+        })
+        .collect();
+
+    if children.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut segments: Vec<GapSegment> = Vec::new();
+    const EPS: f32 = 1.5; // tolerance for float layout rounding
+
+    if col_gap_px > 0.0 {
+        // Collect unique right-edges of children.
+        let mut rights: Vec<f32> =
+            children.iter().map(|c| c.rect.x + c.rect.width).collect();
+        rights.sort_by(|a, x| a.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
+        rights.dedup_by(|a, x| (*a - *x).abs() < EPS);
+
+        // For each right-edge, check if a child starts right_edge + col_gap away.
+        let lefts: Vec<f32> = children.iter().map(|c| c.rect.x).collect();
+        for right in &rights {
+            let expected = right + col_gap_px;
+            if lefts.iter().any(|l| (*l - expected).abs() < EPS) {
+                segments.push(GapSegment {
+                    rect: Rect::new(*right, cy, col_gap_px, ch),
+                    horizontal: false,
+                });
+            }
+        }
+    }
+
+    if row_gap_px > 0.0 {
+        // Collect unique bottom-edges of children.
+        let mut bottoms: Vec<f32> =
+            children.iter().map(|c| c.rect.y + c.rect.height).collect();
+        bottoms.sort_by(|a, x| a.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
+        bottoms.dedup_by(|a, x| (*a - *x).abs() < EPS);
+
+        let tops: Vec<f32> = children.iter().map(|c| c.rect.y).collect();
+        for bottom in &bottoms {
+            let expected = bottom + row_gap_px;
+            if tops.iter().any(|t| (*t - expected).abs() < EPS) {
+                segments.push(GapSegment {
+                    rect: Rect::new(cx, *bottom, cw, row_gap_px),
+                    horizontal: true,
+                });
+            }
+        }
+    }
+
+    segments
+}
+
 fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
     // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
     // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
@@ -4385,6 +4489,19 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             } else {
                 for child in &b.children {
                     walk(child, out, dpr, sel);
+                }
+            }
+            // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
+            if self_visible {
+                let gap_segs = collect_gap_segments(b);
+                if !gap_segs.is_empty() {
+                    let s = &b.style;
+                    let ctx = GapDecorationContext {
+                        rule_width: s.gap_rule_width,
+                        rule_style: s.gap_rule_style,
+                        rule_color: s.gap_rule_color.resolve(s.color),
+                    };
+                    out.extend(emit_gap_rules(&b.children, &gap_segs, &ctx));
                 }
             }
             if has_overflow_clip {
