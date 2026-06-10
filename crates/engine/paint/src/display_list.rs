@@ -2316,11 +2316,12 @@ fn emit_inline_frag_box(
     let bb = s.border_bottom_width;
 
     // Border-box left edge = text_x - padding_left - border_left.
-    let box_x = container_x + frag.x - frag.padding_left - bl;
+    // Snap to integer CSS pixels for consistent rendering with block-level boxes (BUG-084 partial).
+    let box_x = (container_x + frag.x - frag.padding_left - bl).round();
     // Border-box width = border_left + padding_left + text + padding_right + border_right.
-    let box_w = bl + frag.padding_left + frag.width + frag.padding_right + br;
-    let box_h = line_h;
-    let box_y = line_y;
+    let box_w = (bl + frag.padding_left + frag.width + frag.padding_right + br).round();
+    let box_h = line_h.round();
+    let box_y = line_y.round();
 
     let radii = CornerRadii::from_style_and_box(s, box_w, box_h);
 
@@ -3023,10 +3024,12 @@ fn emit_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         if color.a == 0 {
             continue;
         }
-        let x = b.rect.x + shadow.offset_x - shadow.spread;
-        let y = b.rect.y + shadow.offset_y - shadow.spread;
-        let w = b.rect.width + 2.0 * shadow.spread;
-        let h = b.rect.height + 2.0 * shadow.spread;
+        // Snap shadow rect to integer CSS pixels — offset/spread are CSS lengths that can be
+        // fractional; unsnapped values produce sub-pixel shadows vs Edge (BUG-084 partial).
+        let x = (b.rect.x + shadow.offset_x - shadow.spread).round();
+        let y = (b.rect.y + shadow.offset_y - shadow.spread).round();
+        let w = (b.rect.width + 2.0 * shadow.spread).round();
+        let h = (b.rect.height + 2.0 * shadow.spread).round();
         if w <= 0.0 || h <= 0.0 {
             continue;
         }

@@ -3931,13 +3931,24 @@ fn lay_out(
                         match position {
                             ListStylePosition::Outside => {
                                 // Out of flow: does not advance child_y.
-                                child.rect = Rect::new(content_x - marker_w, child_y, marker_w, line_h);
+                                // Snap to integer CSS pixels — em*1.5 is often fractional (BUG-083).
+                                child.rect = Rect::new(
+                                    (content_x - marker_w).round(),
+                                    child_y.round(),
+                                    marker_w.round(),
+                                    line_h.round(),
+                                );
                             }
                             ListStylePosition::Inside => {
                                 // CSS Lists L3 §2.4: inside marker shares the first line with
                                 // content. Place at content_x; record indent for the next child.
-                                child.rect = Rect::new(content_x, child_y, marker_w, line_h);
-                                inside_marker_w = marker_w;
+                                child.rect = Rect::new(
+                                    content_x.round(),
+                                    child_y.round(),
+                                    marker_w.round(),
+                                    line_h.round(),
+                                );
+                                inside_marker_w = marker_w.round();
                                 // Do NOT advance child_y — marker is inline with content.
                             }
                         }
@@ -4268,7 +4279,10 @@ fn lay_out(
                 }
             }
             for (idx, dy) in adjustments {
-                shift_y_box(&mut b.children[idx], dy);
+                // Round dy to integer CSS pixels so vertical-aligned children land on
+                // whole-pixel boundaries, matching the .round() applied to IFC row y-positions
+                // above (line ~4219). Fractional dy causes 0.99% deviation vs Edge (BUG-081).
+                shift_y_box(&mut b.children[idx], dy.round());
             }
         }
         BoxKind::TableRow => {
