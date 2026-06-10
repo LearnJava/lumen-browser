@@ -325,4 +325,85 @@ mod tests {
             assert_eq!(decls.len(), 2);
         }
     }
+
+    // ── compute_style_from_declarations ──
+
+    #[test]
+    fn compute_style_from_decls_opacity_zero() {
+        use crate::style::compute_style_from_declarations;
+        use lumen_core::geom::Size;
+        let sheet = lumen_css_parser::parse(
+            "@starting-style { dialog { opacity: 0; } }",
+        );
+        let doc = lumen_html_parser::parse("<dialog></dialog>");
+        let root = doc.root();
+        if let Some(node) = first_element_at_depth(&doc, root, 4) {
+            let decls = resolve_starting_style(node, &doc, &sheet).unwrap();
+            let style = compute_style_from_declarations(&decls, Size::new(800.0, 600.0));
+            assert!(
+                (style.opacity - 0.0).abs() < 1e-6,
+                "expected opacity=0, got {}",
+                style.opacity
+            );
+        }
+    }
+
+    #[test]
+    fn compute_style_from_decls_empty_returns_root_defaults() {
+        use crate::style::compute_style_from_declarations;
+        use lumen_core::geom::Size;
+        let style = compute_style_from_declarations(&[], Size::new(800.0, 600.0));
+        // opacity default is 1.0 (CSS Initial Values)
+        assert!(
+            (style.opacity - 1.0).abs() < 1e-6,
+            "expected opacity=1 (root default), got {}",
+            style.opacity
+        );
+    }
+
+    #[test]
+    fn compute_style_from_decls_opacity_and_transform() {
+        use crate::style::compute_style_from_declarations;
+        use lumen_core::geom::Size;
+        let sheet = lumen_css_parser::parse(
+            "@starting-style { .enter { opacity: 0; transform: scale(0.9); } }",
+        );
+        let doc = lumen_html_parser::parse(r#"<div class="enter"></div>"#);
+        let root = doc.root();
+        // document(1) > html(2) > body(3) > div(4)
+        if let Some(node) = first_element_at_depth(&doc, root, 4) {
+            let decls = resolve_starting_style(node, &doc, &sheet).unwrap();
+            let style = compute_style_from_declarations(&decls, Size::new(800.0, 600.0));
+            assert!(
+                (style.opacity - 0.0).abs() < 1e-6,
+                "expected opacity=0, got {}",
+                style.opacity
+            );
+            assert!(
+                !style.transform.is_empty(),
+                "expected non-empty transform list"
+            );
+        }
+    }
+
+    #[test]
+    fn compute_style_pipeline_full_round_trip() {
+        use crate::style::compute_style_from_declarations;
+        use lumen_core::geom::Size;
+        // Full pipeline: parse CSS → resolve_starting_style → compute_style_from_declarations.
+        // Verifies that the starting style has opacity=0 (before-change) so a
+        // transition from it to opacity=1 (CSS target) would produce an entry fade.
+        let sheet = lumen_css_parser::parse(
+            "@starting-style { dialog { opacity: 0; } }
+             dialog { opacity: 1; transition: opacity 0.3s; }",
+        );
+        let doc = lumen_html_parser::parse("<dialog></dialog>");
+        let root = doc.root();
+        if let Some(node) = first_element_at_depth(&doc, root, 4) {
+            let decls = resolve_starting_style(node, &doc, &sheet).unwrap();
+            assert_eq!(decls.len(), 1, "should have exactly one @starting-style decl");
+            let starting = compute_style_from_declarations(&decls, Size::new(1024.0, 768.0));
+            assert!((starting.opacity - 0.0).abs() < 1e-6);
+        }
+    }
 }

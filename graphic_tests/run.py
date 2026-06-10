@@ -129,6 +129,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('68', '68-font-variation-settings.html', 0.5, 'CSS Fonts L4 §6.3 font-variation-settings: parsing and layout stability; coloured boxes with varied wght/wdth/slnt axes and inherited settings'),
     ('69', '69-border-spacing.html', 0.5, 'CSS 2.1 §17.6 border-spacing: equal and asymmetric gaps between table cells; three tables showing 12px equal, 8px/24px asymmetric, and 0 spacing'),
     ('70', '70-object-fit.html', 0.5, 'CSS Images L3 §5.5 object-fit / object-position: SVG viewBox scaling modes fill/contain/cover/none/scale-down and object-position alignment'),
+    ('71', '71-starting-style.html', 0.5, 'CSS Transitions L2 §3.4 @starting-style: entry animation support — @starting-style rules parse without crashing; static rendering of two coloured boxes is unaffected'),
 ]
 
 # --- PNG reader (stdlib only) ---

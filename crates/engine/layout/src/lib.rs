@@ -76,7 +76,7 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use selection::{caret_at_point, selection_rects};
-pub use style::compute_selection_style;
+pub use style::{compute_selection_style, compute_style_from_declarations};
 pub use selector_query::{
     computed_style_by_selector, computed_style_to_map, find_all_by_selector,
     find_box_by_selector, matches_selector, query_all, ComputedStyleSnapshot,

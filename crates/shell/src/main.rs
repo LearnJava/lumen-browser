@@ -77,6 +77,7 @@ use lumen_dom::{
 };
 use std::collections::HashMap;
 use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, TransitionScheduler};
+use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolve_starting_style};
 use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
 #[cfg(feature = "quickjs")]
 use lumen_layout::collect_computed_styles;
@@ -329,6 +330,7 @@ fn run_window_mode(
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
+        starting_style_tracker: StartingStyleTracker::new(),
         prev_styles: HashMap::new(),
         anim_frame: None,
         layout_box: None,
@@ -2490,6 +2492,7 @@ struct PageSnapshot {
     runtime: runtime::EventLoop,
     animation_scheduler: animation_scheduler::AnimationScheduler,
     transition_scheduler: TransitionScheduler,
+    starting_style_tracker: StartingStyleTracker,
     prev_styles: HashMap<NodeId, ComputedStyle>,
     anim_frame: Option<lumen_layout::AnimationFrame>,
     layout_box: Option<lumen_layout::LayoutBox>,
@@ -3656,6 +3659,10 @@ struct Lumen {
     /// `sync()` вызывается после каждого layout-обновления; `tick()` — на каждом
     /// RedrawRequested вместе с animation_scheduler. Очищается при load/reload.
     transition_scheduler: TransitionScheduler,
+    /// Tracks nodes that are "entering" the document (inserted or display:none→visible)
+    /// so that `@starting-style` rules can provide the before-change style for their
+    /// entry transitions (CSS Transitions L2 §3.4). Consumed in `relayout()`.
+    starting_style_tracker: StartingStyleTracker,
     /// Computed styles предыдущего layout-дерева — нужны `transition_scheduler.sync()`
     /// для определения изменившихся свойств. Обновляется после каждого layout.
     prev_styles: HashMap<NodeId, ComputedStyle>,
@@ -4348,6 +4355,42 @@ impl Lumen {
                 self.transition_scheduler.sync(*node, old_style, new_style, now_s);
             }
         }
+        // @starting-style (CSS Transitions L2 §3.4): newly visible nodes (not in
+        // prev_styles) use @starting-style rules as the before-change style so that
+        // entry transitions start from the declared starting values.
+        if !src.stylesheet.starting_style_rules.is_empty() {
+            let entering: Vec<NodeId> = new_styles
+                .keys()
+                .filter(|n| !self.prev_styles.contains_key(*n))
+                .copied()
+                .collect();
+            if !entering.is_empty() {
+                let mut entry_styles: Vec<(NodeId, ComputedStyle)> = Vec::new();
+                if let Ok(doc) = src.document.lock() {
+                    for node in &entering {
+                        if let Some(decls) =
+                            resolve_starting_style(*node, &doc, &src.stylesheet)
+                        {
+                            entry_styles.push((
+                                *node,
+                                compute_style_from_declarations(&decls, viewport),
+                            ));
+                        }
+                    }
+                }
+                // MutexGuard dropped — apply entry transitions outside the lock.
+                for (node, starting_style) in &entry_styles {
+                    if let Some(new_style) = new_styles.get(node) {
+                        self.transition_scheduler.sync(
+                            *node,
+                            starting_style,
+                            new_style,
+                            now_s,
+                        );
+                    }
+                }
+            }
+        }
         self.prev_styles = new_styles;
         self.layout_box = Some(lb);
         // Promote nodes with will-change: transform/opacity/filter to GPU layers so
@@ -4595,6 +4638,7 @@ impl Lumen {
                 self.display_list = page.display_list;
                 self.animation_scheduler.clear();
                 self.transition_scheduler = TransitionScheduler::new();
+                self.starting_style_tracker = StartingStyleTracker::new();
                 self.prev_styles.clear();
                 collect_box_styles(&page.layout_box, &mut self.prev_styles);
                 self.layout_box = Some(page.layout_box);
@@ -4834,6 +4878,7 @@ impl Lumen {
         self.display_list = page.display_list;
         self.animation_scheduler.clear();
         self.transition_scheduler = TransitionScheduler::new();
+        self.starting_style_tracker = StartingStyleTracker::new();
         self.prev_styles.clear();
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
@@ -11118,6 +11163,7 @@ impl Lumen {
                 animation_scheduler::AnimationScheduler::new(),
             ),
             transition_scheduler: std::mem::take(&mut self.transition_scheduler),
+            starting_style_tracker: std::mem::take(&mut self.starting_style_tracker),
             prev_styles: std::mem::take(&mut self.prev_styles),
             anim_frame: self.anim_frame.take(),
             layout_box: self.layout_box.take(),
@@ -11185,6 +11231,7 @@ impl Lumen {
         self.runtime = snap.runtime;
         self.animation_scheduler = snap.animation_scheduler;
         self.transition_scheduler = snap.transition_scheduler;
+        self.starting_style_tracker = snap.starting_style_tracker;
         self.prev_styles = snap.prev_styles;
         self.anim_frame = snap.anim_frame;
         self.layout_box = snap.layout_box;
@@ -11240,6 +11287,7 @@ impl Lumen {
         self.runtime = runtime::EventLoop::new();
         self.animation_scheduler = animation_scheduler::AnimationScheduler::new();
         self.transition_scheduler = TransitionScheduler::new();
+        self.starting_style_tracker = StartingStyleTracker::new();
         self.prev_styles = HashMap::new();
         self.anim_frame = None;
         self.layout_box = None;
