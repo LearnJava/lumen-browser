@@ -12,6 +12,21 @@ None
 
 ## Next
 
+### PA — Paint-Arch: итоги архитектурной ревизии paint-пайплайна (2026-06-10)
+
+Полный отчёт: [docs/paint-pipeline-review-2026-06.md](docs/paint-pipeline-review-2026-06.md).
+Ключевой вывод: run.py меряет femtovg (дефолтный бэкенд), у которого нет blur, 15/17 blend modes,
+gradient-масок и backdrop-filter — ~11 открытых багов закрываются 3-4 фичами, а не точечными фиксами.
+**PA-1..PA-4 делать до canvas 2D и View Transitions** (обе фичи сидят на той же layer-модели).
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| PA-1 | **Shared scalar modules**: `blend_modes.rs`, `gradient_math.rs`, `matrix_util.rs` в lumen-paint — дедупликация femtovg (`femtovg_backend.rs:260,272-297,550-610`) / cpu_raster (`cpu_raster.rs:813,1557-1589`) / renderer | S | `lumen-paint` |
+| PA-2 | **femtovg: реальный blur + color-matrix** в PushFilter/PopFilter через offscreen-слой (сейчас sigma пишется в стек и не применяется, `femtovg_backend.rs:1221-1251`) → BUG-082 (большая часть), BUG-094, BUG-076 | M | `lumen-paint` |
+| PA-3 | **femtovg: полный набор blend modes** через offscreen-слой + формулы из PA-1 (сейчас 2/17, остальные → SourceOver, `femtovg_backend.rs:260-267`) → BUG-098 | M | `lumen-paint` |
+| PA-4 | **backdrop-filter**: femtovg (сейчас no-op `femtovg_backend.rs:1256-1265`) + wgpu-фиксы (silent skip `from_level<2` `renderer.rs:6139`; REPLACE-blend убивает альфу родителя `renderer.rs:6275`) → остаток BUG-082 | M | `lumen-paint` |
+| PA-5 | **cpu_raster: BorderStyle dashed/dotted** (сейчас игнорируется, `cpu_raster.rs:1094`) на общей dash-математике из PA-1 → BUG-080 для CPU-гейта | S | `lumen-paint` |
+
 ### N — Закрытие Phase 1 (после A-1 — следующий приоритет)
 
 | # | Задача | Размер | Крейты |

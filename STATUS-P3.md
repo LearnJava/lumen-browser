@@ -19,8 +19,25 @@
 **BUG-119 (rule index регрессии) — БРАТЬ ПЕРВЫМ:** 6 тестов run.py упали после P1 selector rule index commit (bb1f8e99).
 TEST-27 (rtl +1.9%), TEST-28 (containment +0.8%), TEST-29 (container-q +1.24%),
 TEST-40 (conic +1.3%), TEST-41 (table +1.68%), TEST-68 (font-var +1.05%).
-Все были PASS до rule index. RuleIndex пропускает часть CSS правил.
-Исследовать: `crates/engine/layout/src/rule_index.rs` — candidates() для этих страниц.
+Все были PASS до rule index.
+
+**Итог ревизии 2026-06-10** ([docs/paint-pipeline-review-2026-06.md](docs/paint-pipeline-review-2026-06.md)):
+сама схема бакетов корректна — инвариант «неизвестный селектор → universal» держится
+(`rule_index.rs:178` всегда мержит universal; функциональные псевдоклассы → universal, `rule_index.rs:62-65`),
+поселекторный разбор 6 тестов пропусков в бакетах не нашёл. **Главный подозреваемый — ключ кеша
+`(sheet_ptr, sheet_rules_len)`** (`style.rs:~5177`): мутация стилей in-place с тем же указателем
+и тем же числом правил (re-eval container queries / media) даёт тихо протухший индекс — совпадает
+с TEST-29. Вторичная проверка: относительный порядок каскада индексированных правил и brute-force
+проходов media/layer/scope/container. Заодно поправить doc-коммент `rule_index.rs:14-19` —
+в списке неиндексируемого пропущен `container_rules`.
+
+**Из той же ревизии — задачи P3 после BUG-119:**
+- BUG-085 (градиенты 12%): расследовать геометрию, НЕ цветовое пространство (TEST-39 опровергает
+  sRGB-гипотезу — стопы непрозрачные hex + transparent с тем же RGB). Кандидаты: radial default
+  sizing (farthest-corner), hard stops AA, femtovg `fill_gradient` kernel. После P2 PA-1 (gradient_math.rs).
+- BUG-093 (scrollbar 1.39%): калибровка порога TEST-51 до 2% — платформенный скин скроллбара
+  пиксельно с Edge не совпадёт никогда. Не код.
+- BUG-082/094/098/076 — НЕ брать точечно: закрываются фичами femtovg у P2 (PA-2..PA-4 в STATUS-P2.md).
 
 ### 1. Открытые баги (после BUG-119)
 
