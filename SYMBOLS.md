@@ -653,7 +653,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/encoding/src/unicode_provider.rs:31` **fn** `new` — Создаёт провайдер с auto-режимом (LSTM/dictionary для CJK/Thai/etc)
 `crates/engine/encoding/src/unicode_provider.rs:40` **fn** `new_latin` — Облегчённая версия — только Latin + UAX #14 rules, без LSTM
 
-## lumen-font  (173 symbols)
+## lumen-font  (177 symbols)
 
 `crates/engine/font/src/avar.rs:32` **struct** `AxisValueMap` — Одна пара (fromCoord → toCoord) в segment map оси. Координаты в
 `crates/engine/font/src/avar.rs:44` **struct** `SegmentMap` — Segment map для одной оси: список пар, отсортированных по `from`
@@ -804,6 +804,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/system_fonts.rs:44` **fn** `new` — Индекс, который при первом lookup просканирует стандартные пути
 `crates/engine/font/src/system_fonts.rs:53` **fn** `with_dirs` — Индекс с явно заданным списком директорий — для тестов и
 `crates/engine/font/src/system_fonts.rs:66` **fn** `family_count` — Сколько family-имён зарегистрировано. Для тестов и диагностики;
+`crates/engine/font/src/unicode_range.rs:12` **struct** `UnicodeRange` — Один диапазон кодепоинтов из `unicode-range:` дескриптора @font-face
+`crates/engine/font/src/unicode_range.rs:21` **fn** `contains` — Проверяет, входит ли кодепоинт `cp` в этот диапазон
+`crates/engine/font/src/unicode_range.rs:35` **fn** `parse_unicode_ranges` — Парсит CSS `unicode-range` дескриптор в список `UnicodeRange`
+`crates/engine/font/src/unicode_range.rs:74` **fn** `codepoint_in_ranges` — Проверяет, покрывается ли кодепоинт хотя бы одним диапазоном из списка
 `crates/engine/font/src/variation.rs:80` **fn** `apply_variations_to_simple_outline` — Применяет набор `TupleVariation` к outline-контурам, имитируя
 `crates/engine/font/src/variation_coords.rs:28` **struct** `VariationCoords` — Normalized variation coordinates for a font instance. Stores one f32 per axis
 `crates/engine/font/src/variation_coords.rs:33` **fn** `empty` — Creates an empty coordinate vector (no variations applied; uses default
@@ -2054,7 +2058,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (279 symbols)
+## lumen-paint  (280 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -2212,11 +2216,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:240` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
 `crates/engine/paint/src/lib.rs:89` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
 `crates/engine/paint/src/lib.rs:99` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/lib.rs:260` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:269` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:281` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family`
-`crates/engine/paint/src/lib.rs:288` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:303` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:272` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:282` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:296` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:310` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:326` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:341` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1331` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
@@ -2336,7 +2341,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (756 symbols)
+## lumen-shell  (760 symbols)
 
 `crates/shell/src/address_bar.rs:56` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:70` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2428,20 +2433,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/devtools/console_panel.rs:177` **fn** `scroll_up` — Scroll up by `n` lines (towards older messages)
 `crates/shell/src/devtools/console_panel.rs:184` **fn** `scroll_down` — Scroll down by `n` lines (towards newer messages)
 `crates/shell/src/devtools/console_panel.rs:196` **fn** `build_console_panel` — Build the viewport-locked console panel overlay
-`crates/shell/src/devtools/inspector.rs:54` **struct** `SelectedNode` — A node currently pinned by the inspector, with its computed-style snapshot
-`crates/shell/src/devtools/inspector.rs:70` **struct** `DomInspectorPanel` — DevTools DOM inspector panel state
-`crates/shell/src/devtools/inspector.rs:82` **fn** `new` — Create a hidden inspector with no hover or selection
-`crates/shell/src/devtools/inspector.rs:88` **fn** `toggle` — Toggle inspector activity. Clears hover (but keeps the last selection)
-`crates/shell/src/devtools/inspector.rs:97` **fn** `set_hovered` — Update the node under the cursor. Returns `true` when the value changed
-`crates/shell/src/devtools/inspector.rs:106` **fn** `select` — Pin a node as the current selection with its computed-style map
-`crates/shell/src/devtools/inspector.rs:117` **fn** `scroll_up` — Scroll the property list of the current selection up (towards the top)
-`crates/shell/src/devtools/inspector.rs:126` **fn** `scroll_down` — Scroll the property list down (towards the bottom), clamped so the last
-`crates/shell/src/devtools/inspector.rs:138` **fn** `find_box` — Find the [`LayoutBox`] for `node` in document order. Returns `None` when the
-`crates/shell/src/devtools/inspector.rs:157` **fn** `box_model_rects` — Compute the four box-model rectangles for `lb` in document (page) coordinates
-`crates/shell/src/devtools/inspector.rs:212` **fn** `build_box_overlay` — Build the box-model overlay for the hovered box, translated from page
-`crates/shell/src/devtools/inspector.rs:245` **fn** `element_label` — Build a human-readable DOM label for `node`, e.g. `div#main.card`, `#text`,
-`crates/shell/src/devtools/inspector.rs:276` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
-`crates/shell/src/devtools/inspector.rs:373` **fn** `build_inspector_panel` — Build the right-docked computed-style side panel
+`crates/shell/src/devtools/inspector.rs:72` **enum** `InspectorTab` — Which tab of the DevTools inspector panel is currently active
+`crates/shell/src/devtools/inspector.rs:82` **struct** `SelectedNode` — A node currently pinned by the inspector, with its computed-style snapshot
+`crates/shell/src/devtools/inspector.rs:102` **struct** `DomInspectorPanel` — DevTools DOM inspector panel state
+`crates/shell/src/devtools/inspector.rs:116` **fn** `new` — Create a hidden inspector with no hover or selection
+`crates/shell/src/devtools/inspector.rs:122` **fn** `toggle` — Toggle inspector activity. Clears hover (but keeps the last selection)
+`crates/shell/src/devtools/inspector.rs:131` **fn** `set_hovered` — Update the node under the cursor. Returns `true` when the value changed
+`crates/shell/src/devtools/inspector.rs:143` **fn** `select` — Pin a node as the current selection
+`crates/shell/src/devtools/inspector.rs:161` **fn** `switch_tab` — Switch the active tab to `tab`
+`crates/shell/src/devtools/inspector.rs:169` **fn** `is_panel_click` — Returns `true` if `x` is inside the right-docked panel, given window CSS width
+`crates/shell/src/devtools/inspector.rs:175` **fn** `click_tab_at` — Handle a click that is inside the panel. Switches tab when the click lands
+`crates/shell/src/devtools/inspector.rs:194` **fn** `scroll_up` — Scroll the active tab's property list up (towards the top)
+`crates/shell/src/devtools/inspector.rs:208` **fn** `scroll_down` — Scroll the active tab's property list down (towards the bottom), clamped
+`crates/shell/src/devtools/inspector.rs:227` **fn** `find_box` — Find the [`LayoutBox`] for `node` in document order. Returns `None` when the
+`crates/shell/src/devtools/inspector.rs:246` **fn** `box_model_rects` — Compute the four box-model rectangles for `lb` in document (page) coordinates
+`crates/shell/src/devtools/inspector.rs:301` **fn** `build_box_overlay` — Build the box-model overlay for the hovered box, translated from page
+`crates/shell/src/devtools/inspector.rs:334` **fn** `element_label` — Build a human-readable DOM label for `node`, e.g. `div#main.card`, `#text`,
+`crates/shell/src/devtools/inspector.rs:366` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
+`crates/shell/src/devtools/inspector.rs:463` **fn** `build_inspector_panel` — Build the right-docked inspector side panel
 `crates/shell/src/devtools/network_panel.rs:76` **struct** `NetworkEntry` — A single recorded HTTP request and its lifecycle state
 `crates/shell/src/devtools/network_panel.rs:109` **struct** `NetworkLog` — Shared, append-only log of HTTP requests for the network panel
 `crates/shell/src/devtools/network_panel.rs:116` **fn** `record_started` — Record a newly started request: appends a pending entry
@@ -3559,4 +3568,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3494 symbols in 20 crates*
+*Total: 3503 symbols in 20 crates*
