@@ -6,7 +6,8 @@
 
 ## In progress
 
-None
+**PA-1 | Shared scalar modules** — `gradient_math.rs`, `blend_modes.rs`, `matrix_util.rs`, `dash_math.rs` в `lumen-paint`; дедупликация femtovg (`femtovg_backend.rs:69,204,228,272,1196`) / cpu_raster (`cpu_raster.rs:271,1228,1557`) / renderer (`renderer.rs:6970,7545,7594`)  branch: `p2-pa1-shared-scalar`
+Next step: создать модули + перевести 3 бэкенда на общие функции
 
 ---
 

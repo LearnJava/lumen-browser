@@ -1267,13 +1267,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 // 2D affine: x'=a·x+c·y+e, y'=b·x+d·y+f. Печатаем 6 значимых
                 // компонент в snapshot-friendly формате — детерминированный
                 // обход, не зависящий от Z/W-колонок (Phase 0 — 2D).
-                let m = &matrix.0;
-                let a = m[0];
-                let b = m[1];
-                let c = m[4];
-                let d = m[5];
-                let e = m[12];
-                let f = m[13];
+                let [a, b, c, d, e, f] = crate::matrix_util::mat4_to_2d_affine(matrix);
                 out.push_str(&format!(
                     "PushTransform [{a:.3} {b:.3} {c:.3} {d:.3} {e:.3} {f:.3}]\n"
                 ));

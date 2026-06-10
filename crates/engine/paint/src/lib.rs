@@ -8,6 +8,10 @@
 
 pub mod atlas;
 pub mod backend;
+pub mod blend_modes;
+pub mod dash_math;
+pub mod gradient_math;
+pub mod matrix_util;
 #[cfg(any(
     feature = "backend-wgpu",
     feature = "backend-femtovg",

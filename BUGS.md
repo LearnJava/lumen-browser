@@ -771,3 +771,4 @@ CSS-фильтры `grayscale`, `sepia`, `brightness`, `invert`, `contrast`, `sa
 | View Transitions API | Phase 2 | TEST-61: 99.53% → BUG-103 |
 | CSS Scroll Snap | Phase 1 | TEST-62: 63.70% → BUG-104 |
 | CSS Masonry | Phase 2 | TEST-63: 26.13% → BUG-105 |
+BUG-122 | OPEN  | test/paint | flaky: compositor::tests::compositor_thread_wakes_on_commit_faster_than_full_frame (и иногда compositor_thread_flushes_pending_asynchronously) падают под нагрузкой — «vsync wakeup не сработал за 50 мс»; воспроизводится и на main, и в ветках; тайминговый дедлайн 50 мс слишком жёсткий для занятой машины с параллельными сессиями | crates/engine/paint/src/compositor.rs:938
