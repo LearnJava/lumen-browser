@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-starting-style влит 2026-06-10
+`:host` / `::slotted` Shadow DOM pseudo-classes — branch: p4-host-slotted
+Next step: реализовать `PseudoClass::Host` в `matches_pseudo_class` + `::slotted` cascade в `compute_style` — `style.rs:6114`
 
 ## Workflow
 
