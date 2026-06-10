@@ -6,12 +6,18 @@
 
 ## In progress
 
-O-13: DevTools Computed Styles panel  branch: p1-devtools-computed-tab
-Next step: добавить InspectorTab + вкладки в inspector.rs  crates/shell/src/devtools/inspector.rs:66
+_(нет)_
 
 ---
 
 ## Next
+
+### Phase 2 — делать первыми (блокируют закрытие фазы)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| ~~W-6~~ | ~~**`overflow: scroll` shell scroll event wiring**~~ — **выполнено** (реализовано в R-1: `try_scroll_overflow_container` в shell, `find_scroll_container_at` + `set_scroll_position` + display list rebuild) | S | `lumen-shell` |
+| ~~**O-13**~~ | ~~**7E.2: DevTools Computed Styles panel**~~ — **выполнено** (p1-devtools-computed-tab, 2026-06-10) | S | `lumen-shell` |
 
 ### Y — Web Platform Phase 4 (новые алгоритмы)
 
@@ -22,12 +28,6 @@ Next step: добавить InspectorTab + вкладки в inspector.rs  crate
 | Y-3 | **CSS `scrollbar-width`/`scrollbar-color` algorithm stub** — CSS Scrollbars Styling L1; `// CSS: scrollbar-width` handoff для P4 | XS | `lumen-layout` |
 | Y-4 | **CSS `color-scheme: dark light` UA switching algorithm** — полный switch: `prefers-color-scheme` влияет на `color-scheme` у root, system-color резолв | S | `lumen-layout` |
 | Y-5 | **CSS Scroll Snap L2 `snapChanging`/`snapChanged` event JS stubs** — `Element.addEventListener('snapchanging'/'snapchanged')` + dispatch при scroll-snap завершении | XS | `lumen-js`, `lumen-layout` |
-
-### Phase 2 — делать первыми (блокируют закрытие фазы)
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~W-6~~ | ~~**`overflow: scroll` shell scroll event wiring**~~ — **выполнено** (реализовано в R-1: `try_scroll_overflow_container` в shell, `find_scroll_container_at` + `set_scroll_position` + display list rebuild) | S | `lumen-shell` |
 
 ### X — Web Platform Phase 3 (алгоритмы)
 
@@ -182,6 +182,7 @@ Next step: добавить InspectorTab + вкладки в inspector.rs  crate
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | O-13: DevTools Computed Styles panel | lumen-shell inspector.rs: InspectorTab enum (Elements/Computed). SelectedNode + computed_props. click_tab_at() — таб-переключатель (panel UI intercept). scroll_up/scroll_down скроллят активную вкладку. build_inspector_panel рисует tab row: синяя линия подчёркивает активный таб. main.rs: computed_style_to_map (~55 свойств, алфавитно) передаётся при клике на node. MouseWheel перехватывается инспектором. 13 новых unit-тестов. 62 теста итого, clippy чист. |
 | 2026-06-10 | Y-1: CSS Masonry layout stub | lumen-layout masonry.rs: GridTrackSize::Masonry + parse_track_list("masonry") → sentinel. lay_out_grid ранний dispatch: row-masonry (grid-template-rows: masonry) + col-masonry. Greedy waterfall: каждый item → трек с минимальной высотой. lay_out_masonry() + min_track_idx() публичные для unit-тестирования. // CSS: masonry-auto-flow handoff для P4. 7 unit-тестов (+7 vs 2559). CSS-SPECS.md masonry ⬜→🟡. STATUS-P4.md: добавлен handoff masonry-auto-flow/align-tracks/justify-tracks. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-7: pointer-events:none hit-test filtering | lumen-layout collect_clickable_rec: Block/FormControl boxes пропускаются при pointer_events=None (дети обходятся). InlineRun: frag.style.pointer_events=None → link=None (frag.style содержит ComputedStyle <a>-элемента, не контейнера). 4 новых unit-теста (+4 vs 2545). Clippy чист. W-6 отмечена выполненной (реализована в R-1). |
 | 2026-06-10 | W-5: CSS hyphens: auto алгоритм-стаб | lumen-layout hyphenation.rs: SoftHyphenPoint { byte_offset } — позиция в display-строке (U+00AD stripped). collect_hyphen_points(word, locale, hyphens, provider): None→пусто, Manual→U+00AD scan, Auto→Manual+provider.hyphenate(). Сортировка+dedup. Публичный API поверх внутренней логики box_tree.rs. P4 wiring point для wrap_inline_run. 14 unit-тестов + 1 doctest. Clippy чист. Без новых зависимостей. |
