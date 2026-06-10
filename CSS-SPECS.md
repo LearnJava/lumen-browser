@@ -115,7 +115,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Selectors L5 | [selectors-5](https://www.w3.org/TR/selectors-5/) | ✅ | `:nth-child(An+B of S)` selector filter implemented in `style.rs:6464` + `css-parser` parser; 4 layout tests | **#52** |
 | CSS Nesting (scope) | [css-scoping-1](https://www.w3.org/TR/css-scoping-1/) | 🟡 | @scope root matching ✅ (P1 2026-06-03); limit/inner-scope — Phase 2 | **#53** |
 | CSS Functions & Mixins | [css-mixins-1](https://www.w3.org/TR/css-mixins-1/) | ⬜ | @function rule | **#54** |
-| Scroll-driven Animations | [scroll-animations-1](https://www.w3.org/TR/scroll-animations-1/) | 🟡 | scroll-timeline; animation-timeline | **#55** |
+| Scroll-driven Animations | [scroll-animations-1](https://www.w3.org/TR/scroll-animations-1/) | ✅ | scroll-timeline-name/axis, view-timeline-name/axis, animation-timeline (auto/scroll()/view()/named); collect_named_* walks layout tree; P4 2026-06-10 | **#55** |
 | CSS Anchor Positioning | [css-anchor-position-1](https://www.w3.org/TR/css-anchor-position-1/) | 🟡 | algorithm stub ready (P1 2026-06-03): AnchorRegistry, collect_anchors, resolve_anchor_function, resolve_inset_area; CSS wiring pending (P4) | **#56** |
 | CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | 🟡 | `document.startViewTransition` JS API + 300 ms cross-fade ✅ 2026-06-03; `view-transition-name`/`::view-transition-*` pseudo P4 | **#57** |
 | CSS Fill & Stroke L3 | [fill-stroke-3](https://www.w3.org/TR/fill-stroke-3/) | 🟡 | fill/stroke/fill-opacity/stroke-opacity/stroke-width ✅ 2026-05-27; fill-rule/stroke-dasharray ⬜ | **#58** |
@@ -328,7 +328,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `animation-timing-function` | 🟡 | |
 | `animation-iteration-count` / `animation-direction` | 🟡 | |
 | `animation-fill-mode` / `animation-play-state` | 🟡 | |
-| `animation-timeline` / `animation-range` | 🟡 | Scroll-driven Animations — algorithm stub ready (P1); CSS wiring pending (P4) |
+| `animation-timeline` / `animation-range` | ✅ | animation-timeline parsed (Auto/Scroll/View/Named); P4 2026-06-10 |
 | `@keyframes` | 🟡 | parsed; AnimationScheduler::tick ⬜ |
 
 ### [T1] CSS Nesting
@@ -508,7 +508,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `scroll-margin*` / `scroll-padding*` | 🟡 | parsed |
 | `scroll-behavior` | 🟡 | auto/smooth parsed |
 | `overscroll-behavior*` | 🟡 | parsed; gesture boundary ⬜ |
-| `scroll-timeline` / `view-timeline` | 🟡 | Scroll-driven Animations — algorithm stub ready (P1); CSS wiring pending (P4) |
+| `scroll-timeline` / `view-timeline` | ✅ | scroll-timeline-name/axis, view-timeline-name/axis shorthands+longhands; collect_named_* wired; P4 2026-06-10 |
 
 ### [T3] Multi-column
 
@@ -649,8 +649,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `scroll-timeline` / `view-timeline` | 🟡 | algorithm stub ready (P1); CSS wiring pending (P4) |
-| `animation-timeline` / `animation-range` | 🟡 | algorithm stub ready (P1); CSS wiring pending (P4) |
+| `scroll-timeline` / `view-timeline` | ✅ | CSS wiring done: P4 2026-06-10 |
+| `animation-timeline` / `animation-range` | ✅ | animation-timeline parsed; P4 2026-06-10 |
 
 ### [T4] Anchor Positioning
 

@@ -18,6 +18,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::rule_index::RuleIndex;
+use crate::scroll_timeline::ScrollAxis;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
@@ -1764,6 +1765,26 @@ impl AnimationPlayState {
     }
 }
 
+/// CSS Scroll-Driven Animations L1 §3.3 — `animation-timeline` CSS value.
+///
+/// Parsed from `animation-timeline: auto | scroll([axis] [scroller]) | view([axis]) | <custom-ident>`.
+/// Stored per-animation parallel to `animation_names`. Resolution to a concrete
+/// `ScrollTimeline` / `ViewTimeline` happens at runtime in the animation scheduler.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum AnimationTimeline {
+    /// Default: time-driven animation (normal `@keyframes` clock).
+    #[default]
+    Auto,
+    /// `scroll([<axis>] [nearest | root | self])` — scroll container progress.
+    /// `nearest: true` = nearest scroll ancestor (default); `false` = root viewport.
+    Scroll { axis: ScrollAxis, nearest: bool },
+    /// `view([<axis>])` — element visibility in scroll container (cover range).
+    View { axis: ScrollAxis },
+    /// `<custom-ident>` — matched against `scroll-timeline-name` / `view-timeline-name`
+    /// at runtime.
+    Named(String),
+}
+
 /// CSS-wide keywords (CSS Cascade L4 §7) — применимы к любому свойству.
 /// - `Inherit` — взять computed value родителя.
 /// - `Initial` — взять initial value свойства из спецификации.
@@ -2231,6 +2252,21 @@ pub struct ComputedStyle {
     pub animation_fill_modes: Vec<AnimationFillMode>,
     /// CSS Animations L1 §3.8 — `animation-play-state: <single-animation-play-state>#`.
     pub animation_play_states: Vec<AnimationPlayState>,
+    /// CSS Scroll-Driven Animations L1 §3.3 — `animation-timeline: auto | scroll() | view() | <ident>#`.
+    /// Non-inherited. Parallel list to `animation_names`. Default empty = all `Auto`.
+    pub animation_timelines: Vec<AnimationTimeline>,
+    /// CSS Scroll-Driven Animations L1 §3.1 — `scroll-timeline-name: none | <custom-ident>`.
+    /// Non-inherited. Names this element as a scroll container for a named scroll timeline.
+    pub scroll_timeline_name: Option<String>,
+    /// CSS Scroll-Driven Animations L1 §3.2 — `scroll-timeline-axis: block | inline | x | y`.
+    /// Non-inherited. Which axis drives the named scroll timeline. Default `Block`.
+    pub scroll_timeline_axis: ScrollAxis,
+    /// CSS Scroll-Driven Animations L1 §3.3 — `view-timeline-name: none | <custom-ident>`.
+    /// Non-inherited. Names this element as a view-timeline subject.
+    pub view_timeline_name: Option<String>,
+    /// CSS Scroll-Driven Animations L1 §3.4 — `view-timeline-axis: block | inline | x | y`.
+    /// Non-inherited. Which axis drives the named view timeline. Default `Block`.
+    pub view_timeline_axis: ScrollAxis,
     /// CSS Masking L1 §4 — `mask-image: url(...) | linear-gradient(...) | none`.
     /// `BackgroundImage` переиспользуется как тип (same structure: None/Url/Gradient).
     pub mask_image: BackgroundImage,
@@ -4491,6 +4527,11 @@ impl ComputedStyle {
             animation_directions: Vec::new(),
             animation_fill_modes: Vec::new(),
             animation_play_states: Vec::new(),
+            animation_timelines: Vec::new(),
+            scroll_timeline_name: None,
+            scroll_timeline_axis: ScrollAxis::Block,
+            view_timeline_name: None,
+            view_timeline_axis: ScrollAxis::Block,
             mask_image: BackgroundImage::None,
             mask_repeat: BackgroundRepeat::Repeat,
             mask_size: BackgroundSize::Auto,
@@ -4787,6 +4828,11 @@ pub fn compute_style(
         animation_directions: Vec::new(),
         animation_fill_modes: Vec::new(),
         animation_play_states: Vec::new(),
+        animation_timelines: Vec::new(),
+        scroll_timeline_name: None,
+        scroll_timeline_axis: ScrollAxis::Block,
+        view_timeline_name: None,
+        view_timeline_axis: ScrollAxis::Block,
         // CSS Masking — не наследуется.
         mask_image: BackgroundImage::None,
         mask_repeat: BackgroundRepeat::Repeat,
@@ -11848,6 +11894,41 @@ fn apply_declaration(
         "animation-play-state" => {
             style.animation_play_states = AnimationPlayState::parse_list(val);
         }
+        "animation-timeline" => {
+            style.animation_timelines = parse_animation_timeline_list(val);
+        }
+        "scroll-timeline-name" => {
+            let t = val.trim();
+            style.scroll_timeline_name = if t.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(t.to_string())
+            };
+        }
+        "scroll-timeline-axis" => {
+            if let Some(axis) = parse_scroll_axis(val.trim()) {
+                style.scroll_timeline_axis = axis;
+            }
+        }
+        "scroll-timeline" => {
+            apply_scroll_timeline_shorthand(style, val);
+        }
+        "view-timeline-name" => {
+            let t = val.trim();
+            style.view_timeline_name = if t.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(t.to_string())
+            };
+        }
+        "view-timeline-axis" => {
+            if let Some(axis) = parse_scroll_axis(val.trim()) {
+                style.view_timeline_axis = axis;
+            }
+        }
+        "view-timeline" => {
+            apply_view_timeline_shorthand(style, val);
+        }
         "mask-image" => {
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("none") {
@@ -14535,6 +14616,112 @@ fn parse_content_fn(name: &str, args: &str) -> Option<ContentItem> {
         }
         _ => None,
     }
+}
+
+/// Parse `scroll-timeline-axis` / `view-timeline-axis` keyword.
+fn parse_scroll_axis(s: &str) -> Option<ScrollAxis> {
+    match s.to_ascii_lowercase().as_str() {
+        "block" => Some(ScrollAxis::Block),
+        "inline" => Some(ScrollAxis::Inline),
+        "x" => Some(ScrollAxis::X),
+        "y" => Some(ScrollAxis::Y),
+        _ => None,
+    }
+}
+
+/// Parse `scroll()` function: `scroll([<axis>] [nearest | root | self])`.
+/// Returns `AnimationTimeline::Scroll { axis, nearest }`.
+fn parse_scroll_fn(s: &str) -> AnimationTimeline {
+    let inner = s
+        .trim_start_matches("scroll(")
+        .trim_end_matches(')')
+        .trim();
+    let mut axis = ScrollAxis::Block;
+    let mut nearest = true;
+    for token in inner.split_whitespace() {
+        match token.to_ascii_lowercase().as_str() {
+            "block" => axis = ScrollAxis::Block,
+            "inline" => axis = ScrollAxis::Inline,
+            "x" => axis = ScrollAxis::X,
+            "y" => axis = ScrollAxis::Y,
+            "root" => nearest = false,
+            "nearest" | "self" => nearest = true,
+            _ => {}
+        }
+    }
+    AnimationTimeline::Scroll { axis, nearest }
+}
+
+/// Parse `view()` function: `view([<axis>])`.
+fn parse_view_fn(s: &str) -> AnimationTimeline {
+    let inner = s
+        .trim_start_matches("view(")
+        .trim_end_matches(')')
+        .trim();
+    let axis = parse_scroll_axis(inner).unwrap_or(ScrollAxis::Block);
+    AnimationTimeline::View { axis }
+}
+
+/// Parse comma-separated `animation-timeline` list.
+fn parse_animation_timeline_list(val: &str) -> Vec<AnimationTimeline> {
+    split_top_level_commas(val)
+        .into_iter()
+        .map(|item| {
+            let t = item.trim();
+            let lower = t.to_ascii_lowercase();
+            if lower == "auto" || lower == "none" {
+                AnimationTimeline::Auto
+            } else if lower.starts_with("scroll(") || lower == "scroll()" {
+                parse_scroll_fn(t)
+            } else if lower.starts_with("view(") || lower == "view()" {
+                parse_view_fn(t)
+            } else {
+                AnimationTimeline::Named(t.to_string())
+            }
+        })
+        .collect()
+}
+
+/// CSS Scroll-Driven Animations — `scroll-timeline` shorthand.
+/// Syntax: `<custom-ident> [<axis>]` (resets both name and axis).
+fn apply_scroll_timeline_shorthand(style: &mut ComputedStyle, val: &str) {
+    let trimmed = val.trim();
+    if trimmed.eq_ignore_ascii_case("none") {
+        style.scroll_timeline_name = None;
+        style.scroll_timeline_axis = ScrollAxis::Block;
+        return;
+    }
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("").trim();
+    let axis_str = parts.next().unwrap_or("").trim();
+    style.scroll_timeline_name = if name.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(name.to_string())
+    };
+    style.scroll_timeline_axis =
+        parse_scroll_axis(axis_str).unwrap_or(ScrollAxis::Block);
+}
+
+/// CSS Scroll-Driven Animations — `view-timeline` shorthand.
+/// Syntax: `<custom-ident> [<axis>]` (resets both name and axis).
+fn apply_view_timeline_shorthand(style: &mut ComputedStyle, val: &str) {
+    let trimmed = val.trim();
+    if trimmed.eq_ignore_ascii_case("none") {
+        style.view_timeline_name = None;
+        style.view_timeline_axis = ScrollAxis::Block;
+        return;
+    }
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("").trim();
+    let axis_str = parts.next().unwrap_or("").trim();
+    style.view_timeline_name = if name.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(name.to_string())
+    };
+    style.view_timeline_axis =
+        parse_scroll_axis(axis_str).unwrap_or(ScrollAxis::Block);
 }
 
 /// CSS Animations L1 §4 — `animation` shorthand.
@@ -25441,5 +25628,109 @@ mod anchor_positioning_tests {
         let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
         assert_eq!(div_style.anchor_name.as_deref(), Some("--parent"));
         assert!(span_style.anchor_name.is_none(), "anchor-name must not be inherited");
+    }
+
+    // ── CSS Scroll-Driven Animations ─────────────────────────────────────────
+
+    #[test]
+    fn scroll_timeline_name_parsed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { scroll-timeline-name: --my-tl; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.scroll_timeline_name.as_deref(), Some("--my-tl"));
+        assert_eq!(s.scroll_timeline_axis, ScrollAxis::Block);
+    }
+
+    #[test]
+    fn scroll_timeline_axis_inline() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { scroll-timeline-name: --t; scroll-timeline-axis: inline; }",
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.scroll_timeline_axis, ScrollAxis::Inline);
+    }
+
+    #[test]
+    fn scroll_timeline_shorthand() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { scroll-timeline: --tl x; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.scroll_timeline_name.as_deref(), Some("--tl"));
+        assert_eq!(s.scroll_timeline_axis, ScrollAxis::X);
+    }
+
+    #[test]
+    fn view_timeline_shorthand() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { view-timeline: --vt y; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.view_timeline_name.as_deref(), Some("--vt"));
+        assert_eq!(s.view_timeline_axis, ScrollAxis::Y);
+    }
+
+    #[test]
+    fn animation_timeline_auto() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { animation-timeline: auto; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.animation_timelines, vec![AnimationTimeline::Auto]);
+    }
+
+    #[test]
+    fn animation_timeline_scroll_fn() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { animation-timeline: scroll(inline root); }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(
+            s.animation_timelines,
+            vec![AnimationTimeline::Scroll { axis: ScrollAxis::Inline, nearest: false }]
+        );
+    }
+
+    #[test]
+    fn animation_timeline_view_fn() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { animation-timeline: view(inline); }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(
+            s.animation_timelines,
+            vec![AnimationTimeline::View { axis: ScrollAxis::Inline }]
+        );
+    }
+
+    #[test]
+    fn animation_timeline_named() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { animation-timeline: --my-scroll; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(
+            s.animation_timelines,
+            vec![AnimationTimeline::Named("--my-scroll".into())]
+        );
     }
 }

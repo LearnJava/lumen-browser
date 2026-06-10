@@ -228,14 +228,15 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 - **Entry points:** `lumen-layout/src/style.rs:15030` — `parse_function_color` + `parse_css_color_legacy`; `lumen-layout/src/color_mix.rs` — `mix_colors` + `MixColorSpace`.
 - **CSS comment location:** `style.rs:15030` `// CSS: color-mix()` comment.
 
-### CSS Scroll-Driven Animations L1 — `ScrollTimeline` / `ViewTimeline` (P1 feature p1-scroll-driven-animations)
-- **Status:** Algorithm ready. `ScrollTimeline`, `ViewTimeline`, `NamedScrollTimeline`, `NamedViewTimeline`, `ScrollAxis`, `Viewport` in `lumen-layout/src/scroll_timeline.rs`. Progress resolvers: `resolve_scroll_progress()` + `resolve_view_progress()`. Collection stubs: `collect_named_scroll_timelines()` + `collect_named_view_timelines()`. All exported from `lumen-layout`. 15 unit tests.
-- **P4 task** (CSS Scroll-Driven Animations L1):
-  1. Add `scroll_timeline_name: Option<String>` + `scroll_timeline_axis: ScrollAxis` to `ComputedStyle`. Parse `scroll-timeline-name` + `scroll-timeline-axis` in `apply_declaration()`. Wire to `collect_named_scroll_timelines()` — iterate layout tree, emit `NamedScrollTimeline` for each node with a non-`none` `scroll_timeline_name`.
-  2. Add `view_timeline_name: Option<String>` + `view_timeline_axis: ScrollAxis` to `ComputedStyle`. Parse `view-timeline-name` + `view-timeline-axis`. Wire to `collect_named_view_timelines()`.
-  3. Add `animation_timeline: AnimationTimeline` enum (`Auto | ScrollFn(ScrollTimeline) | ViewFn(ViewTimeline) | Named(String)`) to `ComputedStyle`. Parse `animation-timeline` (`auto`, `scroll()`, `view()`, `<custom-ident>`).
-  4. In the animation scheduler (`AnimationScheduler` / shell tick loop): resolve `animation_timeline` to a progress fraction using `resolve_scroll_progress` / `resolve_view_progress`, then drive `CompositorAnimFrame` progress from it instead of wall-clock time.
-- **Entry points:** `lumen-layout/src/scroll_timeline.rs` (all public API), `lumen-layout/src/style.rs` (ComputedStyle), `lumen-layout/src/animation.rs` (AnimationScheduler).
+### ✅ CSS Scroll-Driven Animations L1 — **ВЫПОЛНЕНО** (p4-scroll-driven-animations, 2026-06-10)
+- ComputedStyle: `scroll_timeline_name/axis`, `view_timeline_name/axis`, `animation_timelines: Vec<AnimationTimeline>`
+- `AnimationTimeline` enum: `Auto | Scroll{axis, nearest} | View{axis} | Named(String)`
+- Shorthands: `scroll-timeline`, `view-timeline` в apply_declaration
+- `parse_scroll_axis()`, `parse_animation_timeline_list()`, `parse_scroll_fn()`, `parse_view_fn()`
+- `collect_named_scroll_timelines()` + `collect_named_view_timelines()` — полный walk layout tree
+- SUPPORTED_PROPERTIES: animation-timeline, scroll-timeline{,-name,-axis}, view-timeline{,-name,-axis}
+- 12 unit-тестов (8 CSS parsing + 4 collect); graphic test 78
+- Шаг 4 (shell scheduler wiring) — деферировано P3/shell
 
 ### ✅ CSS Anchor Positioning L1 — **ВЫПОЛНЕНО** (p4-anchor-positioning, 2026-06-10)
 `anchor-name`/`position-anchor`/`inset-area`/`position-area` реализованы. `anchor()` в inset-values — Phase 3+ (требует новый вариант LengthOrAuto::AnchorFn).
@@ -266,6 +267,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-10 | `scroll-timeline-name/axis`, `view-timeline-name/axis`, `animation-timeline` | CSS Scroll-Driven Animations L1; `AnimationTimeline` enum (Auto/Scroll/View/Named); `collect_named_scroll_timelines/view_timelines()` полный walk; SUPPORTED_PROPERTIES +7; 12 unit-тестов + graphic test 78 |
 | 2026-06-10 | `anchor-name` / `position-anchor` / `inset-area` | CSS Anchor Positioning L1; ComputedStyle 4 fields; parse_inset_area_keyword (9 logical kw + physical aliases); collect_anchors_rec wired; apply_anchor_positions() post-layout pass in box_tree.rs; position-area alias; 7 unit-тестов + graphic test 77 |
 | 2026-06-10 | `offset-path` / `offset-distance` / `offset-rotate` | CSS Motion Path L1; forward_box_transform() + PropertyTrees::walk() wiring; resolve_motion_transform() composed before CSS transform; creates_transform() extended; 4 unit-тесты + graphic test 76 |
 | 2026-06-10 | `masonry-auto-flow` | CSS Masonry Layout §9; `MasonryAutoFlow` enum (DefiniteFirst\|Next\|Ordered); `sorted_idxs` в masonry dispatch lay_out_grid; Ordered сортирует по CSS `order`; DefiniteFirst ставит grid-positioned items первыми; 10 unit-тестов + graphic test 75 |

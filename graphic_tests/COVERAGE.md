@@ -215,3 +215,10 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **position-anchor** — ✅ реализован (CSS Anchor Positioning L1 §3): ComputedStyle.position_anchor: Option<Box<str>>; парсинг в apply_declaration; apply_anchor_positions_rec читает для выбора anchor; тест 77
 - **inset-area** — ✅ реализован (CSS Anchor Positioning L1 §5): ComputedStyle.inset_area_row/col: InsetAreaKeyword; parse_inset_area_keyword (9 ключевых слов + физические алиасы); resolve_inset_area() вычисляет top/left/width/height; post-layout pass apply_anchor_positions() в box_tree.rs; тест 77
 - **position-area** — ✅ реализован (alias для inset-area, CSS Anchor Positioning L1): идентичный парсинг; тест 77
+- **scroll-timeline-name** — ✅ реализован (CSS Scroll-Driven Animations L1 §3.1): ComputedStyle.scroll_timeline_name: Option<String>; парсинг в apply_declaration; collect_named_scroll_timelines() обходит layout tree; тест 78
+- **scroll-timeline-axis** — ✅ реализован (CSS Scroll-Driven Animations L1 §3.2): ScrollAxis enum (Block/Inline/X/Y); парсинг keyword; тест 78
+- **scroll-timeline** — ✅ реализован (CSS Scroll-Driven Animations L1): shorthand name+axis; тест 78
+- **view-timeline-name** — ✅ реализован (CSS Scroll-Driven Animations L1 §3.3): ComputedStyle.view_timeline_name: Option<String>; collect_named_view_timelines() обходит дерево; тест 78
+- **view-timeline-axis** — ✅ реализован (CSS Scroll-Driven Animations L1 §3.4): парсинг keyword; тест 78
+- **view-timeline** — ✅ реализован (CSS Scroll-Driven Animations L1): shorthand name+axis; тест 78
+- **animation-timeline** — ✅ реализован (CSS Scroll-Driven Animations L1 §3.3): AnimationTimeline enum (Auto/Scroll{axis,nearest}/View{axis}/Named); parse_animation_timeline_list() разбирает scroll()/view()/ident; тест 78
