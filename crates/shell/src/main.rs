@@ -82,6 +82,7 @@ use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scro
 #[cfg(feature = "quickjs")]
 use lumen_layout::collect_computed_styles;
 use lumen_layout::style::ComputedStyle;
+use lumen_layout::computed_style_to_map;
 use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
 use lumen_layout::Cursor as CssCursor;
 use winit::application::ApplicationHandler;
@@ -6723,6 +6724,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
+                // DevTools inspector intercepts the wheel while visible (§7E.2):
+                // scroll the active tab's property list.
+                if self.dom_inspector.visible && self.dom_inspector.selected.is_some() {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    if lines > 0.0 {
+                        self.dom_inspector.scroll_up(lines.abs().ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.dom_inspector.scroll_down(lines.abs().ceil() as usize);
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // Privacy network panel intercepts the wheel while visible:
                 // scroll the request list instead of the page.
                 if self.privacy.visible {
@@ -7851,6 +7867,18 @@ impl Lumen {
         // DevTools inspector: a click pins the box under the cursor and shows
         // its computed style, suppressing normal navigation / JS dispatch.
         if self.dom_inspector.visible {
+            let win_w_css = self.viewport_width_css();
+            // Click inside the right-docked panel → UI interaction (tab switch).
+            if self.dom_inspector.is_panel_click(x_css, win_w_css) {
+                if self.dom_inspector.click_tab_at(
+                    x_css, y_css, win_w_css,
+                    tabs::strip::TAB_BAR_HEIGHT,
+                ) {
+                    self.request_redraw();
+                }
+                return;
+            }
+            // Click on the page → pin the box under cursor.
             let (page_x, page_y) = self.page_point(x_css, y_css);
             if let Some(hit) = self
                 .layout_box
@@ -7871,7 +7899,18 @@ impl Lumen {
                     .and_then(|lb| devtools::inspector::find_box(lb, node))
                     .map(devtools::inspector::computed_style_map)
                     .unwrap_or_default();
-                self.dom_inspector.select(node, label, props);
+                let computed_props = self
+                    .layout_box
+                    .as_ref()
+                    .and_then(|lb| devtools::inspector::find_box(lb, node))
+                    .map(|lb| {
+                        let mut entries: Vec<(String, String)> =
+                            computed_style_to_map(&lb.style).into_iter().collect();
+                        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                        entries
+                    })
+                    .unwrap_or_default();
+                self.dom_inspector.select(node, label, props, computed_props);
                 self.request_redraw();
             }
             return;
