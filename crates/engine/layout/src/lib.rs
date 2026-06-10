@@ -30,6 +30,7 @@ pub mod selection;
 pub mod selector_query;
 pub mod scroll_timeline;
 pub mod snapshot;
+pub mod inert;
 pub mod stacking;
 pub mod starting_style;
 pub mod style;
@@ -85,6 +86,7 @@ pub use scroll_timeline::{
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };
 pub use snapshot::serialize_layout_tree;
+pub use inert::{collect_inert_regions, is_inert, InertRegion};
 pub use starting_style::{resolve_starting_style, StartingStyleTracker};
 pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};
 pub use stacking::{
@@ -262,6 +264,13 @@ fn collect_clickable_rec(
     use lumen_core::geom::Rect;
 
     if matches!(b.kind, BoxKind::Skip) {
+        return;
+    }
+
+    // CSS: inert — P4 should add `[inert] { pointer-events: none; }` to the UA
+    // stylesheet. This guard provides the complementary layout-level filter:
+    // inert elements are never included in the clickable set.
+    if inert::is_inert(doc, b.node) {
         return;
     }
 
