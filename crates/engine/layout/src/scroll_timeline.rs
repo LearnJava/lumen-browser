@@ -263,24 +263,52 @@ pub fn resolve_view_progress(
 
 /// Collect all named scroll timelines defined in the layout tree.
 ///
-/// P4 populates `LayoutBox` with `scroll_timeline_name` / `scroll_timeline_axis`
-/// fields from `ComputedStyle`; until then this stub returns an empty `Vec`.
+/// Walks the layout tree and returns one [`NamedScrollTimeline`] for each box
+/// whose `ComputedStyle::scroll_timeline_name` is `Some`.
 ///
 /// # CSS: scroll-timeline-name, scroll-timeline-axis
-pub fn collect_named_scroll_timelines(_root: &LayoutBox) -> Vec<NamedScrollTimeline> {
-    // CSS: scroll-timeline-name — P4 wires ComputedStyle fields
-    Vec::new()
+pub fn collect_named_scroll_timelines(root: &LayoutBox) -> Vec<NamedScrollTimeline> {
+    let mut out = Vec::new();
+    collect_named_scroll_timelines_rec(root, &mut out);
+    out
+}
+
+fn collect_named_scroll_timelines_rec(lb: &LayoutBox, out: &mut Vec<NamedScrollTimeline>) {
+    if let Some(ref name) = lb.style.scroll_timeline_name {
+        out.push(NamedScrollTimeline {
+            container: lb.node,
+            name: name.clone(),
+            axis: lb.style.scroll_timeline_axis,
+        });
+    }
+    for child in &lb.children {
+        collect_named_scroll_timelines_rec(child, out);
+    }
 }
 
 /// Collect all named view timelines defined in the layout tree.
 ///
-/// P4 populates `LayoutBox` with `view_timeline_name` / `view_timeline_axis`
-/// fields from `ComputedStyle`; until then this stub returns an empty `Vec`.
+/// Walks the layout tree and returns one [`NamedViewTimeline`] for each box
+/// whose `ComputedStyle::view_timeline_name` is `Some`.
 ///
 /// # CSS: view-timeline-name, view-timeline-axis
-pub fn collect_named_view_timelines(_root: &LayoutBox) -> Vec<NamedViewTimeline> {
-    // CSS: view-timeline-name — P4 wires ComputedStyle fields
-    Vec::new()
+pub fn collect_named_view_timelines(root: &LayoutBox) -> Vec<NamedViewTimeline> {
+    let mut out = Vec::new();
+    collect_named_view_timelines_rec(root, &mut out);
+    out
+}
+
+fn collect_named_view_timelines_rec(lb: &LayoutBox, out: &mut Vec<NamedViewTimeline>) {
+    if let Some(ref name) = lb.style.view_timeline_name {
+        out.push(NamedViewTimeline {
+            subject: lb.node,
+            name: name.clone(),
+            axis: lb.style.view_timeline_axis,
+        });
+    }
+    for child in &lb.children {
+        collect_named_view_timelines_rec(child, out);
+    }
 }
 
 // ─── tests ──────────────────────────────────────────────────────────────────
@@ -492,9 +520,58 @@ mod tests {
     }
 
     #[test]
-    fn named_timelines_stubs_return_empty() {
+    fn named_timelines_no_name_returns_empty() {
+        // LayoutBox with no timeline name → both collectors return empty.
         let root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
         assert!(collect_named_scroll_timelines(&root).is_empty());
         assert!(collect_named_view_timelines(&root).is_empty());
+    }
+
+    #[test]
+    fn collect_scroll_timelines_walks_tree() {
+        // Root has a scroll-timeline-name; child does not.
+        let mut root = make_box(1, 0.0, 0.0, 1024.0, 2000.0);
+        root.style.scroll_timeline_name = Some("--parent".to_string());
+        root.style.scroll_timeline_axis = ScrollAxis::Inline;
+        let child = make_box(2, 0.0, 0.0, 800.0, 600.0);
+        root.children.push(child);
+
+        let collected = collect_named_scroll_timelines(&root);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].name, "--parent");
+        assert_eq!(collected[0].axis, ScrollAxis::Inline);
+        assert_eq!(collected[0].container, node(1));
+    }
+
+    #[test]
+    fn collect_scroll_timelines_nested() {
+        // Both root and a nested child have scroll-timeline-names.
+        let mut root = make_box(1, 0.0, 0.0, 1024.0, 2000.0);
+        root.style.scroll_timeline_name = Some("--outer".to_string());
+        root.style.scroll_timeline_axis = ScrollAxis::Block;
+        let mut child = make_box(2, 0.0, 0.0, 400.0, 800.0);
+        child.style.scroll_timeline_name = Some("--inner".to_string());
+        child.style.scroll_timeline_axis = ScrollAxis::Y;
+        root.children.push(child);
+
+        let collected = collect_named_scroll_timelines(&root);
+        assert_eq!(collected.len(), 2);
+        assert_eq!(collected[0].name, "--outer");
+        assert_eq!(collected[1].name, "--inner");
+        assert_eq!(collected[1].axis, ScrollAxis::Y);
+    }
+
+    #[test]
+    fn collect_view_timelines_walks_tree() {
+        let mut root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+        let mut target = make_box(2, 0.0, 300.0, 400.0, 200.0);
+        target.style.view_timeline_name = Some("--fade".to_string());
+        target.style.view_timeline_axis = ScrollAxis::Block;
+        root.children.push(target);
+
+        let collected = collect_named_view_timelines(&root);
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].name, "--fade");
+        assert_eq!(collected[0].subject, node(2));
     }
 }

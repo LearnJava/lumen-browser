@@ -1005,6 +1005,41 @@
   </div>
 </div><!-- /anchor-positioning card -->
 
+<!-- scroll-driven animations demo card -->
+<style>
+  .sda-card { display:inline-block; vertical-align:top; width:200px; padding:10px; margin:4px; background:#0d1b2a; border:1px solid #4fc3f7; border-radius:6px; }
+  .sda-title { color:#4fc3f7; font:700 10px/1.4 sans-serif; margin-bottom:6px; letter-spacing:.5px; }
+  .sda-scroll-container { scroll-timeline-name:--demo-scroll; scroll-timeline-axis:block; width:100%; height:60px; background:#1a237e; border-radius:4px; overflow:hidden; }
+  .sda-view-subject { view-timeline-name:--demo-view; view-timeline-axis:block; width:100%; height:60px; background:linear-gradient(90deg,#1b5e20,#388e3c); border-radius:4px; }
+  @keyframes sda-move { from{transform:translateX(0);background:#e65100} to{transform:translateX(80px);background:#ff8f00} }
+  .sda-anim-scroll { animation-name:sda-move; animation-duration:1s; animation-timeline:scroll(); animation-fill-mode:both; width:40px; height:40px; background:#e65100; border-radius:4px; }
+  .sda-anim-named { animation-name:sda-move; animation-duration:1s; animation-timeline:--demo-scroll; animation-fill-mode:both; width:40px; height:40px; background:#6a1b9a; border-radius:50%; }
+  @keyframes sda-view-anim { from{transform:scale(1);background:#00838f} to{transform:scale(1.4);background:#00bcd4} }
+  .sda-anim-view { animation-name:sda-view-anim; animation-duration:1s; animation-timeline:view(block); animation-fill-mode:both; width:40px; height:40px; background:#00838f; border-radius:4px; }
+</style>
+<div style="padding:6px">
+  <div class="sda-card">
+    <div class="sda-title">scroll-timeline-name<br>+ axis: block</div>
+    <div class="sda-scroll-container"></div>
+  </div>
+  <div class="sda-card">
+    <div class="sda-title">view-timeline-name<br>+ axis: block</div>
+    <div class="sda-view-subject"></div>
+  </div>
+  <div class="sda-card">
+    <div class="sda-title">animation-timeline:<br>scroll()</div>
+    <div class="sda-anim-scroll"></div>
+  </div>
+  <div class="sda-card">
+    <div class="sda-title">animation-timeline:<br>--demo-scroll</div>
+    <div class="sda-anim-named"></div>
+  </div>
+  <div class="sda-card">
+    <div class="sda-title">animation-timeline:<br>view(block)</div>
+    <div class="sda-anim-view"></div>
+  </div>
+</div><!-- /scroll-driven animations card -->
+
 <!-- list-style-type custom @counter-style demo card -->
 <style>
   @counter-style bracket {
