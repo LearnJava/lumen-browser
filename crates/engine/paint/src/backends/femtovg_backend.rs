@@ -46,14 +46,14 @@ use lumen_image::{Image, resize_area_avg};
 use lumen_layout::Color;
 
 use lumen_layout::{
-    BackgroundRepeat, BackgroundSize, BorderStyle, GradientStop, Length, ObjectPosition,
-    PositionComponent,
+    BackgroundRepeat, BackgroundSize, BorderStyle, GradientStop, Length, ObjectFit,
+    ObjectPosition, PositionComponent,
 };
 
 use lumen_core::geom::Rect;
 
 use crate::backend::{RenderBackend, RenderError};
-use crate::display_list::{BlendMode, CornerRadii, DisplayCommand};
+use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, fit_image_rect};
 
 // ─── Color conversion ────────────────────────────────────────────────────────
 
@@ -698,19 +698,44 @@ impl FemtovgBackend {
         let _ = self.canvas.fill_text(x, y + font_size * 0.8, text, &paint);
     }
 
-    /// Рисует изображение из зарегистрированного URL в rect.
+    /// Рисует изображение из зарегистрированного URL в content box `rect`
+    /// с учётом `object-fit` / `object-position` (CSS Images L3 §5.5).
     ///
-    /// Если изображение не зарегистрировано — рисует серый placeholder.
-    fn draw_image_in_rect(&mut self, rect: &Rect, src: &str) {
-        if let Some(img_id) = self.resolve_image_for_rect(src, rect) {
+    /// Placement-rect считается `fit_image_rect` от intrinsic-размера
+    /// декодированной картинки; для cover / none, когда placement выходит за
+    /// `rect`, излишек срезается scissor-ом (spec: «clipped to the content
+    /// box»). Ранее femtovg-бэкенд игнорировал fit/position и растягивал
+    /// текстуру на весь `rect` (BUG-078). Downscale-ресэмпл (BUG-077)
+    /// выполняется по placement-размеру, а не по box — для contain плитка
+    /// меньше box, для cover больше.
+    ///
+    /// Intrinsic-размер неизвестен (нет raw-пикселей) → историческое
+    /// fill-поведение. Не зарегистрировано вовсе — серый placeholder.
+    fn draw_image_in_rect(
+        &mut self,
+        rect: &Rect,
+        src: &str,
+        fit: ObjectFit,
+        position: &ObjectPosition,
+    ) {
+        let placed = image_placement(
+            *rect,
+            self.raw_images.get(src).map(|raw| (raw.width, raw.height)),
+            fit,
+            *position,
+        );
+        if let Some(img_id) = self.resolve_image_for_rect(src, &placed) {
+            self.canvas.save();
+            self.canvas.intersect_scissor(rect.x, rect.y, rect.width, rect.height);
             let paint = femtovg::Paint::image(
                 img_id,
-                rect.x, rect.y, rect.width, rect.height,
+                placed.x, placed.y, placed.width, placed.height,
                 0.0, 1.0,
             );
             let mut path = femtovg::Path::new();
-            path.rect(rect.x, rect.y, rect.width, rect.height);
+            path.rect(placed.x, placed.y, placed.width, placed.height);
             self.canvas.fill_path(&path, &paint);
+            self.canvas.restore();
         } else {
             // Placeholder — светло-серый прямоугольник.
             self.draw_fill_rect(rect.x, rect.y, rect.width, rect.height, Color { r: 200, g: 200, b: 200, a: 255 });
@@ -1014,8 +1039,8 @@ impl FemtovgBackend {
             }
 
             // ── Images ──────────────────────────────────────────────────────
-            DisplayCommand::DrawImage { rect, src, .. } => {
-                self.draw_image_in_rect(rect, src);
+            DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. } => {
+                self.draw_image_in_rect(rect, src, *object_fit, object_position);
             }
             DisplayCommand::DrawBackgroundImage {
                 rect, origin_rect, src, size, position, repeat, ..
@@ -1443,6 +1468,26 @@ fn downscale_target(raw_w: u32, raw_h: u32, rect_w: f32, rect_h: f32, scale: f64
     }
 }
 
+/// Placement-rect для `<img>` (CSS Images L3 §5.5): куда внутри content box
+/// `rect` рисуется текстура с учётом `object-fit` / `object-position`.
+///
+/// Чистая функция (без GL). `intrinsic` — натуральный размер декодированной
+/// картинки (`raw_images`); `None` (нет raw-пикселей — текстура зарегистрирована
+/// извне) → fit невозможен, возвращаем сам `rect` (историческое fill-поведение).
+/// Возвращённый rect может выходить за `rect` (cover / none) — обрезку по
+/// content box делает scissor в `draw_image_in_rect`.
+fn image_placement(
+    rect: Rect,
+    intrinsic: Option<(u32, u32)>,
+    fit: ObjectFit,
+    position: ObjectPosition,
+) -> Rect {
+    match intrinsic {
+        Some(size) => fit_image_rect(rect, size, fit, position),
+        None => rect,
+    }
+}
+
 /// Считает геометрию плиток фоновой картинки из `background-size` /
 /// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
 ///
@@ -1570,6 +1615,52 @@ mod tests {
         assert_eq!(downscale_target(300, 300, 200.0, 200.0, 2.0), None);
         // But a 500px source into 200 CSS px @2× = 400 device px → downscale to 400.
         assert_eq!(downscale_target(500, 500, 200.0, 200.0, 2.0), Some((400, 400)));
+    }
+
+    #[test]
+    fn image_placement_contain_letterboxes_landscape_image() {
+        // 200×100 image in 180×120 box, contain → scale 0.9, 180×90, centered vertically.
+        let rect = Rect::new(10.0, 20.0, 180.0, 120.0);
+        let placed = image_placement(rect, Some((200, 100)), ObjectFit::Contain, ObjectPosition::default());
+        assert_eq!((placed.x, placed.y, placed.width, placed.height), (10.0, 35.0, 180.0, 90.0));
+    }
+
+    /// Покомпонентное сравнение rect-а с допуском на float-погрешность
+    /// (cover-scale считается делением, точные значения недостижимы).
+    fn assert_rect_close(r: Rect, expected: (f32, f32, f32, f32)) {
+        let (x, y, w, h) = expected;
+        for (got, want) in [(r.x, x), (r.y, y), (r.width, w), (r.height, h)] {
+            assert!((got - want).abs() < 1e-3, "got {r:?}, expected {expected:?}");
+        }
+    }
+
+    #[test]
+    fn image_placement_cover_overflows_box() {
+        // 200×100 image in 180×120 box, cover → scale 1.2, 240×120, overflows horizontally
+        // (clip is the caller's scissor by the content box).
+        let rect = Rect::new(0.0, 0.0, 180.0, 120.0);
+        let placed = image_placement(rect, Some((200, 100)), ObjectFit::Cover, ObjectPosition::default());
+        assert_rect_close(placed, (-30.0, 0.0, 240.0, 120.0));
+    }
+
+    #[test]
+    fn image_placement_position_right_bottom_with_cover() {
+        // object-position: right bottom (100% 100%) shifts the overflow fully to the left/top.
+        let rect = Rect::new(0.0, 0.0, 180.0, 120.0);
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(1.0),
+            y: PositionComponent::Percent(1.0),
+        };
+        let placed = image_placement(rect, Some((200, 100)), ObjectFit::Cover, pos);
+        assert_rect_close(placed, (-60.0, 0.0, 240.0, 120.0));
+    }
+
+    #[test]
+    fn image_placement_unknown_intrinsic_falls_back_to_fill() {
+        // No raw pixels (externally registered texture) → historical stretch-to-box.
+        let rect = Rect::new(5.0, 5.0, 180.0, 120.0);
+        let placed = image_placement(rect, None, ObjectFit::Contain, ObjectPosition::default());
+        assert_eq!((placed.x, placed.y, placed.width, placed.height), (5.0, 5.0, 180.0, 120.0));
     }
 
     #[test]
