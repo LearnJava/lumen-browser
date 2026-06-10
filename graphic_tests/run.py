@@ -135,6 +135,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('74', '74-font-stretch.html', 0.5, 'CSS Fonts L4 §5.2: font-stretch keyword + % values, cascade/inheritance, no-double wdth injection — coloured boxes'),
     ('75', '75-masonry-auto-flow.html', 0.5, 'CSS Masonry Layout §9: masonry-auto-flow: next (source order) / ordered (CSS order property) / definite-first — coloured boxes in 3 masonry grids'),
     ('76', '76-motion-path.html', 1.0, 'CSS Motion Path L1: offset-path + offset-distance + offset-rotate (auto/fixed) — boxes translated along horizontal, diagonal, and cubic-bezier paths'),
+    ('77', '77-anchor-positioning.html', 1.0, 'CSS Anchor Positioning L1: anchor-name + position-anchor + inset-area corner/edge/span placement around a central anchor element'),
 ]
 
 # --- PNG reader (stdlib only) ---

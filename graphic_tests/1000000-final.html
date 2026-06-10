@@ -977,6 +977,34 @@
   </div>
 </div><!-- /offset-path card -->
 
+<!-- anchor-positioning demo card -->
+<style>
+  .anc-card { background:#16213e; padding:8px; border-radius:4px; }
+  .anc-box { position:relative; width:280px; height:160px; background:#161b22; margin-top:6px; }
+  .anc-anchor { position:absolute; anchor-name:--demo-anchor; width:50px; height:50px; background:#f0f6fc; top:55px; left:115px; }
+  .anc-el { position:absolute; position-anchor:--demo-anchor; width:40px; height:40px; }
+  .anc-tl { inset-area: start start; background:#e63946; }
+  .anc-tc { inset-area: start center; background:#f4a261; }
+  .anc-tr { inset-area: start end; background:#2a9d8f; }
+  .anc-ml { inset-area: center start; background:#457b9d; }
+  .anc-mr { inset-area: center end; background:#9d4edd; }
+  .anc-bl { inset-area: end start; background:#52b788; }
+  .anc-br { inset-area: end end; background:#f77f00; }
+</style>
+<div class="card anc-card">
+  <h4>anchor-name / position-anchor / inset-area (Anchor Positioning L1)</h4>
+  <div class="anc-box">
+    <div class="anc-anchor"></div>
+    <div class="anc-el anc-tl"></div>
+    <div class="anc-el anc-tc"></div>
+    <div class="anc-el anc-tr"></div>
+    <div class="anc-el anc-ml"></div>
+    <div class="anc-el anc-mr"></div>
+    <div class="anc-el anc-bl"></div>
+    <div class="anc-el anc-br"></div>
+  </div>
+</div><!-- /anchor-positioning card -->
+
 <!-- list-style-type custom @counter-style demo card -->
 <style>
   @counter-style bracket {
