@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`text-underline-offset` + `text-underline-position` wiring  branch: p4-text-underline
-Next step: commit ready — clippy+tests clean, graphic test 79 added
+_(none)_ — p4-text-underline влит 2026-06-10
 
 ## Workflow
 
@@ -268,6 +267,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-10 | `text-underline-offset` + `text-underline-position` wiring | CSS Text Decoration L4 §5.1/§5.3; `text_underline_offset: Option<f32>` в ComputedStyle; парсинг auto/px/em; wired в push_text_decoration() — Under→fs*0.25; offset добавляется к base; 5 unit-тестов + graphic test 79 |
 | 2026-06-10 | `scroll-timeline-name/axis`, `view-timeline-name/axis`, `animation-timeline` | CSS Scroll-Driven Animations L1; `AnimationTimeline` enum (Auto/Scroll/View/Named); `collect_named_scroll_timelines/view_timelines()` полный walk; SUPPORTED_PROPERTIES +7; 12 unit-тестов + graphic test 78 |
 | 2026-06-10 | `anchor-name` / `position-anchor` / `inset-area` | CSS Anchor Positioning L1; ComputedStyle 4 fields; parse_inset_area_keyword (9 logical kw + physical aliases); collect_anchors_rec wired; apply_anchor_positions() post-layout pass in box_tree.rs; position-area alias; 7 unit-тестов + graphic test 77 |
 | 2026-06-10 | `offset-path` / `offset-distance` / `offset-rotate` | CSS Motion Path L1; forward_box_transform() + PropertyTrees::walk() wiring; resolve_motion_transform() composed before CSS transform; creates_transform() extended; 4 unit-тесты + graphic test 76 |

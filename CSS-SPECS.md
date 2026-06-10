@@ -87,7 +87,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | 🟡 | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ⬜ | **#29** |
 | CSS Box Alignment L3 | [css3-align](https://www.w3.org/TR/css3-align/) | 🟡 | justify-items/justify-self for grid | **#30** |
 | CSS Inline L3 | [css-inline-3](https://www.w3.org/TR/css-inline-3/) | 🟡 | line-height leading; baseline grid | **#31** |
-| CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset | **#32** |
+| CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset ✅ 2026-06-10 | **#32** |
 | CSS Scrollbars L1 | [css-scrollbars-1](https://www.w3.org/TR/css-scrollbars-1/) | 🟡 | scrollbar-width/color rendering | **#33** |
 | CSS Basic UI L3/L4 | [css3-ui](https://www.w3.org/TR/css3-ui/) | 🟡 | resize drag-UI; appearance form widgets | **#34** |
 | Media Queries L4/L5 | [mediaqueries-4](https://www.w3.org/TR/mediaqueries-4/) | 🟡 | prefers-reduced-motion; hover; pointer | **#35** |
@@ -242,7 +242,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
 | `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
 | `text-wrap-mode` / `text-wrap-style` | 🟡 | parsed; integration ⬜ |
-| `text-underline-position` / `text-underline-offset` | 🟡 | parsed; paint offset ⬜ |
+| `text-underline-position` / `text-underline-offset` | ✅ | wired in push_text_decoration(); Under→fs*0.25; offset adds to base (p4-text-underline 2026-06-10) |
 | `text-emphasis` / `text-emphasis-*` | ✅ | per-char marks rendered (emit_text_emphasis_marks) |
 
 ### [T0] Selectors
