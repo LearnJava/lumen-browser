@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+In progress: BUG-120 — C0 control chars рендерятся видимой строкой  branch: p3-bug120-control-chars
+Next step: стрипать Cc (кроме tab/LF/CR) при сборе inline-сегментов  crates/engine/layout/src/box_tree.rs:2062 (+ гарды :1858, :2786)
 
 ## Next
 
