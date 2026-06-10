@@ -12,24 +12,24 @@
 
 Приоритет сверху вниз. Каждая — отдельная ветка `p3-bug-<id>`, отдельный worktree.
 
-### 1. Открытые баги (приоритет сверху вниз)
-
-Много OPEN-багов из графических тестов TEST-58…70 (`grep "OPEN" BUGS.md`).
-Бери по убыванию отклонения, исключая CSS-свойства (домен P4) и Phase 2 фичи.
-Текущий высокий приоритет в домене layout/paint: BUG-098 (mix-blend-mode 14.12%),
-BUG-098 (mix-blend-mode 14.12%), BUG-078 (object-fit 12.68%).
-
-Следить за новыми: `grep "OPEN" BUGS.md`.
-
-### 2. Регрессии тестов (приоритет 0)
+### 0. ПРИОРИТЕТ 0 — регрессии (исправить немедленно, блокируют Phase 2)
 
 При падении `cargo test -p lumen-paint` или `cargo test -p lumen-layout` — исправить немедленно.
 
-**BUG-119 (rule index регрессии):** 6 тестов run.py упали после P1 selector rule index commit (bb1f8e99).
+**BUG-119 (rule index регрессии) — БРАТЬ ПЕРВЫМ:** 6 тестов run.py упали после P1 selector rule index commit (bb1f8e99).
 TEST-27 (rtl +1.9%), TEST-28 (containment +0.8%), TEST-29 (container-q +1.24%),
 TEST-40 (conic +1.3%), TEST-41 (table +1.68%), TEST-68 (font-var +1.05%).
 Все были PASS до rule index. RuleIndex пропускает часть CSS правил.
 Исследовать: `crates/engine/layout/src/rule_index.rs` — candidates() для этих страниц.
+
+### 1. Открытые баги (после BUG-119)
+
+Много OPEN-багов из графических тестов TEST-58…70 (`grep "OPEN" BUGS.md`).
+Бери по убыванию отклонения, исключая CSS-свойства (домен P4) и Phase 2 фичи.
+Текущий высокий приоритет в домене layout/paint: BUG-098 (mix-blend-mode 14.12%),
+BUG-078 (object-fit 12.68%).
+
+Следить за новыми: `grep "OPEN" BUGS.md`.
 
 ### 3. Shell wiring
 

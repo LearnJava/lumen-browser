@@ -12,6 +12,12 @@ _(нет)_
 
 ## Next
 
+### Phase 2 — делать первыми (блокируют закрытие фазы)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| **W-6** | **`overflow: scroll` shell scroll event wiring** — блокирует P4 Phase 2 задачу D (STATUS-P4.md). На `MouseWheel`: найти контейнер через `collect_scroll_containers()` + point-in-rect, вызвать `set_scroll_position()`, перестроить display list. API уже готово в `lumen-layout/src/lib.rs` (R-1 ✅). | S | `lumen-shell` |
+
 ### V — Web Platform Phase 2 (новые)
 
 | # | Задача | Размер | Крейты |
