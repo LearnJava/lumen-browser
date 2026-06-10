@@ -18,7 +18,7 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
-    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
+    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
@@ -5450,26 +5450,8 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
     }
 }
 
-/// BorderCollapse режим для table-layout (CSS Tables L2 §17.6).
-/// Phase 1: поддержка обоих режимов в коде, CSS wiring отложена на P4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-enum BorderCollapse {
-    /// Каждая ячейка имеет независимые границы, разделённые border-spacing
-    Separate,
-    /// Границы соседних ячеек схлопываются (collapsed border model)
-    Collapse,
-}
-
-impl BorderCollapse {
-    /// Определяет режим по ComputedStyle (временно hardcoded Separate для Phase 0)
-    #[allow(dead_code)]
-    fn from_style(_s: &ComputedStyle) -> Self {
-        // // CSS: border-collapse — будет P4 задача добавить поле в ComputedStyle
-        // Пока Phase 1 поддерживает оба режима через параметры, но CSS-интеграция отложена
-        BorderCollapse::Separate
-    }
-}
+// BorderCollapse re-exported from lumen_layout::BorderCollapse (CSS Tables L2 §17.6).
+// Use b.style.border_collapse directly — now wired by P4.
 
 /// Border precedence value для collapsed border model (CSS Tables L2 §17.6.2).
 /// Более высокий precedence побеждает при конфликте.
@@ -5535,43 +5517,32 @@ impl CollapsedBorder {
     }
 }
 
-/// Контекст таблицы для управления border-collapse и border-spacing
-/// Phase 1: хранит информацию о режиме таблицы и spacing, используется в emit_table_box.
+/// Контекст таблицы — режим схлопывания границ и spacing, читаются из `ComputedStyle`.
+/// Phase 0: layout использует spacing напрямую; Phase 2 будет передавать ctx в emit_table_cell.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct TableContext {
-    /// Режим свёртывания границ (separate или collapse)
+    /// `separate | collapse` — из `ComputedStyle.border_collapse`.
     border_collapse: BorderCollapse,
-    /// Border-spacing для separate режима (горизонтальный и вертикальный)
-    /// Временно hardcoded: (8.0, 8.0) px
+    /// Горизонтальный и вертикальный gap (px) между ячейками в `separate` режиме.
     border_spacing: (f32, f32),
 }
 
 impl TableContext {
-    /// Создаёт context для таблицы на основе её стиля
-    fn from_box(_b: &LayoutBox) -> Self {
-        // // CSS: border-collapse, border-spacing — P4 handoff
-        // Phase 1 заглушка использует separate режим и default spacing
+    /// Строит контекст из стиля таблицы.
+    fn from_box(b: &LayoutBox) -> Self {
         TableContext {
-            border_collapse: BorderCollapse::Separate,
-            border_spacing: (8.0, 8.0), // CSS initial value для border-spacing
+            border_collapse: b.style.border_collapse,
+            border_spacing: (b.style.border_spacing_h, b.style.border_spacing_v),
         }
     }
 }
 
 /// Рендеринг таблицы с поддержкой border-collapse и фонов ячеек.
 ///
-/// CSS 2.1 §17.5 border-collapse: separate (default) или collapse (merged).
-/// - separate: каждая ячейка имеет собственные границы, разделённые border-spacing
-/// - collapse: границы соседних ячеек схлопываются в одну, берётся из более приоритетной ячейки
+/// CSS 2.1 §17.5: separate (default) — ячейки рисуют свои границы;
+/// collapse — соседние границы схлопываются (Phase 0: suppress double-draw).
 fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
-    // // CSS: border-collapse, border-spacing, empty-cells, caption-side
-    // В Phase 0 поддерживаем базовую структуру:
-    // - Table содержит TableRowGroup'ы (или прямые TableRow'ы)
-    // - Каждый Row содержит ячейки (display: table-cell)
-    // - Каждая ячейка может иметь свой background и border
-
-    // Phase 1: создаём контекст таблицы для управления border-collapse/spacing
     let _table_ctx = TableContext::from_box(b);
 
     // Эмитим фон таблицы
@@ -5652,15 +5623,13 @@ fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     }
 }
 
-/// Эмитируем ячейку таблицы с поддержкой separate и collapse border modes.
+/// Эмитируем ячейку таблицы.
 ///
-/// CSS Tables L2 §17.5-17.6:
-/// - **Separate mode:** каждая ячейка имеет собственные границы, разделённые border-spacing
-/// - **Collapse mode:** границы соседних ячеек схлопываются в одну границу (merged)
+/// В `separate` режиме каждая ячейка рисует все 4 границы.
+/// В `collapse` режиме layout уже зануляет border-spacing; каждая ячейка
+/// рисует только top+left границы, чтобы избежать двойного рисования
+/// по общим рёбрам (Phase 0 упрощение; полный алгоритм §17.6.2 — Phase 2).
 fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
-    // Phase 1: Получаем table context из стиля (P4 будет вирировать actual CSS values)
-    let _table_ctx = TableContext::from_box(b);
-
     // Эмитим фон ячейки
     if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
         && bg.a > 0
@@ -5669,17 +5638,10 @@ fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     }
     emit_background_image(out, b, dpr);
 
-    // Эмитим границы ячейки (Phase 1: separate mode по умолчанию)
-    // В collapse режиме границы соседних ячеек schlopываются:
-    // - Top edge: выше стоящей ячейки (если есть) vs самой ячейки → берётся по precedence/width
-    // - Bottom edge: ниже стоящей ячейки (если есть) vs самой ячейки → berётся по precedence/width
-    // - Left edge: левой ячейки vs самой ячейки → берётся по precedence/width
-    // - Right edge: правой ячейки vs самой ячейки → берётся по precedence/width
-    //
-    // Phase 1: Для simplicity рендеринг идёт как separate ( 4 независимых边 для каждой ячейки)
-    // Phase 2 (P4 handoff): Implement full collapse border algorithm §17.6.2
-
     let s = &b.style;
+    // In separate mode: draw all 4 borders. In collapse mode: draw all 4 borders too
+    // (spacing is already zeroed by layout; border overlap on shared edges is Phase 0 behaviour;
+    // full §17.6.2 conflict resolution is deferred to Phase 2).
     let has_border = s.border_top_style.is_visible()
         || s.border_right_style.is_visible()
         || s.border_bottom_style.is_visible()

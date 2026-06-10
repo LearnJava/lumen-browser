@@ -6,7 +6,7 @@
 
 ## In progress
 `border-collapse` (CSS Tables L2 §17.6) — branch: p4-border-collapse
-Next step: add `border_collapse: BorderCollapse` to ComputedStyle in style.rs, parse, wire to lay_out_table + display_list
+Next step: done — clippy clean, 5 tests pass, graphic test 80
 
 ## Workflow
 

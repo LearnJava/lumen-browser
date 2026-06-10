@@ -19,7 +19,7 @@ use lumen_html_parser::{
 use crate::style::{
     apply_container_rules, clear_cq_context, compute_pseudo_element_style, compute_style,
     set_cq_context, AlignValue,
-    BackgroundImage, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
+    BackgroundImage, BorderCollapse, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition, MasonryAutoFlow,
     ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextAlignLast, TextOverflow,
@@ -4409,8 +4409,11 @@ fn lay_out_table(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) -> f32 {
-    let h_spacing = b.style.border_spacing_h;
-    let v_spacing = b.style.border_spacing_v;
+    // CSS Tables L2 §17.6: collapse mode zeroes out border-spacing.
+    let (h_spacing, v_spacing) = match b.style.border_collapse {
+        BorderCollapse::Collapse => (0.0, 0.0),
+        BorderCollapse::Separate => (b.style.border_spacing_h, b.style.border_spacing_v),
+    };
 
     let col_widths = compute_table_col_widths(b, content_width, viewport, measurer);
 
@@ -4818,7 +4821,10 @@ fn compute_table_col_widths(
     viewport: Size,
     measurer: Option<&dyn TextMeasurer>,
 ) -> Vec<f32> {
-    let h_spacing = b.style.border_spacing_h;
+    let h_spacing = match b.style.border_collapse {
+        BorderCollapse::Collapse => 0.0,
+        BorderCollapse::Separate => b.style.border_spacing_h,
+    };
 
     let mut col_explicit: Vec<Option<f32>> = Vec::new();
     let mut rowspan_map: Vec<u32> = Vec::new();
