@@ -76,7 +76,7 @@
 - ⬜ Семантические закладки (§12.8) — Phase 3, зависит от AI
 - ⬜ Граф знаний (§12.9) — Phase 3+
 - ⬜ Кросс-устройственная синхронизация E2E (§12.11) — Phase 4+, требует mobile
-- 🟡 DevTools (инспектор / консоль / network) (§12.12) — инспектор (Ctrl+Shift+I), JS-консоль (F12), network panel (Ctrl+Shift+E) готовы; computed-styles panel (7E.2, P4) отложена
+- 🟡 DevTools (инспектор / консоль / network) (§12.12) — инспектор (Ctrl+Shift+I), JS-консоль (F12), network panel (Ctrl+Shift+E) готовы; computed-styles panel (7E.2): P4 JSON-API ✅, UI-панель за P1
 - ✅ Tab UX: вертикальные/tree-style вкладки, workspaces, split view, auto-archive (§12.13) — vertical/tree/workspaces/split view ✅; auto-archive (7A.5) ✅ 2026-06-03
 - ✅ Power-user input: vim-keys, gestures, omnibox-алиасы, regex find, click-hint overlay (§12.14) — все 5 пунктов 7B.1–7B.5 ✅
 - ✅ Privacy UX: встроенный блокировщик, per-site контролы, cookie-banner dismiss (§12.15) — block list engine + permission panel + cookie-banner dismiss + shields widget (7C.1–7C.4) ✅
@@ -291,9 +291,9 @@
 | 7D.1 | 🟡 Passkeys / WebAuthn (CTAP2 client + navigator.credentials) — **`navigator.credentials` + software authenticator + CTAP2-over-USB protocol stack готовы** (trait `CredentialProvider`, `VirtualAuthenticator` ES256, `CtapRoamingTransport`, `CompositeCredentialProvider`; HID framing + CBOR + CTAP2 commands; Phase 1: platform HID enumeration); 15 тестов. | `network/src/ctap2.rs` + `network/src/webauthn.rs` | `CtapRoamingTransport` + `CompositeCredentialProvider` ✅ |
 | 7D.2 | ✅ Tab containers (storage partitioning) | `shell/src/tabs/containers.rs` + `shell` | P2 done 2026-06-01 (p2-tab-containers): ContainerKind + ContainerStore (origin→store_id), цветной border-top |
 | 7D.3 | ✅ Sidebar web panels (мини-страница в sidebar) | `shell/src/panels/sidebar_panel.rs` | P2 done 2026-06-01 (p2-sidebar-panel): 300px right dock, `sidebar:<url>`, Ctrl+Shift+A |
-| 7E | 🟡 **`[P3]` DevTools полный** (§12.12, Phase 4+) | Поверх существующего CDP-минимума (5C); 7E.1/7E.3/7E.4/7E.5 ✅, 7E.2 ⬜ (P4) | `crates/devtools/` + `shell/src/devtools/` |
+| 7E | 🟡 **`[P3]` DevTools полный** (§12.12, Phase 4+) | Поверх существующего CDP-минимума (5C); 7E.1/7E.3/7E.4/7E.5 ✅, 7E.2 🟡 (P4 API ✅, панель за P1) | `crates/devtools/` + `shell/src/devtools/` |
 | 7E.1 | ✅ **`[P2]` DOM inspector panel** (hover box-model overlay + click computed style) | `shell/src/devtools/inspector.rs` + read из `lumen-dom` | P2: Ctrl+Shift+I toggle — 2026-06-02 |
-| 7E.2 | ⬜ **`[P3+P4]` Computed styles panel** | сериализация `ComputedStyle` | P4: expose ComputedStyle как serializable JSON |
+| 7E.2 | 🟡 **`[P3+P4]` Computed styles panel** | сериализация `ComputedStyle` | P4: ✅ `computed_style_json` / `InProcessSession::computed_style_json` (2026-06-10); панель поверх API — за P1 |
 | 7E.3 | ✅ **`[P3+P2]` Box model overlay** (margin/border/padding overlay) | через display list | P2: overlay primitive в `DisplayCommand` — 2026-05-29 |
 | 7E.4 | ✅ **`[P2]` Network panel (live request log)** | `shell/src/devtools/network_panel.rs` слушает `EventSink` (RequestStarted/Completed/Blocked) | P2: Ctrl+Shift+E toggle, method/status/timing/URL — 2026-06-02 |
 | 7E.5 | ✅ JS console (eval в контексте страницы) | `shell/src/devtools/console_panel.rs` + `QuickJsRuntime::console_messages` | P1 done 2026-06-02 (p1-devtools-console): F12 toggle, log/warn/error подсветка, cap 500 |
