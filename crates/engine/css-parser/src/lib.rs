@@ -335,6 +335,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "view-timeline",
     "view-timeline-axis",
     "view-timeline-name",
+    "view-transition-name",
     "visibility",
     "white-space",
     "widows",

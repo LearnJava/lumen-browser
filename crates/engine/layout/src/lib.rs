@@ -1057,6 +1057,33 @@ pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32
 /// Shell uses this to route `MouseWheel` events to the correct overflow container
 /// instead of always scrolling the page.
 ///
+/// CSS View Transitions L1 §10 — collect all elements with a `view-transition-name` set.
+///
+/// Returns one `(node, name)` pair per named element in document order. Elements with
+/// `display: none` (no layout box) are skipped. The shell passes this list to the
+/// transition engine during `document.startViewTransition()` to match old/new snapshots.
+///
+/// Duplicate names are allowed in this list — per-page uniqueness is enforced by the
+/// caller (only the first occurrence should be used as a capture source).
+pub fn collect_view_transition_names(root: &LayoutBox) -> Vec<(lumen_dom::NodeId, Box<str>)> {
+    let mut out = Vec::new();
+    collect_vt_names_rec(root, &mut out);
+    out
+}
+
+fn collect_vt_names_rec(b: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Box<str>)>) {
+    use box_tree::BoxKind;
+    if matches!(b.kind, BoxKind::Skip) {
+        return;
+    }
+    if let Some(ref name) = b.style.view_transition_name {
+        out.push((b.node, name.clone()));
+    }
+    for child in &b.children {
+        collect_vt_names_rec(child, out);
+    }
+}
+
 /// `x` and `y` are in CSS px, document-relative (same coordinate space as
 /// `ScrollContainer::clip_rect`).
 pub fn find_scroll_container_at(
@@ -15794,6 +15821,49 @@ mod tests {
         // Point in outer but not in inner
         let result = find_scroll_container_at(&[outer, inner], 10.0, 10.0);
         assert_eq!(result, Some(lumen_dom::NodeId::from_index(1)));
+    }
+
+    // ── collect_view_transition_names ─────────────────────────────────────────
+
+    #[test]
+    fn vt_names_empty_without_property() {
+        let root = lay("<div></div>", "div { width: 100px; height: 50px; }");
+        let names = collect_view_transition_names(&root);
+        assert!(names.is_empty(), "no view-transition-name set → empty");
+    }
+
+    #[test]
+    fn vt_names_single_named_element() {
+        let root = lay(
+            "<div></div>",
+            "div { view-transition-name: hero; width: 100px; height: 50px; }",
+        );
+        let names = collect_view_transition_names(&root);
+        assert_eq!(names.len(), 1, "one named element");
+        assert_eq!(names[0].1.as_ref(), "hero");
+    }
+
+    #[test]
+    fn vt_names_multiple_elements_document_order() {
+        let root = lay(
+            "<div id='a'></div><div id='b'></div>",
+            "#a { view-transition-name: first; width: 100px; height: 50px; } \
+             #b { view-transition-name: second; width: 100px; height: 50px; }",
+        );
+        let names = collect_view_transition_names(&root);
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0].1.as_ref(), "first");
+        assert_eq!(names[1].1.as_ref(), "second");
+    }
+
+    #[test]
+    fn vt_names_none_value_excluded() {
+        let root = lay(
+            "<div></div>",
+            "div { view-transition-name: none; width: 100px; height: 50px; }",
+        );
+        let names = collect_view_transition_names(&root);
+        assert!(names.is_empty(), "view-transition-name:none should not appear");
     }
 
 }

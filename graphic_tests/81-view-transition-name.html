@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!--
+  TEST-81: view-transition-name (CSS View Transitions L1 §10)
+
+  view-transition-name does NOT affect visual rendering during normal page display —
+  it only marks elements for capture during document.startViewTransition().
+  This test verifies that setting the property leaves boxes visually identical
+  to their normal (un-named) appearance: correct colors, sizes, and positions.
+
+  Layout: three colored boxes inside magenta frame.
+  - Box A (red): no view-transition-name → baseline
+  - Box B (green): view-transition-name: hero → must render identically to a plain box
+  - Box C (blue): view-transition-name: --custom-name → dashed ident variant
+-->
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 60px;
+  }
+  .box {
+    width: 200px;
+    height: 200px;
+    border-radius: 12px;
+  }
+  .a { background: #e63946; }
+  .b { background: #2a9d8f; view-transition-name: hero; }
+  .c { background: #457b9d; view-transition-name: --custom-name; }
+</style>
+<body>
+  <div class="__f">
+    <div class="box a"></div>
+    <div class="box b"></div>
+    <div class="box c"></div>
+  </div>
+</body>

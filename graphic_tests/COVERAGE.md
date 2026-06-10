@@ -225,3 +225,5 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **text-underline-offset** — ✅ реализован (CSS Text Decoration L4 §5.3): ComputedStyle.text_underline_offset: Option<f32>; None=auto; parse_length_px в apply_declaration; wired в push_text_decoration(); 5 unit-тестов; тест 79
 - **text-underline-position** — ✅ подключён (CSS Text Decoration L3 §6.1/L4 §5.1): TextUnderlinePosition.Under → fs*0.25 вместо fs*0.10; wired в push_text_decoration(); тест 79
 - **border-collapse** — ✅ реализован (CSS Tables L2 §17.6): ComputedStyle.border_collapse: BorderCollapse; separate (default)/collapse; в collapse режиме lay_out_table/compute_table_col_widths обнуляют border-spacing; TableContext::from_box() читает реальные CSS-значения; 5 unit-тестов; тест 80
+
+- **view-transition-name** — ✅ реализован (CSS View Transitions L1 §10): ComputedStyle.view_transition_name: Option<Box<str>>; non-inherited; None=«none»; collect_view_transition_names() обходит layout tree и возвращает [(NodeId, name)] для shell; 5 unit-тестов style.rs + 4 unit-теста lib.rs; тест 81

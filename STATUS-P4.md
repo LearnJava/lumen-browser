@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_ — p4-border-collapse влит 2026-06-10
+_(none)_ — p4-view-transition-name влит 2026-06-10
 
 ## Workflow
 
@@ -37,9 +37,9 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 | # | Property / Feature | Effort | Blocker | Task file |
 |---|-------------------|--------|---------|-----------|
 | ~~**A**~~ | ~~**`:host` / `::slotted` (Shadow DOM)**~~ — **выполнено** (p4-host-slotted, 2026-06-10) | M | none | — |
-| **B** | **Find in page (Ctrl+F)** — spec: [lumen-plan.md:2285](lumen-plan.md) | M | none | — |
-| **C** | **DevTools / Inspector Phase 0** — DOM tree + computed styles + network log (CDP минимум) — spec: [lumen-plan.md:2286](lumen-plan.md), подробнее [lumen-plan.md:521](lumen-plan.md) | L | none | — |
-| **D** | **`overflow: scroll` scrollable containers** — алгоритм + P4 задача: [STATUS-P4.md:194](STATUS-P4.md) | L | none (P1 W-6 ✅) | — |
+| ~~**B**~~ | ~~**Find in page (Ctrl+F)**~~ — **выполнено** (P3 259b0c1d + regex f0e9f08d + scroll-to-match 62be2e83) | M | — | — |
+| ~~**C**~~ | ~~**DevTools / Inspector Phase 0**~~ — **выполнено** (P2 f3cb196e + P3 0aaa77ec + d7d47800; DOM inspector + console + network panel) | L | — | — |
+| ~~**D**~~ | ~~**`overflow: scroll` scrollable containers**~~ — **выполнено** (P2 ca59abfa scroll layer; P3 R-1 5a0b240a scroll events) | L | — | — |
 
 ### CSS Properties (после Phase 2)
 
@@ -270,6 +270,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-10 | `view-transition-name` | CSS View Transitions L1 §10; `ComputedStyle.view_transition_name: Option<Box<str>>` (non-inherited, default None); parse «none»→None, ident→Some; `collect_view_transition_names()` в lib.rs — возвращает [(NodeId, name)] для shell; SUPPORTED_PROPERTIES +1; 5 unit-тестов style.rs + 4 unit-теста lib.rs; graphic test 81 |
 | 2026-06-10 | `border-collapse` | CSS Tables L2 §17.6; `BorderCollapse` enum в style.rs; `ComputedStyle.border_collapse` (inherited, default Separate); collapse → spacing=0 в lay_out_table + compute_table_col_widths; `TableContext::from_box()` читает реальные CSS-значения; 5 unit-тестов + graphic test 80 |
 | 2026-06-10 | `text-underline-offset` + `text-underline-position` wiring | CSS Text Decoration L4 §5.1/§5.3; `text_underline_offset: Option<f32>` в ComputedStyle; парсинг auto/px/em; wired в push_text_decoration() — Under→fs*0.25; offset добавляется к base; 5 unit-тестов + graphic test 79 |
 | 2026-06-10 | `scroll-timeline-name/axis`, `view-timeline-name/axis`, `animation-timeline` | CSS Scroll-Driven Animations L1; `AnimationTimeline` enum (Auto/Scroll/View/Named); `collect_named_scroll_timelines/view_timelines()` полный walk; SUPPORTED_PROPERTIES +7; 12 unit-тестов + graphic test 78 |
