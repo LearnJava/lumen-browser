@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-font-stretch влит 2026-06-10
+`masonry-auto-flow` — branch: p4-masonry-auto-flow
+Next step: Wire masonry_auto_flow to lay_out_grid  box_tree.rs:5617
 
 ## Workflow
 

@@ -21,7 +21,7 @@ use crate::style::{
     set_cq_context, AlignValue,
     BackgroundImage, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
-    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
+    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition, MasonryAutoFlow,
     ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextAlignLast, TextOverflow,
     TextWrapMode, TextWrapStyle,
     VerticalAlign, WordBreak,
@@ -5614,11 +5614,33 @@ fn lay_out_grid(
     // CSS Grid L3 §14: masonry layout — early dispatch before normal grid placement.
     // `masonry` as grid_template_rows → column-masonry (most common, Pinterest-style).
     // `masonry` as grid_template_columns → row-masonry (transposed).
-    // // CSS: masonry-auto-flow (P4 handoff: controls placement order — definite-first/next/ordered)
     let col_is_masonry = eff_col_template.first() == Some(&GridTrackSize::Masonry);
     let row_is_masonry = s.grid_template_rows.first() == Some(&GridTrackSize::Masonry);
 
     if col_is_masonry || row_is_masonry {
+        // CSS Masonry Layout §9 — masonry-auto-flow controls placement order.
+        let sorted_idxs: Vec<usize> = {
+            let mut idxs = item_idxs.clone();
+            match s.masonry_auto_flow {
+                MasonryAutoFlow::DefiniteFirst => {
+                    // Items with an explicit grid-axis position first, then auto items.
+                    let is_definite = |i: usize| -> bool {
+                        if row_is_masonry {
+                            !matches!(children[i].style.grid_column_start, GridLine::Auto)
+                        } else {
+                            !matches!(children[i].style.grid_row_start, GridLine::Auto)
+                        }
+                    };
+                    idxs.sort_by_key(|&i| if is_definite(i) { 0usize } else { 1 });
+                }
+                MasonryAutoFlow::Next => { /* source order — no-op */ }
+                MasonryAutoFlow::Ordered => {
+                    idxs.sort_by_key(|&i| children[i].style.order);
+                }
+            }
+            idxs
+        };
+
         let (track_count, track_gap) = if row_is_masonry {
             // Grid axis = columns (defined by grid_template_columns), masonry axis = rows.
             (eff_col_template.len().max(1), col_gap)
@@ -5631,13 +5653,13 @@ fn lay_out_grid(
         let item_gap = if row_is_masonry { row_gap } else { col_gap };
 
         // Step 1: lay out all items at track_size to establish their intrinsic height.
-        for &i in &item_idxs {
+        for &i in &sorted_idxs {
             lay_out(&mut children[i], content_x, content_y, track_size, None, measurer, viewport, pcb, hp);
         }
 
         // Step 2: greedy waterfall placement — each item placed in the track with minimum height.
         let mut track_heights = vec![0.0_f32; track_count];
-        for &i in &item_idxs {
+        for &i in &sorted_idxs {
             let min_track = track_heights
                 .iter()
                 .enumerate()
@@ -10284,6 +10306,81 @@ mod tests {
         let expected = (200.0_f32 / 300.0).min(1.0);
         assert!((sx - expected).abs() < 1e-4, "scale-down with large content: sx={sx}, expected={expected}");
         assert!((sx - sy).abs() < 1e-4, "scale-down must be uniform");
+    }
+
+    // ── masonry-auto-flow integration tests ──────────────────────────────────
+
+    fn masonry_grid_children(css: &str, vp: f32) -> Vec<super::LayoutBox> {
+        let html = r#"<div id="grid"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(vp, vp));
+        // Grid containers are Block boxes in lumen-layout. Find the deepest block with 3 children.
+        fn find_3child_block(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::Block) && b.children.len() == 3 {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_3child_block)
+        }
+        find_3child_block(&root).map(|g| g.children.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn masonry_auto_flow_ordered_respects_css_order() {
+        // 3-column masonry, items have explicit `order` overriding source order.
+        // c has order:-1 → placed first in track 0.
+        // a has order:0, b has order:0 → placed in source order after c.
+        let css = r#"
+            #grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                grid-template-rows: masonry;
+                masonry-auto-flow: ordered;
+                width: 300px;
+                gap: 0px;
+            }
+            #a { height: 100px; order: 0; }
+            #b { height: 60px; order: 0; }
+            #c { height: 40px; order: -1; }
+        "#;
+        let children = masonry_grid_children(css, 300.0);
+        // With ordered: item c (order=-1) → placed first into track 0.
+        // After that, a (order=0) → track 1 (min height), b (order=0) → track 2 (min height).
+        // → track0 contains c at y=0, track1 contains a, track2 contains b.
+        let c_box = children.iter().find(|b| b.rect.height == 40.0);
+        assert!(c_box.is_some(), "item c (height=40) not found in masonry children");
+        if let Some(c) = c_box {
+            // c has order=-1, placed first → lands in track 0 (leftmost x=0).
+            assert!(c.rect.x < 110.0, "c with order=-1 should be in track 0, got x={}", c.rect.x);
+        }
+    }
+
+    #[test]
+    fn masonry_auto_flow_next_source_order() {
+        // With masonry-auto-flow: next, items appear in DOM source order.
+        // item a (height=100) → track 0; item b (height=60) → track 1; item c (height=40) → track 2.
+        let css = r#"
+            #grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                grid-template-rows: masonry;
+                masonry-auto-flow: next;
+                width: 300px;
+                gap: 0px;
+            }
+            #a { height: 100px; }
+            #b { height: 60px; }
+            #c { height: 40px; }
+        "#;
+        let children = masonry_grid_children(css, 300.0);
+        let a_box = children.iter().find(|b| b.rect.height == 100.0);
+        let b_box = children.iter().find(|b| b.rect.height == 60.0);
+        assert!(a_box.is_some(), "item a (height=100) not found");
+        assert!(b_box.is_some(), "item b (height=60) not found");
+        if let (Some(a), Some(b)) = (a_box, b_box) {
+            // a first → track 0 (x near 0), b second → track 1 (x near 100).
+            assert!(a.rect.x < b.rect.x, "a should be in track 0 (x<b.x), got a.x={} b.x={}", a.rect.x, b.rect.x);
+        }
     }
 
 }
