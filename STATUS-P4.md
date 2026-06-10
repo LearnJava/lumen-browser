@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-anchor-positioning влит 2026-06-10
+`text-underline-offset` + `text-underline-position` wiring  branch: p4-text-underline
+Next step: commit ready — clippy+tests clean, graphic test 79 added
 
 ## Workflow
 

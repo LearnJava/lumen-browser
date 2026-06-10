@@ -1897,9 +1897,13 @@ pub struct ComputedStyle {
     /// Initial: `OverRight` (horizontal writing-mode).
     pub text_emphasis_position: TextEmphasisPosition,
     /// CSS Text Decoration L3 §6.1 / L4 §5.1 — `text-underline-position`.
-    /// Inherited. Initial: `Auto`. Phase 0: parse + store; реальный offset
-    /// при рисовании underline — задача P2.
+    /// Inherited. Initial: `Auto`. Controls whether underline is placed below
+    /// the alphabetic baseline (`Under`) or uses font metrics (`FromFont`).
     pub text_underline_position: TextUnderlinePosition,
+    /// CSS Text Decoration L4 §5.3 — `text-underline-offset`. Inherited.
+    /// Initial: `None` (auto ≡ 0). `Some(px)` = additional offset added to
+    /// the intrinsic underline position. Positive shifts down (away from text).
+    pub text_underline_offset: Option<f32>,
     /// Явная ширина (CSS `width`). `None` = auto. Typed `Length`; `%`
     /// резолвится при layout с known cb_width.
     pub width: Option<Length>,
@@ -4384,6 +4388,7 @@ impl ComputedStyle {
             text_emphasis_color: CssColor::CurrentColor,
             text_emphasis_position: TextEmphasisPosition::OverRight,
             text_underline_position: TextUnderlinePosition::Auto,
+            text_underline_offset: None,
             width: None,
             height: None,
             min_width: None,
@@ -4662,6 +4667,7 @@ pub fn compute_style(
         text_emphasis_color: inherited.text_emphasis_color,
         text_emphasis_position: inherited.text_emphasis_position,
         text_underline_position: inherited.text_underline_position,
+        text_underline_offset: inherited.text_underline_offset,
         accent_color: inherited.accent_color,
         color_scheme: inherited.color_scheme,
         // CSS Color Adjustment L1 §4: forced-color-adjust is NOT inherited — reset.
@@ -5586,6 +5592,7 @@ pub fn compute_pseudo_element_style(
     style.text_emphasis_color = parent.text_emphasis_color;
     style.text_emphasis_position = parent.text_emphasis_position;
     style.text_underline_position = parent.text_underline_position;
+    style.text_underline_offset = parent.text_underline_offset;
     style.accent_color = parent.accent_color;
     style.color_scheme = parent.color_scheme;
     style.custom_props = parent.custom_props.clone();
@@ -12336,6 +12343,15 @@ fn apply_declaration(
                 _ => style.text_underline_position,
             };
         }
+        "text-underline-offset" => {
+            // CSS Text Decoration L4 §5.3: auto | <length>.
+            // Positive offset shifts underline away from text (downward for horizontal).
+            style.text_underline_offset = if val.trim() == "auto" {
+                None
+            } else {
+                parse_length_px(val.trim())
+            };
+        }
         "text-emphasis" => {
             // CSS Text Decoration L4 §5.6 — shorthand для -style и -color
             // (НЕ включает -position по spec). Сбрасывает обе longhand-ы в
@@ -13425,6 +13441,13 @@ fn apply_css_wide_keyword(
                 inherited.text_underline_position
             } else {
                 init.text_underline_position
+            };
+        }
+        "text-underline-offset" => {
+            style.text_underline_offset = if inh {
+                inherited.text_underline_offset
+            } else {
+                init.text_underline_offset
             };
         }
         "text-shadow" => {
@@ -22628,6 +22651,58 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
+    }
+
+    // ── text-underline-offset ─────────────────────────────────────────────────
+
+    #[test]
+    fn text_underline_offset_initial_none() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.text_underline_offset, None);
+    }
+
+    #[test]
+    fn text_underline_offset_px() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-offset: 4px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_underline_offset, Some(4.0));
+    }
+
+    #[test]
+    fn text_underline_offset_auto_resets_to_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-offset: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_underline_offset, None);
+    }
+
+    #[test]
+    fn text_underline_offset_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-offset: 6px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.text_underline_offset, Some(6.0));
+        assert_eq!(span_style.text_underline_offset, Some(6.0));
+    }
+
+    #[test]
+    fn text_underline_offset_negative_px() {
+        // Negative offset shifts underline toward text (CSS allows it).
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-offset: -2px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_underline_offset, Some(-2.0));
     }
 
     // ── color-scheme ──────────────────────────────────────────────────────────

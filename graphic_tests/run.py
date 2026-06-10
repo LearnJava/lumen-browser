@@ -137,6 +137,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('76', '76-motion-path.html', 1.0, 'CSS Motion Path L1: offset-path + offset-distance + offset-rotate (auto/fixed) — boxes translated along horizontal, diagonal, and cubic-bezier paths'),
     ('77', '77-anchor-positioning.html', 1.0, 'CSS Anchor Positioning L1: anchor-name + position-anchor + inset-area corner/edge/span placement around a central anchor element'),
     ('78', '78-scroll-driven-animations.html', 1.0, 'CSS Scroll-Driven Animations L1: scroll-timeline-name/axis, view-timeline-name/axis, animation-timeline: scroll()/view()/named'),
+    ('79', '79-text-underline-offset.html', 1.0, 'CSS Text Decoration L4: text-underline-offset (px/auto/negative) + text-underline-position (under) wired to push_text_decoration'),
 ]
 
 # --- PNG reader (stdlib only) ---
