@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+V-2: `@starting-style` CSS at-rule algorithm stub  branch: p1-starting-style
+Next step: create starting_style.rs in lumen-layout  crates/engine/layout/src/starting_style.rs
 
 ---
 

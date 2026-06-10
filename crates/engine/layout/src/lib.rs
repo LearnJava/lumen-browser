@@ -31,6 +31,7 @@ pub mod selector_query;
 pub mod scroll_timeline;
 pub mod snapshot;
 pub mod stacking;
+pub mod starting_style;
 pub mod style;
 pub mod subgrid;
 pub mod table;
@@ -84,6 +85,7 @@ pub use scroll_timeline::{
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };
 pub use snapshot::serialize_layout_tree;
+pub use starting_style::{resolve_starting_style, StartingStyleTracker};
 pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};
 pub use stacking::{
     box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,
