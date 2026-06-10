@@ -14284,6 +14284,48 @@ mod tests {
         assert_eq!(result, lumen_core::JsValue::Bool(true), "window scroll event should fire");
     }
 
+    // ── CSS Scroll Snap L2 snapchanging/snapchanged events ─────────────────────
+
+    #[test]
+    fn fire_snap_changing_dispatches_event() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        rt.eval(&format!(
+            "var snap_type = ''; \
+             var el = document.body || _lumen_make_element({nid}); \
+             el.addEventListener('snapchanging', function(e) {{ snap_type = e.type; }});"
+        )).unwrap();
+        rt.fire_snap_changing(nid, None, None);
+        let result = rt.eval("snap_type").unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("snapchanging".into()));
+    }
+
+    #[test]
+    fn fire_snap_changed_exposes_snap_targets() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        // Resolve block/inline targets to elements; both are the body here.
+        rt.eval(&format!(
+            "var block_ok = false; var inline_null = false; \
+             var el = document.body || _lumen_make_element({nid}); \
+             el.addEventListener('snapchanged', function(e) {{ \
+                 block_ok = (e.snapTargetBlock !== null && e.snapTargetBlock !== undefined); \
+                 inline_null = (e.snapTargetInline === null); \
+             }});"
+        )).unwrap();
+        rt.fire_snap_changed(nid, Some(nid), None);
+        assert_eq!(rt.eval("block_ok").unwrap(), lumen_core::JsValue::Bool(true));
+        assert_eq!(rt.eval("inline_null").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
     // ── Lazy image loading ────────────────────────────────────────────────────
     // Delivery now goes through IntersectionObserver (_lazy_io) created inside
     // _lumen_init_lazy_images; _lumen_deliver_intersection_observers() is the

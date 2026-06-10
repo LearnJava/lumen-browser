@@ -119,7 +119,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Anchor Positioning | [css-anchor-position-1](https://www.w3.org/TR/css-anchor-position-1/) | 🟡 | algorithm stub ready (P1 2026-06-03): AnchorRegistry, collect_anchors, resolve_anchor_function, resolve_inset_area; CSS wiring pending (P4) | **#56** |
 | CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | 🟡 | `document.startViewTransition` JS API + 300 ms cross-fade ✅ 2026-06-03; `view-transition-name` ✅ P4 2026-06-10 (ComputedStyle field + parsing + collect_view_transition_names); `::view-transition-*` pseudos ⬜ Phase 3 | **#57** |
 | CSS Fill & Stroke L3 | [fill-stroke-3](https://www.w3.org/TR/fill-stroke-3/) | 🟡 | fill/stroke/fill-opacity/stroke-opacity/stroke-width ✅ 2026-05-27; fill-rule/stroke-dasharray ⬜ | **#58** |
-| CSS Scroll Snap L2 | [css-scroll-snap-2](https://www.w3.org/TR/css-scroll-snap-2/) | ⬜ | snapChanging/snapChanged events | **#59** |
+| CSS Scroll Snap L2 | [css-scroll-snap-2](https://www.w3.org/TR/css-scroll-snap-2/) | 🟡 | snapchanging/snapchanged events: SnapChangeEvent (snapTargetBlock/Inline) + лэйаут-резолв снапнутых узлов (find_snapped_nodes/SnapTargets) + QuickJsRuntime::fire_snap_changing/changed; shell-диспатч при scroll-snap завершении — Phase 1 2026-06-10 | **#59** |
 
 ### Out of scope 🚫
 
