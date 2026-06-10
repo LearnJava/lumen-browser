@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+W-3: Topics API stub  branch: p1-w3-topics-api
+Next step: clippy + tests → commit  crates/js/src/topics_api.rs
 
 ---
 

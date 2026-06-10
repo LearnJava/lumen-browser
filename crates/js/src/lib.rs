@@ -101,6 +101,7 @@ pub mod launch_handler;
 pub mod inert;
 pub mod shared_storage;
 pub mod idle_detection;
+pub mod topics_api;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -1061,6 +1062,13 @@ impl QuickJsRuntime {
             // Phase 1: wire _lumen_idle_query_* native hooks to OS idle-time APIs.
             if let Err(e) = idle_detection::install_idle_detection_bindings(&ctx) {
                 eprintln!("Idle Detection API init failed: {}", e);
+            }
+
+            // Privacy Sandbox Topics API — document.browsingTopics() + DeprecatedTopicsButton.
+            // Phase 0: browsingTopics() → Promise<[]>; no topic observation or storage.
+            // Phase 1: wire _lumen_topics_get_topics native hook to per-origin topic store.
+            if let Err(e) = topics_api::install_topics_api(&ctx) {
+                eprintln!("Topics API init failed: {}", e);
             }
 
             Ok(())
