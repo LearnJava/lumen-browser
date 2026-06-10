@@ -5367,6 +5367,24 @@ fn matches_complex_for_pseudo(
     }
 }
 
+/// Build a `ComputedStyle` from a flat list of declarations with neutral context.
+///
+/// Used by `@starting-style` cascade wiring: converts the declarations returned by
+/// `resolve_starting_style()` into a `ComputedStyle` that serves as the
+/// *before-change* style for CSS entry transitions (CSS Transitions L2 §3.4).
+///
+/// Context defaults: em_basis = 16 px, inherited = default, non-quirks mode.
+/// Suitable for transition value extraction (`opacity`, `color`, `background-color`,
+/// `transform`).
+pub fn compute_style_from_declarations(decls: &[Declaration], viewport: Size) -> ComputedStyle {
+    let inherited = ComputedStyle::root();
+    let mut style = inherited.clone();
+    for decl in decls {
+        apply_declaration(&mut style, decl, 16.0, viewport, FontWeight::NORMAL, &inherited, false);
+    }
+    style
+}
+
 /// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
 ///
 /// `pseudo` — "before" или "after" (без "::"). `dark_mode` forwarded to

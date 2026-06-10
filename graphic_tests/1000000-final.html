@@ -903,5 +903,23 @@
   </div>
 </div><!-- /list-style-type custom card -->
 
+
+<!-- @starting-style entry animation demo (TEST-71) -->
+<style>
+  .ss-card { background:#1a1a2e; border-radius:8px; padding:16px; margin-top:16px; display:flex; gap:16px; align-items:center; }
+  @starting-style {
+    .ss-box-a { opacity:0; transform:scale(0.5); }
+    .ss-box-b { opacity:0; transform:translateX(-40px); }
+  }
+  .ss-box-a { width:80px; height:80px; background:#e94560; border-radius:8px; opacity:1; transition:opacity 0.4s,transform 0.4s; }
+  .ss-box-b { width:80px; height:80px; background:#0f3460; border-radius:8px; opacity:1; transition:opacity 0.4s,transform 0.4s; }
+  .ss-label { color:#aaa; font-size:13px; }
+</style>
+<div class="card ss-card">
+  <div class="ss-box-a"></div>
+  <div class="ss-box-b"></div>
+  <span class="ss-label">@starting-style (entry transitions)</span>
+</div>
+
 </body>
 </html>
