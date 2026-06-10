@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-masonry-auto-flow влит 2026-06-10
+CSS Motion Path L1 (`offset-path` / `offset-distance` / `offset-rotate`) — branch: p4-motion-path
+Next step: commit, merge, finish
 
 ## Workflow
 

@@ -1409,54 +1409,54 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/pagination.rs:67` **struct** `Page` — A single page with positioned content
 `crates/engine/layout/src/pagination.rs:88` **struct** `PageFragment` — A fragment of layout tree content positioned on a page
 `crates/engine/layout/src/pagination.rs:112` **fn** `paginate` — Pagination algorithm: split LayoutBox tree into pages
-`crates/engine/layout/src/property_trees.rs:39` **struct** `PropertyTreeNodeId` — Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
-`crates/engine/layout/src/property_trees.rs:45` **fn** `raw`
-`crates/engine/layout/src/property_trees.rs:54` **struct** `Mat4` — 4×4 матрица в column-major порядке (как принято в OpenGL / WebGPU)
-`crates/engine/layout/src/property_trees.rs:65` **fn** `is_identity`
-`crates/engine/layout/src/property_trees.rs:70` **fn** `translation_2d` — 2D translation. Z и W колонки остаются identity
-`crates/engine/layout/src/property_trees.rs:78` **fn** `scale_2d` — 2D scale. CSS Transforms L1 §13.4
-`crates/engine/layout/src/property_trees.rs:88` **fn** `rotate_2d` — 2D rotation вокруг Z (положительный угол — против часовой стрелки в
-`crates/engine/layout/src/property_trees.rs:100` **fn** `skew_x` — `skewX(angle)` — сдвигает X пропорционально Y. CSS Transforms L1 §13.7
-`crates/engine/layout/src/property_trees.rs:107` **fn** `skew_y` — `skewY(angle)` — сдвигает Y пропорционально X
-`crates/engine/layout/src/property_trees.rs:115` **fn** `from_2d_affine` — 2D affine `matrix(a, b, c, d, e, f)` (CSS Transforms L1 §13.10) →
-`crates/engine/layout/src/property_trees.rs:128` **fn** `multiply` — Композиция матриц: `lhs * rhs`. Для column-major OpenGL-конвенции
-`crates/engine/layout/src/property_trees.rs:154` **fn** `invert_2d_affine` — Инверсия 2D affine-матрицы. Возвращает `None`, если матрица
-`crates/engine/layout/src/property_trees.rs:180` **fn** `transform_point_2d` — Применяет 2D affine часть матрицы к точке `(x, y)`. Z/W колонки
-`crates/engine/layout/src/property_trees.rs:204` **fn** `perspective` — CSS `perspective(<length>)` — матрица перспективной проекции с фокусным
-`crates/engine/layout/src/property_trees.rs:212` **fn** `translate_3d` — 3D translation. CSS `translate3d(tx, ty, tz)` / `translateZ(tz)`
-`crates/engine/layout/src/property_trees.rs:222` **fn** `scale_3d` — 3D scale. CSS `scale3d(sx, sy, sz)` / `scaleZ(sz)`
-`crates/engine/layout/src/property_trees.rs:233` **fn** `rotate_x` — Поворот вокруг оси X. CSS `rotateX(theta)`, `theta` в радианах
-`crates/engine/layout/src/property_trees.rs:247` **fn** `rotate_y` — Поворот вокруг оси Y. CSS `rotateY(theta)`, `theta` в радианах
-`crates/engine/layout/src/property_trees.rs:261` **fn** `rotate_z` — Поворот вокруг оси Z. CSS `rotateZ(theta)` ≡ `rotate(theta)`
-`crates/engine/layout/src/property_trees.rs:270` **fn** `rotate_3d` — CSS `rotate3d(x, y, z, theta)` — поворот вокруг произвольной оси
-`crates/engine/layout/src/property_trees.rs:302` **fn** `from_3d` — CSS `matrix3d(m11, …, m44)` — 16 значений в column-major порядке
-`crates/engine/layout/src/property_trees.rs:312` **fn** `project_point` — Применяет полную 4×4 матрицу к точке `(x, y, z)` и выполняет
-`crates/engine/layout/src/property_trees.rs:330` **fn** `project_point_z` — Как [`project_point`](Self::project_point), но возвращает и
-`crates/engine/layout/src/property_trees.rs:351` **fn** `transform_z` — Возвращает только трансформированную z-координату точки `(x, y, z)`
-`crates/engine/layout/src/property_trees.rs:361` **fn** `is_2d_affine` — `true`, если матрица — чистое 2D affine-преобразование (Z/W-строки
-`crates/engine/layout/src/property_trees.rs:385` **struct** `TransformNode` — Узел TransformTree. Хранит локальный transform; accumulated transform
-`crates/engine/layout/src/property_trees.rs:395` **struct** `TransformTree` — Дерево transform-преобразований. Корень — identity
-`crates/engine/layout/src/property_trees.rs:401` **fn** `empty` — Sprint 0 stub: только root с identity
-`crates/engine/layout/src/property_trees.rs:411` **fn** `root`
-`crates/engine/layout/src/property_trees.rs:418` **struct** `ScrollNode` — Узел ScrollTree. Хранит scrollable rect и текущий scroll offset
-`crates/engine/layout/src/property_trees.rs:431` **struct** `ScrollTree`
-`crates/engine/layout/src/property_trees.rs:436` **fn** `empty`
-`crates/engine/layout/src/property_trees.rs:448` **fn** `root`
-`crates/engine/layout/src/property_trees.rs:456` **struct** `EffectNode` — Узел EffectTree. Хранит opacity / filter / blend-mode — всё, что
-`crates/engine/layout/src/property_trees.rs:483` **struct** `EffectTree`
-`crates/engine/layout/src/property_trees.rs:488` **fn** `empty`
-`crates/engine/layout/src/property_trees.rs:494` **fn** `root`
-`crates/engine/layout/src/property_trees.rs:502` **struct** `ClipNode` — Узел ClipTree. Хранит clip rectangle в локальных координатах (т.е
-`crates/engine/layout/src/property_trees.rs:511` **struct** `ClipTree`
-`crates/engine/layout/src/property_trees.rs:516` **fn** `empty`
-`crates/engine/layout/src/property_trees.rs:526` **fn** `root`
-`crates/engine/layout/src/property_trees.rs:536` **struct** `PropertyTrees` — 4-deep property trees — единая поверхность, которую layout
-`crates/engine/layout/src/property_trees.rs:545` **fn** `empty` — Sprint 0 stub: все 4 дерева — empty roots
-`crates/engine/layout/src/property_trees.rs:556` **fn** `build_stub` — Совместимость с Sprint 0: пустые root-only деревья. Используется
-`crates/engine/layout/src/property_trees.rs:583` **fn** `build` — Построение property trees из layout-дерева (P1 п.2B)
-`crates/engine/layout/src/property_trees.rs:614` **fn** `compute_local_transform` — Вычислить локальную transform-матрицу элемента. CSS Transforms L1 §13:
-`crates/engine/layout/src/property_trees.rs:663` **fn** `forward_box_transform` — Forward-матрица бокса в viewport-координатах. CSS Transforms L1 §13:
-`crates/engine/layout/src/property_trees.rs:729` **fn** `transform_fns_to_matrix` — Build the forward transform matrix from a list of TransformFn with a pivot point
+`crates/engine/layout/src/property_trees.rs:40` **struct** `PropertyTreeNodeId` — Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
+`crates/engine/layout/src/property_trees.rs:46` **fn** `raw`
+`crates/engine/layout/src/property_trees.rs:55` **struct** `Mat4` — 4×4 матрица в column-major порядке (как принято в OpenGL / WebGPU)
+`crates/engine/layout/src/property_trees.rs:66` **fn** `is_identity`
+`crates/engine/layout/src/property_trees.rs:71` **fn** `translation_2d` — 2D translation. Z и W колонки остаются identity
+`crates/engine/layout/src/property_trees.rs:79` **fn** `scale_2d` — 2D scale. CSS Transforms L1 §13.4
+`crates/engine/layout/src/property_trees.rs:89` **fn** `rotate_2d` — 2D rotation вокруг Z (положительный угол — против часовой стрелки в
+`crates/engine/layout/src/property_trees.rs:101` **fn** `skew_x` — `skewX(angle)` — сдвигает X пропорционально Y. CSS Transforms L1 §13.7
+`crates/engine/layout/src/property_trees.rs:108` **fn** `skew_y` — `skewY(angle)` — сдвигает Y пропорционально X
+`crates/engine/layout/src/property_trees.rs:116` **fn** `from_2d_affine` — 2D affine `matrix(a, b, c, d, e, f)` (CSS Transforms L1 §13.10) →
+`crates/engine/layout/src/property_trees.rs:129` **fn** `multiply` — Композиция матриц: `lhs * rhs`. Для column-major OpenGL-конвенции
+`crates/engine/layout/src/property_trees.rs:155` **fn** `invert_2d_affine` — Инверсия 2D affine-матрицы. Возвращает `None`, если матрица
+`crates/engine/layout/src/property_trees.rs:181` **fn** `transform_point_2d` — Применяет 2D affine часть матрицы к точке `(x, y)`. Z/W колонки
+`crates/engine/layout/src/property_trees.rs:205` **fn** `perspective` — CSS `perspective(<length>)` — матрица перспективной проекции с фокусным
+`crates/engine/layout/src/property_trees.rs:213` **fn** `translate_3d` — 3D translation. CSS `translate3d(tx, ty, tz)` / `translateZ(tz)`
+`crates/engine/layout/src/property_trees.rs:223` **fn** `scale_3d` — 3D scale. CSS `scale3d(sx, sy, sz)` / `scaleZ(sz)`
+`crates/engine/layout/src/property_trees.rs:234` **fn** `rotate_x` — Поворот вокруг оси X. CSS `rotateX(theta)`, `theta` в радианах
+`crates/engine/layout/src/property_trees.rs:248` **fn** `rotate_y` — Поворот вокруг оси Y. CSS `rotateY(theta)`, `theta` в радианах
+`crates/engine/layout/src/property_trees.rs:262` **fn** `rotate_z` — Поворот вокруг оси Z. CSS `rotateZ(theta)` ≡ `rotate(theta)`
+`crates/engine/layout/src/property_trees.rs:271` **fn** `rotate_3d` — CSS `rotate3d(x, y, z, theta)` — поворот вокруг произвольной оси
+`crates/engine/layout/src/property_trees.rs:303` **fn** `from_3d` — CSS `matrix3d(m11, …, m44)` — 16 значений в column-major порядке
+`crates/engine/layout/src/property_trees.rs:313` **fn** `project_point` — Применяет полную 4×4 матрицу к точке `(x, y, z)` и выполняет
+`crates/engine/layout/src/property_trees.rs:331` **fn** `project_point_z` — Как [`project_point`](Self::project_point), но возвращает и
+`crates/engine/layout/src/property_trees.rs:352` **fn** `transform_z` — Возвращает только трансформированную z-координату точки `(x, y, z)`
+`crates/engine/layout/src/property_trees.rs:362` **fn** `is_2d_affine` — `true`, если матрица — чистое 2D affine-преобразование (Z/W-строки
+`crates/engine/layout/src/property_trees.rs:386` **struct** `TransformNode` — Узел TransformTree. Хранит локальный transform; accumulated transform
+`crates/engine/layout/src/property_trees.rs:396` **struct** `TransformTree` — Дерево transform-преобразований. Корень — identity
+`crates/engine/layout/src/property_trees.rs:402` **fn** `empty` — Sprint 0 stub: только root с identity
+`crates/engine/layout/src/property_trees.rs:412` **fn** `root`
+`crates/engine/layout/src/property_trees.rs:419` **struct** `ScrollNode` — Узел ScrollTree. Хранит scrollable rect и текущий scroll offset
+`crates/engine/layout/src/property_trees.rs:432` **struct** `ScrollTree`
+`crates/engine/layout/src/property_trees.rs:437` **fn** `empty`
+`crates/engine/layout/src/property_trees.rs:449` **fn** `root`
+`crates/engine/layout/src/property_trees.rs:457` **struct** `EffectNode` — Узел EffectTree. Хранит opacity / filter / blend-mode — всё, что
+`crates/engine/layout/src/property_trees.rs:484` **struct** `EffectTree`
+`crates/engine/layout/src/property_trees.rs:489` **fn** `empty`
+`crates/engine/layout/src/property_trees.rs:495` **fn** `root`
+`crates/engine/layout/src/property_trees.rs:503` **struct** `ClipNode` — Узел ClipTree. Хранит clip rectangle в локальных координатах (т.е
+`crates/engine/layout/src/property_trees.rs:512` **struct** `ClipTree`
+`crates/engine/layout/src/property_trees.rs:517` **fn** `empty`
+`crates/engine/layout/src/property_trees.rs:527` **fn** `root`
+`crates/engine/layout/src/property_trees.rs:537` **struct** `PropertyTrees` — 4-deep property trees — единая поверхность, которую layout
+`crates/engine/layout/src/property_trees.rs:546` **fn** `empty` — Sprint 0 stub: все 4 дерева — empty roots
+`crates/engine/layout/src/property_trees.rs:557` **fn** `build_stub` — Совместимость с Sprint 0: пустые root-only деревья. Используется
+`crates/engine/layout/src/property_trees.rs:584` **fn** `build` — Построение property trees из layout-дерева (P1 п.2B)
+`crates/engine/layout/src/property_trees.rs:615` **fn** `compute_local_transform` — Вычислить локальную transform-матрицу элемента. CSS Transforms L1 §13:
+`crates/engine/layout/src/property_trees.rs:664` **fn** `forward_box_transform` — Forward-матрица бокса в viewport-координатах. CSS Transforms L1 §13:
+`crates/engine/layout/src/property_trees.rs:746` **fn** `transform_fns_to_matrix` — Build the forward transform matrix from a list of TransformFn with a pivot point
 `crates/engine/layout/src/ruby.rs:18` **enum** `RubyPosition` — Ruby annotation position relative to base text
 `crates/engine/layout/src/ruby.rs:30` **struct** `RubyBox` — Ruby box: base text with optional annotation
 `crates/engine/layout/src/ruby.rs:43` **fn** `new` — Create a new Ruby box with default Over positioning

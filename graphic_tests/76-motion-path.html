@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<!--
+  TEST-76: offset-path / offset-distance / offset-rotate — CSS Motion Path L1
+  Verifies that elements are positioned and rotated along SVG paths.
+  Pure geometry test — no text involved.
+-->
+<html>
+<head>
+  <title>Lumen — 76 motion-path</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #0d1117;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 30px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  /* ── Section: horizontal path progression ─────────────────────────── */
+  .section { position: relative; height: 160px; margin-bottom: 30px; }
+
+  /* Path track indicator (behind elements) */
+  .track-h {
+    position: absolute;
+    top: 72px; left: 0;
+    width: 960px; height: 4px;
+    background: #30363d;
+  }
+  .track-diag {
+    position: absolute;
+    top: 0; left: 0;
+    width: 960px; height: 160px;
+    /* diagonal line via gradient */
+    background: linear-gradient(to bottom right, transparent calc(50% - 2px), #30363d calc(50% - 2px), #30363d calc(50% + 2px), transparent calc(50% + 2px));
+  }
+
+  /* Base box for all path elements */
+  .box {
+    position: absolute;
+    width: 40px; height: 40px;
+    top: 54px; left: 0;
+  }
+
+  /* ── Row 1: horizontal path, three distances, no rotation ─────────── */
+  .h1 {
+    background: #e63946;
+    offset-path: path("M 0 0 L 960 0");
+    offset-distance: 0px;
+    offset-rotate: 0deg;
+  }
+  .h2 {
+    background: #f4a261;
+    offset-path: path("M 0 0 L 960 0");
+    offset-distance: 480px;
+    offset-rotate: 0deg;
+  }
+  .h3 {
+    background: #2a9d8f;
+    offset-path: path("M 0 0 L 960 0");
+    offset-distance: 920px;
+    offset-rotate: 0deg;
+  }
+
+  /* ── Row 2: diagonal path, auto rotation (elements tilt with tangent) ─ */
+  .d1 {
+    background: #457b9d;
+    offset-path: path("M 0 0 L 800 160");
+    offset-distance: 100px;
+    offset-rotate: auto;
+    width: 50px; height: 20px;
+    top: 70px;
+  }
+  .d2 {
+    background: #9d4edd;
+    offset-path: path("M 0 0 L 800 160");
+    offset-distance: 400px;
+    offset-rotate: auto;
+    width: 50px; height: 20px;
+    top: 70px;
+  }
+  .d3 {
+    background: #52b788;
+    offset-path: path("M 0 0 L 800 160");
+    offset-distance: 750px;
+    offset-rotate: auto;
+    width: 50px; height: 20px;
+    top: 70px;
+  }
+
+  /* ── Row 3: curved path (cubic bezier) ────────────────────────────── */
+  .c1 {
+    background: #e9c46a;
+    offset-path: path("M 0 0 C 200 -120 600 120 960 0");
+    offset-distance: 0px;
+    offset-rotate: auto;
+    width: 36px; height: 36px;
+    top: 62px;
+  }
+  .c2 {
+    background: #f77f00;
+    offset-path: path("M 0 0 C 200 -120 600 120 960 0");
+    offset-distance: 300px;
+    offset-rotate: auto;
+    width: 36px; height: 36px;
+    top: 62px;
+  }
+  .c3 {
+    background: #e63946;
+    offset-path: path("M 0 0 C 200 -120 600 120 960 0");
+    offset-distance: 700px;
+    offset-rotate: auto;
+    width: 36px; height: 36px;
+    top: 62px;
+  }
+  .c4 {
+    background: #2a9d8f;
+    offset-path: path("M 0 0 C 200 -120 600 120 960 0");
+    offset-distance: 960px;
+    offset-rotate: auto;
+    width: 36px; height: 36px;
+    top: 62px;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- Row 1: horizontal path, fixed 0deg rotation -->
+  <div class="section">
+    <div class="track-h"></div>
+    <div class="box h1"></div>
+    <div class="box h2"></div>
+    <div class="box h3"></div>
+  </div>
+
+  <!-- Row 2: diagonal path, auto rotation -->
+  <div class="section">
+    <div class="track-diag"></div>
+    <div class="box d1"></div>
+    <div class="box d2"></div>
+    <div class="box d3"></div>
+  </div>
+
+  <!-- Row 3: cubic bezier path, auto rotation -->
+  <div class="section" style="height: 200px;">
+    <div class="box c1"></div>
+    <div class="box c2"></div>
+    <div class="box c3"></div>
+    <div class="box c4"></div>
+  </div>
+
+</div>
+</body>
+</html>
