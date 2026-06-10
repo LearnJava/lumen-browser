@@ -1477,6 +1477,54 @@ impl QuickJsRuntime {
         });
     }
 
+    /// Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container.
+    ///
+    /// Called by the shell while a scroll gesture is in flight and the
+    /// container's snapped area changes (before the scroll settles). `nid` is
+    /// the scroll-container element; `block` / `inline` are the node ids of the
+    /// snapped areas on the block and inline axes (typically from
+    /// `lumen_layout::find_snapped_nodes`), or `None` when no area is snapped on
+    /// that axis. They are exposed to JS as the event's `snapTargetBlock` /
+    /// `snapTargetInline` element properties.
+    ///
+    /// No-op when the runtime has not been initialised yet.
+    pub fn fire_snap_changing(&self, nid: u32, block: Option<u32>, inline: Option<u32>) {
+        self.fire_snap_event("_lumen_fire_snap_changing", nid, block, inline);
+    }
+
+    /// Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container.
+    ///
+    /// Called by the shell once a scroll has settled on a new snap position.
+    /// Argument semantics are identical to [`Self::fire_snap_changing`].
+    ///
+    /// No-op when the runtime has not been initialised yet.
+    pub fn fire_snap_changed(&self, nid: u32, block: Option<u32>, inline: Option<u32>) {
+        self.fire_snap_event("_lumen_fire_snap_changed", nid, block, inline);
+    }
+
+    /// Shared dispatch path for the snap events. Resolves `block` / `inline`
+    /// node ids to elements via `_lumen_make_element` inside JS, guarding both
+    /// the target function and the resolver so the call is a no-op when the DOM
+    /// bindings are absent.
+    fn fire_snap_event(&self, func: &str, nid: u32, block: Option<u32>, inline: Option<u32>) {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.ctx.with(|ctx| {
+            let blk = match block {
+                Some(b) => format!("_lumen_make_element({b})"),
+                None => "null".to_string(),
+            };
+            let inl = match inline {
+                Some(i) => format!("_lumen_make_element({i})"),
+                None => "null".to_string(),
+            };
+            let script = format!(
+                "if(typeof {func}==='function'&&typeof _lumen_make_element==='function')\
+                 {func}({nid},{blk},{inl});"
+            );
+            ctx.eval::<(), _>(script.as_str()).ok();
+        });
+    }
+
     /// Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers.
     ///
     /// Call from the shell frame-timing path when a frame exceeds 50 ms.

@@ -905,6 +905,82 @@ pub fn find_snap_target(
     best
 }
 
+/// The snap areas a container is currently snapped to, one per axis.
+///
+/// CSS Scroll Snap L2 §`snapchanging`/`snapchanged`: the snap events expose
+/// `snapTargetBlock` / `snapTargetInline` — the elements snapped on the block
+/// and inline axes respectively. Either may be `None` when no area is snapped
+/// on that axis (e.g. the container only snaps on one axis, or no area aligns).
+///
+/// `block` corresponds to the y axis and `inline` to the x axis under the
+/// default `horizontal-tb` writing mode (matching [`snap_offset_x`] /
+/// [`snap_offset_y`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SnapTargets {
+    /// DOM node snapped on the block axis (y under `horizontal-tb`), or `None`.
+    pub block: Option<lumen_dom::NodeId>,
+    /// DOM node snapped on the inline axis (x under `horizontal-tb`), or `None`.
+    pub inline: Option<lumen_dom::NodeId>,
+}
+
+/// Determine which snap areas a container is snapped to at scroll offset `scroll`.
+///
+/// For each axis the container actually snaps on (per its `scroll-snap-type`),
+/// picks the snap area whose required offset on that axis is closest to the
+/// container's current scroll position. Returns the node ids as [`SnapTargets`].
+///
+/// Returns the default (both `None`) when the container has no snap areas.
+///
+/// # Integration
+///
+/// Shell scroll handler: after [`find_snap_target`] resolves a new scroll
+/// offset, call this to learn the snapped elements, then dispatch the snap
+/// events via [`crate`]-external JS bindings — fire `snapchanging` while the
+/// gesture is in flight and `snapchanged` once the scroll settles, passing
+/// `block`/`inline` node ids as `snapTargetBlock` / `snapTargetInline`
+/// (`QuickJsRuntime::fire_snap_changing` / `fire_snap_changed`).
+pub fn find_snapped_nodes(container: &SnapContainer, scroll: (f32, f32)) -> SnapTargets {
+    use style::ScrollSnapAxis;
+
+    if container.points.is_empty() {
+        return SnapTargets::default();
+    }
+
+    let axis = container.snap_type.axis;
+    let snaps_x = matches!(
+        axis,
+        ScrollSnapAxis::X | ScrollSnapAxis::Inline | ScrollSnapAxis::Both
+    );
+    let snaps_y = matches!(
+        axis,
+        ScrollSnapAxis::Y | ScrollSnapAxis::Block | ScrollSnapAxis::Both
+    );
+
+    let mut inline = None;
+    let mut block = None;
+    let mut best_inline = f32::INFINITY;
+    let mut best_block = f32::INFINITY;
+
+    for pt in &container.points {
+        if snaps_x && let Some(sx) = pt.snap_x {
+            let d = (sx - scroll.0).abs();
+            if d < best_inline {
+                best_inline = d;
+                inline = Some(pt.node);
+            }
+        }
+        if snaps_y && let Some(sy) = pt.snap_y {
+            let d = (sy - scroll.1).abs();
+            if d < best_block {
+                best_block = d;
+                block = Some(pt.node);
+            }
+        }
+    }
+
+    SnapTargets { block, inline }
+}
+
 // ---------------------------------------------------------------------------
 // Scroll container infrastructure
 // CSS: overflow — P4 wires: check style.overflow_x/overflow_y == Overflow::Scroll | Auto,
@@ -9343,6 +9419,87 @@ mod tests {
             1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
         );
         assert!(find_snap_target(&sc, (0.0, 0.0), (0.0, 400.0)).is_none());
+    }
+
+    // ──────── find_snapped_nodes (CSS Scroll Snap L2 events) ────────
+
+    fn snap_pt_node(idx: u32, x: Option<f32>, y: Option<f32>) -> SnapPoint {
+        SnapPoint {
+            node: lumen_dom::NodeId::from_index(idx as usize),
+            snap_x: x,
+            snap_y: y,
+            stop_always: false,
+        }
+    }
+
+    #[test]
+    fn find_snapped_nodes_empty_container_is_default() {
+        let sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        let t = find_snapped_nodes(&sc, (0.0, 0.0));
+        assert_eq!(t, SnapTargets::default());
+    }
+
+    #[test]
+    fn find_snapped_nodes_block_axis_picks_nearest() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![
+            snap_pt_node(1, None, Some(0.0)),
+            snap_pt_node(2, None, Some(720.0)),
+            snap_pt_node(3, None, Some(1440.0)),
+        ];
+        // Scroll at 700 → nearest block snap is node 2 (720).
+        let t = find_snapped_nodes(&sc, (0.0, 700.0));
+        assert_eq!(t.block, Some(lumen_dom::NodeId::from_index(2)));
+        // Y-only container does not snap on the inline axis.
+        assert_eq!(t.inline, None);
+    }
+
+    #[test]
+    fn find_snapped_nodes_both_axes() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Both, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![
+            snap_pt_node(1, Some(0.0), Some(0.0)),
+            snap_pt_node(2, Some(500.0), Some(720.0)),
+        ];
+        // Inline near 480 → node 2 (x=500); block near 30 → node 1 (y=0).
+        let t = find_snapped_nodes(&sc, (480.0, 30.0));
+        assert_eq!(t.inline, Some(lumen_dom::NodeId::from_index(2)));
+        assert_eq!(t.block, Some(lumen_dom::NodeId::from_index(1)));
+    }
+
+    #[test]
+    fn find_snapped_nodes_x_only_ignores_block() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::X, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![
+            snap_pt_node(1, Some(0.0), Some(0.0)),
+            snap_pt_node(2, Some(1024.0), Some(720.0)),
+        ];
+        let t = find_snapped_nodes(&sc, (900.0, 700.0));
+        assert_eq!(t.inline, Some(lumen_dom::NodeId::from_index(2)));
+        assert_eq!(t.block, None);
+    }
+
+    #[test]
+    fn find_snapped_nodes_skips_points_without_axis_offset() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Both, ScrollSnapStrictness::Mandatory,
+        );
+        // Node 1 snaps only on block; node 2 only on inline.
+        sc.points = vec![
+            snap_pt_node(1, None, Some(0.0)),
+            snap_pt_node(2, Some(300.0), None),
+        ];
+        let t = find_snapped_nodes(&sc, (290.0, 10.0));
+        assert_eq!(t.inline, Some(lumen_dom::NodeId::from_index(2)));
+        assert_eq!(t.block, Some(lumen_dom::NodeId::from_index(1)));
     }
 
     #[test]
