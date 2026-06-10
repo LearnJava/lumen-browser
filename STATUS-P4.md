@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-motion-path влит 2026-06-10
+CSS Anchor Positioning L1 — `anchor-name` / `position-anchor` / `inset-area` / `anchor()`  branch: p4-anchor-positioning
+Next step: Add fields to ComputedStyle + parsing + collect_anchors_rec wiring + post-layout pass  style.rs / anchor.rs / box_tree.rs
 
 ## Workflow
 

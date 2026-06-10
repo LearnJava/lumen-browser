@@ -2450,6 +2450,16 @@ pub struct ComputedStyle {
     pub border_block_start_width: f32,
     /// CSS Logical Properties L1 — `border-block-end-width`.
     pub border_block_end_width: f32,
+    /// CSS Anchor Positioning L1 §2 — `anchor-name`. Custom-ident with `--` prefix.
+    /// Non-inherited. When set, this element is registered as an anchor for positioned elements.
+    pub anchor_name: Option<Box<str>>,
+    /// CSS Anchor Positioning L1 §3 — `position-anchor`. Custom-ident with `--` prefix.
+    /// Non-inherited. Names the default anchor element for `inset-area` and `anchor()` resolution.
+    pub position_anchor: Option<Box<str>>,
+    /// CSS Anchor Positioning L1 §5 — `inset-area` row (vertical axis) keyword. Non-inherited.
+    pub inset_area_row: crate::anchor::InsetAreaKeyword,
+    /// CSS Anchor Positioning L1 §5 — `inset-area` column (horizontal axis) keyword. Non-inherited.
+    pub inset_area_col: crate::anchor::InsetAreaKeyword,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -4563,6 +4573,10 @@ impl ComputedStyle {
             border_inline_end_width: 0.0,
             border_block_start_width: 0.0,
             border_block_end_width: 0.0,
+            anchor_name: None,
+            position_anchor: None,
+            inset_area_row: crate::anchor::InsetAreaKeyword::None,
+            inset_area_col: crate::anchor::InsetAreaKeyword::None,
         }
     }
 }
@@ -4873,6 +4887,10 @@ pub fn compute_style(
         border_inline_end_width: 0.0,
         border_block_start_width: 0.0,
         border_block_end_width: 0.0,
+        anchor_name: None,
+        position_anchor: None,
+        inset_area_row: crate::anchor::InsetAreaKeyword::None,
+        inset_area_col: crate::anchor::InsetAreaKeyword::None,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -11278,6 +11296,40 @@ fn apply_declaration(
                 style.position = v;
             }
         }
+        // CSS Anchor Positioning L1 §2 — anchor-name: <custom-ident> | none.
+        "anchor-name" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.anchor_name = None;
+            } else if v.starts_with("--") {
+                style.anchor_name = Some(v.into());
+            }
+        }
+        // CSS Anchor Positioning L1 §3 — position-anchor: <custom-ident> | auto.
+        "position-anchor" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("none") {
+                style.position_anchor = None;
+            } else if v.starts_with("--") {
+                style.position_anchor = Some(v.into());
+            }
+        }
+        // CSS Anchor Positioning L1 §5 — inset-area: [<inset-area-kw>]{1,2}.
+        // `position-area` is the updated spec name; both are identical.
+        "inset-area" | "position-area" => {
+            let toks: Vec<&str> = val.split_whitespace().collect();
+            let (row_tok, col_tok) = match toks.as_slice() {
+                [a] => (*a, *a),
+                [a, b] => (*a, *b),
+                _ => return,
+            };
+            if let Some(r) = parse_inset_area_keyword(row_tok) {
+                style.inset_area_row = r;
+            }
+            if let Some(c) = parse_inset_area_keyword(col_tok) {
+                style.inset_area_col = c;
+            }
+        }
         "top" => set_margin_side(&mut style.top, val, is_quirks),
         "right" => set_margin_side(&mut style.right, val, is_quirks),
         "bottom" => set_margin_side(&mut style.bottom, val, is_quirks),
@@ -13793,6 +13845,17 @@ fn apply_css_wide_keyword(
         "position" => {
             style.position = if inh_only_inherit { inherited.position } else { init.position };
         }
+        // CSS Anchor Positioning L1 — non-inherited properties.
+        "anchor-name" => {
+            style.anchor_name = if inh_only_inherit { inherited.anchor_name.clone() } else { None };
+        }
+        "position-anchor" => {
+            style.position_anchor = if inh_only_inherit { inherited.position_anchor.clone() } else { None };
+        }
+        "inset-area" | "position-area" => {
+            style.inset_area_row = if inh_only_inherit { inherited.inset_area_row } else { init.inset_area_row };
+            style.inset_area_col = if inh_only_inherit { inherited.inset_area_col } else { init.inset_area_col };
+        }
         "top" => {
             style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
         }
@@ -15894,6 +15957,30 @@ fn parse_overscroll_behavior(s: &str) -> Option<OverscrollBehavior> {
 }
 
 /// Парсит CSS Fragmentation L3 §3.1 `break-*` keyword.
+/// CSS Anchor Positioning L1 §5 — parses a single `inset-area` axis keyword.
+fn parse_inset_area_keyword(s: &str) -> Option<crate::anchor::InsetAreaKeyword> {
+    use crate::anchor::InsetAreaKeyword as K;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "none"       => Some(K::None),
+        "start"      => Some(K::Start),
+        "center"     => Some(K::Center),
+        "end"        => Some(K::End),
+        "span-start" => Some(K::SpanStart),
+        "span-end"   => Some(K::SpanEnd),
+        "span-all"   => Some(K::SpanAll),
+        "self-start" => Some(K::SelfStart),
+        "self-end"   => Some(K::SelfEnd),
+        // Physical keywords that map to logical equivalents in LTR.
+        "top" | "left"   => Some(K::Start),
+        "bottom" | "right" => Some(K::End),
+        "x-start" | "y-start" | "inline-start" | "block-start" => Some(K::Start),
+        "x-end" | "y-end" | "inline-end" | "block-end" => Some(K::End),
+        "span-x-start" | "span-y-start" | "span-inline-start" | "span-block-start" => Some(K::SpanStart),
+        "span-x-end" | "span-y-end" | "span-inline-end" | "span-block-end" => Some(K::SpanEnd),
+        _ => None,
+    }
+}
+
 fn parse_break_value(s: &str) -> Option<BreakValue> {
     match s.trim().to_ascii_lowercase().as_str() {
         "auto" => Some(BreakValue::Auto),
@@ -25267,5 +25354,92 @@ mod masonry_auto_flow_tests {
         let span_style = compute_style(&doc, span, &sheet, &div_style, vp, false);
         assert_eq!(div_style.masonry_auto_flow, MasonryAutoFlow::Next);
         assert_eq!(span_style.masonry_auto_flow, MasonryAutoFlow::DefiniteFirst, "masonry_auto_flow must not be inherited");
+    }
+
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSS Anchor Positioning L1 tests
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod anchor_positioning_tests {
+    use super::*;
+    use crate::anchor::InsetAreaKeyword;
+    use lumen_core::geom::Size;
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    fn first_div_style(html: &str, css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let child = doc.get(body).children[0];
+        compute_style(&doc, child, &sheet, &root, VP, false)
+    }
+
+    #[test]
+    fn anchor_name_parsed() {
+        let s = first_div_style("<div></div>", "div { anchor-name: --btn; }");
+        assert_eq!(s.anchor_name.as_deref(), Some("--btn"));
+    }
+
+    #[test]
+    fn anchor_name_none_clears() {
+        let s = first_div_style("<div></div>", "div { anchor-name: none; }");
+        assert!(s.anchor_name.is_none());
+    }
+
+    #[test]
+    fn position_anchor_parsed() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; position-anchor: --tooltip-anchor; }",
+        );
+        assert_eq!(s.position_anchor.as_deref(), Some("--tooltip-anchor"));
+    }
+
+    #[test]
+    fn inset_area_two_keywords() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; inset-area: end start; }",
+        );
+        assert_eq!(s.inset_area_row, InsetAreaKeyword::End);
+        assert_eq!(s.inset_area_col, InsetAreaKeyword::Start);
+    }
+
+    #[test]
+    fn inset_area_single_keyword_sets_both_axes() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; inset-area: center; }",
+        );
+        assert_eq!(s.inset_area_row, InsetAreaKeyword::Center);
+        assert_eq!(s.inset_area_col, InsetAreaKeyword::Center);
+    }
+
+    #[test]
+    fn position_area_alias_parsed() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; position-area: start end; }",
+        );
+        assert_eq!(s.inset_area_row, InsetAreaKeyword::Start);
+        assert_eq!(s.inset_area_col, InsetAreaKeyword::End);
+    }
+
+    #[test]
+    fn anchor_name_not_inherited() {
+        let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+        let sheet = lumen_css_parser::parse("div { anchor-name: --parent; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+        assert_eq!(div_style.anchor_name.as_deref(), Some("--parent"));
+        assert!(span_style.anchor_name.is_none(), "anchor-name must not be inherited");
     }
 }

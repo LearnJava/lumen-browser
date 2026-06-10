@@ -30,6 +30,7 @@ use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
                       build_counter_style_registry, format_counter_with_registry,
                       build_list_marker_text};
 use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
+use crate::anchor::{collect_anchors, resolve_inset_area, InsetAreaKeyword};
 use crate::TextMeasurer;
 
 /// HTML-имя элемента `<img>` для распознавания replaced-боксов в layout.
@@ -1650,6 +1651,8 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, false);
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
     apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false);
+    // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
+    apply_anchor_positions(&mut root, viewport);
     root
 }
 
@@ -1688,6 +1691,8 @@ pub fn layout_measured_hyp(
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+    // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
+    apply_anchor_positions(&mut root, viewport);
     root
 }
 
@@ -7415,6 +7420,74 @@ fn apply_container_inner(
         for child in &mut b.children {
             apply_container_inner(child, doc, sheet, viewport, measurer, pcb, hp, dark_mode);
         }
+    }
+}
+
+/// CSS Anchor Positioning L1 — post-layout pass.
+///
+/// Builds the anchor registry from the completed layout tree, then walks the
+/// tree to reposition every absolutely/fixed-positioned element that has both
+/// `position-anchor` and a non-`none` `inset-area` set.  Called once after all
+/// layout and container-query passes complete.
+pub(crate) fn apply_anchor_positions(root: &mut LayoutBox, viewport: Size) {
+    let registry = collect_anchors(root);
+    if registry.is_empty() {
+        return;
+    }
+    let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    apply_anchor_positions_rec(root, &registry, viewport, init_pcb);
+}
+
+fn apply_anchor_positions_rec(
+    lb: &mut LayoutBox,
+    registry: &crate::anchor::AnchorRegistry,
+    viewport: Size,
+    pcb: Rect,
+) {
+    // Resolve inset-area for this element if it is abs/fixed-positioned with a named anchor.
+    let anchor_name = matches!(lb.style.position, Position::Absolute | Position::Fixed)
+        .then(|| lb.style.position_anchor.as_deref())
+        .flatten();
+    if let Some(anchor_name) = anchor_name {
+        let row = lb.style.inset_area_row;
+        let col = lb.style.inset_area_col;
+        if row != InsetAreaKeyword::None || col != InsetAreaKeyword::None {
+            let cb = if matches!(lb.style.position, Position::Fixed) {
+                Rect::new(0.0, 0.0, viewport.width, viewport.height)
+            } else {
+                pcb
+            };
+            if let Some(pos) = resolve_inset_area(registry, anchor_name, row, col, cb) {
+                let new_x = cb.x + pos.left;
+                let new_y = cb.y + pos.top;
+                let dx = new_x - lb.rect.x;
+                let dy = new_y - lb.rect.y;
+                shift_tree(lb, dx, dy);
+                if let Some(w) = pos.width {
+                    lb.rect.width = w;
+                }
+                if let Some(h) = pos.height {
+                    lb.rect.height = h;
+                }
+            }
+        }
+    }
+
+    // Compute the containing block for absolute-positioned children of this element.
+    let is_positioned = !matches!(lb.style.position, Position::Static);
+    let my_pcb = if is_positioned {
+        Rect::new(
+            lb.rect.x + lb.style.border_left_width,
+            lb.rect.y + lb.style.border_top_width,
+            (lb.rect.width - lb.style.border_left_width - lb.style.border_right_width).max(0.0),
+            (lb.rect.height - lb.style.border_top_width - lb.style.border_bottom_width).max(0.0),
+        )
+    } else {
+        pcb
+    };
+
+    for child in &mut lb.children {
+        apply_anchor_positions_rec(child, registry, viewport, my_pcb);
     }
 }
 

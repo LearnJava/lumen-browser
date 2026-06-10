@@ -656,7 +656,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `anchor-name` / `position-anchor` / `inset-area` | ⬜ | entirely new spec |
+| `anchor-name` / `position-anchor` / `inset-area` | ✅ | ComputedStyle + collect_anchors + apply_anchor_positions post-layout pass; position-area alias |
 | `anchor()` / `anchor-size()` functions | ⬜ | |
 
 ### [T4] Color L5

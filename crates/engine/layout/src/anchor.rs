@@ -157,13 +157,10 @@ pub fn collect_anchors(root: &LayoutBox) -> AnchorRegistry {
     registry
 }
 
-// CSS: anchor-name — P4 adds ComputedStyle.anchor_name: Option<String>.
-// When wiring, replace the early-return stub with:
-//   if let Some(name) = &lb.style.anchor_name {
-//       register_anchor(registry, name.clone(), lb.node, lb.rect);
-//   }
-#[allow(clippy::only_used_in_recursion)] // registry unused until P4 wires anchor_name
 fn collect_anchors_rec(lb: &LayoutBox, registry: &mut AnchorRegistry) {
+    if let Some(name) = &lb.style.anchor_name {
+        register_anchor(registry, name.to_string(), lb.node, lb.rect);
+    }
     for child in &lb.children {
         collect_anchors_rec(child, registry);
     }

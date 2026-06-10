@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<!--
+  TEST-77: anchor-name / position-anchor / inset-area — CSS Anchor Positioning L1
+  Verifies that anchored elements are placed in correct grid cells relative to an anchor.
+  Pure geometry test — no text involved.
+-->
+<html>
+<head>
+  <title>Lumen — 77 anchor-positioning</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #0d1117;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 40px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  /* ── Anchor positioning demo ─────────────────────────────────────────── */
+  /* Container is the containing block for all absolute elements */
+  .container {
+    position: relative;
+    width: 900px;
+    height: 290px;
+    margin-bottom: 30px;
+    background: #161b22;
+  }
+
+  /* The anchor element — central reference box */
+  .anchor-el {
+    position: absolute;
+    anchor-name: --center-anchor;
+    width: 80px; height: 80px;
+    background: #f0f6fc;
+    top: 105px; left: 410px;
+  }
+
+  /* Anchored element base style */
+  .anchored {
+    position: absolute;
+    position-anchor: --center-anchor;
+    width: 60px; height: 60px;
+  }
+
+  /* inset-area grid: start-start (top-left corner) */
+  .tl { inset-area: start start; background: #e63946; }
+  /* inset-area grid: start (top row, full width) */
+  .tc { inset-area: start center; background: #f4a261; }
+  /* inset-area grid: start-end (top-right corner) */
+  .tr { inset-area: start end; background: #2a9d8f; }
+  /* inset-area grid: center-start (left column) */
+  .ml { inset-area: center start; background: #457b9d; }
+  /* inset-area grid: center-end (right column) */
+  .mr { inset-area: center end; background: #9d4edd; }
+  /* inset-area grid: end-start (bottom-left corner) */
+  .bl { inset-area: end start; background: #52b788; }
+  /* inset-area grid: end (bottom row, full width) */
+  .bc { inset-area: end center; background: #e9c46a; }
+  /* inset-area grid: end-end (bottom-right corner) */
+  .br { inset-area: end end; background: #f77f00; }
+
+  /* ── Span demo — second container ───────────────────────────────────── */
+  .container2 {
+    position: relative;
+    width: 900px;
+    height: 250px;
+    background: #161b22;
+  }
+
+  .anchor2 {
+    position: absolute;
+    anchor-name: --anchor2;
+    width: 60px; height: 60px;
+    background: #f0f6fc;
+    top: 95px; left: 420px;
+  }
+
+  .anchored2 {
+    position: absolute;
+    position-anchor: --anchor2;
+    height: 40px;
+  }
+
+  /* span-start: spans from container left edge to anchor right edge */
+  .span-start {
+    inset-area: center span-start;
+    background: #e63946;
+    opacity: 0.8;
+  }
+  /* span-end: spans from anchor left edge to container right edge */
+  .span-end {
+    inset-area: center span-end;
+    background: #2a9d8f;
+    opacity: 0.8;
+  }
+  /* span-all column: full width, above anchor */
+  .span-all-top {
+    inset-area: start span-all;
+    background: #9d4edd;
+    height: 30px;
+    opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- Row 1: 8 corner/edge positions around an anchor -->
+  <div class="container">
+    <div class="anchor-el"></div>
+    <div class="anchored tl"></div>
+    <div class="anchored tc"></div>
+    <div class="anchored tr"></div>
+    <div class="anchored ml"></div>
+    <div class="anchored mr"></div>
+    <div class="anchored bl"></div>
+    <div class="anchored bc"></div>
+    <div class="anchored br"></div>
+  </div>
+
+  <!-- Row 2: span demos -->
+  <div class="container2">
+    <div class="anchor2"></div>
+    <div class="anchored2 span-start"></div>
+    <div class="anchored2 span-end"></div>
+    <div class="anchored2 span-all-top"></div>
+  </div>
+
+</div>
+</body>
+</html>

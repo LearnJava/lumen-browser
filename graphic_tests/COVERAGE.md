@@ -210,3 +210,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **offset-path** — ✅ реализован (CSS Motion Path L1): resolve_motion_transform() в motion_path.rs; wiring в forward_box_transform() и PropertyTrees::walk() в property_trees.rs; offset-path: path("...") хранится в ComputedStyle.offset_path; offset-distance (px/%) разрешается через diagonal bbox как percent-basis; offset-rotate: auto следует тангенту, fixed angle — фиксированный; 4 unit-теста + graphic test 76
 - **offset-distance** — ✅ реализован (CSS Motion Path L1): parse + resolve в property_trees.rs; тест 76
 - **offset-rotate** — ✅ реализован (CSS Motion Path L1): OffsetRotate::Auto/Reverse/Angle/AutoAngle; тест 76
+
+- **anchor-name** — ✅ реализован (CSS Anchor Positioning L1 §2): ComputedStyle.anchor_name: Option<Box<str>>; парсинг --custom-ident в apply_declaration; collect_anchors_rec регистрирует элементы в AnchorRegistry; тест 77
+- **position-anchor** — ✅ реализован (CSS Anchor Positioning L1 §3): ComputedStyle.position_anchor: Option<Box<str>>; парсинг в apply_declaration; apply_anchor_positions_rec читает для выбора anchor; тест 77
+- **inset-area** — ✅ реализован (CSS Anchor Positioning L1 §5): ComputedStyle.inset_area_row/col: InsetAreaKeyword; parse_inset_area_keyword (9 ключевых слов + физические алиасы); resolve_inset_area() вычисляет top/left/width/height; post-layout pass apply_anchor_positions() в box_tree.rs; тест 77
+- **position-area** — ✅ реализован (alias для inset-area, CSS Anchor Positioning L1): идентичный парсинг; тест 77
