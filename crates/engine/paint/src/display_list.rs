@@ -19,7 +19,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
-    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
+    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
@@ -1945,6 +1945,13 @@ fn emit_text_frags(
                 {
                     axes.push((*b"opsz", frag.style.font_size));
                 }
+                // CSS Fonts L4 §5.2: inject `wdth` for non-normal font-stretch
+                // unless the author already set it via font-variation-settings.
+                if frag.style.font_stretch != FontStretch::NORMAL
+                    && !axes.iter().any(|(t, _)| t == b"wdth")
+                {
+                    axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
+                }
                 axes
             },
             tab_size: frag.style.tab_size,
@@ -2069,6 +2076,11 @@ fn emit_inline_run(
                         && !axes.iter().any(|(t, _)| t == b"opsz")
                     {
                         axes.push((*b"opsz", ef.style.font_size));
+                    }
+                    if ef.style.font_stretch != FontStretch::NORMAL
+                        && !axes.iter().any(|(t, _)| t == b"wdth")
+                    {
+                        axes.push((*b"wdth", ef.style.font_stretch.0 as f32 / 10.0));
                     }
                     axes
                 },
@@ -2404,6 +2416,11 @@ fn emit_text_shadows(
                     if !has_opsz {
                         axes.push((*b"opsz", frag.style.font_size));
                     }
+                }
+                if frag.style.font_stretch != FontStretch::NORMAL
+                    && !axes.iter().any(|(t, _)| t == b"wdth")
+                {
+                    axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
                 }
                 axes
             },
@@ -3735,6 +3752,11 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                             && !axes.iter().any(|(t, _)| t == b"opsz")
                         {
                             axes.push((*b"opsz", em));
+                        }
+                        if s.font_stretch != FontStretch::NORMAL
+                            && !axes.iter().any(|(t, _)| t == b"wdth")
+                        {
+                            axes.push((*b"wdth", s.font_stretch.0 as f32 / 10.0));
                         }
                         axes
                     },
@@ -11277,6 +11299,85 @@ mod tests {
         let red = super::meter_gauge_color(1.0, 0.0, 10.0, 2.0, 8.0, 9.0);
         assert!(red.r > 100, "red zone should have high red channel");
         assert!(red.g < 100, "red zone should have low green channel");
+    }
+
+    // ── font-stretch → wdth variation axis ─────────────────────────────────
+
+    fn wdth_axes(dl: &DisplayList) -> Vec<f32> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { font_variation_axes, .. } => {
+                    font_variation_axes.iter()
+                        .find(|(tag, _)| tag == b"wdth")
+                        .map(|(_, v)| *v)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn font_stretch_normal_no_wdth_axis() {
+        // font-stretch: normal (default) → no wdth axis injected
+        let dl = build("<p>hello</p>", "p { font-stretch: normal; }");
+        let wdth: Vec<_> = wdth_axes(&dl);
+        assert!(wdth.is_empty(), "normal stretch must not inject wdth, got {:?}", wdth);
+    }
+
+    #[test]
+    fn font_stretch_condensed_injects_wdth_75() {
+        // font-stretch: condensed → wdth = 75.0
+        let dl = build("<p>hello</p>", "p { font-stretch: condensed; }");
+        let wdth = wdth_axes(&dl);
+        assert!(!wdth.is_empty(), "condensed stretch must inject wdth axis");
+        assert!(
+            wdth.iter().all(|v| (*v - 75.0).abs() < f32::EPSILON),
+            "condensed = 75%, got {:?}",
+            wdth
+        );
+    }
+
+    #[test]
+    fn font_stretch_expanded_injects_wdth_125() {
+        // font-stretch: expanded → wdth = 125.0
+        let dl = build("<p>hello</p>", "p { font-stretch: expanded; }");
+        let wdth = wdth_axes(&dl);
+        assert!(!wdth.is_empty(), "expanded stretch must inject wdth axis");
+        assert!(
+            wdth.iter().all(|v| (*v - 125.0).abs() < f32::EPSILON),
+            "expanded = 125%, got {:?}",
+            wdth
+        );
+    }
+
+    #[test]
+    fn font_stretch_percentage_injects_correct_wdth() {
+        // font-stretch: 60% → wdth = 60.0
+        let dl = build("<p>hello</p>", "p { font-stretch: 60%; }");
+        let wdth = wdth_axes(&dl);
+        assert!(!wdth.is_empty(), "60% stretch must inject wdth axis");
+        assert!(
+            wdth.iter().all(|v| (*v - 60.0).abs() < 0.1),
+            "60% stretch must give wdth=60.0, got {:?}",
+            wdth
+        );
+    }
+
+    #[test]
+    fn font_stretch_explicit_wdth_not_overridden() {
+        // font-variation-settings: "wdth" 80 with font-stretch: condensed
+        // → explicit wdth=80 wins, no second injection
+        let dl = build(
+            "<p>hello</p>",
+            r#"p { font-stretch: condensed; font-variation-settings: "wdth" 80; }"#,
+        );
+        let wdth = wdth_axes(&dl);
+        // Only one wdth axis per DrawText, and it should be the explicit 80, not 75
+        assert!(
+            wdth.iter().all(|v| (*v - 80.0).abs() < f32::EPSILON),
+            "explicit wdth=80 must not be overridden by font-stretch=condensed (75), got {:?}",
+            wdth
+        );
     }
 }
 
