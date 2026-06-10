@@ -9,9 +9,10 @@ _(none)_ — p4-text-underline влит 2026-06-10
 
 ## Workflow
 
-1. **Check for "Needs wiring" section below** — P1/P2 algorithms ready for CSS connection
-2. **Read CSS-SPECS.md** P4 Priority Queue for next property to implement
-3. **Create branch:** `git checkout -b p4-<property-name>`, e.g. `p4-overflow-scroll`
+1. **⚠️ СНАЧАЛА проверь секцию "Phase 2" в ## Next** — если есть незачёркнутые задачи B/C/D, брать их, не CSS-SPECS.md и не "Needs wiring"
+2. **Check for "Needs wiring" section below** — P1/P2 algorithms ready for CSS connection (только если Phase 2 пуста)
+3. **Read CSS-SPECS.md** P4 Priority Queue for next property to implement (только если Phase 2 и Needs wiring пусты)
+4. **Create branch:** `git checkout -b p4-<property-name>`, e.g. `p4-overflow-scroll`
 4. **Implement end-to-end:**
    - Add field to `ComputedStyle` (lumen-layout/src/style.rs)
    - Add parsing in `apply_declaration()` 
