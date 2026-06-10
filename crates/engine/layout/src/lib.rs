@@ -16,6 +16,7 @@ pub mod anchor;
 pub mod animation;
 pub mod box_tree;
 pub mod color_mix;
+pub mod hyphenation;
 pub mod counters;
 pub mod font_palette;
 pub mod image_gating;
@@ -47,6 +48,7 @@ pub use counters::{
     CounterSystem, CounterRange, RangeBound,
 };
 pub use color_mix::{MixColorSpace, mix_colors};
+pub use hyphenation::{collect_hyphen_points, SoftHyphenPoint};
 pub use image_gating::gate_image_requests;
 pub use image_set::{
     parse_image_set, select_image_set_candidate, select_image_set_url,
