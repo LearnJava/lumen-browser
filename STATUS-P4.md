@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`masonry-auto-flow` — branch: p4-masonry-auto-flow
-Next step: Wire masonry_auto_flow to lay_out_grid  box_tree.rs:5617
+_(none)_ — p4-masonry-auto-flow влит 2026-06-10
 
 ## Workflow
 
@@ -287,6 +286,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-10 | `masonry-auto-flow` | CSS Masonry Layout §9; `MasonryAutoFlow` enum (DefiniteFirst\|Next\|Ordered); `sorted_idxs` в masonry dispatch lay_out_grid; Ordered сортирует по CSS `order`; DefiniteFirst ставит grid-positioned items первыми; 10 unit-тестов + graphic test 75 |
 | 2026-06-10 | `font-stretch` | CSS Fonts L4 §5.2; wdth axis injection в 4 местах DrawText; FontStretch.0/10.0 = wdth %; explicit wdth не перезаписывается; 5 unit-тестов + graphic test 74 |
 | 2026-06-10 | `gap-rule-width/style/color` | CSS Gap Decorations L1; `gap_rule_*` в ComputedStyle (non-inherited); shorthand+longhands в apply_declaration; `collect_gap_segments()` + `emit_gap_rules()` в display_list.rs walk(); 5 unit-тестов + graphic test 73 |
 | 2026-06-10 | `:host` / `::slotted` Shadow DOM | CSS Scoping L1 §6.1-6.2; `PseudoClass::Host` в `matches_pseudo_class`; `is_slotted_element()` + `matches_slotted_complex()` + cascade wiring в `compute_style`; 6 unit-тестов + graphic test 72 |
