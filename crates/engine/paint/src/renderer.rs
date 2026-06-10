@@ -32,7 +32,7 @@ use lumen_font::{
     maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Length, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -6964,64 +6964,22 @@ fn push_grad_quad(out: &mut Vec<GradVertex>, rect: Rect) {
 
 /// CSS Images L3 §3.3 — resolve `GradientStop` positions to normalized [0,1].
 ///
-/// CSS spec: if first/last stop position is unspecified, default to 0/100%.
-/// Runs of unspecified positions between explicit ones are evenly distributed.
-/// `line_len`: pixel length of gradient line (for `Length::Px` stops).
+/// Thin wrapper over the shared [`crate::gradient_math::resolve_stop_positions`]
+/// (single source of truth for all backends, PA-1) converting colours to the
+/// `[f32; 4]` straight-RGBA layout the GPU vertex buffers use.
 fn resolve_gradient_stops(stops: &[GradientStop], line_len: f32) -> Vec<(f32, [f32; 4])> {
-    if stops.is_empty() {
-        return vec![];
-    }
-    let n = stops.len();
-    let mut positions: Vec<Option<f32>> = stops
-        .iter()
-        .map(|s| {
-            s.position.as_ref().map(|l| match l {
-                Length::Percent(p) => p / 100.0,
-                Length::Px(v) if line_len > 0.0 => v / line_len,
-                _ => 0.0,
-            })
-        })
-        .collect();
-    if positions[0].is_none() {
-        positions[0] = Some(0.0);
-    }
-    if positions[n - 1].is_none() {
-        positions[n - 1] = Some(1.0);
-    }
-    // Distribute runs of None between two explicit positions.
-    let mut i = 0;
-    while i < n {
-        if positions[i].is_some() {
-            i += 1;
-            continue;
-        }
-        let lo_i = i - 1;
-        let lo_pos = positions[lo_i].unwrap_or(0.0);
-        let mut hi_i = i + 1;
-        while hi_i < n && positions[hi_i].is_none() {
-            hi_i += 1;
-        }
-        let hi_pos = positions[hi_i.min(n - 1)].unwrap_or(1.0);
-        let gap = (hi_i - lo_i) as f32;
-        for (offset, pos) in positions[i..hi_i].iter_mut().enumerate() {
-            let t = (i + offset - lo_i) as f32 / gap;
-            *pos = Some(lo_pos + (hi_pos - lo_pos) * t);
-        }
-        i = hi_i;
-    }
-    stops
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let pos = positions[i].unwrap_or(0.0);
-            let c = s.color;
-            let col = [
-                c.r as f32 / 255.0,
-                c.g as f32 / 255.0,
-                c.b as f32 / 255.0,
-                c.a as f32 / 255.0,
-            ];
-            (pos, col)
+    crate::gradient_math::resolve_stop_positions(stops, line_len)
+        .into_iter()
+        .map(|(pos, c)| {
+            (
+                pos,
+                [
+                    c.r as f32 / 255.0,
+                    c.g as f32 / 255.0,
+                    c.b as f32 / 255.0,
+                    c.a as f32 / 255.0,
+                ],
+            )
         })
         .collect()
 }
@@ -7534,43 +7492,8 @@ pub(crate) fn apply_alpha_to_color(color: [f32; 4], alpha: f32) -> [f32; 4] {
     [color[0], color[1], color[2], color[3] * alpha]
 }
 
-/// Разбивает полосу длиной `total_length` на серию dash-сегментов
-/// `(offset, length)` по pattern-у `(dash_len, gap_len)`. Совпадает с
-/// Chrome/Edge (Skia): `n = floor(total / period)`, `leading = gap / 2`.
-///
-/// Возвращает empty при degenerate-входе: `total_length <= 0`,
-/// `dash_len <= 0`. При `gap_len <= 0` возвращает один full-length сегмент
-/// (= Solid fallback). Если полоса короче одного даша, возвращает один
-/// сегмент с offset=0.
-pub(crate) fn dash_segments(
-    total_length: f32,
-    dash_len: f32,
-    gap_len: f32,
-) -> Vec<(f32, f32)> {
-    if total_length <= 0.0 || dash_len <= 0.0 {
-        return Vec::new();
-    }
-    if gap_len <= 0.0 {
-        return vec![(0.0, total_length)];
-    }
-    let period = dash_len + gap_len;
-    let n_floor = (total_length / period).floor() as i32;
-    let n_dashes = n_floor.max(1) as usize;
-    // leading=gap/2 matches Chrome/Edge (Skia) phase offset.
-    // For too-short fallback (n_floor<1) start at corner (offset=0).
-    let leading = if n_floor >= 1 { gap_len * 0.5 } else { 0.0 };
-    let mut out = Vec::with_capacity(n_dashes);
-    let mut x = leading;
-    for _ in 0..n_dashes {
-        let seg_start = x.max(0.0);
-        let seg_end = (x + dash_len).min(total_length);
-        if seg_end > seg_start {
-            out.push((seg_start, seg_end - seg_start));
-        }
-        x += period;
-    }
-    out
-}
+// Dash/dot геометрия для outline — общая для всех бэкендов (PA-1).
+pub(crate) use crate::dash_math::dash_segments;
 
 /// Рисует одну сторону border (top / right / bottom / left) с учётом
 /// `BorderStyle`. Логика идентична `emit_outline_side` (Solid → один
@@ -7592,65 +7515,33 @@ fn emit_border_side(
     let total = if horizontal { side_rect.width } else { side_rect.height };
     match style {
         BorderStyle::Dashed => {
-            // Chrome/Edge (Skia): full side width, n=round(total/period), leading=0.
-            // Dash=max(6,2w) and gap=max(4,w) reproduce Edge's observed n values:
-            //   2px→n=18, 4px→n=15, 8px→n=8, 16px→n=4 on a 180px side.
-            // Dash size is fixed (native); only gap (step) is adjusted to anchor the last
-            // dash end exactly at total. This matches Skia's dash rendering more closely.
-            // Positions use floor() to match Chrome/Edge pixel-snapping behaviour.
-            let target_dash = (width * 2.0).max(6.0);
-            let target_gap = width.max(4.0);
-            let target_period = target_dash + target_gap;
-            let n = ((total / target_period).round() as usize).max(1);
-            // Step between dash start positions; last dash end is clamped to total.
-            let step = if n > 1 { (total - target_dash) / (n - 1) as f32 } else { 0.0 };
-            for i in 0..n {
-                let offset = (i as f32 * step).floor();
-                let seg_end = (offset + target_dash).min(total);
-                if seg_end > offset {
-                    let seg = if horizontal {
-                        Rect::new(side_rect.x + offset, side_rect.y, seg_end - offset, side_rect.height)
-                    } else {
-                        Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, seg_end - offset)
-                    };
-                    push_fill_quad(out, seg, color);
-                }
+            // Сегменты считает общий crate::dash_math (PA-1): dash=max(6,2w),
+            // gap=max(4,w), floor-snapping — совпадает с Edge/Skia.
+            for (offset, len) in crate::dash_math::dashed_border_offsets(total, width) {
+                let seg = if horizontal {
+                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
+                } else {
+                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
+                };
+                push_fill_quad(out, seg, color);
             }
         }
         BorderStyle::Dotted => {
-            // Chrome/Edge (Skia): n = floor(total/period) + 1 dots evenly distributed.
-            // Symmetric placement: floor(i*step) for first half, span-floor((n-1-i)*step)
-            // for second half. This matches the symmetric Bresenham pattern Edge uses,
-            // where the "short" gaps appear at both ends, all middle gaps are equal.
-            //   2px→n=46, 4px→n=23, 8px→n=12, 16px→n=6 on a 180px side.
-            // For dot_len ≤ 2px: use fill_quad (rectangle) instead of SDF circle —
-            // Chrome/Edge renders thin dotted borders as squares, not antialiased circles.
-            let dot_len = width.max(1.0);
-            let period = dot_len * 2.0;
-            let n = ((total / period).floor() as usize + 1).max(1);
-            let span = total - dot_len;
-            let step = if n > 1 { span / (n - 1) as f32 } else { 0.0 };
-            let mid = if n > 0 { (n - 1) / 2 } else { 0 };
-            let use_rect = dot_len <= 2.0;
-            for i in 0..n {
-                let offset = if i <= mid {
-                    (i as f32 * step).floor()
+            // Сегменты считает общий crate::dash_math (PA-1): симметричный
+            // Bresenham-паттерн Edge. For dot_len ≤ 2px: use fill_quad
+            // (rectangle) instead of SDF circle — Chrome/Edge renders thin
+            // dotted borders as squares, not antialiased circles.
+            let use_rect = width.max(1.0) <= 2.0;
+            for (offset, len) in crate::dash_math::dotted_border_offsets(total, width) {
+                let seg = if horizontal {
+                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
                 } else {
-                    let j = (n - 1 - i) as f32;
-                    span.floor() - (j * step).floor()
+                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
                 };
-                let seg_end = (offset + dot_len).min(total);
-                if seg_end > offset {
-                    let seg = if horizontal {
-                        Rect::new(side_rect.x + offset, side_rect.y, seg_end - offset, side_rect.height)
-                    } else {
-                        Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, seg_end - offset)
-                    };
-                    if use_rect {
-                        push_fill_quad(out, seg, color);
-                    } else {
-                        push_circle_quad(circle_out, seg, color);
-                    }
+                if use_rect {
+                    push_fill_quad(out, seg, color);
+                } else {
+                    push_circle_quad(circle_out, seg, color);
                 }
             }
         }
@@ -8145,81 +8036,7 @@ mod tests {
         assert_eq!(out, [1.0, 0.5, 0.25, 0.0]);
     }
 
-    // ── dash_segments ────────────────────────────────────────────────────
-
-    #[test]
-    fn dash_segments_zero_length_returns_empty() {
-        assert!(dash_segments(0.0, 4.0, 2.0).is_empty());
-        assert!(dash_segments(-5.0, 4.0, 2.0).is_empty());
-    }
-
-    #[test]
-    fn dash_segments_zero_dash_returns_empty() {
-        assert!(dash_segments(10.0, 0.0, 2.0).is_empty());
-        assert!(dash_segments(10.0, -1.0, 2.0).is_empty());
-    }
-
-    #[test]
-    fn dash_segments_zero_gap_returns_single_full() {
-        // gap=0 — это solid, не разрывается.
-        let segs = dash_segments(10.0, 4.0, 0.0);
-        assert_eq!(segs, vec![(0.0, 10.0)]);
-    }
-
-    #[test]
-    fn dash_segments_exact_fit() {
-        // dash=4, gap=2 → period=6; total=10 → floor(10/6)=1 dash;
-        // leading=gap/2=1; сегмент: (1, 4).
-        let segs = dash_segments(10.0, 4.0, 2.0);
-        assert_eq!(segs.len(), 1);
-        assert!((segs[0].0 - 1.0).abs() < 1e-6);
-        assert!((segs[0].1 - 4.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dash_segments_centered_leftover() {
-        // dash=2, gap=2 → period=4; total=10 → floor(10/4)=2 dashes;
-        // leading=gap/2=1; сегменты (1,2),(5,2).
-        let segs = dash_segments(10.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0], (1.0, 2.0));
-        assert_eq!(segs[1], (5.0, 2.0));
-    }
-
-    #[test]
-    fn dash_segments_with_leftover_centers() {
-        // dash=2, gap=2 → period=4; total=11 → floor(11/4)=2 dashes;
-        // leading=gap/2=1; segs[0].0=1.0.
-        let segs = dash_segments(11.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 2);
-        assert!((segs[0].0 - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dash_segments_too_short_one_dash() {
-        // total=3, dash=4, gap=2 — n_floor=floor(3/6)=0 → max(1)=1;
-        // leading=0 (too-short fallback); сегмент (0,3) обрезается до total.
-        let segs = dash_segments(3.0, 4.0, 2.0);
-        assert_eq!(segs.len(), 1);
-        assert_eq!(segs[0].0, 0.0);
-        assert!((segs[0].1 - 3.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dash_segments_dotted_pattern() {
-        // dot_len=2, gap=2 (Dotted width=2): total=10 → floor(10/4)=2 dots;
-        // leading=1; dots at (1,2),(5,2).
-        let segs = dash_segments(10.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 2);
-    }
-
-    #[test]
-    fn dash_segments_count_for_typical_outline() {
-        // Outline width=2, dashed: dash=4, gap=2; полоса 100 px.
-        // n=floor(100/6)=16 dashes; leading=1.
-        let segs = dash_segments(100.0, 4.0, 2.0);
-        assert_eq!(segs.len(), 16);
-    }
+    // dash_segments unit-тесты переехали в crate::dash_math (PA-1).
 
     // ── emit_border_side ──────────────────────────────────────────────────
 

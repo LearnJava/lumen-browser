@@ -1473,10 +1473,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/ruby.rs:56` **fn** `with_position` — Set the ruby text position
 `crates/engine/layout/src/ruby.rs:62` **fn** `with_inter_char_spacing` — Set inter-character spacing in em units
 `crates/engine/layout/src/ruby.rs:77` **fn** `lay_out_ruby` — Layout algorithm for ruby annotations
-`crates/engine/layout/src/rule_index.rs:20` **struct** `RuleIndex` — Subject-keyed rule index for the top-level `rules` vec of a stylesheet
-`crates/engine/layout/src/rule_index.rs:96` **fn** `empty` — Empty index — used as the initial value of the thread-local cache
-`crates/engine/layout/src/rule_index.rs:109` **fn** `build` — Builds an index over the top-level rules of `sheet`
-`crates/engine/layout/src/rule_index.rs:153` **fn** `candidates` — Returns the deduplicated, sorted candidate rule indices for a node
+`crates/engine/layout/src/rule_index.rs:21` **struct** `RuleIndex` — Subject-keyed rule index for the top-level `rules` vec of a stylesheet
+`crates/engine/layout/src/rule_index.rs:97` **fn** `empty` — Empty index — used as the initial value of the thread-local cache
+`crates/engine/layout/src/rule_index.rs:110` **fn** `build` — Builds an index over the top-level rules of `sheet`
+`crates/engine/layout/src/rule_index.rs:154` **fn** `candidates` — Returns the deduplicated, sorted candidate rule indices for a node
 `crates/engine/layout/src/scroll_timeline.rs:26` **enum** `ScrollAxis` — Selects which scroll axis drives a timeline
 `crates/engine/layout/src/scroll_timeline.rs:40` **struct** `Viewport` — Viewport dimensions used during progress resolution
 `crates/engine/layout/src/scroll_timeline.rs:53` **struct** `ScrollTimeline` — Scroll progress timeline (CSS `scroll()` function / named `scroll-timeline`)
@@ -2064,7 +2064,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (280 symbols)
+## lumen-paint  (297 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -2112,8 +2112,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backends/cpu_backend.rs:31` **struct** `CpuBackend` — Headless CPU-бэкенд на tiny-skia: детерминированный рендер без GPU
 `crates/engine/paint/src/backends/cpu_backend.rs:44` **fn** `new` — Создаёт headless CPU-бэкенд с заданным размером поверхности
 `crates/engine/paint/src/backends/cpu_backend.rs:49` **fn** `last_image` — Возвращает Image из последнего рендера, если он был выполнен
-`crates/engine/paint/src/backends/femtovg_backend.rs:320` **struct** `FemtovgBackend` — femtovg/OpenGL рендер-бэкенд (Phase 2, ADR-010)
-`crates/engine/paint/src/backends/femtovg_backend.rs:433` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
+`crates/engine/paint/src/backends/femtovg_backend.rs:182` **struct** `FemtovgBackend` — femtovg/OpenGL рендер-бэкенд (Phase 2, ADR-010)
+`crates/engine/paint/src/backends/femtovg_backend.rs:295` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
 `crates/engine/paint/src/backends/vello_backend.rs:43` **struct** `VelloBackend` — Phase 3 рендер-бэкенд на базе Vello (ADR-010, RB-7 заглушка)
 `crates/engine/paint/src/backends/vello_backend.rs:57` **fn** `new` — Создаёт заглушку `VelloBackend` с начальным размером поверхности
 `crates/engine/paint/src/backends/wgpu_backend.rs:51` **struct** `WgpuBackend` — wgpu-бэкенд: тонкая обёртка над [`Renderer`], реализующая [`RenderBackend`]
@@ -2121,6 +2121,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backends/wgpu_backend.rs:73` **fn** `new_headless` — Создаёт headless-бэкенд для тестов и `--print-to-pdf`
 `crates/engine/paint/src/backends/wgpu_backend.rs:85` **fn** `renderer` — Неизменяемый доступ к внутреннему [`Renderer`]
 `crates/engine/paint/src/backends/wgpu_backend.rs:90` **fn** `renderer_mut` — Изменяемый доступ к внутреннему [`Renderer`]
+`crates/engine/paint/src/blend_modes.rs:24` **fn** `blend_channel` — Separable blend function `B(Cs, Cb)` per channel (CSS Compositing L1 §9)
+`crates/engine/paint/src/blend_modes.rs:93` **fn** `blend_rgb` — Blend function `B(Cs, Cb)` for a full RGB triple (CSS Compositing L1 §9–10)
+`crates/engine/paint/src/blend_modes.rs:120` **fn** `mix_blend_rgba` — CSS Compositing L1 §5 — blend `src` over `dst` with `mode`, then composite
+`crates/engine/paint/src/blend_modes.rs:148` **fn** `lum` — Luminance of a straight RGB triple (Rec.601 weights, как в WGSL-шейдере)
+`crates/engine/paint/src/blend_modes.rs:155` **fn** `clip_color` — `ClipColor` (CSS Compositing L1 §10): после SetLum компоненты могут выйти
+`crates/engine/paint/src/blend_modes.rs:177` **fn** `set_lum` — `SetLum` (CSS Compositing L1 §10): сдвигает все каналы так, чтобы
+`crates/engine/paint/src/blend_modes.rs:184` **fn** `sat` — Saturation of a straight RGB triple: `max − min` (CSS Compositing L1 §10)
+`crates/engine/paint/src/blend_modes.rs:191` **fn** `set_sat` — `SetSat` (CSS Compositing L1 §10): задаёт saturation `s`, сохраняя порядок
 `crates/engine/paint/src/compositor.rs:63` **trait** `Layer` — Один layer: bbox + связь со stacking context-ом + локальный display list
 `crates/engine/paint/src/compositor.rs:71` **trait** `LayerTree` — Коллекция layer-ов. Trait-обстракция, чтобы compositor мог принимать
 `crates/engine/paint/src/compositor.rs:79` **struct** `BasicLayer` — Sprint 0 / Phase 0 concrete impl. Owned struct без интерлевания —
@@ -2142,6 +2150,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/compositor.rs:526` **struct** `CompositorThread` — Реальный compositor thread: отдельный OS-поток с vsync tick-loop
 `crates/engine/paint/src/compositor.rs:535` **fn** `spawn` — Запускает compositor thread. `handle` — разделяемый доступ к state
 `crates/engine/paint/src/compositor.rs:550` **fn** `shutdown` — Запрашивает завершение потока и блокируется до его выхода
+`crates/engine/paint/src/dash_math.rs:24` **fn** `dashed_border_offsets` — Returns `(offset, length)` pairs along a border side of length `total` for a
+`crates/engine/paint/src/dash_math.rs:53` **fn** `dotted_border_offsets` — Returns `(offset, length)` pairs along a border side of length `total` for a
+`crates/engine/paint/src/dash_math.rs:88` **fn** `dash_segments` — Разбивает полосу длиной `total_length` на серию dash-сегментов
 `crates/engine/paint/src/display_list.rs:39` **enum** `FilterMode` — CSS Images L3 §4.3 — image-rendering filter mode (scaling algorithm)
 `crates/engine/paint/src/display_list.rs:52` **fn** `from_image_rendering` — Преобразует `ImageRendering` в `FilterMode`
 `crates/engine/paint/src/display_list.rs:68` **enum** `BlendMode` — CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
@@ -2163,19 +2174,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:953` **fn** `changed` — Создаёт DiffResult для изменённых display list-ов с заданным bounding rect
 `crates/engine/paint/src/display_list.rs:969` **fn** `diff_display_lists` — Сравнивает два display list-а по Debug hash каждой команды
 `crates/engine/paint/src/display_list.rs:1086` **fn** `serialize_display_list`
-`crates/engine/paint/src/display_list.rs:1444` **fn** `build_display_list`
-`crates/engine/paint/src/display_list.rs:1460` **fn** `build_display_list_with_selection` — Like [`build_display_list`] but applies `::selection` CSS highlight styles
-`crates/engine/paint/src/display_list.rs:1478` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1518` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
-`crates/engine/paint/src/display_list.rs:1529` **fn** `build_display_list_ordered_dpr` — Like [`build_display_list_ordered`] but resolves `image-set()` background
-`crates/engine/paint/src/display_list.rs:1571` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1582` **fn** `build_display_list_ordered_with_anim_dpr` — Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
-`crates/engine/paint/src/display_list.rs:1629` **fn** `build_print_display_list` — Builds a print display list from paginated layout
-`crates/engine/paint/src/display_list.rs:1691` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
-`crates/engine/paint/src/display_list.rs:2513` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
-`crates/engine/paint/src/display_list.rs:2642` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/display_list.rs:3331` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:11359` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:1438` **fn** `build_display_list`
+`crates/engine/paint/src/display_list.rs:1454` **fn** `build_display_list_with_selection` — Like [`build_display_list`] but applies `::selection` CSS highlight styles
+`crates/engine/paint/src/display_list.rs:1472` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:1512` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
+`crates/engine/paint/src/display_list.rs:1523` **fn** `build_display_list_ordered_dpr` — Like [`build_display_list_ordered`] but resolves `image-set()` background
+`crates/engine/paint/src/display_list.rs:1565` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:1576` **fn** `build_display_list_ordered_with_anim_dpr` — Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
+`crates/engine/paint/src/display_list.rs:1623` **fn** `build_print_display_list` — Builds a print display list from paginated layout
+`crates/engine/paint/src/display_list.rs:1685` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
+`crates/engine/paint/src/display_list.rs:2507` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
+`crates/engine/paint/src/display_list.rs:2636` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
+`crates/engine/paint/src/display_list.rs:3325` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
+`crates/engine/paint/src/display_list.rs:11353` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/fingerprint.rs:21` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
 `crates/engine/paint/src/fingerprint.rs:36` **fn** `from_adapter_info` — Create normalized GPU fingerprint from wgpu adapter info
 `crates/engine/paint/src/fingerprint.rs:44` **fn** `vendor` — Vendor string: always "WebKit"
@@ -2195,6 +2206,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/glsl.rs:938` **fn** `new`
 `crates/engine/paint/src/glsl.rs:977` **fn** `exec_main` — Execute the `main()` function of a parsed shader
 `crates/engine/paint/src/glsl.rs:1546` **fn** `interp_varyings` — Linearly interpolate a map of varying values given barycentric weights
+`crates/engine/paint/src/gradient_math.rs:24` **fn** `resolve_stop_positions` — CSS Images L3 §3.3 — resolve `GradientStop` positions to normalized [0,1]
+`crates/engine/paint/src/gradient_math.rs:78` **fn** `sample_gradient_color` — Sample a resolved gradient stop list at position `t` (straight-colour linear
+`crates/engine/paint/src/gradient_math.rs:108` **fn** `lerp_color` — Linear interpolation between two straight (non-premultiplied) RGBA8 colours
+`crates/engine/paint/src/gradient_math.rs:121` **fn** `conic_sample_t` — CSS Images L4 §3.7 — отображает долю оборота `t` ∈ [0,1) в позицию сэмпла
+`crates/engine/paint/src/gradient_math.rs:137` **fn** `atan2_det` — Deterministic `atan2(y, x)` returning radians in `(-π, π]`
 `crates/engine/paint/src/hit_test.rs:48` **struct** `HitTestResult` — Результат hit-теста
 `crates/engine/paint/src/hit_test.rs:77` **fn** `hit_test` — Hit-тест точки в viewport-координатах. `root` — layout-дерево из
 `crates/engine/paint/src/layer_cache.rs:21` **struct** `LayerKey` — Layer identification key for cache lookup
@@ -2220,14 +2236,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:218` **fn** `sync_promoted_layers` — Remove promoted layers for nodes NOT in `current_nodes`
 `crates/engine/paint/src/layer_cache.rs:231` **fn** `promoted_count` — Number of nodes currently promoted to their own GPU layer
 `crates/engine/paint/src/layer_cache.rs:240` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:89` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:99` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/lib.rs:272` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:282` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:296` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:310` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:326` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:341` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:93` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:103` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/lib.rs:276` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:286` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:300` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:314` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:330` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:345` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1331` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
@@ -3574,4 +3591,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3509 symbols in 20 crates*
+*Total: 3526 symbols in 20 crates*

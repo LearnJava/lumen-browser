@@ -46,14 +46,17 @@ use lumen_image::{Image, resize_area_avg};
 use lumen_layout::Color;
 
 use lumen_layout::{
-    BackgroundRepeat, BackgroundSize, BorderStyle, GradientStop, Length, ObjectPosition,
+    BackgroundRepeat, BackgroundSize, BorderStyle, GradientStop, ObjectPosition,
     PositionComponent,
 };
 
 use lumen_core::geom::Rect;
 
 use crate::backend::{RenderBackend, RenderError};
+use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::display_list::{BlendMode, CornerRadii, DisplayCommand};
+use crate::gradient_math::{conic_sample_t, sample_gradient_color};
+use crate::matrix_util::mat4_to_2d_affine;
 
 // ─── Color conversion ────────────────────────────────────────────────────────
 
@@ -66,53 +69,14 @@ fn lumen_to_fvg(c: Color) -> femtovg::Color {
 // ─── Gradient helpers ─────────────────────────────────────────────────────────
 
 /// Разрешает `GradientStop.position` в [0,1], равномерно распределяя `None` позиции.
+///
+/// Thin wrapper над общим [`crate::gradient_math::resolve_stop_positions`]
+/// (единый алгоритм для всех бэкендов, PA-1): позиции дополнительно зажимаются
+/// в [0,1] — femtovg-библиотечные градиенты не принимают значения вне диапазона.
 fn resolve_stops(stops: &[GradientStop], width: f32) -> Vec<(f32, femtovg::Color)> {
-    if stops.is_empty() {
-        return vec![];
-    }
-    let mut result: Vec<Option<f32>> = Vec::with_capacity(stops.len());
-    for s in stops {
-        let p = s.position.as_ref().map(|l| match l {
-            Length::Px(v) if width > 0.0 => (v / width).clamp(0.0, 1.0),
-            Length::Px(_) => 0.0,
-            Length::Percent(p) => (p / 100.0).clamp(0.0, 1.0),
-            _ => 0.0,
-        });
-        result.push(p);
-    }
-    // Разрешаем None: первый None → 0.0, последний None → 1.0, промежуточные — линейно.
-    if result[0].is_none() {
-        result[0] = Some(0.0);
-    }
-    if result[result.len() - 1].is_none() {
-        let last = result.len() - 1;
-        result[last] = Some(1.0);
-    }
-    let n = result.len();
-    let mut i = 0;
-    while i < n {
-        if result[i].is_none() {
-            let start = i - 1;
-            let mut end = i + 1;
-            while end < n && result[end].is_none() {
-                end += 1;
-            }
-            let v0 = result[start].unwrap_or(0.0);
-            let v1 = result[end].unwrap_or(1.0);
-            let count = (end - start) as f32;
-            for (idx, item) in result.iter_mut().enumerate().take(end).skip(start + 1) {
-                let t = (idx - start) as f32 / count;
-                *item = Some(v0 + t * (v1 - v0));
-            }
-            i = end;
-        } else {
-            i += 1;
-        }
-    }
-    result
-        .iter()
-        .zip(stops.iter())
-        .map(|(pos, s)| (pos.unwrap_or(0.0), lumen_to_fvg(s.color)))
+    crate::gradient_math::resolve_stop_positions(stops, width)
+        .into_iter()
+        .map(|(pos, c)| (pos.clamp(0.0, 1.0), lumen_to_fvg(c)))
         .collect()
 }
 
@@ -193,63 +157,6 @@ fn sticky_offset_dx(
     dx
 }
 
-// ─── Border dash / dot geometry ───────────────────────────────────────────────
-
-/// Returns `(offset, length)` pairs along a border side of length `total` for a
-/// `dashed` border of thickness `width`. Mirrors the wgpu `emit_border_side`
-/// dashed pattern (BUG-080) so both backends match Edge/Skia: dash size is fixed
-/// at `max(6, 2·width)`, gap at `max(4, width)`; `n = round(total / period)`
-/// dashes are laid out with the step adjusted so the last dash ends at `total`.
-/// Offsets use `floor()` to match Edge pixel-snapping. Empty when `total <= 0`.
-fn dashed_border_offsets(total: f32, width: f32) -> Vec<(f32, f32)> {
-    if total <= 0.0 {
-        return Vec::new();
-    }
-    let target_dash = (width * 2.0).max(6.0);
-    let target_gap = width.max(4.0);
-    let n = ((total / (target_dash + target_gap)).round() as usize).max(1);
-    let step = if n > 1 { (total - target_dash) / (n - 1) as f32 } else { 0.0 };
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let offset = (i as f32 * step).floor();
-        let seg_end = (offset + target_dash).min(total);
-        if seg_end > offset {
-            out.push((offset, seg_end - offset));
-        }
-    }
-    out
-}
-
-/// Returns `(offset, length)` pairs along a border side of length `total` for a
-/// `dotted` border of thickness `width`. Mirrors the wgpu `emit_border_side`
-/// dotted pattern: `n = floor(total / (2·dot)) + 1` dots, symmetric placement
-/// (short gaps at both ends, equal middle gaps). `dot = max(1, width)`. The
-/// caller decides square (≤2px) vs round rendering. Empty when `total <= 0`.
-fn dotted_border_offsets(total: f32, width: f32) -> Vec<(f32, f32)> {
-    if total <= 0.0 {
-        return Vec::new();
-    }
-    let dot_len = width.max(1.0);
-    let n = ((total / (dot_len * 2.0)).floor() as usize + 1).max(1);
-    let span = total - dot_len;
-    let step = if n > 1 { span / (n - 1) as f32 } else { 0.0 };
-    let mid = (n - 1) / 2;
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let offset = if i <= mid {
-            (i as f32 * step).floor()
-        } else {
-            let j = (n - 1 - i) as f32;
-            span.floor() - (j * step).floor()
-        };
-        let seg_end = (offset + dot_len).min(total);
-        if seg_end > offset {
-            out.push((offset, seg_end - offset));
-        }
-    }
-    out
-}
-
 // ─── BlendMode → CompositeOperation ──────────────────────────────────────────
 
 /// Маппинг CSS MixBlendMode → femtovg CompositeOperation.
@@ -263,51 +170,6 @@ fn blend_to_composite(mode: BlendMode) -> femtovg::CompositeOperation {
         BlendMode::PlusLighter => femtovg::CompositeOperation::Lighter,
         // Остальные CSS blend modes не поддерживаются OpenGL ES 2.0 — fallback.
         _ => femtovg::CompositeOperation::SourceOver,
-    }
-}
-
-// ─── Conic gradient color interpolation ───────────────────────────────────────
-
-/// Интерполирует цвет в позиции `t` [0,1] между двумя соседними stop-ами.
-fn interp_conic_color(resolved: &[(f32, femtovg::Color)], t: f32) -> Color {
-    if resolved.is_empty() {
-        return Color::TRANSPARENT;
-    }
-    let last = resolved.len() - 1;
-    for i in 0..last {
-        let (p0, c0) = resolved[i];
-        let (p1, c1) = resolved[i + 1];
-        if t <= p1 || i == last - 1 {
-            let range = p1 - p0;
-            let fac = if range > 1e-6 { ((t - p0) / range).clamp(0.0, 1.0) } else { 0.0 };
-            let r = (c0.r * 255.0 + fac * (c1.r * 255.0 - c0.r * 255.0)).round() as u8;
-            let g = (c0.g * 255.0 + fac * (c1.g * 255.0 - c0.g * 255.0)).round() as u8;
-            let b = (c0.b * 255.0 + fac * (c1.b * 255.0 - c0.b * 255.0)).round() as u8;
-            let a = (c0.a * 255.0 + fac * (c1.a * 255.0 - c0.a * 255.0)).round() as u8;
-            return Color { r, g, b, a };
-        }
-    }
-    let last_color = resolved[last].1;
-    Color {
-        r: (last_color.r * 255.0).round() as u8,
-        g: (last_color.g * 255.0).round() as u8,
-        b: (last_color.b * 255.0).round() as u8,
-        a: (last_color.a * 255.0).round() as u8,
-    }
-}
-
-/// CSS Images L4 §3.7 — отображает долю оборота `t` ∈ [0,1) в позицию сэмпла
-/// внутри диапазона stop-ов градиента.
-///
-/// Для `repeating-conic-gradient` паттерн повторяется каждые (last − first) доли
-/// оборота: `t` сворачивается в `[first, first+span)` через `rem_euclid`.
-/// Для не-repeating (или вырожденного нулевого span) возвращает `t` без изменений.
-fn conic_sample_t(t: f32, repeating: bool, first_pos: f32, last_pos: f32) -> f32 {
-    let span = last_pos - first_pos;
-    if repeating && span > 1e-6 {
-        first_pos + (t - first_pos).rem_euclid(span)
-    } else {
-        t
     }
 }
 
@@ -875,7 +737,9 @@ impl FemtovgBackend {
         // смещён (`at <pos>`), поэтому берём полную диагональ как верхнюю границу.
         let radius = rect.width.hypot(rect.height);
 
-        let resolved = resolve_stops(stops, 1.0);
+        // Общая resolve/sample-математика (PA-1): цвета остаются в CSS `Color`,
+        // конверсия в femtovg::Color — только на заливке сегмента.
+        let resolved = crate::gradient_math::resolve_stop_positions(stops, 1.0);
         if resolved.len() < 2 {
             return;
         }
@@ -899,8 +763,8 @@ impl FemtovgBackend {
             let t_mid = (t0 + t1) / 2.0;
 
             let t_sample = conic_sample_t(t_mid, repeating, first_pos, last_pos);
-            let c_mid = interp_conic_color(&resolved, t_sample);
-            let avg_color = femtovg::Color::rgba(c_mid.r, c_mid.g, c_mid.b, c_mid.a);
+            let c_mid = sample_gradient_color(&resolved, t_sample, false);
+            let avg_color = lumen_to_fvg(c_mid);
 
             let a0 = base_angle + t0 * std::f32::consts::TAU;
             let a1 = base_angle + t1 * std::f32::consts::TAU;
@@ -1190,21 +1054,9 @@ impl FemtovgBackend {
             // ── Transform ────────────────────────────────────────────────────
             DisplayCommand::PushTransform { matrix } => {
                 self.canvas.save();
-                // Извлекаем 2D-аффинную часть из Mat4 (column-major layout).
-                // Mat4[i]: layout column-major — [col0_row0..col0_row3, col1_row0..col1_row3, ...]
-                // femtovg Transform2D([a, b, c, d, e, f]):
-                //   | a c e |    a=m[0], c=m[4], e=m[12]
-                //   | b d f |    b=m[1], d=m[5], f=m[13]
-                //   | 0 0 1 |
-                let m = &matrix.0;
-                let transform = femtovg::Transform2D([
-                    m[0],   // a = scale_x / cos
-                    m[1],   // b = sin
-                    m[4],   // c = -sin
-                    m[5],   // d = scale_y / cos
-                    m[12],  // e = translate_x
-                    m[13],  // f = translate_y
-                ]);
+                // femtovg Transform2D([a, b, c, d, e, f]) — 2D-аффинная часть
+                // Mat4 через общий crate::matrix_util (PA-1).
+                let transform = femtovg::Transform2D(mat4_to_2d_affine(matrix));
                 self.canvas.set_transform(&transform);
                 self.layer_stack_depth += 1;
             }
@@ -1543,6 +1395,7 @@ fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_layout::Length;
 
     #[test]
     fn downscale_target_triggers_on_large_downscale() {
@@ -1840,74 +1693,8 @@ mod tests {
         assert!((dy - (-200.0)).abs() < 1e-4);
     }
 
-    #[test]
-    fn interp_conic_color_at_zero() {
-        let stops = vec![
-            (0.0_f32, femtovg::Color::rgb(0, 0, 0)),
-            (1.0_f32, femtovg::Color::rgb(255, 255, 255)),
-        ];
-        let c = interp_conic_color(&stops, 0.0);
-        assert_eq!(c.r, 0);
-        assert_eq!(c.a, 255);
-    }
-
-    #[test]
-    fn interp_conic_color_at_one() {
-        let stops = vec![
-            (0.0_f32, femtovg::Color::rgb(0, 0, 0)),
-            (1.0_f32, femtovg::Color::rgb(255, 255, 255)),
-        ];
-        let c = interp_conic_color(&stops, 1.0);
-        assert_eq!(c.r, 255);
-    }
-
-    #[test]
-    fn interp_conic_color_midpoint() {
-        let stops = vec![
-            (0.0_f32, femtovg::Color::rgb(0, 0, 0)),
-            (1.0_f32, femtovg::Color::rgb(200, 100, 50)),
-        ];
-        let c = interp_conic_color(&stops, 0.5);
-        assert_eq!(c.r, 100);
-        assert_eq!(c.g, 50);
-    }
-
-    #[test]
-    fn conic_sample_t_non_repeating_is_identity() {
-        // Не-repeating: t возвращается как есть на всём обороте.
-        assert!((conic_sample_t(0.0, false, 0.0, 0.25) - 0.0).abs() < 1e-6);
-        assert!((conic_sample_t(0.7, false, 0.0, 0.25) - 0.7).abs() < 1e-6);
-        assert!((conic_sample_t(1.0, false, 0.0, 0.25) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn conic_sample_t_repeating_tiles_pattern() {
-        // BUG-086: repeating-conic-gradient с span=0.25 (45deg×2 паттерн)
-        // должен повторяться 4 раза за оборот, а не оставлять 3/4 заливкой
-        // последнего цвета. t за пределами первого span сворачивается в него.
-        let (first, last) = (0.0_f32, 0.25_f32);
-        assert!((conic_sample_t(0.05, true, first, last) - 0.05).abs() < 1e-6);
-        // 0.30 → 0.30 mod 0.25 = 0.05
-        assert!((conic_sample_t(0.30, true, first, last) - 0.05).abs() < 1e-6);
-        // 0.55 → 0.55 mod 0.25 = 0.05
-        assert!((conic_sample_t(0.55, true, first, last) - 0.05).abs() < 1e-6);
-        // 0.875 (7/8 оборота) → 0.875 mod 0.25 = 0.125 (середина паттерна)
-        assert!((conic_sample_t(0.875, true, first, last) - 0.125).abs() < 1e-6);
-    }
-
-    #[test]
-    fn conic_sample_t_repeating_zero_span_is_identity() {
-        // Вырожденный span (все stop-ы в одной точке) — не делим, возвращаем t.
-        assert!((conic_sample_t(0.6, true, 0.5, 0.5) - 0.6).abs() < 1e-6);
-    }
-
-    #[test]
-    fn conic_sample_t_repeating_nonzero_first() {
-        // Паттерн со смещённым first_pos: span = 0.4 - 0.1 = 0.3.
-        // t=0.75 → 0.1 + (0.75-0.1) mod 0.3 = 0.1 + 0.65 mod 0.3 = 0.1 + 0.05 = 0.15
-        let v = conic_sample_t(0.75, true, 0.1, 0.4);
-        assert!((v - 0.15).abs() < 1e-6, "v={v}");
-    }
+    // interp_conic_color / conic_sample_t unit-тесты переехали в
+    // crate::gradient_math (PA-1; sample_gradient_color покрывает интерполяцию).
 
     #[test]
     fn draw_fill_rounded_rect_circular_does_not_panic() {
