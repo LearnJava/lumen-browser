@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-border-collapse влит 2026-06-10
+`view-transition-name` / `::view-transition-*` (CSS View Transitions L1 §10)  branch: p4-view-transition-name
+Next step: добавить `view_transition_name: Option<Box<str>>` в ComputedStyle  style.rs:~2480
 
 ## Workflow
 
@@ -37,9 +38,9 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 | # | Property / Feature | Effort | Blocker | Task file |
 |---|-------------------|--------|---------|-----------|
 | ~~**A**~~ | ~~**`:host` / `::slotted` (Shadow DOM)**~~ — **выполнено** (p4-host-slotted, 2026-06-10) | M | none | — |
-| **B** | **Find in page (Ctrl+F)** — spec: [lumen-plan.md:2285](lumen-plan.md) | M | none | — |
-| **C** | **DevTools / Inspector Phase 0** — DOM tree + computed styles + network log (CDP минимум) — spec: [lumen-plan.md:2286](lumen-plan.md), подробнее [lumen-plan.md:521](lumen-plan.md) | L | none | — |
-| **D** | **`overflow: scroll` scrollable containers** — алгоритм + P4 задача: [STATUS-P4.md:194](STATUS-P4.md) | L | none (P1 W-6 ✅) | — |
+| ~~**B**~~ | ~~**Find in page (Ctrl+F)**~~ — **выполнено** (P3 259b0c1d + regex f0e9f08d + scroll-to-match 62be2e83) | M | — | — |
+| ~~**C**~~ | ~~**DevTools / Inspector Phase 0**~~ — **выполнено** (P2 f3cb196e + P3 0aaa77ec + d7d47800; DOM inspector + console + network panel) | L | — | — |
+| ~~**D**~~ | ~~**`overflow: scroll` scrollable containers**~~ — **выполнено** (P2 ca59abfa scroll layer; P3 R-1 5a0b240a scroll events) | L | — | — |
 
 ### CSS Properties (после Phase 2)
 
