@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-host-slotted влит 2026-06-10
+`gap-rule-width` / `gap-rule-style` / `gap-rule-color`  branch: p4-gap-rule
+Next step: добавить поля в ComputedStyle, парсинг в apply_declaration, вызов emit_gap_rules в display_list.rs  style.rs:2077
 
 ## Workflow
 
