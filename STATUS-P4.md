@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`view-transition-name` / `::view-transition-*` (CSS View Transitions L1 §10)  branch: p4-view-transition-name
-Next step: добавить `view_transition_name: Option<Box<str>>` в ComputedStyle  style.rs:~2480
+_(none)_ — p4-view-transition-name влит 2026-06-10
 
 ## Workflow
 
@@ -271,6 +270,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-10 | `view-transition-name` | CSS View Transitions L1 §10; `ComputedStyle.view_transition_name: Option<Box<str>>` (non-inherited, default None); parse «none»→None, ident→Some; `collect_view_transition_names()` в lib.rs — возвращает [(NodeId, name)] для shell; SUPPORTED_PROPERTIES +1; 5 unit-тестов style.rs + 4 unit-теста lib.rs; graphic test 81 |
 | 2026-06-10 | `border-collapse` | CSS Tables L2 §17.6; `BorderCollapse` enum в style.rs; `ComputedStyle.border_collapse` (inherited, default Separate); collapse → spacing=0 в lay_out_table + compute_table_col_widths; `TableContext::from_box()` читает реальные CSS-значения; 5 unit-тестов + graphic test 80 |
 | 2026-06-10 | `text-underline-offset` + `text-underline-position` wiring | CSS Text Decoration L4 §5.1/§5.3; `text_underline_offset: Option<f32>` в ComputedStyle; парсинг auto/px/em; wired в push_text_decoration() — Under→fs*0.25; offset добавляется к base; 5 unit-тестов + graphic test 79 |
 | 2026-06-10 | `scroll-timeline-name/axis`, `view-timeline-name/axis`, `animation-timeline` | CSS Scroll-Driven Animations L1; `AnimationTimeline` enum (Auto/Scroll/View/Named); `collect_named_scroll_timelines/view_timelines()` полный walk; SUPPORTED_PROPERTIES +7; 12 unit-тестов + graphic test 78 |
