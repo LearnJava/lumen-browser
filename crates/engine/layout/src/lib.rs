@@ -9461,6 +9461,87 @@ mod tests {
         );
     }
 
+    // ──────── scrollbar-gutter layout algorithm ────────
+
+    /// `scrollbar-gutter: stable` + `overflow-y: scroll` reserves 12px (auto gutter)
+    /// in the inline axis so children are narrower than the container's content edge.
+    #[test]
+    fn scrollbar_gutter_stable_reduces_child_width() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // 200 border-box → content = 200; minus 12 gutter = 188.
+        assert!((div.rect.width - 200.0).abs() < 0.01, "div={}", div.rect.width);
+        assert!((p.rect.width - 188.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// `scrollbar-gutter: auto` (default) with overlay scrollbars = no gutter reserved.
+    #[test]
+    fn scrollbar_gutter_auto_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // No gutter reserved: child fills full content width.
+        assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// `scrollbar-width: none` suppresses the gutter even with `scrollbar-gutter: stable`.
+    #[test]
+    fn scrollbar_gutter_stable_none_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable; scrollbar-width: none; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// `scrollbar-gutter: stable both-edges` reserves gutter on start AND end of
+    /// the inline axis (2 × 12 = 24 px).
+    #[test]
+    fn scrollbar_gutter_stable_both_edges_double_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable both-edges; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // 200 − 12*2 = 176.
+        assert!((p.rect.width - 176.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// `scrollbar-width: thin` uses 6 px gutter instead of 12.
+    #[test]
+    fn scrollbar_gutter_stable_thin_reduces_by_6() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable; scrollbar-width: thin; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // 200 − 6 = 194.
+        assert!((p.rect.width - 194.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// Without `overflow-y: scroll/auto`, `scrollbar-gutter: stable` has no effect.
+    #[test]
+    fn scrollbar_gutter_stable_no_scroll_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; scrollbar-gutter: stable; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
     // ──────── transform-origin / perspective / list-style-* / transition-* ────────
 
     #[test]
