@@ -6,8 +6,7 @@
 
 ## In progress
 
-W-2: Idle Detection API stub  branch: p1-w2-idle-detection
-Next step: clippy + tests  crates/js/src/idle_detection.rs
+_(нет)_
 
 ---
 
@@ -28,7 +27,7 @@ Next step: clippy + tests  crates/js/src/idle_detection.rs
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | W-1 | **Shared Storage API Phase 0** — Privacy Sandbox `window.sharedStorage` (set/get/append/delete/clear/keys/values/entries/length/remainingBudget/selectURL/run/worklet stub) | S | `lumen-js` |
-| W-2 | **Idle Detection API stub** — WICG `IdleDetector.requestPermission()`, `start({threshold})`, `userState`/`screenState`, `'change'` event | XS | `lumen-js` |
+| ~~W-2~~ | ~~**Idle Detection API stub** — WICG `IdleDetector.requestPermission()`, `start({threshold})`, `userState`/`screenState`, `'change'` event~~ — **выполнено** | XS | `lumen-js` |
 | W-3 | **Topics API stub** — Privacy Sandbox `document.browsingTopics()` → Promise<[]>, `DeprecatedTopicsButton` Phase 0 | XS | `lumen-js` |
 | W-4 | **Attribution Reporting API stub** — `attributionsrc` attribute parsing, `window.attributionReporting` Phase 0 | XS | `lumen-js` |
 | W-5 | **CSS `hyphens: auto` algorithm stub** — `SoftHyphenPoint` type, `collect_hyphen_points(word)` stub via `HyphenationProvider` | S | `lumen-layout`, `lumen-core` |
@@ -160,6 +159,7 @@ Next step: clippy + tests  crates/js/src/idle_detection.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | W-2: Idle Detection API stub | lumen-js idle_detection.rs: WICG Idle Detection API Phase 0. IdleDetector: extends EventTarget; requestPermission()→'granted'; start({threshold≥60s})→{userState:'active', screenState:'unlocked'} Promise; start({threshold<60s})→RangeError; stop() сбрасывает state в null. 'change' событие не генерируется (Phase 0). Phase 1: _lumen_idle_query_user_state/_lumen_idle_query_screen_state нативные хуки. 8 unit-тестов (с execute_pending_job() drain для Promise-тестов). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-1: Shared Storage API Phase 0 | lumen-js shared_storage.rs: WICG Privacy Sandbox `window.sharedStorage`. In-memory key-value store (Phase 0). set/get/append/delete/clear/keys/values/entries/length/remainingBudget/run/selectURL. SharedStorageWorklet stub (addModule→resolved). ignoreIfPresent option. Async iterators через asyncIter() helper. Phase 1: _lumen_shared_storage_* нативные биндинги для SQLite per-origin. 13 unit-тестов (включая microtask drain через ctx.execute_pending_job()). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | V-4: CSS image-set() selection algorithm stub | lumen-layout image_set.rs: типизированный CSS Images L4 §5 API. `ImageSetOption {url, resolution_dppx, mime_type}`. `SupportedTypes` (Phase 0: all()). `parse_image_set(value) -> Vec<ImageSetOption>` — парсит image-set()/-webkit-image-set() или plain URL (→ 1× без типа); поддерживает resolution-единицы x/dppx/dpi/dpcm и `type(...)` дескриптор в любом порядке. `select_image_set_candidate(candidates, dpr, supported)` — CSS L4 §5 алгоритм (type-фильтр → ближайший dpr, тай → выше). `select_image_set_url(value, dpr) -> String` — convenience. P4-handoff обновлён в STATUS-P4.md. 17 unit-тестов. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | V-3: inert attribute layout algorithm stub | lumen-layout inert.rs: is_inert(doc, node) — обходит цепочку родителей (HTML LS §6.7); InertRegion { node_id, rect }; collect_inert_regions(root, doc) — возвращает только корни inert-поддеревьев (вложенные не дублируются); collect_clickable_rec: проверка is_inert исключает inert-элементы из hit-test. Точки для P4: `// CSS: inert` (UA-правило `[inert] { pointer-events: none; }`), для P3 (shell): collect_inert_regions для фильтрации событий. 10 unit-тестов. lumen-js inert.rs: HTMLElement.prototype.inert getter/setter + _lumen_set_inert Phase-0-stub. 8 unit-тестов. Clippy чист. Без новых зависимостей. |
