@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+In progress: BUG-078 — object-fit contain/cover image quality (TEST-19: 12.68%)  branch: p3-bug078-object-fit
+Next step: проверить, проходит ли object-fit путь через area-averaged downscale (BUG-077) в crates/engine/paint/src/backends/femtovg_backend.rs
 
 ## Next
 
