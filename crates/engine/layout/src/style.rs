@@ -2304,6 +2304,9 @@ pub struct ComputedStyle {
     pub grid_template_areas: Vec<Vec<String>>,
     /// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited. Default `Row`.
     pub grid_auto_flow: GridAutoFlow,
+    /// CSS Masonry Layout §9 — `masonry-auto-flow`. Controls placement order in
+    /// masonry containers. Non-inherited. Default `DefiniteFirst`.
+    pub masonry_auto_flow: MasonryAutoFlow,
     /// CSS Grid Layout L1 §8.6 — `grid-auto-columns`. Non-inherited. Default `Auto`.
     pub grid_auto_columns: GridTrackSize,
     /// CSS Grid Layout L1 §8.6 — `grid-auto-rows`. Non-inherited. Default `Auto`.
@@ -3872,6 +3875,32 @@ impl GridAutoFlow {
     }
 }
 
+/// CSS Masonry Layout §9 — `masonry-auto-flow`. Controls the placement order
+/// of auto-placed items in a masonry container. Non-inherited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum MasonryAutoFlow {
+    /// `definite-first` (initial) — items with an explicit grid-axis position are
+    /// placed first, then auto items in source order.
+    #[default]
+    DefiniteFirst,
+    /// `next` — all items placed in source order, no definite-first prioritisation.
+    Next,
+    /// `ordered` — items sorted by their CSS `order` property before placement.
+    Ordered,
+}
+
+impl MasonryAutoFlow {
+    /// Parse a CSS `masonry-auto-flow` value string.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "definite-first" => Some(Self::DefiniteFirst),
+            "next" => Some(Self::Next),
+            "ordered" => Some(Self::Ordered),
+            _ => None,
+        }
+    }
+}
+
 /// CSS Grid Layout L1 §8.3 — a grid-line reference for grid-column-start,
 /// grid-column-end, grid-row-start, grid-row-end. Non-inherited.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -4475,6 +4504,7 @@ impl ComputedStyle {
             grid_template_row_auto_repeat: None,
             grid_template_areas: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
+            masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
             grid_auto_columns: GridTrackSize::Auto,
             grid_auto_rows: GridTrackSize::Auto,
             grid_column_start: GridLine::Auto,
@@ -4775,6 +4805,7 @@ pub fn compute_style(
         grid_template_row_auto_repeat: None,
         grid_template_areas: Vec::new(),
         grid_auto_flow: GridAutoFlow::Row,
+        masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
         grid_auto_columns: GridTrackSize::Auto,
         grid_auto_rows: GridTrackSize::Auto,
         grid_column_start: GridLine::Auto,
@@ -10204,6 +10235,11 @@ fn apply_declaration(
         "grid-auto-flow" => {
             if let Some(v) = GridAutoFlow::parse(val) {
                 style.grid_auto_flow = v;
+            }
+        }
+        "masonry-auto-flow" => {
+            if let Some(v) = MasonryAutoFlow::parse(val) {
+                style.masonry_auto_flow = v;
             }
         }
         "grid-template" => {
@@ -25165,5 +25201,71 @@ mod gap_rule_tests {
         assert!((div_style.gap_rule_width - 5.0).abs() < 0.01);
         assert_eq!(span_style.gap_rule_width, 0.0, "gap_rule_width must not be inherited");
         assert_eq!(span_style.gap_rule_style, BorderStyle::None, "gap_rule_style must not be inherited");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// masonry-auto-flow tests (CSS Masonry Layout §9)
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod masonry_auto_flow_tests {
+    use super::*;
+
+    #[test]
+    fn masonry_auto_flow_parse_definite_first() {
+        assert_eq!(MasonryAutoFlow::parse("definite-first"), Some(MasonryAutoFlow::DefiniteFirst));
+    }
+
+    #[test]
+    fn masonry_auto_flow_parse_next() {
+        assert_eq!(MasonryAutoFlow::parse("next"), Some(MasonryAutoFlow::Next));
+    }
+
+    #[test]
+    fn masonry_auto_flow_parse_ordered() {
+        assert_eq!(MasonryAutoFlow::parse("ordered"), Some(MasonryAutoFlow::Ordered));
+    }
+
+    #[test]
+    fn masonry_auto_flow_parse_unknown_is_none() {
+        assert_eq!(MasonryAutoFlow::parse("dense"), None);
+        assert_eq!(MasonryAutoFlow::parse(""), None);
+    }
+
+    #[test]
+    fn masonry_auto_flow_default_is_definite_first() {
+        assert_eq!(MasonryAutoFlow::default(), MasonryAutoFlow::DefiniteFirst);
+    }
+
+    #[test]
+    fn masonry_auto_flow_root_style_default() {
+        let s = ComputedStyle::root();
+        assert_eq!(s.masonry_auto_flow, MasonryAutoFlow::DefiniteFirst);
+    }
+
+    #[test]
+    fn masonry_auto_flow_apply_declaration() {
+        let doc = lumen_html_parser::parse(r#"<div></div>"#);
+        let sheet = lumen_css_parser::parse("div { masonry-auto-flow: ordered; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+        assert_eq!(style.masonry_auto_flow, MasonryAutoFlow::Ordered);
+    }
+
+    #[test]
+    fn masonry_auto_flow_not_inherited() {
+        let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+        let sheet = lumen_css_parser::parse("div { masonry-auto-flow: next; }");
+        let root = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 800.0, height: 600.0 };
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, vp, false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, vp, false);
+        assert_eq!(div_style.masonry_auto_flow, MasonryAutoFlow::Next);
+        assert_eq!(span_style.masonry_auto_flow, MasonryAutoFlow::DefiniteFirst, "masonry_auto_flow must not be inherited");
     }
 }

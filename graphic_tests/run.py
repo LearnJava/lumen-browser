@@ -133,6 +133,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('72', '72-host-slotted.html', 0.5, 'CSS Scoping L1 §6.1-6.2 :host / ::slotted: shadow host gets blue background via :host; :host(.special) colours second host amber; :host(.missing) does not match third host; ::slotted children get coloured boxes'),
     ('73', '73-gap-rule.html', 0.5, 'CSS Gap Decorations L1: gap-rule-width/style/color — flex-row with solid red rules, flex-wrap with dashed cyan rules, grid with solid orange rules'),
     ('74', '74-font-stretch.html', 0.5, 'CSS Fonts L4 §5.2: font-stretch keyword + % values, cascade/inheritance, no-double wdth injection — coloured boxes'),
+    ('75', '75-masonry-auto-flow.html', 0.5, 'CSS Masonry Layout §9: masonry-auto-flow: next (source order) / ordered (CSS order property) / definite-first — coloured boxes in 3 masonry grids'),
 ]
 
 # --- PNG reader (stdlib only) ---

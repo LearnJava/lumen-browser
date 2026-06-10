@@ -896,6 +896,45 @@
   </div>
 </div><!-- /font-variation-settings card -->
 
+<!-- masonry-auto-flow demo card -->
+<style>
+  .maf-card { background:#0d1b2a; padding:8px; border-radius:4px; }
+  .maf-wrap { display:flex; gap:8px; margin-top:6px; }
+  .maf-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: masonry;
+    gap: 3px;
+    width: 90px;
+  }
+  .maf-item { border-radius:2px; }
+  /* ordered: blue (order:-1) jumps to first */
+  .maf-ord { masonry-auto-flow: ordered; }
+  .maf-r { background:#e63946; height:28px; order:1; }
+  .maf-b { background:#457b9d; height:18px; order:-1; }
+  .maf-g { background:#2a9d8f; height:22px; order:0; }
+  /* next: source order */
+  .maf-next { masonry-auto-flow: next; }
+  .maf-r2 { background:#e63946; height:28px; }
+  .maf-b2 { background:#457b9d; height:18px; }
+  .maf-g2 { background:#2a9d8f; height:22px; }
+</style>
+<div class="card maf-card">
+  <h4>masonry-auto-flow</h4>
+  <div class="maf-wrap">
+    <div class="maf-grid maf-next">
+      <div class="maf-item maf-r2"></div>
+      <div class="maf-item maf-b2"></div>
+      <div class="maf-item maf-g2"></div>
+    </div>
+    <div class="maf-grid maf-ord">
+      <div class="maf-item maf-r"></div>
+      <div class="maf-item maf-b"></div>
+      <div class="maf-item maf-g"></div>
+    </div>
+  </div>
+</div><!-- /masonry-auto-flow card -->
+
 <!-- font-stretch demo card -->
 <style>
   .fs-card { background:#0d1b2a; padding:8px; border-radius:4px; }

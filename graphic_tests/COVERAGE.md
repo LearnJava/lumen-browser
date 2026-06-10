@@ -80,6 +80,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 71-starting-style.html | CSS Transitions L2 §3.4 `@starting-style` — entry transition wiring | 2 | `@starting-style` rules parsed without crash · static rendering unaffected by entry declarations · two coloured boxes at declared CSS colours |
 | 73-gap-rule.html | CSS Gap Decorations L1 `gap-rule-width/style/color` | 3 | flex-row 4 items solid red 2px rules · flex-wrap 5 items dashed cyan 3px rules · grid 3×2 solid orange 4px rules |
 | 74-font-stretch.html | CSS Fonts L4 §5.2 `font-stretch` | 3 | keyword values ultra-condensed→extra-expanded · percentage form 50%–200% · inheritance + no-double wdth injection |
+| 75-masonry-auto-flow.html | CSS Masonry Layout §9 `masonry-auto-flow` | 3 | masonry-auto-flow: next (source order) · ordered (CSS order property sorts items) · definite-first (explicit grid-column-start goes first) |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~80 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) · linear/radial gradient (6 объектов) · conic gradient (5 объектов) |
 
 ---
