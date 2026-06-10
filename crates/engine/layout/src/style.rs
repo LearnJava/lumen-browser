@@ -2075,6 +2075,14 @@ pub struct ComputedStyle {
     pub column_rule_style: BorderStyle,
     /// CSS Multi-column L1 §4.3 — `column-rule-color`. Initial = `CurrentColor`.
     pub column_rule_color: CssColor,
+    /// CSS Gap Decorations L1 — `gap-rule-width` (px). Default 0. Non-inherited.
+    /// Thickness of the visual rule drawn in flex/grid/multicol gaps.
+    pub gap_rule_width: f32,
+    /// CSS Gap Decorations L1 — `gap-rule-style`. Default `None`. Non-inherited.
+    /// Rule is only visible when style != None and width > 0.
+    pub gap_rule_style: BorderStyle,
+    /// CSS Gap Decorations L1 — `gap-rule-color`. Default `CurrentColor`. Non-inherited.
+    pub gap_rule_color: CssColor,
     /// CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`. Inherited. Default 0.
     /// Horizontal gap (px) between adjacent table cells in separate-border mode.
     /// Only applies when `border-collapse: separate` (CSS 2.1 default).
@@ -4362,6 +4370,9 @@ impl ComputedStyle {
             column_rule_width: 0.0,
             column_rule_style: BorderStyle::None,
             column_rule_color: CssColor::CurrentColor,
+            gap_rule_width: 0.0,
+            gap_rule_style: BorderStyle::None,
+            gap_rule_color: CssColor::CurrentColor,
             border_spacing_h: 0.0,
             border_spacing_v: 0.0,
             column_span_all: false,
@@ -4641,6 +4652,9 @@ pub fn compute_style(
         column_rule_width: 0.0,
         column_rule_style: BorderStyle::None,
         column_rule_color: CssColor::CurrentColor,
+        gap_rule_width: 0.0,
+        gap_rule_style: BorderStyle::None,
+        gap_rule_color: CssColor::CurrentColor,
         column_span_all: false,
         column_fill_balance: false,
         break_before: BreakValue::Auto,
@@ -10888,6 +10902,51 @@ fn apply_declaration(
                 && let Some(c) = parse_css_color_legacy(rest, is_quirks)
             {
                 style.column_rule_color = c;
+            }
+        }
+        // CSS Gap Decorations L1 — visual rules inside flex/grid/multicol gaps.
+        "gap-rule-width" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.gap_rule_width = px.max(0.0);
+            }
+        }
+        "gap-rule-style" => {
+            style.gap_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
+        }
+        "gap-rule-color" => {
+            if let Some(c) = parse_css_color_legacy(val.trim(), is_quirks) {
+                style.gap_rule_color = c;
+            }
+        }
+        "gap-rule" => {
+            // Shorthand: <width> || <style> || <color>. Any order (mirrors column-rule).
+            let mut rest = val.trim().to_string();
+            let mut color_set = false;
+            for tok in val.split_whitespace() {
+                if let Some(s) = parse_border_style_opt(tok) {
+                    style.gap_rule_style = s;
+                    rest = rest.replacen(tok, "", 1);
+                    continue;
+                }
+                if let Some(px) = resolve_box_length(tok, em_basis, viewport, is_quirks)
+                    && px >= 0.0
+                {
+                    style.gap_rule_width = px;
+                    rest = rest.replacen(tok, "", 1);
+                    continue;
+                }
+                if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
+                    style.gap_rule_color = c;
+                    color_set = true;
+                    rest = rest.replacen(tok, "", 1);
+                }
+            }
+            let rest = rest.trim();
+            if !rest.is_empty()
+                && !color_set
+                && let Some(c) = parse_css_color_legacy(rest, is_quirks)
+            {
+                style.gap_rule_color = c;
             }
         }
         "column-span" => {
@@ -25023,5 +25082,72 @@ mod shadow_dom_selectors {
         // Should retain default color, not red.
         assert_ne!((s.color.r, s.color.g, s.color.b), (255, 0, 0),
             "::slotted(.other) must not match span with class=item");
+    }
+}
+
+#[cfg(test)]
+mod gap_rule_tests {
+    use super::*;
+    use lumen_core::geom::Size;
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    fn parse_gap_rule(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(r#"<div></div>"#);
+        let sheet = lumen_css_parser::parse(&format!("div {{ display: flex; {} }}", css));
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let child = doc.get(body).children.first().copied().expect("div");
+        compute_style(&doc, child, &sheet, &root, VP, false)
+    }
+
+    #[test]
+    fn gap_rule_width_parses() {
+        let s = parse_gap_rule("gap-rule-width: 4px;");
+        assert!((s.gap_rule_width - 4.0).abs() < 0.01, "gap_rule_width={}", s.gap_rule_width);
+    }
+
+    #[test]
+    fn gap_rule_style_solid_parses() {
+        let s = parse_gap_rule("gap-rule-style: solid;");
+        assert_eq!(s.gap_rule_style, BorderStyle::Solid);
+    }
+
+    #[test]
+    fn gap_rule_color_parses() {
+        let s = parse_gap_rule("gap-rule-color: #ff0000;");
+        if let CssColor::Rgba(c) = s.gap_rule_color {
+            assert_eq!((c.r, c.g, c.b), (255, 0, 0));
+        } else {
+            panic!("expected Rgba, got {:?}", s.gap_rule_color);
+        }
+    }
+
+    #[test]
+    fn gap_rule_shorthand_parses_all_components() {
+        let s = parse_gap_rule("gap-rule: 3px dashed blue;");
+        assert!((s.gap_rule_width - 3.0).abs() < 0.01, "width={}", s.gap_rule_width);
+        assert_eq!(s.gap_rule_style, BorderStyle::Dashed);
+        if let CssColor::Rgba(c) = s.gap_rule_color {
+            assert_eq!((c.r, c.g, c.b), (0, 0, 255));
+        } else {
+            panic!("expected Rgba color for gap-rule shorthand");
+        }
+    }
+
+    #[test]
+    fn gap_rule_not_inherited() {
+        // gap-rule-* are non-inherited; child div should get default 0/None/CurrentColor.
+        let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+        let sheet = lumen_css_parser::parse("div { gap-rule-width: 5px; gap-rule-style: solid; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children.first().copied().expect("div");
+        let span = doc.get(div).children.first().copied().expect("span");
+        let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+        assert!((div_style.gap_rule_width - 5.0).abs() < 0.01);
+        assert_eq!(span_style.gap_rule_width, 0.0, "gap_rule_width must not be inherited");
+        assert_eq!(span_style.gap_rule_style, BorderStyle::None, "gap_rule_style must not be inherited");
     }
 }
