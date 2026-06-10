@@ -34,9 +34,9 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 | # | Property / Feature | Effort | Blocker | Task file |
 |---|-------------------|--------|---------|-----------|
 | ~~**A**~~ | ~~**`:host` / `::slotted` (Shadow DOM)**~~ — **выполнено** (p4-host-slotted, 2026-06-10) | M | none | — |
-| **B** | **Find in page (Ctrl+F)** — `[P4]` по lumen-plan.md §Фаза 2 | M | none | — |
-| **C** | **DevTools / Inspector Phase 0** — DOM tree + computed styles + network log (CDP минимум) — `[P4]` по lumen-plan.md §Фаза 2 | L | none | — |
-| **D** | **`overflow: scroll` scrollable containers** | L | none (P1 W-6 ✅ — shell wiring реализовано в R-1) | — |
+| **B** | **Find in page (Ctrl+F)** — spec: [lumen-plan.md:2285](lumen-plan.md) | M | none | — |
+| **C** | **DevTools / Inspector Phase 0** — DOM tree + computed styles + network log (CDP минимум) — spec: [lumen-plan.md:2286](lumen-plan.md), подробнее [lumen-plan.md:521](lumen-plan.md) | L | none | — |
+| **D** | **`overflow: scroll` scrollable containers** — алгоритм + P4 задача: [STATUS-P4.md:194](STATUS-P4.md) | L | none (P1 W-6 ✅) | — |
 
 ### CSS Properties (после Phase 2)
 
