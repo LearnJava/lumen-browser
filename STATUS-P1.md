@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+W-2: Idle Detection API stub  branch: p1-w2-idle-detection
+Next step: clippy + tests  crates/js/src/idle_detection.rs
 
 ---
 

@@ -100,6 +100,7 @@ pub mod long_animation_frames;
 pub mod launch_handler;
 pub mod inert;
 pub mod shared_storage;
+pub mod idle_detection;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -1052,6 +1053,14 @@ impl QuickJsRuntime {
             // Phase 0: in-memory key-value store. Phase 1: SQLite per-origin partition.
             if let Err(e) = shared_storage::install_shared_storage(&ctx) {
                 eprintln!("Shared Storage API init failed: {}", e);
+            }
+
+            // WICG Idle Detection API — window.IdleDetector.
+            // Phase 0: requestPermission() → 'granted'; start() resolves with fixed
+            // {userState:'active', screenState:'unlocked'}; 'change' event never fires.
+            // Phase 1: wire _lumen_idle_query_* native hooks to OS idle-time APIs.
+            if let Err(e) = idle_detection::install_idle_detection_bindings(&ctx) {
+                eprintln!("Idle Detection API init failed: {}", e);
             }
 
             Ok(())
