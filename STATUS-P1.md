@@ -6,8 +6,7 @@
 
 ## In progress
 
-W-5: CSS `hyphens: auto` algorithm stub  branch: p1-w5-hyphens
-Next step: create `crates/engine/layout/src/hyphenation.rs` with `SoftHyphenPoint` + `collect_hyphen_points`
+_(нет)_
 
 ---
 
@@ -31,7 +30,7 @@ Next step: create `crates/engine/layout/src/hyphenation.rs` with `SoftHyphenPoin
 | ~~W-2~~ | ~~**Idle Detection API stub** — WICG `IdleDetector.requestPermission()`, `start({threshold})`, `userState`/`screenState`, `'change'` event~~ — **выполнено** | XS | `lumen-js` |
 | ~~W-3~~ | ~~**Topics API stub** — Privacy Sandbox `document.browsingTopics()` → Promise<[]>, `DeprecatedTopicsButton` Phase 0~~ — **выполнено** | XS | `lumen-js` |
 | ~~W-4~~ | ~~**Attribution Reporting API stub** — `attributionsrc` attribute parsing, `window.attributionReporting` Phase 0~~ — **выполнено** | XS | `lumen-js` |
-| W-5 | **CSS `hyphens: auto` algorithm stub** — `SoftHyphenPoint` type, `collect_hyphen_points(word)` stub via `HyphenationProvider` | S | `lumen-layout`, `lumen-core` |
+| ~~W-5~~ | ~~**CSS `hyphens: auto` algorithm stub** — `SoftHyphenPoint` type, `collect_hyphen_points(word)` stub via `HyphenationProvider`~~ — **выполнено** | S | `lumen-layout`, `lumen-core` |
 
 ### U — TC39 Stage 4 ES2026+ APIs (новые)
 
@@ -160,6 +159,7 @@ Next step: create `crates/engine/layout/src/hyphenation.rs` with `SoftHyphenPoin
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | W-5: CSS hyphens: auto алгоритм-стаб | lumen-layout hyphenation.rs: SoftHyphenPoint { byte_offset } — позиция в display-строке (U+00AD stripped). collect_hyphen_points(word, locale, hyphens, provider): None→пусто, Manual→U+00AD scan, Auto→Manual+provider.hyphenate(). Сортировка+dedup. Публичный API поверх внутренней логики box_tree.rs. P4 wiring point для wrap_inline_run. 14 unit-тестов + 1 doctest. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-4: Attribution Reporting API stub | lumen-js attribution_reporting.rs: Privacy Sandbox Attribution Reporting API Phase 0. window.attributionReporting: registerSource({}) → Promise<undefined>; registerTrigger({}) → Promise<undefined>; оба — no-op. AttributionReportingEligibility константы (EMPTY/EVENT_SOURCE/NAVIGATION_SOURCE/TRIGGER). attributionSrc IDL-атрибут на HTMLAnchorElement, HTMLImageElement, HTMLScriptElement (mirrors attributionsrc content attribute). Phase 1: _lumen_attribution_register_source/_lumen_attribution_register_trigger нативные хуки. 8 unit-тестов. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-3: Topics API stub | lumen-js topics_api.rs: Privacy Sandbox Topics API Phase 0. document.browsingTopics([options]) → Promise<[]>; DeprecatedTopicsButton с статическим browsingTopics() → Promise<[]>; конструктор бросает TypeError. Phase 1: _lumen_topics_get_topics нативный хук для per-origin хранилища. 6 unit-тестов (с execute_pending_job() drain). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-2: Idle Detection API stub | lumen-js idle_detection.rs: WICG Idle Detection API Phase 0. IdleDetector: extends EventTarget; requestPermission()→'granted'; start({threshold≥60s})→{userState:'active', screenState:'unlocked'} Promise; start({threshold<60s})→RangeError; stop() сбрасывает state в null. 'change' событие не генерируется (Phase 0). Phase 1: _lumen_idle_query_user_state/_lumen_idle_query_screen_state нативные хуки. 8 unit-тестов (с execute_pending_job() drain для Promise-тестов). Clippy чист. Без новых зависимостей. |
