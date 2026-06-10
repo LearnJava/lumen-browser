@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**BUG-093 — калибровка порога TEST-51 (scrollbar) до 2%**  branch: `p3-bug093-threshold`
+Next step: поднять порог 0.5→2.0 в `graphic_tests/run.py:112` и `crates/driver/tests/snapshot_vs_edge.rs:105` (платформенный скин скроллбара пиксельно с Edge не совпадёт никогда — не код).
 
 ## Next
 
