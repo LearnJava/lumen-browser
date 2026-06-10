@@ -19,6 +19,7 @@ pub mod color_mix;
 pub mod counters;
 pub mod font_palette;
 pub mod image_gating;
+pub mod image_set;
 pub mod mathml;
 pub mod motion_path;
 pub mod page;
@@ -47,6 +48,10 @@ pub use counters::{
 };
 pub use color_mix::{MixColorSpace, mix_colors};
 pub use image_gating::gate_image_requests;
+pub use image_set::{
+    parse_image_set, select_image_set_candidate, select_image_set_url,
+    ImageSetOption, SupportedTypes,
+};
 pub use mathml::{MathmlBox, MathmlElementKind, lay_out_mathml, collect_mathml_structure};
 pub use ruby::{RubyBox, RubyPosition, lay_out_ruby};
 pub use animation::{

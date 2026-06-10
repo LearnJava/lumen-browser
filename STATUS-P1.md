@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+V-4: CSS image-set() selection algorithm stub  branch: p1-v4-image-set
+Next step: cargo check + tests  crates/engine/layout/src/image_set.rs
 
 ---
 
