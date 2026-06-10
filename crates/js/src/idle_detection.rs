@@ -137,15 +137,16 @@ mod tests {
     #[test]
     fn request_permission_returns_granted() {
         with_idle_api(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var result = false;
-                    IdleDetector.requestPermission().then(function(v) { result = v === 'granted'; });
-                    result
-                    "#,
-                )
-                .unwrap();
+            ctx.eval::<(), _>(
+                "var __perm = null; IdleDetector.requestPermission().then(function(v) { __perm = v; });",
+            )
+            .unwrap();
+            loop {
+                if !ctx.execute_pending_job() {
+                    break;
+                }
+            }
+            let ok: bool = ctx.eval("__perm === 'granted'").unwrap();
             assert!(ok);
         });
     }
@@ -185,16 +186,20 @@ mod tests {
     #[test]
     fn start_rejects_threshold_below_60s() {
         with_idle_api(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new IdleDetector();
-                    var rejected = false;
-                    d.start({ threshold: 1000 }).catch(function(e) { rejected = e instanceof RangeError; });
-                    rejected
-                    "#,
-                )
-                .unwrap();
+            ctx.eval::<(), _>(
+                r#"
+                var __rejected = false;
+                var d = new IdleDetector();
+                d.start({ threshold: 1000 }).catch(function(e) { __rejected = e instanceof RangeError; });
+                "#,
+            )
+            .unwrap();
+            loop {
+                if !ctx.execute_pending_job() {
+                    break;
+                }
+            }
+            let ok: bool = ctx.eval("__rejected").unwrap();
             assert!(ok);
         });
     }
