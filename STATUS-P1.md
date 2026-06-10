@@ -6,8 +6,7 @@
 
 ## In progress
 
-V-3: `inert` attribute layout algorithm  branch: p1-v3-inert
-Next step: создать inert.rs в lumen-layout  crates/engine/layout/src/inert.rs
+_(нет)_
 
 ---
 
@@ -19,7 +18,7 @@ Next step: создать inert.rs в lumen-layout  crates/engine/layout/src/ine
 |---|--------|--------|--------|
 | ~~V-1~~ | ~~**Declarative Shadow DOM** (`<template shadowrootmode="open\|closed">`)~~ — **выполнено** | S | `lumen-html-parser`, `lumen-dom` |
 | ~~V-2~~ | ~~**`@starting-style` CSS at-rule algorithm stub**~~ — **выполнено** | S | `lumen-layout` |
-| V-3 | **`inert` attribute layout algorithm** — non-interactive subtrees | XS | `lumen-layout`, `lumen-js` |
+| ~~V-3~~ | ~~**`inert` attribute layout algorithm** — non-interactive subtrees~~ — **выполнено** | XS | `lumen-layout`, `lumen-js` |
 | V-4 | **`CSS image-set()` selection algorithm stub** — responsive images | S | `lumen-layout` |
 | V-5 | **TC39 Temporal API Phase 0 stub** — `Temporal.PlainDate/Time/DateTime/Duration` | M | `lumen-js` |
 
@@ -150,6 +149,7 @@ Next step: создать inert.rs в lumen-layout  crates/engine/layout/src/ine
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | V-3: inert attribute layout algorithm stub | lumen-layout inert.rs: is_inert(doc, node) — обходит цепочку родителей (HTML LS §6.7); InertRegion { node_id, rect }; collect_inert_regions(root, doc) — возвращает только корни inert-поддеревьев (вложенные не дублируются); collect_clickable_rec: проверка is_inert исключает inert-элементы из hit-test. Точки для P4: `// CSS: inert` (UA-правило `[inert] { pointer-events: none; }`), для P3 (shell): collect_inert_regions для фильтрации событий. 10 unit-тестов. lumen-js inert.rs: HTMLElement.prototype.inert getter/setter + _lumen_set_inert Phase-0-stub. 8 unit-тестов. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | V-2: @starting-style algorithm stub | lumen-layout starting_style.rs: StartingStyleTracker (mark_entered/is_entered/consume/remove) — HashSet<NodeId> для узлов, только что вошедших в DOM. resolve_starting_style(node, doc, sheet) — сопоставляет @starting-style блоки с узлом через matches_complex (тот же путь, что каскад), возвращает объединённые декларации. Точка интеграции для P4 — TransitionScheduler::sync (// CSS: @starting-style). Экспортировано из lib.rs. 11 unit-тестов. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | V-1: Declarative Shadow DOM | lumen-html-parser tree_builder.rs: когда парсер встречает `<template shadowrootmode="open\|closed">`, вместо DocumentFragment создаёт shadow root на хост-элементе и парсит контент шаблона прямо в него. Сам `<template>` отсоединяется при `</template>`. Поле `declarative_shadow_templates: HashSet<NodeId>` в `IncrementalTreeBuilder`; `current_insertion_parent()` перенаправляет в shadow root через `set_template_content(template, shadow_root)`; `process_template_end_tag()` вызывает `doc.detach(template)` для декларативных шаблонов. 7 unit-тестов (open/closed mode, content in SR, template removed from host, regular template unaffected, invalid mode fallback, in-body). lumen-html-parser: 386 тестов (+7 vs 379). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | U-1–U-5: ES2026 Float16Array + Web Platform APIs 2025 | lumen-js es2026_proposals.rs: Float16Array (Proxy-based, full TypedArray API), Math.f16round, DataView.getFloat16/setFloat16 (ES2025). Symbol.dispose/asyncDispose, SuppressedError, DisposableStack/AsyncDisposableStack (ES2024 Explicit Resource Management). speculation_rules.rs: document.prerendering=false, document.getSpeculationRules()→[], _lumen_deliver_speculation_rules hook. soft_navigation.rs: PerformanceSoftNavigationEntry, _lumen_deliver_soft_nav. content_index.rs: ContentIndex.add/getAll/delete, ServiceWorkerRegistration.prototype.index. digital_credentials.rs: DigitalCredential, navigator.credentials.get({digital:…})→NotSupportedError. 33 новых тестов. lumen-js: 1804 тестов (+33 vs 1771). Clippy чист. Без новых зависимостей. |
