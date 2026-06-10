@@ -6,8 +6,7 @@
 
 ## In progress
 
-Y-1: **CSS Masonry layout algorithm stub**  branch: p1-masonry-layout
-Next step: add `GridTrackSize::Masonry` to style.rs:3608, create masonry.rs, wire in lay_out_grid
+_(нет)_
 
 ---
 
@@ -17,7 +16,7 @@ Next step: add `GridTrackSize::Masonry` to style.rs:3608, create masonry.rs, wir
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| Y-1 | **CSS Masonry layout stub** (CSS Grid L2/L3 §14) — `masonry` keyword в `grid-template-columns/rows`; greedy placement algorithm; `// CSS: masonry-auto-flow` handoff для P4 | M | `lumen-layout` |
+| ~~Y-1~~ | ~~**CSS Masonry layout stub** (CSS Grid L2/L3 §14) — `masonry` keyword в `grid-template-columns/rows`; greedy placement algorithm; `// CSS: masonry-auto-flow` handoff для P4~~ — **выполнено** | M | `lumen-layout` |
 | Y-2 | **`@font-face` unicode-range descriptor** — layout stub: `unicode-range` дескриптор в `FontFaceRule`, фильтрация при выборе face для символа | S | `lumen-layout`, `lumen-font` |
 | Y-3 | **CSS `scrollbar-width`/`scrollbar-color` algorithm stub** — CSS Scrollbars Styling L1; `// CSS: scrollbar-width` handoff для P4 | XS | `lumen-layout` |
 | Y-4 | **CSS `color-scheme: dark light` UA switching algorithm** — полный switch: `prefers-color-scheme` влияет на `color-scheme` у root, system-color резолв | S | `lumen-layout` |
@@ -182,6 +181,7 @@ Next step: add `GridTrackSize::Masonry` to style.rs:3608, create masonry.rs, wir
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | Y-1: CSS Masonry layout stub | lumen-layout masonry.rs: GridTrackSize::Masonry + parse_track_list("masonry") → sentinel. lay_out_grid ранний dispatch: row-masonry (grid-template-rows: masonry) + col-masonry. Greedy waterfall: каждый item → трек с минимальной высотой. lay_out_masonry() + min_track_idx() публичные для unit-тестирования. // CSS: masonry-auto-flow handoff для P4. 7 unit-тестов (+7 vs 2559). CSS-SPECS.md masonry ⬜→🟡. STATUS-P4.md: добавлен handoff masonry-auto-flow/align-tracks/justify-tracks. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-7: pointer-events:none hit-test filtering | lumen-layout collect_clickable_rec: Block/FormControl boxes пропускаются при pointer_events=None (дети обходятся). InlineRun: frag.style.pointer_events=None → link=None (frag.style содержит ComputedStyle <a>-элемента, не контейнера). 4 новых unit-теста (+4 vs 2545). Clippy чист. W-6 отмечена выполненной (реализована в R-1). |
 | 2026-06-10 | W-5: CSS hyphens: auto алгоритм-стаб | lumen-layout hyphenation.rs: SoftHyphenPoint { byte_offset } — позиция в display-строке (U+00AD stripped). collect_hyphen_points(word, locale, hyphens, provider): None→пусто, Manual→U+00AD scan, Auto→Manual+provider.hyphenate(). Сортировка+dedup. Публичный API поверх внутренней логики box_tree.rs. P4 wiring point для wrap_inline_run. 14 unit-тестов + 1 doctest. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-4: Attribution Reporting API stub | lumen-js attribution_reporting.rs: Privacy Sandbox Attribution Reporting API Phase 0. window.attributionReporting: registerSource({}) → Promise<undefined>; registerTrigger({}) → Promise<undefined>; оба — no-op. AttributionReportingEligibility константы (EMPTY/EVENT_SOURCE/NAVIGATION_SOURCE/TRIGGER). attributionSrc IDL-атрибут на HTMLAnchorElement, HTMLImageElement, HTMLScriptElement (mirrors attributionsrc content attribute). Phase 1: _lumen_attribution_register_source/_lumen_attribution_register_trigger нативные хуки. 8 unit-тестов. Clippy чист. Без новых зависимостей. |
