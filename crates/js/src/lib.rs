@@ -98,6 +98,7 @@ pub mod window_management;
 pub mod local_font_access;
 pub mod long_animation_frames;
 pub mod launch_handler;
+pub mod inert;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -952,6 +953,12 @@ impl QuickJsRuntime {
             // Phase 0: element.attachInternals() + CustomStateSet; :state() selector is P4 handoff.
             if let Err(e) = element_internals::install_element_internals_bindings(&ctx) {
                 eprintln!("ElementInternals API init failed: {}", e);
+            }
+
+            // Phase 0: HTMLElement.prototype.inert getter/setter (HTML LS §6.7).
+            // Phase 1: _lumen_set_inert native binding propagates to DOM attr + triggers style recalc.
+            if let Err(e) = inert::install_inert_api(&ctx) {
+                eprintln!("Inert API init failed: {}", e);
             }
 
             // Phase 0: navigator.presentation + PresentationRequest/Connection stubs.

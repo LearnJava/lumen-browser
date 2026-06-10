@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+V-3: `inert` attribute layout algorithm  branch: p1-v3-inert
+Next step: создать inert.rs в lumen-layout  crates/engine/layout/src/inert.rs
 
 ---
 
