@@ -1034,6 +1034,21 @@ fn resolve_target_point(state: &SessionState, target: &Target) -> Result<(f32, f
 }
 
 impl InProcessSession {
+    /// Возвращает полный набор computed-style свойств первого элемента,
+    /// совпадающего с `selector`, в виде JSON-объекта (`{"prop":"value",...}`).
+    ///
+    /// Используется панелью DevTools «Computed» (lumen-plan §7E.2). В отличие от
+    /// [`computed_style`](lumen_core::ext::BrowserSession::computed_style)
+    /// (≈13 свойств), охватывает ~70 свойств `ComputedStyle` через
+    /// `lumen_layout::computed_style_json`. Ключи отсортированы (детерминизм).
+    ///
+    /// Ошибка [`Error::NotFound`], если ни один элемент не совпал с селектором.
+    pub fn computed_style_json(&self, selector: &str) -> Result<String> {
+        let state = self.state()?;
+        lumen_layout::computed_style_json_by_selector(&state.layout_root, &state.doc, selector)
+            .ok_or_else(|| Error::NotFound(format!("элемент не найден: {selector}")))
+    }
+
     /// Проверить выполнение условия ожидания.
     fn check_wait_condition(&self, cond: &WaitCondition) -> Result<bool> {
         match cond {
@@ -1376,6 +1391,26 @@ mod tests {
             .expect("computed_style should be valid JSON");
         // Verify we have a JSON object with properties
         assert!(obj.is_object());
+    }
+
+    #[test]
+    fn computed_style_json_full_map() {
+        let s = make_session(r#"<html><body><div id="x" style="color:red;font-size:20px"></div></body></html>"#);
+        let json_str = s.computed_style_json("#x").expect("computed_style_json");
+        let obj: serde_json::Value =
+            serde_json::from_str(&json_str).expect("valid JSON object");
+        let map = obj.as_object().expect("object");
+        // Full map covers far more than the ~13-property BrowserSession::computed_style.
+        assert!(map.len() > 30, "expected full property map, got {}", map.len());
+        assert_eq!(map["color"], "rgb(255, 0, 0)");
+        assert_eq!(map["font-size"], "20px");
+        assert_eq!(map["display"], "block");
+    }
+
+    #[test]
+    fn computed_style_json_missing_selector_errors() {
+        let s = make_session(r#"<html><body><div></div></body></html>"#);
+        assert!(s.computed_style_json("#nope").is_err());
     }
 
     #[test]

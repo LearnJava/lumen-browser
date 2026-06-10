@@ -853,6 +853,64 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m
 }
 
+/// Serialises a [`ComputedStyle`] into a deterministic JSON object string.
+///
+/// Each key is a CSS property name and each value is the resolved value as
+/// produced by [`computed_style_to_map`] (e.g. `{"font-size":"16px",...}`).
+/// Keys are emitted in sorted order so the output is byte-stable across runs —
+/// suitable for the DevTools "Computed" panel (lumen-plan §7E.2) and snapshot
+/// assertions.
+///
+/// Dependency-free: builds the JSON text by hand (the layout crate does not
+/// depend on `serde`).
+pub fn computed_style_json(style: &ComputedStyle) -> String {
+    let map = computed_style_to_map(style);
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort_unstable();
+    let mut out = String::with_capacity(map.len() * 32 + 2);
+    out.push('{');
+    for (i, k) in keys.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        json_escape_into(k, &mut out);
+        out.push(':');
+        json_escape_into(&map[*k], &mut out);
+    }
+    out.push('}');
+    out
+}
+
+/// Like [`computed_style_by_selector`] but returns the full computed-style JSON
+/// (see [`computed_style_json`]) for the first box matching `sel`.
+///
+/// Returns `None` under the same conditions as [`find_box_by_selector`].
+pub fn computed_style_json_by_selector(
+    root: &LayoutBox,
+    doc: &Document,
+    sel: &str,
+) -> Option<String> {
+    find_box_by_selector(root, doc, sel).map(|b| computed_style_json(&b.style))
+}
+
+/// Appends `s` to `out` as a JSON string literal (with surrounding quotes),
+/// escaping `"`, `\`, and ASCII control characters per RFC 8259.
+fn json_escape_into(s: &str, out: &mut String) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1005,5 +1063,76 @@ mod tests {
         assert!(found.is_some());
         let snap = found.unwrap().style_snapshot();
         assert!((snap.opacity - 0.5).abs() < 0.001);
+    }
+
+    // ──────────────── computed_style_json ────────────────
+
+    #[test]
+    fn json_is_well_formed_object() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="x" style="font-size:20px;color:red"></div>"#,
+            "",
+        );
+        let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
+        assert!(json.starts_with('{') && json.ends_with('}'));
+        // Contains a couple of known properties.
+        assert!(json.contains(r#""font-size":"20px""#), "json: {json}");
+        assert!(json.contains(r#""color":"rgb(255, 0, 0)""#), "json: {json}");
+    }
+
+    #[test]
+    fn json_keys_are_sorted() {
+        let (doc, tree) = layout_tree(r#"<div id="x"></div>"#, "");
+        let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
+        // Keys are emitted in sorted order, so the byte offset of each successive
+        // `"<key>":` marker must be strictly increasing. (Naive comma-splitting
+        // would break on values like `rgb(255, 0, 0)`, so probe by marker.)
+        let markers = [
+            "\"align-items\":",
+            "\"color\":",
+            "\"display\":",
+            "\"opacity\":",
+            "\"width\":",
+            "\"z-index\":",
+        ];
+        let mut last = 0usize;
+        for m in markers {
+            let pos = json.find(m).unwrap_or_else(|| panic!("missing key marker {m}"));
+            assert!(pos >= last, "key {m} out of sorted order");
+            last = pos;
+        }
+    }
+
+    #[test]
+    fn json_missing_selector_returns_none() {
+        let (doc, tree) = layout_tree(r#"<div></div>"#, "");
+        assert!(computed_style_json_by_selector(&tree, &doc, "#nope").is_none());
+    }
+
+    #[test]
+    fn json_round_trips_via_string_parsing() {
+        // The output must be parseable back into the same key/value map.
+        let (doc, tree) = layout_tree(
+            r#"<div id="x" style="display:flex;opacity:0.5"></div>"#,
+            "",
+        );
+        let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
+        assert!(json.contains(r#""display":"flex""#), "json: {json}");
+        assert!(json.contains(r#""opacity":"0.5""#), "json: {json}");
+        // No trailing comma / empty entries.
+        assert!(!json.contains(",,"));
+        assert!(!json.contains("{,") && !json.contains(",}"));
+    }
+
+    #[test]
+    fn json_escapes_font_family_quotes() {
+        // A multi-word family name is quoted inside the value; the surrounding
+        // JSON string must escape those inner quotes.
+        let (doc, tree) = layout_tree(
+            r#"<div id="x" style="font-family:Times New Roman"></div>"#,
+            "",
+        );
+        let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
+        assert!(json.contains(r#"\"Times New Roman\""#), "json: {json}");
     }
 }
