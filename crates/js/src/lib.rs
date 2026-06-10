@@ -99,6 +99,7 @@ pub mod local_font_access;
 pub mod long_animation_frames;
 pub mod launch_handler;
 pub mod inert;
+pub mod shared_storage;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -1045,6 +1046,12 @@ impl QuickJsRuntime {
             // Phase 0: in-memory queue. Phase 1: _lumen_deliver_launch_params() from shell.
             if let Err(e) = launch_handler::install_launch_handler_api(&ctx) {
                 eprintln!("Launch Handler API init failed: {}", e);
+            }
+
+            // WICG Shared Storage API — window.sharedStorage (Privacy Sandbox).
+            // Phase 0: in-memory key-value store. Phase 1: SQLite per-origin partition.
+            if let Err(e) = shared_storage::install_shared_storage(&ctx) {
+                eprintln!("Shared Storage API init failed: {}", e);
             }
 
             Ok(())
