@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`font-stretch` wiring — wdth axis injection в DrawText  branch: p4-font-stretch
-Next step: commit + merge
+_(none)_ — p4-font-stretch влит 2026-06-10
 
 ## Workflow
 
@@ -101,12 +100,8 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 ### ✅ `gap-rule-width`, `gap-rule-style`, `gap-rule-color` — **ВЫПОЛНЕНО** (p4-gap-rule, 2026-06-10)
 `gap_rule_*` поля в ComputedStyle; shorthand+longhands в apply_declaration; `collect_gap_segments()` + `emit_gap_rules()` в display_list.rs walk(); 5 unit-тестов + graphic test 73.
 
-### `font-stretch` (P2 feature p2-f3-font-stretch, 2026-06-07)
-- **Status:** Algorithm ready. `MultiFontMeasurer::resolve_font_stretch(families, stretch_pct) -> Option<f32>` in `lumen-paint/src/lib.rs`. Searches registered @font-face families for a `wdth` variation axis; if found, clamps `stretch_pct` to `[axis.min, axis.max]` and returns Some. Returns None when no registered family has a `wdth` axis. 4 unit tests pass.
-- **P4 task:**
-  1. Add `font_stretch: f32` field to `ComputedStyle` in `lumen-layout/src/style.rs` (default 100.0; non-inherited per CSS Fonts L4 §5.2). Parse keyword and percentage forms in `apply_declaration("font-stretch")`: ultra-condensed→50, condensed→75, normal→100, expanded→125, ultra-expanded→200, or `<percentage>` directly.
-  2. In `build_display_list` / wherever `DrawText` is emitted, call `measurer.resolve_font_stretch(families, style.font_stretch)` and pass the result as a variation-settings override to the font rasterizer (future: once variable font rendering is wired).
-- **Entry points:** `lumen-paint/src/lib.rs` — `MultiFontMeasurer::resolve_font_stretch` (pub); `// CSS: font-stretch` comment on the method.
+### ✅ `font-stretch` — **ВЫПОЛНЕНО** (p4-font-stretch, 2026-06-10)
+`FontStretch::NORMAL` (1000) → без инжекции wdth. Не-нормальный stretch → `wdth = stretch.0/10.0` добавляется в `font_variation_axes` в 4 местах DrawText (text frags, ellipsis, text-shadow, emphasis-marks). Explicit wdth из font-variation-settings не перезаписывается. 5 unit-тестов + graphic test 74.
 
 ### `grid-template-columns/rows: subgrid` (P1 feature p1-css-subgrid, 2026-06-03)
 - **Status:** Full layout algorithm ready in `lumen-layout/src/subgrid.rs` + `box_tree.rs`.
@@ -271,6 +266,7 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-10 | `font-stretch` | CSS Fonts L4 §5.2; wdth axis injection в 4 местах DrawText; FontStretch.0/10.0 = wdth %; explicit wdth не перезаписывается; 5 unit-тестов + graphic test 74 |
 | 2026-06-10 | `gap-rule-width/style/color` | CSS Gap Decorations L1; `gap_rule_*` в ComputedStyle (non-inherited); shorthand+longhands в apply_declaration; `collect_gap_segments()` + `emit_gap_rules()` в display_list.rs walk(); 5 unit-тестов + graphic test 73 |
 | 2026-06-10 | `:host` / `::slotted` Shadow DOM | CSS Scoping L1 §6.1-6.2; `PseudoClass::Host` в `matches_pseudo_class`; `is_slotted_element()` + `matches_slotted_complex()` + cascade wiring в `compute_style`; 6 unit-тестов + graphic test 72 |
 | 2026-06-10 | `@starting-style` entry transitions | CSS Transitions L2 §3.4; `compute_style_from_declarations()` в style.rs; `StartingStyleTracker` + shell `relayout()` — новые ноды матчатся через `resolve_starting_style`; `sync` вызывается с starting-style как `old`; 4 unit-теста + graphic test 71 |
