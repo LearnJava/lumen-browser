@@ -4,26 +4,12 @@
 // // CSS: table-layout, border-collapse, border-spacing, caption-side, empty-cells
 
 use crate::box_tree::{BoxKind, LayoutBox};
-use crate::style::BoxSizing;
+use crate::style::{BorderCollapse, BoxSizing};
 use crate::TextMeasurer;
 use lumen_core::ext::HyphenationProvider;
 use lumen_core::geom::Size;
 
-// ──────────────── BorderCollapse / BorderPrecedence / CollapsedBorder ────────────────
-
-/// CSS Tables L2 §17.6 — border-collapse mode for table layout.
-/// `Separate`: each cell has independent borders separated by `border-spacing`.
-/// `Collapse`: adjacent cell borders are merged into a single shared border.
-///
-/// CSS: border-collapse — P4 wires from ComputedStyle.border_collapse once the field is added.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BorderCollapse {
-    /// Each cell has its own borders; gaps between cells are controlled by `border-spacing`.
-    #[default]
-    Separate,
-    /// Borders between adjacent cells are merged; the winning border is chosen by precedence.
-    Collapse,
-}
+// ──────────────── BorderPrecedence / CollapsedBorder ────────────────
 
 /// CSS Tables L2 §17.6.2 — precedence level used when two borders compete in collapsed mode.
 /// Higher variant = higher precedence (derives `Ord`).

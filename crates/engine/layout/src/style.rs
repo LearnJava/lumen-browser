@@ -881,6 +881,28 @@ impl SvgPaint {
     }
 }
 
+/// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Initial: `Separate`.
+/// Controls whether adjacent cell borders are merged (`collapse`) or kept separate (`separate`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderCollapse {
+    /// Each cell has its own borders separated by `border-spacing`.
+    #[default]
+    Separate,
+    /// Adjacent borders are merged into a single shared border (no `border-spacing`).
+    Collapse,
+}
+
+impl BorderCollapse {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "separate" => Some(Self::Separate),
+            "collapse" => Some(Self::Collapse),
+            _ => None,
+        }
+    }
+}
+
 /// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
 /// Controls how the interior of a shape is determined for overlapping contours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2108,6 +2130,9 @@ pub struct ComputedStyle {
     pub gap_rule_style: BorderStyle,
     /// CSS Gap Decorations L1 — `gap-rule-color`. Default `CurrentColor`. Non-inherited.
     pub gap_rule_color: CssColor,
+    /// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Default `Separate`.
+    /// When `Collapse`, `border-spacing` has no effect and adjacent cell borders merge.
+    pub border_collapse: BorderCollapse,
     /// CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`. Inherited. Default 0.
     /// Horizontal gap (px) between adjacent table cells in separate-border mode.
     /// Only applies when `border-collapse: separate` (CSS 2.1 default).
@@ -4469,6 +4494,7 @@ impl ComputedStyle {
             gap_rule_width: 0.0,
             gap_rule_style: BorderStyle::None,
             gap_rule_color: CssColor::CurrentColor,
+            border_collapse: BorderCollapse::Separate,
             border_spacing_h: 0.0,
             border_spacing_v: 0.0,
             column_span_all: false,
@@ -4801,7 +4827,8 @@ pub fn compute_style(
         scroll_padding_left: 0.0,
         overscroll_behavior_x: OverscrollBehavior::Auto,
         overscroll_behavior_y: OverscrollBehavior::Auto,
-        // CSS Table — border-spacing inherited (CSS 2.1 §17.6).
+        // CSS Table — border-collapse and border-spacing are inherited (CSS Tables L2 §17.6).
+        border_collapse: inherited.border_collapse,
         border_spacing_h: inherited.border_spacing_h,
         border_spacing_v: inherited.border_spacing_v,
         // CSS Text typography — все inherited.
@@ -10906,6 +10933,12 @@ fn apply_declaration(
                 }
             }
         }
+        "border-collapse" => {
+            // CSS Tables L2 §17.6 — `border-collapse: separate | collapse`.
+            if let Some(v) = BorderCollapse::parse(val.trim()) {
+                style.border_collapse = v;
+            }
+        }
         "border-spacing" => {
             // CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`.
             // One value: both h and v. Two values: h then v. Negatives invalid — skip.
@@ -13794,6 +13827,13 @@ fn apply_css_wide_keyword(
             style.border_right_color = v.1;
             style.border_bottom_color = v.2;
             style.border_left_color = v.3;
+        }
+        "border-collapse" => {
+            style.border_collapse = if inh_only_inherit { inherited.border_collapse } else { init.border_collapse };
+        }
+        "border-spacing" => {
+            style.border_spacing_h = if inh_only_inherit { inherited.border_spacing_h } else { init.border_spacing_h };
+            style.border_spacing_v = if inh_only_inherit { inherited.border_spacing_v } else { init.border_spacing_v };
         }
         // border / border-top / -right / -bottom / -left shorthand: width + style + color на сторону.
         "border" => {
@@ -25807,5 +25847,85 @@ mod anchor_positioning_tests {
             s.animation_timelines,
             vec![AnimationTimeline::Named("--my-scroll".into())]
         );
+    }
+
+    // ── border-collapse ────────────────────────────────────────────────────────
+
+    #[test]
+    fn p4_border_collapse_default_is_separate() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.border_collapse, BorderCollapse::Separate);
+    }
+
+    #[test]
+    fn p4_border_collapse_parse_collapse() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { border-collapse: collapse; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.border_collapse, BorderCollapse::Collapse);
+    }
+
+    #[test]
+    fn p4_border_collapse_parse_separate_explicit() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { border-collapse: separate; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.border_collapse, BorderCollapse::Separate);
+    }
+
+    #[test]
+    fn p4_border_collapse_inherited_by_cells() {
+        // border-collapse is inherited: td should see the table's collapse value.
+        // Must walk the ancestor chain: root → body → table → (tbody) → tr → td.
+        let doc = lumen_html_parser::parse("<table><tr><td>x</td></tr></table>");
+        let sheet = lumen_css_parser::parse("table { border-collapse: collapse; }");
+        let root_style = ComputedStyle::root();
+        let body_node = doc.body().expect("body");
+        let body_style = compute_style(&doc, body_node, &sheet, &root_style, VP, false);
+        // Walk children to find the table, then tbody/tr, then td.
+        fn find_tag(doc: &lumen_dom::Document, parent: lumen_dom::NodeId, tag_name: &str) -> Option<lumen_dom::NodeId> {
+            for &c in &doc.get(parent).children {
+                if let lumen_dom::NodeData::Element { name, .. } = &doc.get(c).data
+                    && name.local == tag_name
+                {
+                    return Some(c);
+                }
+                if let Some(found) = find_tag(doc, c, tag_name) { return Some(found); }
+            }
+            None
+        }
+        let table = find_tag(&doc, body_node, "table").expect("table");
+        let table_style = compute_style(&doc, table, &sheet, &body_style, VP, false);
+        assert_eq!(table_style.border_collapse, BorderCollapse::Collapse, "table should have collapse");
+        // TD inherits via tr; tr uses table_style (or intermediate row-group).
+        let tr = find_tag(&doc, table, "tr").expect("tr");
+        let tr_style = compute_style(&doc, tr, &sheet, &table_style, VP, false);
+        let td = find_tag(&doc, tr, "td").expect("td");
+        let td_style = compute_style(&doc, td, &sheet, &tr_style, VP, false);
+        assert_eq!(td_style.border_collapse, BorderCollapse::Collapse, "td inherits collapse from table");
+    }
+
+    #[test]
+    fn p4_border_collapse_initial_via_keyword() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse(
+            "table { border-collapse: collapse; } table { border-collapse: initial; }",
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.border_collapse, BorderCollapse::Separate, "initial resets to Separate");
     }
 }

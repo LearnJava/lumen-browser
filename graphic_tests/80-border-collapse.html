@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Lumen — 80 border-collapse</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 20px; overflow: hidden; box-sizing: border-box; }
+
+  /* Row 1: border-collapse: separate (default) */
+  table.sep {
+    border-collapse: separate;
+    border-spacing: 4px;
+    background: #161b22;
+    border: 2px solid #58a6ff;
+  }
+  table.sep td {
+    background: #1c2128;
+    border: 2px solid #58a6ff;
+    padding: 8px 16px;
+    width: 120px;
+  }
+
+  /* Row 2: border-collapse: collapse */
+  table.col {
+    border-collapse: collapse;
+    background: #161b22;
+    border: 2px solid #3fb950;
+  }
+  table.col td {
+    background: #1c2128;
+    border: 2px solid #3fb950;
+    padding: 8px 16px;
+    width: 120px;
+  }
+
+  /* Row 3: collapse with varied border widths */
+  table.thick {
+    border-collapse: collapse;
+    border: 3px solid #f85149;
+  }
+  table.thick td {
+    background: #21262d;
+    padding: 8px 12px;
+    width: 100px;
+  }
+  table.thick td.thin  { border: 1px solid #f85149; }
+  table.thick td.thick { border: 3px solid #f85149; }
+
+  /* Row 4: collapse with background colors per cell */
+  table.colorful {
+    border-collapse: collapse;
+    border: 2px solid #d2a8ff;
+  }
+  table.colorful td {
+    border: 2px solid #d2a8ff;
+    padding: 10px 14px;
+    width: 90px;
+  }
+  table.colorful .c1 { background: #58a6ff; }
+  table.colorful .c2 { background: #3fb950; }
+  table.colorful .c3 { background: #f85149; }
+  table.colorful .c4 { background: #d2a8ff; }
+
+  .label { color: #8b949e; font-size: 13px; margin-bottom: 6px; font-family: monospace; }
+  .row { margin-bottom: 18px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- Row 1: separate mode (blue) -->
+  <div class="row">
+    <div class="label">border-collapse: separate  (4px spacing)</div>
+    <table class="sep">
+      <tr><td>A1</td><td>A2</td><td>A3</td><td>A4</td></tr>
+      <tr><td>B1</td><td>B2</td><td>B3</td><td>B4</td></tr>
+    </table>
+  </div>
+
+  <!-- Row 2: collapse mode (green) -->
+  <div class="row">
+    <div class="label">border-collapse: collapse  (no spacing)</div>
+    <table class="col">
+      <tr><td>A1</td><td>A2</td><td>A3</td><td>A4</td></tr>
+      <tr><td>B1</td><td>B2</td><td>B3</td><td>B4</td></tr>
+    </table>
+  </div>
+
+  <!-- Row 3: collapse with mixed border widths (red) -->
+  <div class="row">
+    <div class="label">collapse + varied border widths</div>
+    <table class="thick">
+      <tr>
+        <td class="thin">thin</td><td class="thick">thick</td>
+        <td class="thin">thin</td><td class="thick">thick</td>
+        <td class="thin">thin</td>
+      </tr>
+      <tr>
+        <td class="thick">thick</td><td class="thin">thin</td>
+        <td class="thick">thick</td><td class="thin">thin</td>
+        <td class="thick">thick</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- Row 4: collapse with cell background colors (purple) -->
+  <div class="row">
+    <div class="label">collapse + cell backgrounds</div>
+    <table class="colorful">
+      <tr>
+        <td class="c1">blue</td><td class="c2">green</td>
+        <td class="c3">red</td><td class="c4">purple</td>
+      </tr>
+      <tr>
+        <td class="c4">purple</td><td class="c3">red</td>
+        <td class="c2">green</td><td class="c1">blue</td>
+      </tr>
+    </table>
+  </div>
+</div>
+</body>
+</html>

@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-text-underline влит 2026-06-10
+`border-collapse` (CSS Tables L2 §17.6) — branch: p4-border-collapse
+Next step: done — clippy clean, 5 tests pass, graphic test 80
 
 ## Workflow
 

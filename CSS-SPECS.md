@@ -346,7 +346,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `display: table-row` | 🟡 | parsed |
 | `display: table-cell` | 🟡 | parsed |
 | `display: table-header-group` / `table-footer-group` | 🟡 | parsed |
-| `border-collapse` / `border-spacing` | 🟡 | parsed |
+| `border-collapse` | ✅ | ComputedStyle.border_collapse wired; collapse zeroes spacing; 5 unit-тестов + graphic test 80 (P4 2026-06-10) |
+| `border-spacing` | ✅ | border_spacing_h/v in ComputedStyle; zero when collapse mode |
 | `caption-side` / `table-layout` | 🟡 | parsed |
 
 ### [T1] Positioning (sticky & z-index)
