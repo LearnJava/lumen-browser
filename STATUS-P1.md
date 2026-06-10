@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+O-13: DevTools Computed Styles panel  branch: p1-devtools-computed-tab
+Next step: добавить InspectorTab + вкладки в inspector.rs  crates/shell/src/devtools/inspector.rs:66
 
 ---
 

@@ -1,10 +1,15 @@
-//! DevTools DOM inspector panel (§7E.1).
+//! DevTools DOM inspector panel (§7E.1) with Computed tab (§7E.2).
 //!
 //! Lets the user inspect the rendered page: while the inspector is active,
 //! moving the mouse highlights the box under the cursor with a Chrome-style
 //! [`DisplayCommand::BoxModelOverlay`] (margin / border / padding / content),
 //! and clicking a box "pins" it — showing its DOM label, [`NodeId`] and a
 //! computed-style map in a right-docked side panel.
+//!
+//! The panel has two tabs:
+//! - **Elements** — box-model geometry + most-used CSS properties (§7E.1).
+//! - **Computed** — full CSS computed-style map (~55 properties) from P4's
+//!   [`lumen_layout::computed_style_to_map`] (§7E.2).
 //!
 //! Toggle with `Ctrl+Shift+I` (the standard DevTools inspector binding; `F12`
 //! is already taken by the JS console, see [`super::console_panel`]).
@@ -16,6 +21,8 @@
 //!   call [`DomInspectorPanel::set_hovered`].
 //! - A left click while visible → [`DomInspectorPanel::select`] (and the shell
 //!   suppresses normal navigation / JS dispatch).
+//! - A click inside the panel header tab row → [`DomInspectorPanel::click_tab_at`]
+//!   switches active tab without re-selecting.
 //!
 //! All rendering happens in the redraw compositing step:
 //! - [`build_box_overlay`] emits the hovered box-model overlay (page → viewport
@@ -31,23 +38,44 @@ use lumen_paint::{DisplayCommand, DisplayList};
 
 const PANEL_BG: Color = Color { r: 24, g: 24, b: 28, a: 244 };
 const HEADER_BG: Color = Color { r: 32, g: 33, b: 38, a: 255 };
+const TAB_ACTIVE_BG: Color = Color { r: 24, g: 24, b: 28, a: 255 };
+const TAB_INACTIVE_BG: Color = Color { r: 40, g: 41, b: 48, a: 255 };
+const TAB_ACTIVE_LINE: Color = Color { r: 66, g: 135, b: 245, a: 255 };
 const FG_KEY: Color = Color { r: 130, g: 180, b: 250, a: 255 };
 const FG_VAL: Color = Color { r: 210, g: 212, b: 218, a: 255 };
 const FG_DIM: Color = Color { r: 150, g: 152, b: 160, a: 255 };
 const FG_TAG: Color = Color { r: 240, g: 170, b: 110, a: 255 };
+const FG_TAB: Color = Color { r: 190, g: 192, b: 200, a: 255 };
+const FG_TAB_ACTIVE: Color = Color { r: 220, g: 222, b: 230, a: 255 };
 
 // ── Layout constants ────────────────────────────────────────────────────────────
 
 /// Width of the right-docked side panel in CSS px.
 pub const PANEL_WIDTH: f32 = 300.0;
 const HEADER_H: f32 = 30.0;
+/// Height of the tab row below the header.
+pub const TAB_ROW_H: f32 = 26.0;
 const LINE_H: f32 = 18.0;
 const FONT_SIZE: f32 = 12.0;
 const H_PAD: f32 = 10.0;
+/// Width of the "Elements" tab button.
+const TAB_ELEMENTS_W: f32 = 82.0;
+/// Width of the "Computed" tab button.
+const TAB_COMPUTED_W: f32 = 90.0;
 /// Maximum number of property rows visible without scrolling.
-const MAX_VISIBLE_ROWS: usize = 24;
+const MAX_VISIBLE_ROWS: usize = 22;
 
 // ── Types ───────────────────────────────────────────────────────────────────────
+
+/// Which tab of the DevTools inspector panel is currently active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InspectorTab {
+    /// Elements tab — box-model geometry and most-used CSS properties.
+    #[default]
+    Elements,
+    /// Computed tab — full CSS computed-style map (~55 properties, §7E.2).
+    Computed,
+}
 
 /// A node currently pinned by the inspector, with its computed-style snapshot.
 #[derive(Debug, Clone)]
@@ -56,10 +84,14 @@ pub struct SelectedNode {
     pub node: NodeId,
     /// Human-readable element label, e.g. `div#main.card` (or `#text`).
     pub label: String,
-    /// Computed style as an ordered `(property, value)` list.
+    /// Elements-tab: box-model geometry + most-used CSS properties.
     pub props: Vec<(String, String)>,
-    /// First property row to show (scroll position, 0 = top).
+    /// Computed-tab: full CSS computed-style map sorted alphabetically (§7E.2).
+    pub computed_props: Vec<(String, String)>,
+    /// First property row to show in the Elements tab (scroll position, 0 = top).
     pub scroll_offset: usize,
+    /// First property row to show in the Computed tab.
+    pub computed_scroll_offset: usize,
 }
 
 /// DevTools DOM inspector panel state.
@@ -75,6 +107,8 @@ pub struct DomInspectorPanel {
     pub hovered: Option<NodeId>,
     /// Node pinned by the last click, with its computed-style snapshot.
     pub selected: Option<SelectedNode>,
+    /// Which tab is currently shown.
+    pub active_tab: InspectorTab,
 }
 
 impl DomInspectorPanel {
@@ -102,31 +136,86 @@ impl DomInspectorPanel {
         true
     }
 
-    /// Pin a node as the current selection with its computed-style map.
-    pub fn select(&mut self, node: NodeId, label: String, props: Vec<(String, String)>) {
+    /// Pin a node as the current selection.
+    ///
+    /// `props` — Elements-tab list (box-model geometry + most-used CSS properties).
+    /// `computed_props` — Computed-tab list (full CSS map, sorted alphabetically).
+    pub fn select(
+        &mut self,
+        node: NodeId,
+        label: String,
+        props: Vec<(String, String)>,
+        computed_props: Vec<(String, String)>,
+    ) {
         self.selected = Some(SelectedNode {
             node,
             label,
             props,
+            computed_props,
             scroll_offset: 0,
+            computed_scroll_offset: 0,
         });
     }
 
-    /// Scroll the property list of the current selection up (towards the top).
-    #[allow(dead_code)]
+    /// Switch the active tab to `tab`.
+    pub fn switch_tab(&mut self, tab: InspectorTab) {
+        self.active_tab = tab;
+    }
+
+    /// Returns `true` if `x` is inside the right-docked panel, given window CSS width.
+    ///
+    /// Used by the shell click handler to distinguish panel UI interactions from
+    /// page hit-tests.
+    pub fn is_panel_click(&self, x: f32, win_w_css: f32) -> bool {
+        x >= win_w_css - PANEL_WIDTH
+    }
+
+    /// Handle a click that is inside the panel. Switches tab when the click lands
+    /// on the tab row. Returns `true` when the click was consumed.
+    pub fn click_tab_at(&mut self, x: f32, y: f32, win_w_css: f32, top: f32) -> bool {
+        let panel_x = win_w_css - PANEL_WIDTH;
+        let tab_y = top + HEADER_H;
+        if y < tab_y || y > tab_y + TAB_ROW_H {
+            return false;
+        }
+        let local_x = x - panel_x;
+        if local_x < TAB_ELEMENTS_W {
+            self.switch_tab(InspectorTab::Elements);
+            return true;
+        }
+        if local_x < TAB_ELEMENTS_W + TAB_COMPUTED_W {
+            self.switch_tab(InspectorTab::Computed);
+            return true;
+        }
+        false
+    }
+
+    /// Scroll the active tab's property list up (towards the top).
     pub fn scroll_up(&mut self, n: usize) {
-        if let Some(sel) = self.selected.as_mut() {
-            sel.scroll_offset = sel.scroll_offset.saturating_sub(n);
+        let Some(sel) = self.selected.as_mut() else { return };
+        match self.active_tab {
+            InspectorTab::Elements => {
+                sel.scroll_offset = sel.scroll_offset.saturating_sub(n);
+            }
+            InspectorTab::Computed => {
+                sel.computed_scroll_offset = sel.computed_scroll_offset.saturating_sub(n);
+            }
         }
     }
 
-    /// Scroll the property list down (towards the bottom), clamped so the last
-    /// page of rows stays visible.
-    #[allow(dead_code)]
+    /// Scroll the active tab's property list down (towards the bottom), clamped
+    /// so the last page of rows stays visible.
     pub fn scroll_down(&mut self, n: usize) {
-        if let Some(sel) = self.selected.as_mut() {
-            let max = sel.props.len().saturating_sub(MAX_VISIBLE_ROWS);
-            sel.scroll_offset = (sel.scroll_offset + n).min(max);
+        let Some(sel) = self.selected.as_mut() else { return };
+        match self.active_tab {
+            InspectorTab::Elements => {
+                let max = sel.props.len().saturating_sub(MAX_VISIBLE_ROWS);
+                sel.scroll_offset = (sel.scroll_offset + n).min(max);
+            }
+            InspectorTab::Computed => {
+                let max = sel.computed_props.len().saturating_sub(MAX_VISIBLE_ROWS);
+                sel.computed_scroll_offset = (sel.computed_scroll_offset + n).min(max);
+            }
         }
     }
 }
@@ -271,8 +360,9 @@ pub fn element_label(doc: &Document, node: NodeId) -> String {
 }
 
 /// Extract a curated computed-style map from a [`LayoutBox`] as ordered
-/// `(property, value)` pairs. Covers the box model and the most common visual
-/// properties; geometry rows come from the resolved layout `rect`.
+/// `(property, value)` pairs for the **Elements** tab. Covers the box model and
+/// the most common visual properties; geometry rows come from the resolved
+/// layout `rect`.
 pub fn computed_style_map(lb: &LayoutBox) -> Vec<(String, String)> {
     let s = &lb.style;
     let mut out: Vec<(String, String)> = Vec::with_capacity(16);
@@ -364,12 +454,12 @@ fn fmt_color(c: Color) -> String {
 
 // ── Rendering: side panel ─────────────────────────────────────────────────────────
 
-/// Build the right-docked computed-style side panel.
+/// Build the right-docked inspector side panel.
 ///
 /// `(win_w, win_h)` are window dimensions in CSS px. The panel is anchored to
 /// the right edge below `top` (the tab-bar height) and shows the pinned node's
-/// label, [`NodeId`] and a scrollable computed-style list. Returns an empty
-/// list when the inspector is hidden.
+/// label, [`NodeId`] and a scrollable property list in the active tab.
+/// Returns an empty list when the inspector is hidden.
 pub fn build_inspector_panel(
     panel: &DomInspectorPanel,
     (win_w, win_h): (u32, u32),
@@ -381,7 +471,7 @@ pub fn build_inspector_panel(
 
     let panel_x = win_w as f32 - PANEL_WIDTH;
     let panel_h = win_h as f32 - top;
-    let mut out: DisplayList = Vec::with_capacity(8 + MAX_VISIBLE_ROWS * 2);
+    let mut out: DisplayList = Vec::with_capacity(16 + MAX_VISIBLE_ROWS * 2);
 
     // Background + left border.
     out.push(DisplayCommand::FillRect {
@@ -407,11 +497,36 @@ pub fn build_inspector_panel(
         FG_DIM,
     ));
 
+    // Tab row.
+    let tab_y = top + HEADER_H;
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(panel_x, tab_y, PANEL_WIDTH, TAB_ROW_H),
+        color: HEADER_BG,
+    });
+    draw_tab(
+        &mut out,
+        "Elements",
+        panel_x,
+        tab_y,
+        TAB_ELEMENTS_W,
+        panel.active_tab == InspectorTab::Elements,
+    );
+    draw_tab(
+        &mut out,
+        "Computed",
+        panel_x + TAB_ELEMENTS_W,
+        tab_y,
+        TAB_COMPUTED_W,
+        panel.active_tab == InspectorTab::Computed,
+    );
+
+    let content_top = tab_y + TAB_ROW_H;
+
     let Some(sel) = panel.selected.as_ref() else {
         out.push(make_text(
             "Hover a box, then click to inspect.".to_string(),
             panel_x + H_PAD,
-            top + HEADER_H + 8.0,
+            content_top + 8.0,
             PANEL_WIDTH - H_PAD * 2.0,
             FONT_SIZE,
             FG_DIM,
@@ -420,7 +535,7 @@ pub fn build_inspector_panel(
     };
 
     // Selected element label + NodeId.
-    let mut y = top + HEADER_H + 6.0;
+    let mut y = content_top + 6.0;
     out.push(make_text(
         sel.label.clone(),
         panel_x + H_PAD,
@@ -440,11 +555,16 @@ pub fn build_inspector_panel(
     ));
     y += LINE_H + 4.0;
 
-    // Computed-style rows (respecting scroll).
-    let total = sel.props.len();
-    let start = sel.scroll_offset.min(total);
+    // Property rows for the active tab.
+    let (props, scroll_offset) = match panel.active_tab {
+        InspectorTab::Elements => (&sel.props, sel.scroll_offset),
+        InspectorTab::Computed => (&sel.computed_props, sel.computed_scroll_offset),
+    };
+
+    let total = props.len();
+    let start = scroll_offset.min(total);
     let end = (start + MAX_VISIBLE_ROWS).min(total);
-    for (key, val) in &sel.props[start..end] {
+    for (key, val) in &props[start..end] {
         out.push(make_text(
             format!("{key}:"),
             panel_x + H_PAD,
@@ -476,6 +596,30 @@ pub fn build_inspector_panel(
     }
 
     out
+}
+
+/// Emit a single tab button into `out`.
+fn draw_tab(out: &mut DisplayList, label: &str, x: f32, y: f32, w: f32, active: bool) {
+    let bg = if active { TAB_ACTIVE_BG } else { TAB_INACTIVE_BG };
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(x, y, w, TAB_ROW_H),
+        color: bg,
+    });
+    if active {
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(x, y + TAB_ROW_H - 2.0, w, 2.0),
+            color: TAB_ACTIVE_LINE,
+        });
+    }
+    let fg = if active { FG_TAB_ACTIVE } else { FG_TAB };
+    out.push(make_text(
+        label.to_string(),
+        x + 8.0,
+        y + (TAB_ROW_H - FONT_SIZE) / 2.0,
+        w - 16.0,
+        FONT_SIZE,
+        fg,
+    ));
 }
 
 fn make_text(text: String, x: f32, y: f32, w: f32, font_size: f32, color: Color) -> DisplayCommand {
@@ -532,6 +676,7 @@ mod tests {
         assert!(!p.visible);
         assert!(p.hovered.is_none());
         assert!(p.selected.is_none());
+        assert_eq!(p.active_tab, InspectorTab::Elements);
     }
 
     #[test]
@@ -646,11 +791,84 @@ mod tests {
             NodeId::from_index(7),
             "div".to_string(),
             vec![("display".into(), "block".into())],
+            vec![("color".into(), "rgb(0,0,0)".into())],
         );
         let sel = p.selected.as_ref().unwrap();
         assert_eq!(sel.node, NodeId::from_index(7));
         assert_eq!(sel.props.len(), 1);
+        assert_eq!(sel.computed_props.len(), 1);
         assert_eq!(sel.scroll_offset, 0);
+        assert_eq!(sel.computed_scroll_offset, 0);
+    }
+
+    #[test]
+    fn switch_tab_changes_active_tab() {
+        let mut p = DomInspectorPanel::new();
+        assert_eq!(p.active_tab, InspectorTab::Elements);
+        p.switch_tab(InspectorTab::Computed);
+        assert_eq!(p.active_tab, InspectorTab::Computed);
+        p.switch_tab(InspectorTab::Elements);
+        assert_eq!(p.active_tab, InspectorTab::Elements);
+    }
+
+    #[test]
+    fn click_tab_at_switches_tabs() {
+        let mut p = DomInspectorPanel::new();
+        let win_w = 1280.0_f32;
+        let top = 36.0_f32;
+        let panel_x = win_w - PANEL_WIDTH;
+        let tab_y = top + HEADER_H + TAB_ROW_H / 2.0;
+        // Click "Elements" tab.
+        p.switch_tab(InspectorTab::Computed);
+        assert!(p.click_tab_at(panel_x + 10.0, tab_y, win_w, top));
+        assert_eq!(p.active_tab, InspectorTab::Elements);
+        // Click "Computed" tab.
+        assert!(p.click_tab_at(panel_x + TAB_ELEMENTS_W + 10.0, tab_y, win_w, top));
+        assert_eq!(p.active_tab, InspectorTab::Computed);
+        // Click outside tab row → not consumed.
+        assert!(!p.click_tab_at(panel_x + 10.0, top + 5.0, win_w, top));
+    }
+
+    #[test]
+    fn is_panel_click_detects_right_side() {
+        let p = DomInspectorPanel::new();
+        let win_w = 1280.0_f32;
+        assert!(p.is_panel_click(win_w - 10.0, win_w));
+        assert!(!p.is_panel_click(win_w - PANEL_WIDTH - 1.0, win_w));
+    }
+
+    #[test]
+    fn scroll_per_active_tab() {
+        let mut p = DomInspectorPanel::new();
+        let many: Vec<(String, String)> =
+            (0..MAX_VISIBLE_ROWS + 5).map(|i| (format!("k{i}"), "v".into())).collect();
+        p.select(NodeId::from_index(1), "div".into(), many.clone(), many);
+        // Elements tab scroll.
+        p.scroll_down(3);
+        assert_eq!(p.selected.as_ref().unwrap().scroll_offset, 3);
+        assert_eq!(p.selected.as_ref().unwrap().computed_scroll_offset, 0);
+        // Computed tab scroll.
+        p.switch_tab(InspectorTab::Computed);
+        p.scroll_down(2);
+        assert_eq!(p.selected.as_ref().unwrap().scroll_offset, 3);
+        assert_eq!(p.selected.as_ref().unwrap().computed_scroll_offset, 2);
+    }
+
+    #[test]
+    fn scroll_clamps_to_props_len() {
+        let mut p = DomInspectorPanel::new();
+        let props: Vec<(String, String)> =
+            (0..MAX_VISIBLE_ROWS + 10).map(|i| (format!("k{i}"), "v".into())).collect();
+        p.select(NodeId::from_index(1), "div".into(), props.clone(), props);
+        p.scroll_down(9999);
+        assert_eq!(p.selected.as_ref().unwrap().scroll_offset, 10);
+        p.scroll_up(9999);
+        assert_eq!(p.selected.as_ref().unwrap().scroll_offset, 0);
+        p.switch_tab(InspectorTab::Computed);
+        p.scroll_down(9999);
+        assert_eq!(p.selected.as_ref().unwrap().computed_scroll_offset, 10);
+        p.scroll_up(9999);
+        assert_eq!(p.selected.as_ref().unwrap().computed_scroll_offset, 0);
     }
 
     #[test]
@@ -671,6 +889,19 @@ mod tests {
     }
 
     #[test]
+    fn panel_shows_tab_buttons() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
+        assert!(dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text == "Elements"
+        )));
+        assert!(dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text == "Computed"
+        )));
+    }
+
+    #[test]
     fn panel_shows_selection_label_and_node_id() {
         let mut p = DomInspectorPanel::new();
         p.toggle();
@@ -678,6 +909,7 @@ mod tests {
             NodeId::from_index(42),
             "p#intro".to_string(),
             vec![("display".into(), "block".into())],
+            vec![("color".into(), "rgb(0,0,0)".into())],
         );
         let dl = build_inspector_panel(&p, (1280, 800), 36.0);
         assert!(dl.iter().any(|c| matches!(
@@ -692,14 +924,19 @@ mod tests {
     }
 
     #[test]
-    fn scroll_clamps_to_props_len() {
+    fn panel_computed_tab_shows_computed_props() {
         let mut p = DomInspectorPanel::new();
-        let props: Vec<(String, String)> =
-            (0..MAX_VISIBLE_ROWS + 10).map(|i| (format!("k{i}"), "v".into())).collect();
-        p.select(NodeId::from_index(1), "div".into(), props);
-        p.scroll_down(9999);
-        assert_eq!(p.selected.as_ref().unwrap().scroll_offset, 10);
-        p.scroll_up(9999);
-        assert_eq!(p.selected.as_ref().unwrap().scroll_offset, 0);
+        p.toggle();
+        p.select(
+            NodeId::from_index(1),
+            "div".into(),
+            vec![("display".into(), "block".into())],
+            vec![("color".into(), "rgb(255,0,0)".into())],
+        );
+        p.switch_tab(InspectorTab::Computed);
+        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
+        assert!(dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text.contains("color")
+        )));
     }
 }
