@@ -6,8 +6,7 @@
 
 ## In progress
 
-**BUG-121 — snapshot_vs_edge гейт красный на main**  branch: `p3-bug121-edge-gate`
-Next step: informational-режим по умолчанию + strict через env var; гейт рендерит через wgpu fallback `Renderer`, а run.py меряет femtovg — пороги run.py неприменимы.  `crates/driver/tests/snapshot_vs_edge.rs:219`
+(none)
 
 ## Next
 
@@ -22,10 +21,12 @@ _(BUG-119 закрыт 2026-06-10 — rule index оказался невинов
 на каждый layout-проход (`box_tree.rs:1756`, merge 26d4386e) его покрывает.)_
 
 **Из ревизии 2026-06-10 ([docs/paint-pipeline-review-2026-06.md](docs/paint-pipeline-review-2026-06.md)) — задачи P3:**
-- **BUG-121 (snapshot_vs_edge гейт красный на main):** `cargo test -p lumen-driver` падает
-  на любой машине с локальными Edge-скриншотами — ~25 страниц выше плоского порога 0.5%
-  (текстовый AA CPU-растеризатора; нет per-page порогов как в run.py TESTS и нет text-exemption).
-  Нужны per-page пороги или честный informational-режим. `crates/driver/tests/snapshot_vs_edge.rs:219`
+
+_(BUG-121 закрыт 2026-06-10 — informational-режим по умолчанию, см. Recent. Корень был не в
+порогах: гейт рендерит через wgpu fallback `Renderer`, а не femtovg. Follow-up-инфраструктура —
+femtovg headless путь для snapshot_vs_edge, чтобы пороги run.py снова стали применимы — не
+запланирована, брать после исчерпания OPEN-багов.)_
+
 - **BUG-120 (C0 control chars рендерятся видимой строкой):** Edge рендерит U+0001 невидимым
   zero-advance, Lumen — линией 19.2px. Стрипать Cc (кроме tab/LF/CR) на inline-item уровне.
   `crates/engine/layout/src/box_tree.rs`
@@ -85,6 +86,7 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 ## Recent fixes
 
+- **BUG-121 snapshot_vs_edge гейт — informational-режим по умолчанию** (2026-06-10) — `cargo test -p lumen-driver` был красным на любой машине с локальными Edge-скриншотами (42/71 страниц над порогом). Корень не в порогах (per-page пороги из run.py уже были): тест рендерит через `lumen_paint::Renderer::new_headless` — это **wgpu fallback**-бэкенд, а run.py и оконный Lumen рендерят через femtovg (ADR-010 RB-9 default). Femtovg-фиксы (BUG-077/086/095/097) до wgpu-пути не доходят → 18-images 57% против 21% в окне, 61-view-transitions 99.66%; пороги run.py недостижимы структурно, а не из-за регрессий. Fix: превышения порогов печатаются (таблица + INFORMATIONAL-сводка), но не валят тест; `SNAPSHOT_VS_EDGE_STRICT=1` возвращает жёсткий assert (для откалиброванного CI). Ошибки рендера/декодирования падают в обоих режимах. Настоящие гейты — snapshot_cpu (бит-в-бит) + nightly run.py. Doc-комментарий модуля переписан честно (раньше утверждал «same femtovg path»). Верификация: default ok с 71 эталоном, strict падает, `cargo test -p lumen-driver` целиком зелёный, clippy -D warnings чист. Follow-up: femtovg headless рендер-путь (см. Next §0). Влито `p3-bug121-edge-gate`.
 - **BUG-119 U+0001 в `<head>` 17 тест-страниц — rule index невиновен** (2026-06-10) — 6 регрессий run.py (TEST-27/28/29/40/41/68) приписывались selector rule index (bb1f8e99), но `--dump-layout`/`--dump-display-list` побитово идентичны с индексом и brute-force на всех 6 страницах. Фактический корень: коммит 88cdb9e1 (title-теги, та же ночь между прогонами) при замене `<meta charset>` оставил сырой байт U+0001 в `<head>` 17 файлов. По HTML-спеке не-whitespace символ закрывает head → байт стал текстом body → Lumen рисовал строку 19.2px на верху страницы, контент уезжал на ~20px (diff_region top:0 full-width у ВСЕХ деградировавших тестов, включая +0.3–1% у 24/30/32/34/39/46). Edge рендерит управляющий символ невидимым — заведён **BUG-120**. Fix: строки U+0001 заменены затёртым ими `<meta charset="utf-8">`; 12 эталонов snapshot_cpu регенерированы (BUG-118 сохранил их с порчей); новый тест `graphic_test_pages_have_no_stray_control_bytes` (`crates/driver/tests/test_pages_integrity.rs`); doc-коммент `rule_index.rs` дополнен container_rules/supports_rules; попутно pre-existing clippy `print_literal` в `snapshot_vs_edge.rs` (тоже из 88cdb9e1). Заведён **BUG-121**: snapshot_vs_edge гейт красный на main (~25 страниц, не связан с BUG-119 — после фикса 27/28/29 улучшились 1.50→0.36 / 2.24→1.57 / 0.68→0.00%). Верификация: run.py TEST-27 PASS 0.38%, 28 PASS 0.28%, 29 PASS 0.00%, 40 PASS 0.48%, 41 PASS 0.00%, 68 PASS 0.00% — значения совпали с прогоном до регрессии. layout --lib 2653/2653, snapshot_cpu 1/1, clippy driver+layout чист. Влито `p3-bug119-rule-index`.
 - **BUG-117 multi-column пропуск первой колонки + column-fill:auto** (2026-06-09) — TEST-33 (16.14%): `lay_out_multicol_children` (`crates/engine/layout/src/box_tree.rs:5021`) содержал два бага распределения. (1) В balance-режиме элемент выше сбалансированного `target_h` (total/n_cols) срабатывал `height_overflow` на ПУСТОЙ колонке 0 и выталкивался в колонку 1 → колонка 0 оставалась пустой; дочерние элементы `column-span:all`-сегмента (group 5) попадали в колонки 1+2 вместо 0+1. (2) `column-fill:auto` ошибочно применял per-column count cap (защита от голодания, нужная только для balance), раскладывая по одному элементу на колонку вместо последовательного заполнения по высоте (group 6). Fix: никогда не переходим за пустую колонку (`col_nonempty`-гард); count cap включён только при `balance`. По CSS Multicol §3.4 колонки заполняются по порядку с первой. После фикса group 5 на x=17/241 (было 241/465), group 6 — col0 держит 2 элемента, col1 — третий. 2 регресс-теста (`multicol_balance_does_not_skip_first_column`, `multicol_fill_auto_ignores_count_cap`), CPU-снапшот 33 перегенерирован, layout --lib 2472/2472, snapshot_cpu 1/1, clippy чист. Влито `p3-bug117-multicol`.
 - **BUG-106 таблицы TEST-64 уезжали вверх (24.85%→14.90%)** (2026-06-09) — доминирующая причина была НЕ в табличном layout, а в отсутствии UA-дефолтов для заголовков: `<h3>` рендерился 16px без margin, поэтому обе таблицы стояли на ~25px выше Edge, сдвиг накапливался вниз по странице. Lumen имел `ua_font_weight` (bold), но не font-size и не margin заголовков. Fix: новая `apply_ua_heading_style` (`crates/engine/layout/src/style.rs`) задаёт UA font-size (h1 2em…h6 0.67em относительно родителя) + вертикальные margin (em собственного font-size, HTML Rendering §15.3.3), вызывается в UA-блоке `compute_style` ДО author-каскада. font_size пишется как computed px (как `ua_font_size_factor` для small/sub/sup) → author `font-size` перекрывает через pre-pass; margin как `Em` → author margin перекрывает через main-pass. После фикса separate-table на y=80.9 (Edge ~84), заголовки fs=18.72 margin 1em. Остаток ~15% — content-based auto table column widths (Lumen делит ширину поровну 335/335/335, Edge сайзит по контенту → City уезжает на ~95px), заведён **BUG-116** (нужен measurer в `compute_table_col_widths`). 2 регресс-теста (`headings_get_ua_font_size_and_margins`, `heading_ua_defaults_overridden_by_author_css`). layout --lib 2470/2470, clippy чист. CPU-снапшоты 53/58 (страницы с заголовками) перегенерированы, snapshot_cpu 1/1. Влито `p3-bug106-table`.
