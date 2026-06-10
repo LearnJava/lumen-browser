@@ -200,3 +200,6 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 
 - **object-fit** — ✅ реализован (CSS Images L3 §5.5): compute_object_fit_transform() в box_tree.rs; объекты Fill/Contain/Cover/None/ScaleDown применяются к SVG viewBox; object-position (x/y PositionComponent) управляет выравниванием контента в свободном пространстве; при Fill (default) сохраняется поведение SVG preserveAspectRatio; тест 70
 - **object-position** — ✅ реализован (CSS Images L3 §5.5): PositionComponent::Px/Percent; resolve(free_space) → px offset; default 50% 50% (центр); парсинг keyword/length/percent; тест 70
+
+- **:host** — ✅ реализован (CSS Scoping L1 §6.1): matches_pseudo_class() обрабатывает PseudoClass::Host(None) → doc.is_shadow_host(); PseudoClass::Host(Some(list)) → shadow host AND matches inner selector list; парсинг уже был в css-parser; тест 72
+- **::slotted** — ✅ реализован (CSS Scoping L1 §6.2): matches_slotted_complex() проверяет is_slotted_element() (DOM parent is shadow host) AND inner selector match AND outer context against shadow host; declarations применяются в compute_style() cascade когда is_slotted_element(); тест 72
