@@ -281,8 +281,18 @@ fn collect_clickable_rec(
         return;
     }
 
+    // CSS Pointer Events L1: `pointer-events: none` on a block box excludes the box
+    // itself from the clickable set. Children are always visited — a child's
+    // pointer-events is independent (the property is not inherited).
+    //
+    // InlineRun boxes carry the BLOCK CONTAINER'S style (not the inline element's
+    // own style), so we cannot use `b.style.pointer_events` to gate InlineRun
+    // processing. Instead, each inline link is gated by `frag.style.pointer_events`,
+    // which reflects the actual inline element's computed value.
+    let block_pe_none = b.style.pointer_events == PointerEvents::None;
+
     match &b.kind {
-        BoxKind::FormControl { kind } => {
+        BoxKind::FormControl { kind } if !block_pe_none => {
             let ck = match kind {
                 FormControlKind::Button => ClickableKind::Button,
                 FormControlKind::Input { .. }
@@ -299,7 +309,7 @@ fn collect_clickable_rec(
                 kind: ck,
             });
         }
-        BoxKind::Block | BoxKind::FlowRoot => {
+        BoxKind::Block | BoxKind::FlowRoot if !block_pe_none => {
             if let Some(href) = element_href(doc, b.node) {
                 out.push(ClickableElement {
                     node_id: b.node,
@@ -326,6 +336,8 @@ fn collect_clickable_rec(
         BoxKind::InlineRun { lines, .. } => {
             // Collect rects for inline <a href> links by walking frag source_nodes.
             // Groups consecutive frags with the same link ancestor into one entry.
+            // Skip links whose frag.style.pointer_events is None (the frag carries
+            // the inline element's own computed style, not the block container's).
             let line_y_offset = b.rect.y;
             let line_x_offset = b.rect.x;
             for line in lines {
@@ -333,7 +345,12 @@ fn collect_clickable_rec(
                 let mut cur_href = String::new();
                 let mut cur_rect: Option<Rect> = None;
                 for frag in line {
-                    let link = link_ancestor(doc, frag.source_node);
+                    // Treat pointer-events:none inline elements as if they have no link.
+                    let link = if frag.style.pointer_events == PointerEvents::None {
+                        None
+                    } else {
+                        link_ancestor(doc, frag.source_node)
+                    };
                     if link == cur_link_node {
                         if let Some(ref mut r) = cur_rect {
                             let fx = line_x_offset + frag.x;
@@ -14750,6 +14767,59 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn clickable_skips_pointer_events_none_link() {
+        // Use display:block so links create Block boxes (layout() without measurer
+        // can't detect inline <a> links — they require a text measurer to populate
+        // InlineRun.lines). Block-level links are found via element_href on the box.
+        let doc = lumen_html_parser::parse(
+            r#"<a href="/blocked" style="display:block;pointer-events:none">Blocked</a>
+               <a href="/ok" style="display:block">OK</a>"#,
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            !elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/blocked")),
+            "pointer-events:none link must not be in clickable set"
+        );
+        assert!(
+            elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/ok")),
+            "normal link must still be collected"
+        );
+    }
+
+    #[test]
+    fn clickable_pointer_events_none_skips_element_but_not_children() {
+        // Parent has pointer-events:none; child link has default (auto).
+        // Child must still be clickable even though parent is not.
+        let doc = lumen_html_parser::parse(
+            r#"<div style="pointer-events:none"><a href="/child">Child</a></div>"#,
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/child")),
+            "child link inside pointer-events:none parent must remain clickable"
+        );
+    }
+
+    #[test]
+    fn clickable_pointer_events_none_on_button() {
+        let doc = lumen_html_parser::parse(
+            r#"<button style="pointer-events:none">Disabled</button>"#,
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            !elems.iter().any(|e| matches!(e.kind, ClickableKind::Button)),
+            "button with pointer-events:none must not be in clickable set"
+        );
+    }
+
     // ── line-clamp layout tests ───────────────────────────────────────────────
 
     fn find_inline_run_in(b: &box_tree::LayoutBox) -> Option<&box_tree::LayoutBox> {
@@ -15724,3 +15794,4 @@ mod tests {
     }
 
 }
+
