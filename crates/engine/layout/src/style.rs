@@ -2525,6 +2525,12 @@ pub struct ComputedStyle {
     pub inset_area_row: crate::anchor::InsetAreaKeyword,
     /// CSS Anchor Positioning L1 §5 — `inset-area` column (horizontal axis) keyword. Non-inherited.
     pub inset_area_col: crate::anchor::InsetAreaKeyword,
+
+    /// CSS View Transitions L1 §10 — `view-transition-name`. Non-inherited. Initial: `None` (none).
+    /// Custom-ident that marks this element as a named view-transition capture target.
+    /// During a `document.startViewTransition()` call the shell matches old/new snapshots
+    /// by name and cross-fades them. `None` means the property is `none`.
+    pub view_transition_name: Option<Box<str>>,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -4649,6 +4655,7 @@ impl ComputedStyle {
             position_anchor: None,
             inset_area_row: crate::anchor::InsetAreaKeyword::None,
             inset_area_col: crate::anchor::InsetAreaKeyword::None,
+            view_transition_name: None,
         }
     }
 }
@@ -4970,6 +4977,7 @@ pub fn compute_style(
         position_anchor: None,
         inset_area_row: crate::anchor::InsetAreaKeyword::None,
         inset_area_col: crate::anchor::InsetAreaKeyword::None,
+        view_transition_name: None,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -11416,6 +11424,18 @@ fn apply_declaration(
                 style.inset_area_col = c;
             }
         }
+        // CSS View Transitions L1 §10 — view-transition-name: none | <custom-ident>.
+        // Names this element as a capture target during document.startViewTransition().
+        // `none` (default) opts out; any other ident opts in. Per-page names must be unique,
+        // but that constraint is not enforced here (shell deduplicates at capture time).
+        "view-transition-name" => {
+            let v = val.trim();
+            style.view_transition_name = if v.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(v.into())
+            };
+        }
         "top" => set_margin_side(&mut style.top, val, is_quirks),
         "right" => set_margin_side(&mut style.right, val, is_quirks),
         "bottom" => set_margin_side(&mut style.bottom, val, is_quirks),
@@ -13999,6 +14019,9 @@ fn apply_css_wide_keyword(
         "inset-area" | "position-area" => {
             style.inset_area_row = if inh_only_inherit { inherited.inset_area_row } else { init.inset_area_row };
             style.inset_area_col = if inh_only_inherit { inherited.inset_area_col } else { init.inset_area_col };
+        }
+        "view-transition-name" => {
+            style.view_transition_name = if inh_only_inherit { inherited.view_transition_name.clone() } else { None };
         }
         "top" => {
             style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
@@ -25743,6 +25766,66 @@ mod anchor_positioning_tests {
         let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
         assert_eq!(div_style.anchor_name.as_deref(), Some("--parent"));
         assert!(span_style.anchor_name.is_none(), "anchor-name must not be inherited");
+    }
+
+    // ── CSS View Transitions L1 ───────────────────────────────────────────────
+
+    #[test]
+    fn view_transition_name_parsed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { view-transition-name: hero; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.view_transition_name.as_deref(), Some("hero"));
+    }
+
+    #[test]
+    fn view_transition_name_none_clears() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { view-transition-name: none; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert!(s.view_transition_name.is_none());
+    }
+
+    #[test]
+    fn view_transition_name_default_is_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert!(s.view_transition_name.is_none());
+    }
+
+    #[test]
+    fn view_transition_name_not_inherited() {
+        let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+        let sheet = lumen_css_parser::parse("div { view-transition-name: parent-el; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+        assert_eq!(div_style.view_transition_name.as_deref(), Some("parent-el"));
+        assert!(span_style.view_transition_name.is_none(), "view-transition-name must not be inherited");
+    }
+
+    #[test]
+    fn view_transition_name_dashed_ident() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { view-transition-name: --my-element; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.view_transition_name.as_deref(), Some("--my-element"));
     }
 
     // ── CSS Scroll-Driven Animations ─────────────────────────────────────────
