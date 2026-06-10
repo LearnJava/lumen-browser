@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+W-4: Attribution Reporting API stub  branch: p1-w4-attribution-reporting
+Next step: clippy + tests  crates/js/src/attribution_reporting.rs
 
 ---
 

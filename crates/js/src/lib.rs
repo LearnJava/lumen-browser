@@ -102,6 +102,7 @@ pub mod inert;
 pub mod shared_storage;
 pub mod idle_detection;
 pub mod topics_api;
+pub mod attribution_reporting;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -1069,6 +1070,14 @@ impl QuickJsRuntime {
             // Phase 1: wire _lumen_topics_get_topics native hook to per-origin topic store.
             if let Err(e) = topics_api::install_topics_api(&ctx) {
                 eprintln!("Topics API init failed: {}", e);
+            }
+
+            // Privacy Sandbox Attribution Reporting API — window.attributionReporting +
+            // attributionsrc IDL attribute on <a>/<img>/<script>.
+            // Phase 0: registerSource/registerTrigger → Promise<undefined> no-ops.
+            // Phase 1: wire _lumen_attribution_register_source/_lumen_attribution_register_trigger.
+            if let Err(e) = attribution_reporting::install_attribution_reporting_api(&ctx) {
+                eprintln!("Attribution Reporting API init failed: {}", e);
             }
 
             Ok(())
