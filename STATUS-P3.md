@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+**BUG-119 (rule index регрессии)**  branch: p3-bug119-rule-index
+Next step: проверить ключ кеша `(sheet_ptr, sheet_rules_len)` — style.rs:~5177
 
 ## Next
 
