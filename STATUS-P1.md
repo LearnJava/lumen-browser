@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+W-7: `pointer-events: none` hit-test filtering algorithm  branch: p1-w7-pointer-events
+Next step: добавить проверку pointer_events == None в collect_clickable_rec  crates/engine/layout/src/lib.rs:265
 
 ---
 
@@ -16,7 +17,13 @@ _(нет)_
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| **W-6** | **`overflow: scroll` shell scroll event wiring** — блокирует P4 Phase 2 задачу D (STATUS-P4.md). На `MouseWheel`: найти контейнер через `collect_scroll_containers()` + point-in-rect, вызвать `set_scroll_position()`, перестроить display list. API уже готово в `lumen-layout/src/lib.rs` (R-1 ✅). | S | `lumen-shell` |
+| ~~W-6~~ | ~~**`overflow: scroll` shell scroll event wiring**~~ — **выполнено** (реализовано в R-1: `try_scroll_overflow_container` в shell, `find_scroll_container_at` + `set_scroll_position` + display list rebuild) | S | `lumen-shell` |
+
+### X — Web Platform Phase 3 (алгоритмы)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| **W-7** | **`pointer-events: none` hit-test filtering** — `collect_clickable_rec` не проверяет `pointer_events`; элементы с `pointer-events: none` должны быть исключены из hit-test, но дочерние элементы продолжают участвовать. CSS-поле уже в ComputedStyle (P4). | XS | `lumen-layout` |
 
 ### V — Web Platform Phase 2 (новые)
 
