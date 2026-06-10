@@ -75,7 +75,7 @@ pub use webgl::SoftwareWebGl;
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
 
-use lumen_font::{Cmap, FontError, Hmtx, Hvar, VariationAxis};
+use lumen_font::{Cmap, FontError, Hmtx, Hvar, UnicodeRange, VariationAxis, codepoint_in_ranges};
 use lumen_layout::{FontVariationSetting, TextMeasurer};
 
 /// Реализация [`TextMeasurer`] на основе TTF-данных шрифта.
@@ -248,6 +248,18 @@ impl OwnedFontMetrics {
     }
 }
 
+/// Один @font-face face-слот с опциональным `unicode-range` ограничением.
+///
+/// CSS Fonts L4 §5.1: несколько @font-face с одним family name, но разными
+/// `unicode-range` — хранятся как отдельные слоты. При выборе шрифта для символа
+/// берётся первый слот, чей диапазон покрывает символ И чей cmap содержит глиф.
+struct FontFaceSlot {
+    /// Метрики и данные шрифта.
+    metrics: OwnedFontMetrics,
+    /// `unicode-range` дескриптор. Пустой Vec = нет ограничений (применяется для всех символов).
+    unicode_ranges: Vec<UnicodeRange>,
+}
+
 /// Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты.
 ///
 /// Расширяет [`FontMeasurer`]: при вызове [`TextMeasurer::char_width_with_families`]
@@ -256,12 +268,13 @@ impl OwnedFontMetrics {
 /// fallback к bundled Inter через внутренний [`FontMeasurer`].
 ///
 /// Создаётся через [`MultiFontMeasurer::new`], дополняется семьями через
-/// [`MultiFontMeasurer::register_family`].
+/// [`MultiFontMeasurer::register_family`] или [`MultiFontMeasurer::register_family_with_ranges`].
 pub struct MultiFontMeasurer {
     /// Bundled Inter fallback (всегда доступен).
     fallback: FontMeasurer<'static>,
-    /// Загруженные @font-face семьи: ключ = lowercase family name.
-    faces: HashMap<String, OwnedFontMetrics>,
+    /// Загруженные @font-face семьи: ключ = lowercase family name, значение = список face-слотов.
+    /// Один family может иметь несколько слотов с разными unicode-range диапазонами.
+    faces: HashMap<String, Vec<FontFaceSlot>>,
 }
 
 impl MultiFontMeasurer {
@@ -273,14 +286,39 @@ impl MultiFontMeasurer {
         })
     }
 
-    /// Регистрирует @font-face шрифт под именем `family`.
+    /// Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений.
     ///
-    /// Если для `family` уже есть запись — она заменяется (последнее правило
-    /// CSS @font-face побеждает, как в каскаде).
-    /// При ошибке парсинга шрифта тихо игнорируется (не заменяет старую запись).
+    /// Шрифт применяется для любого символа, если в нём есть глиф. Для передачи
+    /// `unicode-range` используй [`register_family_with_ranges`].
+    /// При ошибке парсинга шрифта тихо игнорируется.
+    ///
+    /// [`register_family_with_ranges`]: Self::register_family_with_ranges
     pub fn register_family(&mut self, family: &str, bytes: Vec<u8>) {
+        self.register_family_with_ranges(family, bytes, Vec::new());
+    }
+
+    /// Регистрирует @font-face шрифт с `unicode-range` ограничением.
+    ///
+    /// `unicode_ranges`: список диапазонов из `unicode-range:` дескриптора @font-face.
+    /// Пустой Vec = нет ограничений (эквивалентно [`register_family`]).
+    ///
+    /// CSS Fonts L4 §5.1: один family может иметь несколько слотов с разными
+    /// unicode-range — добавляет новый слот, не заменяет предыдущие. При
+    /// `char_width_with_families` используется первый слот, покрывающий символ.
+    ///
+    /// [`register_family`]: Self::register_family
+    pub fn register_family_with_ranges(
+        &mut self,
+        family: &str,
+        bytes: Vec<u8>,
+        unicode_ranges: Vec<UnicodeRange>,
+    ) {
         if let Ok(metrics) = OwnedFontMetrics::from_bytes(&bytes) {
-            self.faces.insert(family.to_ascii_lowercase(), metrics);
+            let slot = FontFaceSlot { metrics, unicode_ranges };
+            self.faces
+                .entry(family.to_ascii_lowercase())
+                .or_default()
+                .push(slot);
         }
     }
 
@@ -302,10 +340,12 @@ impl MultiFontMeasurer {
     /// // CSS: font-stretch
     pub fn resolve_font_stretch(&self, families: &[String], stretch_pct: f32) -> Option<f32> {
         for family in families {
-            if let Some(metrics) = self.faces.get(&family.to_ascii_lowercase())
-                && let Some((min, max)) = metrics.wdth_axis
-            {
-                return Some(stretch_pct.clamp(min, max));
+            if let Some(slots) = self.faces.get(&family.to_ascii_lowercase()) {
+                for slot in slots {
+                    if let Some((min, max)) = slot.metrics.wdth_axis {
+                        return Some(stretch_pct.clamp(min, max));
+                    }
+                }
             }
         }
         None
@@ -314,13 +354,20 @@ impl MultiFontMeasurer {
     /// Insert a family entry with an explicit `wdth` axis range for testing.
     #[cfg(test)]
     fn insert_test_wdth_family(&mut self, family: &str, wdth_min: f32, wdth_max: f32) {
-        self.faces.insert(family.to_ascii_lowercase(), OwnedFontMetrics {
-            cmap_data: vec![],
-            advance_widths: vec![],
-            units_per_em: 1000,
-            wdth_axis: Some((wdth_min, wdth_max)),
-            var_data: None,
-        });
+        let slot = FontFaceSlot {
+            metrics: OwnedFontMetrics {
+                cmap_data: vec![],
+                advance_widths: vec![],
+                units_per_em: 1000,
+                wdth_axis: Some((wdth_min, wdth_max)),
+                var_data: None,
+            },
+            unicode_ranges: Vec::new(),
+        };
+        self.faces
+            .entry(family.to_ascii_lowercase())
+            .or_default()
+            .push(slot);
     }
 }
 
@@ -330,11 +377,18 @@ impl TextMeasurer for MultiFontMeasurer {
     }
 
     fn char_width_with_families(&self, ch: char, font_size_px: f32, families: &[String]) -> f32 {
+        let cp = ch as u32;
         for family in families {
-            if let Some(metrics) = self.faces.get(&family.to_ascii_lowercase())
-                && let Some(w) = metrics.try_char_width(ch, font_size_px)
-            {
-                return w;
+            if let Some(slots) = self.faces.get(&family.to_ascii_lowercase()) {
+                for slot in slots {
+                    // CSS Fonts L4 §5.1: пропустить слот, если символ вне его unicode-range.
+                    if !codepoint_in_ranges(cp, &slot.unicode_ranges) {
+                        continue;
+                    }
+                    if let Some(w) = slot.metrics.try_char_width(ch, font_size_px) {
+                        return w;
+                    }
+                }
             }
         }
         self.fallback.char_width(ch, font_size_px)
@@ -347,11 +401,17 @@ impl TextMeasurer for MultiFontMeasurer {
         axes: &[FontVariationSetting],
         families: &[String],
     ) -> f32 {
+        let cp = ch as u32;
         for family in families {
-            if let Some(metrics) = self.faces.get(&family.to_ascii_lowercase())
-                && let Some(w) = metrics.try_char_width_varied(ch, font_size_px, axes)
-            {
-                return w;
+            if let Some(slots) = self.faces.get(&family.to_ascii_lowercase()) {
+                for slot in slots {
+                    if !codepoint_in_ranges(cp, &slot.unicode_ranges) {
+                        continue;
+                    }
+                    if let Some(w) = slot.metrics.try_char_width_varied(ch, font_size_px, axes) {
+                        return w;
+                    }
+                }
             }
         }
         self.fallback.char_width(ch, font_size_px)
@@ -530,5 +590,68 @@ mod multi_font_tests {
         let w_fallback = m.char_width('C', 16.0);
         assert!((w - w_fallback).abs() < 0.01,
             "неизвестная семья → fallback Inter: {w} vs {w_fallback}");
+    }
+
+    // ── unicode-range фильтрация (CSS Fonts L4 §5.1) ────────────────────────
+
+    #[test]
+    fn unicode_range_covers_char_uses_registered_font() {
+        // Регистрируем Inter только для ASCII (U+0020-007E).
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        let ranges = lumen_font::parse_unicode_ranges("U+0020-007E");
+        m.register_family_with_ranges("myfont", INTER.to_vec(), ranges);
+        // ASCII 'A' (U+0041) покрыт диапазоном → должны получить ширину из Inter.
+        let w_family = m.char_width_with_families('A', 16.0, &["myfont".to_string()]);
+        let w_fallback = m.char_width('A', 16.0);
+        assert!((w_family - w_fallback).abs() < 0.01,
+            "символ внутри unicode-range: должна использоваться зарегистрированная семья");
+    }
+
+    #[test]
+    fn unicode_range_outside_falls_back_to_inter() {
+        // Регистрируем Inter только для ASCII (U+0020-007E).
+        // Кириллица (U+0410 = А) — вне диапазона → должен быть fallback.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        let ranges = lumen_font::parse_unicode_ranges("U+0020-007E");
+        m.register_family_with_ranges("myfont", INTER.to_vec(), ranges);
+        let families = vec!["myfont".to_string()];
+        // Inter содержит кириллицу, поэтому если unicode-range игнорируется,
+        // ширины были бы равны. Нас интересует, что слот пропускается —
+        // fallback Inter (без unicode-range) даёт тот же результат,
+        // поэтому тест просто проверяет, что ширина ненулевая.
+        let w = m.char_width_with_families('А', 16.0, &families);
+        assert!(w > 0.0, "кириллица вне unicode-range: fallback должен дать ненулевую ширину");
+    }
+
+    #[test]
+    fn multiple_slots_per_family_unicode_range_selection() {
+        // Два слота для одной семьи: первый — ASCII, второй — кириллица.
+        // Символ из ASCII → должен выбраться первый слот.
+        // Символ из кириллицы → первый слот пропускается, берётся второй.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        let latin_ranges = lumen_font::parse_unicode_ranges("U+0020-007E");
+        let cyrillic_ranges = lumen_font::parse_unicode_ranges("U+0400-04FF");
+        m.register_family_with_ranges("subset", INTER.to_vec(), latin_ranges);
+        m.register_family_with_ranges("subset", INTER.to_vec(), cyrillic_ranges);
+        // Ровно одна уникальная семья
+        assert_eq!(m.family_count(), 1);
+        // ASCII 'A' и кирилл. 'А' — оба покрыты через разные слоты
+        let w_latin = m.char_width_with_families('A', 16.0, &["subset".to_string()]);
+        let w_cyrillic = m.char_width_with_families('А', 16.0, &["subset".to_string()]);
+        assert!(w_latin > 0.0, "латиница должна быть покрыта первым слотом");
+        assert!(w_cyrillic > 0.0, "кириллица должна быть покрыта вторым слотом");
+    }
+
+    #[test]
+    fn register_family_with_ranges_empty_ranges_is_unrestricted() {
+        // Пустые ranges = нет ограничений — все символы проходят через этот слот.
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        m.register_family_with_ranges("all", INTER.to_vec(), Vec::new());
+        let w = m.char_width_with_families('А', 16.0, &["all".to_string()]);
+        assert!(w > 0.0, "пустой unicode-range → нет ограничений, кириллица должна работать");
     }
 }

@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+Y-2: `@font-face` unicode-range descriptor  branch: p1-font-unicode-range
+Next step: clippy + test lumen-paint → commit  crates/engine/font/src/unicode_range.rs
 
 ---
 

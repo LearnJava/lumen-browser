@@ -2702,7 +2702,11 @@ fn parse_and_layout(
         if !rule.family.is_empty()
             && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
         {
-            measurer.register_family(&rule.family, bytes);
+            // CSS Fonts L4 §5.1: передаём unicode-range из @font-face дескриптора.
+            let ranges = rule.unicode_range.as_deref()
+                .map(lumen_font::parse_unicode_ranges)
+                .unwrap_or_default();
+            measurer.register_family_with_ranges(&rule.family, bytes, ranges);
         }
     }
     // Move font_registry into Arc after using it above (face_bytes_for_family).
