@@ -134,6 +134,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('73', '73-gap-rule.html', 0.5, 'CSS Gap Decorations L1: gap-rule-width/style/color — flex-row with solid red rules, flex-wrap with dashed cyan rules, grid with solid orange rules'),
     ('74', '74-font-stretch.html', 0.5, 'CSS Fonts L4 §5.2: font-stretch keyword + % values, cascade/inheritance, no-double wdth injection — coloured boxes'),
     ('75', '75-masonry-auto-flow.html', 0.5, 'CSS Masonry Layout §9: masonry-auto-flow: next (source order) / ordered (CSS order property) / definite-first — coloured boxes in 3 masonry grids'),
+    ('76', '76-motion-path.html', 1.0, 'CSS Motion Path L1: offset-path + offset-distance + offset-rotate (auto/fixed) — boxes translated along horizontal, diagonal, and cubic-bezier paths'),
 ]
 
 # --- PNG reader (stdlib only) ---

@@ -959,6 +959,24 @@
   </div>
 </div><!-- /font-stretch card -->
 
+<!-- offset-path demo card -->
+<style>
+  .mp-card { background:#16213e; padding:8px; border-radius:4px; }
+  .mp-scene { position:relative; height:80px; }
+  .mp-box { position:absolute; width:28px; height:28px; top:26px; left:0; }
+  .mp-r { background:#e63946; offset-path: path("M 0 0 L 300 0"); offset-distance: 0px;   offset-rotate:0deg; }
+  .mp-o { background:#f4a261; offset-path: path("M 0 0 L 300 0"); offset-distance: 136px; offset-rotate:0deg; }
+  .mp-g { background:#2a9d8f; offset-path: path("M 0 0 L 300 0"); offset-distance: 272px; offset-rotate:0deg; }
+</style>
+<div class="card mp-card">
+  <h4>offset-path / offset-distance (Motion Path L1)</h4>
+  <div class="mp-scene">
+    <div class="mp-box mp-r"></div>
+    <div class="mp-box mp-o"></div>
+    <div class="mp-box mp-g"></div>
+  </div>
+</div><!-- /offset-path card -->
+
 <!-- list-style-type custom @counter-style demo card -->
 <style>
   @counter-style bracket {
