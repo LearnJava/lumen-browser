@@ -13,10 +13,11 @@ type RuleIdx = usize;
 
 /// Subject-keyed rule index for the top-level `rules` vec of a stylesheet.
 ///
-/// Rules in `sheet.layers`, `sheet.media_rules`, and `sheet.scope_rules` are
-/// NOT indexed (Phase 1 scope) — they are still tested brute-force by the
-/// existing loops in `compute_style`, which is fine because they are typically
-/// a small fraction of total rules.
+/// Rules in `sheet.layers`, `sheet.media_rules`, `sheet.scope_rules`,
+/// `sheet.supports_rules`, and `sheet.container_rules` are NOT indexed
+/// (Phase 1 scope) — they are still tested brute-force by the existing loops
+/// in `compute_style` / `apply_container_rules`, which is fine because they
+/// are typically a small fraction of total rules.
 pub struct RuleIndex {
     by_id: HashMap<String, Vec<RuleIdx>>,
     by_class: HashMap<String, Vec<RuleIdx>>,

@@ -177,7 +177,7 @@ fn snapshot_vs_edge() {
     let mut skip = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    eprintln!("\n{:<35}  {:>7}  {:>6}  {}", "PAGE", "DIFF%", "LIMIT", "STATUS");
+    eprintln!("\n{:<35}  {:>7}  {:>6}  STATUS", "PAGE", "DIFF%", "LIMIT");
     eprintln!("{}", "-".repeat(60));
 
     for &(stem, threshold) in TESTS {
