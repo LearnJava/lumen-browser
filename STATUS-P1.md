@@ -6,8 +6,7 @@
 
 ## In progress
 
-Y-4: CSS `color-scheme` UA switching algorithm  branch: p1-y4-color-scheme
-Next step: `ColorScheme::used_dark` + `system_color()` + form-control wiring  crates/engine/layout/src/style.rs:655
+_(нет)_
 
 ---
 
@@ -27,7 +26,7 @@ Next step: `ColorScheme::used_dark` + `system_color()` + form-control wiring  cr
 | ~~Y-1~~ | ~~**CSS Masonry layout stub** (CSS Grid L2/L3 §14) — `masonry` keyword в `grid-template-columns/rows`; greedy placement algorithm; `// CSS: masonry-auto-flow` handoff для P4~~ — **выполнено** | M | `lumen-layout` |
 | ~~Y-2~~ | ~~**`@font-face` unicode-range descriptor** — layout stub: `unicode-range` дескриптор в `FontFaceRule`, фильтрация при выборе face для символа~~ — **выполнено** (p1-font-unicode-range, 2026-06-10) | S | `lumen-font`, `lumen-paint` |
 | ~~Y-3~~ | ~~**CSS `scrollbar-width`/`scrollbar-color` algorithm stub** — CSS Scrollbars Styling L1; `// CSS: scrollbar-width` handoff для P4~~ — **выполнено** (p1-y3-scrollbar, 2026-06-10) | XS | `lumen-layout` |
-| Y-4 | **CSS `color-scheme: dark light` UA switching algorithm** — полный switch: `prefers-color-scheme` влияет на `color-scheme` у root, system-color резолв | S | `lumen-layout` |
+| ~~Y-4~~ | ~~**CSS `color-scheme: dark light` UA switching algorithm** — полный switch: `prefers-color-scheme` влияет на `color-scheme` у root, system-color резолв~~ — **выполнено** (p1-y4-color-scheme, 2026-06-10): `ColorScheme::used_dark` + `system_color()` + form-control UA theming; `// CSS: system-color` handoff для P4 | S | `lumen-layout` |
 | Y-5 | **CSS Scroll Snap L2 `snapChanging`/`snapChanged` event JS stubs** — `Element.addEventListener('snapchanging'/'snapchanged')` + dispatch при scroll-snap завершении | XS | `lumen-js`, `lumen-layout` |
 
 ### X — Web Platform Phase 3 (алгоритмы)
