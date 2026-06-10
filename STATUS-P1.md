@@ -6,8 +6,7 @@
 
 ## In progress
 
-W-4: Attribution Reporting API stub  branch: p1-w4-attribution-reporting
-Next step: clippy + tests  crates/js/src/attribution_reporting.rs
+_(нет)_
 
 ---
 
@@ -30,7 +29,7 @@ Next step: clippy + tests  crates/js/src/attribution_reporting.rs
 | W-1 | **Shared Storage API Phase 0** — Privacy Sandbox `window.sharedStorage` (set/get/append/delete/clear/keys/values/entries/length/remainingBudget/selectURL/run/worklet stub) | S | `lumen-js` |
 | ~~W-2~~ | ~~**Idle Detection API stub** — WICG `IdleDetector.requestPermission()`, `start({threshold})`, `userState`/`screenState`, `'change'` event~~ — **выполнено** | XS | `lumen-js` |
 | ~~W-3~~ | ~~**Topics API stub** — Privacy Sandbox `document.browsingTopics()` → Promise<[]>, `DeprecatedTopicsButton` Phase 0~~ — **выполнено** | XS | `lumen-js` |
-| W-4 | **Attribution Reporting API stub** — `attributionsrc` attribute parsing, `window.attributionReporting` Phase 0 | XS | `lumen-js` |
+| ~~W-4~~ | ~~**Attribution Reporting API stub** — `attributionsrc` attribute parsing, `window.attributionReporting` Phase 0~~ — **выполнено** | XS | `lumen-js` |
 | W-5 | **CSS `hyphens: auto` algorithm stub** — `SoftHyphenPoint` type, `collect_hyphen_points(word)` stub via `HyphenationProvider` | S | `lumen-layout`, `lumen-core` |
 
 ### U — TC39 Stage 4 ES2026+ APIs (новые)
@@ -160,6 +159,7 @@ Next step: clippy + tests  crates/js/src/attribution_reporting.rs
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-10 | W-4: Attribution Reporting API stub | lumen-js attribution_reporting.rs: Privacy Sandbox Attribution Reporting API Phase 0. window.attributionReporting: registerSource({}) → Promise<undefined>; registerTrigger({}) → Promise<undefined>; оба — no-op. AttributionReportingEligibility константы (EMPTY/EVENT_SOURCE/NAVIGATION_SOURCE/TRIGGER). attributionSrc IDL-атрибут на HTMLAnchorElement, HTMLImageElement, HTMLScriptElement (mirrors attributionsrc content attribute). Phase 1: _lumen_attribution_register_source/_lumen_attribution_register_trigger нативные хуки. 8 unit-тестов. Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-3: Topics API stub | lumen-js topics_api.rs: Privacy Sandbox Topics API Phase 0. document.browsingTopics([options]) → Promise<[]>; DeprecatedTopicsButton с статическим browsingTopics() → Promise<[]>; конструктор бросает TypeError. Phase 1: _lumen_topics_get_topics нативный хук для per-origin хранилища. 6 unit-тестов (с execute_pending_job() drain). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-2: Idle Detection API stub | lumen-js idle_detection.rs: WICG Idle Detection API Phase 0. IdleDetector: extends EventTarget; requestPermission()→'granted'; start({threshold≥60s})→{userState:'active', screenState:'unlocked'} Promise; start({threshold<60s})→RangeError; stop() сбрасывает state в null. 'change' событие не генерируется (Phase 0). Phase 1: _lumen_idle_query_user_state/_lumen_idle_query_screen_state нативные хуки. 8 unit-тестов (с execute_pending_job() drain для Promise-тестов). Clippy чист. Без новых зависимостей. |
 | 2026-06-10 | W-1: Shared Storage API Phase 0 | lumen-js shared_storage.rs: WICG Privacy Sandbox `window.sharedStorage`. In-memory key-value store (Phase 0). set/get/append/delete/clear/keys/values/entries/length/remainingBudget/run/selectURL. SharedStorageWorklet stub (addModule→resolved). ignoreIfPresent option. Async iterators через asyncIter() helper. Phase 1: _lumen_shared_storage_* нативные биндинги для SQLite per-origin. 13 unit-тестов (включая microtask drain через ctx.execute_pending_job()). Clippy чист. Без новых зависимостей. |
