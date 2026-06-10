@@ -312,6 +312,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "text-overflow",
     "text-shadow",
     "text-transform",
+    "text-underline-offset",
     "text-underline-position",
     "text-wrap",
     "text-wrap-mode",

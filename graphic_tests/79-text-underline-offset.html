@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<!-- Test: text-underline-offset + text-underline-position (CSS Text Decoration L4 §5.1/§5.3) -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; padding: 40px 60px; overflow: hidden; box-sizing: border-box; }
+
+  .row { margin-bottom: 30px; }
+
+  /* Default underline — baseline offset */
+  .default { font-size: 32px; color: #e0e0ff; text-decoration: underline; }
+
+  /* text-underline-offset: positive — pushes underline further from text */
+  .offset-pos { font-size: 32px; color: #7ec8e3; text-decoration: underline; text-underline-offset: 8px; }
+
+  /* text-underline-offset: negative — brings underline closer to text */
+  .offset-neg { font-size: 32px; color: #f9c846; text-decoration: underline; text-underline-offset: -2px; }
+
+  /* text-underline-position: under — below all descenders */
+  .under { font-size: 32px; color: #a8e6cf; text-decoration: underline; text-underline-position: under; }
+
+  /* Combination: under + positive offset */
+  .combo { font-size: 32px; color: #ffb3ba; text-decoration: underline; text-underline-position: under; text-underline-offset: 6px; }
+
+  /* Inherited offset from parent */
+  .parent { font-size: 28px; color: #c3b1e1; text-decoration: underline; text-underline-offset: 10px; }
+  .child  { font-size: 28px; color: #c3b1e1; /* inherits text-underline-offset: 10px */ }
+
+  /* Color swatches to verify visual position difference (no text reliance) */
+  .swatch-row { display: flex; gap: 20px; margin-top: 20px; }
+  .swatch { width: 120px; height: 40px; display: flex; align-items: center; justify-content: center; font-size: 18px; text-decoration: underline; font-weight: bold; }
+  .s1 { background: #2a2a4a; color: #ffffff; text-underline-offset: 0px; }
+  .s2 { background: #2a2a4a; color: #ffffff; text-underline-offset: 5px; }
+  .s3 { background: #2a2a4a; color: #ffffff; text-underline-offset: 10px; }
+  .s4 { background: #2a4a2a; color: #ffffff; text-underline-position: under; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row default">Default underline (auto offset)</div>
+  <div class="row offset-pos">Offset +8px (pushed down)</div>
+  <div class="row offset-neg">Offset -2px (closer)</div>
+  <div class="row under">Position: under (below descenders)</div>
+  <div class="row combo">Under + offset 6px</div>
+  <div class="row parent">Parent 10px offset — <span class="child">child inherits it</span></div>
+  <div class="swatch-row">
+    <div class="swatch s1">0px</div>
+    <div class="swatch s2">5px</div>
+    <div class="swatch s3">10px</div>
+    <div class="swatch s4">under</div>
+  </div>
+</div>
+</body>
+</html>

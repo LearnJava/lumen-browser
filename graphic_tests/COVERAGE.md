@@ -222,3 +222,5 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **view-timeline-axis** — ✅ реализован (CSS Scroll-Driven Animations L1 §3.4): парсинг keyword; тест 78
 - **view-timeline** — ✅ реализован (CSS Scroll-Driven Animations L1): shorthand name+axis; тест 78
 - **animation-timeline** — ✅ реализован (CSS Scroll-Driven Animations L1 §3.3): AnimationTimeline enum (Auto/Scroll{axis,nearest}/View{axis}/Named); parse_animation_timeline_list() разбирает scroll()/view()/ident; тест 78
+- **text-underline-offset** — ✅ реализован (CSS Text Decoration L4 §5.3): ComputedStyle.text_underline_offset: Option<f32>; None=auto; parse_length_px в apply_declaration; wired в push_text_decoration(); 5 unit-тестов; тест 79
+- **text-underline-position** — ✅ подключён (CSS Text Decoration L3 §6.1/L4 §5.1): TextUnderlinePosition.Under → fs*0.25 вместо fs*0.10; wired в push_text_decoration(); тест 79

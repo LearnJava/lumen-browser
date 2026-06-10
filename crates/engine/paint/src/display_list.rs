@@ -26,7 +26,7 @@ use lumen_layout::{
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
     ScrollbarWidth, SelectionHighlight,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
-    TextEmphasisShape, TextEmphasisStyle, TextOverflow,
+    TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
     TransformStyle,
     Visibility,
 };
@@ -5143,8 +5143,16 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
     let color = frag.style.text_decoration_color.resolve(frag.style.color);
 
     if decoration.underline {
-        let y = baseline_y + fs * 0.10;
-        emit_decoration_line(out, x, y, frag.width, thickness, color, style);
+        // CSS Text Decoration L4 §5.1: text-underline-position.
+        // `Under` places the line below all descenders (≈ 25% of font-size below baseline).
+        // `Auto`/`FromFont` uses the standard position just below the baseline.
+        let base_offset = match frag.style.text_underline_position {
+            TextUnderlinePosition::Under => fs * 0.25,
+            _ => fs * 0.10,
+        };
+        // CSS Text Decoration L4 §5.3: text-underline-offset adds an explicit shift.
+        let extra = frag.style.text_underline_offset.unwrap_or(0.0);
+        emit_decoration_line(out, x, baseline_y + base_offset + extra, frag.width, thickness, color, style);
     }
     if decoration.line_through {
         let y = baseline_y - fs * 0.30;
