@@ -36,6 +36,7 @@ pub mod inert;
 pub mod stacking;
 pub mod starting_style;
 pub mod style;
+pub mod masonry;
 pub mod subgrid;
 pub mod table;
 pub mod text_iter;

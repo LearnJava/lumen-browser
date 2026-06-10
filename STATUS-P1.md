@@ -6,11 +6,22 @@
 
 ## In progress
 
-_(нет)_
+Y-1: **CSS Masonry layout algorithm stub**  branch: p1-masonry-layout
+Next step: add `GridTrackSize::Masonry` to style.rs:3608, create masonry.rs, wire in lay_out_grid
 
 ---
 
 ## Next
+
+### Y — Web Platform Phase 4 (новые алгоритмы)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| Y-1 | **CSS Masonry layout stub** (CSS Grid L2/L3 §14) — `masonry` keyword в `grid-template-columns/rows`; greedy placement algorithm; `// CSS: masonry-auto-flow` handoff для P4 | M | `lumen-layout` |
+| Y-2 | **`@font-face` unicode-range descriptor** — layout stub: `unicode-range` дескриптор в `FontFaceRule`, фильтрация при выборе face для символа | S | `lumen-layout`, `lumen-font` |
+| Y-3 | **CSS `scrollbar-width`/`scrollbar-color` algorithm stub** — CSS Scrollbars Styling L1; `// CSS: scrollbar-width` handoff для P4 | XS | `lumen-layout` |
+| Y-4 | **CSS `color-scheme: dark light` UA switching algorithm** — полный switch: `prefers-color-scheme` влияет на `color-scheme` у root, system-color резолв | S | `lumen-layout` |
+| Y-5 | **CSS Scroll Snap L2 `snapChanging`/`snapChanged` event JS stubs** — `Element.addEventListener('snapchanging'/'snapchanged')` + dispatch при scroll-snap завершении | XS | `lumen-js`, `lumen-layout` |
 
 ### Phase 2 — делать первыми (блокируют закрытие фазы)
 

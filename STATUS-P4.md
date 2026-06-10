@@ -64,6 +64,26 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
+### `masonry-auto-flow` / `align-tracks` / `justify-tracks` (P1 feature p1-masonry-layout, 2026-06-10)
+- **Status:** Full masonry layout algorithm ready in `lumen-layout/src/masonry.rs`.
+  - `GridTrackSize::Masonry` variant added to enum (`style.rs:3630`).
+  - `parse_track_list("masonry", ...)` returns `vec![GridTrackSize::Masonry]` sentinel.
+  - `lay_out_grid` in `box_tree.rs` detects masonry axis and dispatches to inline waterfall algorithm.
+  - Greedy waterfall placement: each item goes into the track with minimum running height.
+  - `masonry::min_track_idx` helper exposed as `pub` for P4 potential reuse.
+  - 7 unit tests pass. Clippy clean.
+- **P4 task:**
+  1. Add `masonry_auto_flow: MasonryAutoFlow` to `ComputedStyle` in `lumen-layout/src/style.rs`
+     (non-inherited, default = `DefiniteFirst`; values: `DefiniteFirst | Next | Ordered`).
+  2. Parse `masonry-auto-flow` in `apply_declaration()`.
+  3. In `lay_out_grid` masonry dispatch (around `box_tree.rs:5623`), use `masonry_auto_flow` to
+     control item ordering: `DefiniteFirst` → items with explicit track first; `Next` → source order;
+     `Ordered` → reverse source order.
+  4. (Optional) Add `align-tracks` / `justify-tracks` to `ComputedStyle` for cross-axis alignment.
+- **Entry points:** `lumen-layout/src/masonry.rs` — `lay_out_masonry`, `min_track_idx`;
+  `lumen-layout/src/box_tree.rs:5623` — inline masonry dispatch block (`// CSS: masonry-auto-flow`).
+- **CSS comment location:** `box_tree.rs` at masonry dispatch: `// CSS: masonry-auto-flow`.
+
 ### ✅ `@starting-style` entry transitions — **ВЫПОЛНЕНО** (p4-starting-style, 2026-06-10)
 `compute_style_from_declarations()` в `style.rs`; `StartingStyleTracker` + wiring в shell `relayout()` — для новых нод (не в `prev_styles`) матчит `@starting-style` и вызывает `sync` с starting-style как `old`. 4 unit-теста + graphic test 71.
 

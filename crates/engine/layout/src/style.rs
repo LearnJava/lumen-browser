@@ -3636,15 +3636,21 @@ pub enum GridTrackSize {
     /// for the cells it spans. Stored as a sentinel `vec![GridTrackSize::Subgrid]`
     /// in `grid_template_columns` or `grid_template_rows`.
     Subgrid,
+    /// `masonry` — CSS Grid L3 §14 waterfall layout axis sentinel.
+    /// Stored as `vec![GridTrackSize::Masonry]` in `grid_template_columns` or
+    /// `grid_template_rows` to signal that the axis uses masonry placement.
+    /// The perpendicular axis defines track sizes; `masonry.rs` handles placement.
+    /// P4 handoff: `masonry-auto-flow`, `align-tracks`, `justify-tracks` in ComputedStyle.
+    Masonry,
 }
 
 impl GridTrackSize {
     /// Resolve to a concrete pixel size given container width, em, viewport.
-    /// For `fr`, `auto`, `fit-content`, and `subgrid` returns `None` — caller handles those specially.
+    /// For `fr`, `auto`, `fit-content`, `subgrid`, and `masonry` returns `None` — caller handles those specially.
     pub fn resolve_fixed(&self, em: f32, cb: f32, viewport: Size) -> Option<f32> {
         match self {
             Self::Length(l) => l.resolve(em, Some(cb), viewport),
-            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent | Self::FitContent(_) | Self::Subgrid => None,
+            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent | Self::FitContent(_) | Self::Subgrid | Self::Masonry => None,
             Self::Minmax(min, _max) => min.resolve_fixed(em, cb, viewport),
         }
     }
@@ -3664,6 +3670,11 @@ impl GridTrackSize {
         matches!(self, Self::Subgrid)
     }
 
+    /// True when this axis uses masonry placement (CSS Grid L3 §14).
+    pub fn is_masonry(&self) -> bool {
+        matches!(self, Self::Masonry)
+    }
+
     /// Parse a single track sizing keyword / value (no `repeat()`).
     fn parse_single(s: &str, is_quirks: bool) -> Option<Self> {
         let lc = s.trim().to_ascii_lowercase();
@@ -3671,9 +3682,9 @@ impl GridTrackSize {
             "auto" => return Some(Self::Auto),
             "min-content" => return Some(Self::MinContent),
             "max-content" => return Some(Self::MaxContent),
-            // `subgrid` as a single token is handled in parse_track_list; reaching
-            // here means it appeared inside a repeat() context — treat as auto.
-            "subgrid" => return Some(Self::Auto),
+            // `subgrid` / `masonry` as single tokens are handled in parse_track_list;
+            // reaching here means they appeared inside a repeat() context — treat as auto.
+            "subgrid" | "masonry" => return Some(Self::Auto),
             _ => {}
         }
         // `<number>fr`
@@ -3705,11 +3716,16 @@ impl GridTrackSize {
     /// Parse a track-list value string into a Vec of GridTrackSize.
     /// Handles `repeat(N, <track-list>)` by expanding.
     /// `subgrid` as the entire value returns `vec![Subgrid]` (sentinel for the whole axis).
+    /// `masonry` as the entire value returns `vec![Masonry]` (CSS Grid L3 §14 sentinel).
     pub fn parse_track_list(s: &str, is_quirks: bool) -> Vec<Self> {
         let trimmed = s.trim();
         // CSS Grid L2 §9: `subgrid` replaces the entire track list for that axis.
         if trimmed.eq_ignore_ascii_case("subgrid") {
             return vec![Self::Subgrid];
+        }
+        // CSS Grid L3 §14: `masonry` replaces the entire track list — waterfall placement axis.
+        if trimmed.eq_ignore_ascii_case("masonry") {
+            return vec![Self::Masonry];
         }
         let mut result = Vec::new();
         for token in split_track_list_tokens(trimmed) {

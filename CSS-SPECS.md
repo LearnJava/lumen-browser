@@ -102,7 +102,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
 | CSS Writing Modes L4 | [css-writing-modes-4](https://www.w3.org/TR/css-writing-modes-4/) | 🟡 | vertical-rl/lr layout axis swap | **#41** |
-| CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry ⬜ | **#42** |
+| CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry ✅ 2026-06-10 (`masonry.rs`, `GridTrackSize::Masonry`, greedy waterfall algorithm) | **#42** |
 | CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | circle() ✅ 2026-06-03 (`FloatContext.shape_circles`, `parse_circle_px`); polygon/ellipse ⬜ | **#43** |
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | offset-path motion layout algorithm stub ready (P1); CSS wiring pending (P4) | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
@@ -467,8 +467,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `grid-auto-columns` / `grid-auto-rows` | 🟡 | |
 | `grid-auto-flow` | ✅ | row/column/dense/column dense ✅ 2026-05-24 |
 | `grid-column*` / `grid-row*` / `grid-area` | 🟡 | auto/int/span |
-| `subgrid` | ⬜ | CSS Grid L2 |
-| `masonry` | ⬜ | CSS Grid L3 |
+| `subgrid` | 🟡 | CSS Grid L2; layout algorithm ✅ 2026-06-03; CSS parsing ✅ (subgrid keyword) |
+| `masonry` | 🟡 | CSS Grid L3; layout algorithm ✅ 2026-06-10 (`masonry.rs`, greedy waterfall); CSS: masonry-auto-flow P4 |
 
 ### [T2] Intrinsic Sizing
 
