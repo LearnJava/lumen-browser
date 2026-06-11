@@ -6,7 +6,7 @@
 
 ## In progress
 
-Нет активной задачи.
+None. Last task: W-2b (see Recent below).
 
 ---
 
@@ -16,8 +16,8 @@
 
 | # | Задача | Размер | Крейты | Статус |
 |---|--------|--------|--------|--------|
-| W-2b | **Print preview UI dialog** — interactive dialog для выбора параметров, сохранение в диалоге | M | `lumen-shell` | ⬜ (после W-2c) |
-| W-2c | **Page break parsing** — полная реализация CSS `page-break-before/after` в layout | M | `lumen-layout` | ⬜ |
+| W-2b | **Print preview UI dialog** — interactive dialog для выбора параметров, сохранение в диалоге | M | `lumen-shell` | ✅ |
+| W-2c | **Page break parsing** — полная реализация CSS `page-break-before/after` в layout | M | `lumen-layout` | ✅ |
 
 ### Phase 3 — Graphics & Color (P2 будущее)
 
@@ -30,6 +30,15 @@
 ---
 
 ## Current / Recently Merged
+
+**W-2b | Print preview UI dialog** ✅ 2026-06-12 (branch: p2-w2b-print-preview)
+- Shell handler для кликов на scale −/+ кнопки (ScaleDecrease / ScaleIncrease)
+- Передача параметра `scale` в `do_print_to_pdf_with_opts(scale: i32)`
+- Применение масштаба к viewport: scale 50–200% → viewport width/height пересчитываются
+- PaginationContext использует масштабированные размеры для пагинации
+- Интеграция: window.print() использует масштаб 100% (default); print dialog использует текущий scale
+- 2 новых unit-теста: проверка отображения "Масштаб" в диалоге, проверка вывода процента
+- Next: мержить в main, работать над X-series (color management)
 
 **W-2c | Page break parsing** ✅ 2026-06-12 (merged: p2-w2c-page-breaks)
 - `page-break-before/after/inside` алиасы в apply_declaration для legacy CSS Fragmentation L3 § 3.4
