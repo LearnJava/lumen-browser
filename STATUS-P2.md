@@ -6,9 +6,7 @@
 
 ## In progress
 
-**W-2 | Print PDF Phase 3b** — Print preview dialog, real PDF export via window.print()  
-Branch: `p2-w1-print-phase2`  
-Next step: Implement print dialog handler and PDF export in shell
+Нет активной задачи.
 
 ---
 
@@ -16,10 +14,10 @@ Next step: Implement print dialog handler and PDF export in shell
 
 ### Phase 3 — Printing & Advanced Rendering (P2 приоритет)
 
-| # | Задача | Размер | Крейты | Блокирует |
-|---|--------|--------|--------|-----------|
-| W-1 | **Print PDF Phase 2** — `PdfRenderer` → PDF stream, page coordinate transform, rasterization | L | `lumen-pdf`, `lumen-paint`, `lumen-shell` | Print preview UI (P3) |
-| W-2 | **Print PDF Phase 3** — Print preview dialog, `window.print()` capture, page break UI | L | `lumen-shell` | — |
+| # | Задача | Размер | Крейты | Статус |
+|---|--------|--------|--------|--------|
+| W-2b | **Print preview UI dialog** — interactive dialog для выбора параметров, сохранение в диалоге | M | `lumen-shell` | ⬜ (после W-2c) |
+| W-2c | **Page break parsing** — полная реализация CSS `page-break-before/after` в layout | M | `lumen-layout` | ⬜ |
 
 ### Phase 3 — Graphics & Color (P2 будущее)
 
@@ -32,6 +30,14 @@ Next step: Implement print dialog handler and PDF export in shell
 ---
 
 ## Current / Recently Merged
+
+**W-2 | Print PDF Phase 3b: PDF export via window.print()** ✅ 2026-06-12 (in progress: p2-w1-print-phase2)
+- PrintRequest структура расширена: paper_width_in/height_in, output_path fields
+- `handle_print_request()` в shell: экспорт документа в PDF через существующий pipeline
+- Использование `do_print_to_pdf_with_opts()` для вывода с custom margins
+- Unit-тесты: print_request_default_values, multiple_print_calls_accumulate ✅
+- lumen-js: 1873 тестов (+3 vs 1870); Clippy чист
+- Next: интерактивный диалог печати UI (W-2b), полная поддержка page-break (W-2c)
 
 **W-2 | Print PDF Phase 3a: window.print() API infrastructure** ✅ 2026-06-12 (merged: p2-w2-print-preview)
 - `window.print()` JavaScript function → calls `_lumen_print_dialog()` Rust binding
