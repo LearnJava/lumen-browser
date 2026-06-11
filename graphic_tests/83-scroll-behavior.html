@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<!-- Test: scroll-behavior (CSS Scroll Behavior L1 §3) — property accepted, containers render -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #0f0f23;
+    width: 1022px; height: 718px;
+    margin: 1px; padding: 30px 50px;
+    overflow: hidden; box-sizing: border-box;
+  }
+
+  h2 { color: #c8c8ff; font-size: 18px; margin: 0 0 16px; }
+
+  .grid { display: flex; gap: 24px; margin-bottom: 24px; }
+
+  /* Scroll container with scroll-behavior: smooth */
+  .scroll-box {
+    width: 200px; height: 140px;
+    overflow-y: scroll;
+    border: 2px solid #5555ff;
+    border-radius: 6px;
+    padding: 8px;
+    background: #1a1a3e;
+    scroll-behavior: smooth;
+  }
+
+  /* Scroll container with scroll-behavior: auto (default) */
+  .scroll-box.auto {
+    border-color: #55aa55;
+    background: #1a3e1a;
+    scroll-behavior: auto;
+  }
+
+  .scroll-item {
+    height: 36px;
+    line-height: 36px;
+    padding: 0 8px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    font-size: 14px;
+    color: #e0e0ff;
+    background: #2a2a5e;
+  }
+
+  .scroll-box.auto .scroll-item {
+    background: #2a4a2a;
+    color: #e0ffe0;
+  }
+
+  .label {
+    font-size: 12px;
+    color: #888;
+    margin-top: 6px;
+    text-align: center;
+  }
+
+  /* Root scroll-behavior on <html> element */
+  .root-demo {
+    background: #23181e;
+    border: 2px solid #ff6688;
+    border-radius: 6px;
+    padding: 16px;
+    margin-top: 8px;
+  }
+  .root-demo p { color: #ffbbcc; font-size: 14px; margin: 0 0 8px; }
+  .root-demo .pill {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    background: #3e1a28;
+    color: #ff88aa;
+    font-size: 13px;
+    margin: 2px;
+  }
+
+  /* window.scrollTo demo indicator */
+  .api-demo {
+    margin-top: 16px;
+    background: #181823;
+    border: 2px solid #88aaff;
+    border-radius: 6px;
+    padding: 14px 20px;
+  }
+  .api-demo p { color: #aac0ff; font-size: 14px; margin: 4px 0; }
+  .code { font-family: monospace; color: #88ffcc; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <h2>CSS scroll-behavior: smooth (CSS Scroll Behavior L1 §3)</h2>
+
+  <div class="grid">
+    <div>
+      <div class="scroll-box">
+        <div class="scroll-item">Item 1</div>
+        <div class="scroll-item">Item 2</div>
+        <div class="scroll-item">Item 3</div>
+        <div class="scroll-item">Item 4</div>
+        <div class="scroll-item">Item 5</div>
+        <div class="scroll-item">Item 6</div>
+      </div>
+      <div class="label">scroll-behavior: smooth</div>
+    </div>
+
+    <div>
+      <div class="scroll-box auto">
+        <div class="scroll-item">Item 1</div>
+        <div class="scroll-item">Item 2</div>
+        <div class="scroll-item">Item 3</div>
+        <div class="scroll-item">Item 4</div>
+        <div class="scroll-item">Item 5</div>
+        <div class="scroll-item">Item 6</div>
+      </div>
+      <div class="label">scroll-behavior: auto</div>
+    </div>
+
+    <div>
+      <div class="scroll-box" style="scroll-behavior: smooth; border-color: #ffaa44; background: #3e2a00;">
+        <div class="scroll-item" style="background: #5e3a00; color: #ffe0a0;">Alpha</div>
+        <div class="scroll-item" style="background: #5e3a00; color: #ffe0a0;">Beta</div>
+        <div class="scroll-item" style="background: #5e3a00; color: #ffe0a0;">Gamma</div>
+        <div class="scroll-item" style="background: #5e3a00; color: #ffe0a0;">Delta</div>
+        <div class="scroll-item" style="background: #5e3a00; color: #ffe0a0;">Epsilon</div>
+      </div>
+      <div class="label">inline smooth style</div>
+    </div>
+  </div>
+
+  <div class="root-demo">
+    <p>Page-level scroll-behavior on &lt;html&gt;: fragment navigation uses smooth animation</p>
+    <span class="pill">html { scroll-behavior: smooth }</span>
+    <span class="pill">a href="#section" → animated</span>
+    <span class="pill">window.scrollTo({ behavior: 'smooth' })</span>
+  </div>
+
+  <div class="api-demo">
+    <p>JS scroll API (CSSOM View §4):</p>
+    <p class="code">window.scrollTo({ top: 500, behavior: 'smooth' })</p>
+    <p class="code">window.scrollBy({ top: 100, behavior: 'smooth' })</p>
+    <p class="code">window.scrollY  // ← current page scroll Y</p>
+    <p class="code">window.pageYOffset  // ← alias for scrollY</p>
+  </div>
+</div>
+</body>
+</html>
