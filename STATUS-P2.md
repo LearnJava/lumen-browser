@@ -6,7 +6,8 @@
 
 ## In progress
 
-(нет)
+G-1: SVG `<use>` clone algorithm  branch: p2-svg-use-element
+Next step: implement collect_svg_shapes_impl with use_stack cycle detection  crates/engine/layout/src/box_tree.rs:985
 
 ---
 
@@ -721,6 +722,15 @@ Ordered by priority. Сгруппированы по домену.
 | ~~F-5~~ | ~~**BiDi 8H.3: network response body**~~ — **выполнено** | S | `lumen-shell` |
 
 > **RB-10** `VelloBackend` полный — заблокирован (vello API нестабилен, Phase 3+). Взять после стабилизации vello 0.x API.
+
+### G — Phase 2 Algorithm Completions
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| **G-1** | **SVG `<use>` clone algorithm** — shadow tree clone with cycle detection, href/xlink:href, x/y offset | M | `lumen-layout` |
+| G-2 | **`@counter-style` evaluation engine** — cyclic/numeric/alphabetic/symbolic/additive/fixed/extends | M | `lumen-layout`, `lumen-css-parser` |
+| G-3 | **`scroll-behavior: smooth` animation** — rAF-based smooth scrolling, easing curve | S | `lumen-shell` |
+| G-4 | **CSS `text-decoration-skip-ink`** — underline gaps over glyph descenders | S | `lumen-layout`, `lumen-paint` |
 
 ---
 
