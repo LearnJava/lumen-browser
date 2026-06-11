@@ -6,8 +6,10 @@
 
 ## In progress
 
-Нет активной задачи. W-1 Phase 2 (Print PDF Renderer) завершена ✅ 2026-06-12.
-Следующее: W-2 (Print preview UI) или взять другую Phase 3 фичу.
+**W-2 | Print PDF Phase 3** — Print preview dialog & `window.print()` capture
+- branch: `p2-w2-print-preview`
+- Next step: Research page-break CSS, print dialog behavior, window.print API; sketch UI; implement print capture + preview renderer
+- Files: lumen-shell/src/shell.rs (print handler), lumen-layout/src/page.rs (page break layout), lumen-paint/src/renderer.rs (print capture)
 
 ---
 
