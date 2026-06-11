@@ -6,13 +6,8 @@
 
 ## In progress
 
-**V-3 | CSS Anchor Positioning L1** — Phase 0 (layout algorithm P2, CSS properties P4)
-Branch: `p2-v3-anchor-positioning`
-Status:
-- anchor.rs: 24 unit-тестов ✅ (collect_anchors, resolve_anchor_function, resolve_inset_area)
-- Integration: collect_anchors вызывается в lay_out_abs_children ✅, заглушка resolve_inset_area на месте
-- Graphic tests: TEST-85–89 добавлены (anchor-name, position-anchor, inset-area, нестед, множественные якоря)
-Next step: P4 подключит ComputedStyle поля и apply_declaration для anchor-name/position-anchor/inset-area
+Нет активной задачи. Phase 3 фичи (V-1, V-2, V-3) разделены между P2 и P4.
+Следующее: следующий пункт из Phase 3 или координация с P4 по V-3 CSS-wiring.
 
 ---
 
@@ -32,6 +27,12 @@ Next step: P4 подключит ComputedStyle поля и apply_declaration д�
 ---
 
 ## Current / Recently Merged
+
+**V-3 | CSS Anchor Positioning L1 (Phase 0)** ✅ 2026-06-12 (merged: P2 layout algorithm foundation)
+- anchor.rs: 24 unit-тестов ✅ (collect_anchors, resolve_anchor_function, resolve_inset_area)
+- Integration: collect_anchors вызывается в lay_out_abs_children ✅
+- Graphic tests: TEST-85–89 добавлены (anchor-name, position-anchor, inset-area, нестед, множественные якоря)
+- P4 awaiting: ComputedStyle fields + apply_declaration + resolve-function wiring
 
 **V-2 | CSS Motion Path L1** ✅ 2026-06-10 (завершено P4: p4-motion-path)
 - `offset-path: path("M...")` parsing + motion layout algorithm ✅
