@@ -177,6 +177,12 @@ pub struct QuickJsRuntime {
     /// Each entry is (nid, target_scroll_x, target_scroll_y).
     /// Shell drains via `take_scroll_requests()` and calls `set_scroll_position()`.
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
+    /// Pending page-level scroll requests from JS `window.scrollTo/scrollBy`.
+    /// Each entry is (target_y, smooth). Shell drains via `take_page_scroll_requests()`.
+    pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
+    /// Current page scroll Y exposed to JS `window.scrollY` / `window.pageYOffset`.
+    /// Shell updates after each scroll via `set_page_scroll_y()`.
+    page_scroll_y: Arc<Mutex<f32>>,
     /// Computed CSS styles per node, updated after each relayout by the shell.
     /// Maps NodeId index (u32) → CSS property name → resolved CSS value string.
     /// Read by `_lumen_get_computed_style(nid, prop)` from JS (`getComputedStyle`).
@@ -296,6 +302,8 @@ impl QuickJsRuntime {
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
+            pending_page_scrolls: Arc::new(Mutex::new(Vec::new())),
+            page_scroll_y: Arc::new(Mutex::new(0.0)),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
             worker_messages: Arc::new(Mutex::new(Vec::new())),
@@ -460,6 +468,8 @@ impl QuickJsRuntime {
                 sw_backend,
                 Arc::clone(&self.scroll_states),
                 Arc::clone(&self.pending_scrolls),
+                Arc::clone(&self.pending_page_scrolls),
+                Arc::clone(&self.page_scroll_y),
                 Arc::clone(&self.computed_styles),
                 Arc::clone(&self.window_open_requests),
                 deterministic_seed,
@@ -1345,6 +1355,19 @@ impl QuickJsRuntime {
     /// `set_scroll_position(root, NodeId::from_index(nid), x, y)`.
     pub fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
         std::mem::take(&mut self.pending_scrolls.lock().unwrap())
+    }
+
+    /// Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`.
+    /// Returns `(target_y, smooth)` pairs; clears the queue.
+    /// Shell routes `smooth=true` → `start_smooth_scroll(y)`, `false` → `scroll_to(y)`.
+    pub fn take_page_scroll_requests(&self) -> Vec<(f32, bool)> {
+        std::mem::take(&mut self.pending_page_scrolls.lock().unwrap())
+    }
+
+    /// Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`.
+    /// Shell calls this whenever `scroll_y` changes.
+    pub fn set_page_scroll_y(&self, y: f32) {
+        *self.page_scroll_y.lock().unwrap() = y;
     }
 
     /// Drain all OS notification requests queued by `new Notification(...)` in JS.

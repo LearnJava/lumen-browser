@@ -727,13 +727,15 @@ Ordered by priority. Сгруппированы по домену.
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~G-1~~ | ~~**SVG `<use>` clone algorithm**~~ — **выполнено** (p2-svg-use-element, 2026-06-11) | M | `lumen-layout` |
-| G-2 | **`@counter-style` evaluation engine** — cyclic/numeric/alphabetic/symbolic/additive/fixed/extends | M | `lumen-layout`, `lumen-css-parser` |
-| G-3 | **`scroll-behavior: smooth` animation** — rAF-based smooth scrolling, easing curve | S | `lumen-shell` |
+| ~~G-2~~ | ~~**`@counter-style` evaluation engine**~~ — **выполнено** ранее (C7 + I-4 + P4 list-style-type; counters.rs 70+ тестов; полный pipeline) | M | `lumen-layout`, `lumen-css-parser` |
+| ~~G-3~~ | ~~**`scroll-behavior: smooth` animation**~~ — **выполнено** (p2-g3-scroll-behavior-smooth, 2026-06-11) | S | `lumen-shell`, `lumen-js` |
 | G-4 | **CSS `text-decoration-skip-ink`** — underline gaps over glyph descenders | S | `lumen-layout`, `lumen-paint` |
 
 ---
 
 ## Recent merges
+
+- **p2-g3-scroll-behavior-smooth** ✅ 2026-06-11 — G-3: CSS Scroll Behavior L1 §3 + CSSOM View §4. `navigate_fragment` уважает CSS `scroll-behavior` на `<html>`: при `smooth` → `start_smooth_scroll(y)`, при `auto` → `scroll_to(y)`. `page_scroll_behavior()` helper читает стиль первого child layout box. `_lumen_request_page_scroll(y, smooth)` + `_lumen_get_page_scroll_y()` — нативные биндинги. `window.scrollY/scrollX/pageYOffset/pageXOffset` через `Object.defineProperties`. `window.scrollTo({top, behavior:'smooth'})` / `window.scrollBy` / `window.scroll`. QuickJsRuntime: `pending_page_scrolls` + `page_scroll_y` + `take_page_scroll_requests()` + `set_page_scroll_y()`. Shell дренирует `take_page_scroll_requests()` в event loop, синхронизирует `page_scroll_y` после каждого `advance_scroll_anim()`. Graphic test 83. 7 новых тестов. lumen-js 1866 ✅, lumen-shell 1234 ✅; Clippy чист.
 
 - **p2-svg-use-element** ✅ 2026-06-11 — G-1: SVG `<use>` clone algorithm (SVG 2 §5.6). `process_svg_node` helper извлечён из main loop; `collect_svg_shapes_impl` с `use_stack: &[NodeId]` для cycle detection. `"use"` arm: читает `href`/`xlink:href`, ищет через `doc.find_by_id()`, cycle guard, комбинирует `<use transform="">` + `translate(x, y)` через `SvgTransform::compose`, рекурсивно клонирует `<g>`/`<symbol>` (collect_svg_shapes_impl) или одиночные фигуры (process_svg_node), результат — `BoxKind::Block` с `svg_group_transform`. 7 unit-тестов + graphic test 82. 2662 layout-тестов ✅. Clippy чист.
 
