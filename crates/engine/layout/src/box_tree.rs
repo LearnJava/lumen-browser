@@ -5405,6 +5405,11 @@ fn lay_out_abs_children(
     my_pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) {
+    // CSS Anchor Positioning L1: collect all elements with `anchor-name` in the tree.
+    // This registry is used to resolve `position-anchor` and `anchor()` function calls below.
+    // CSS: anchor-name, position-anchor, anchor()
+    let anchors = crate::anchor::collect_anchors(parent);
+
     for &(idx, static_x, static_y) in deferred {
         let cs = parent.children[idx].style.clone();
         let c_em = cs.font_size;
@@ -5445,6 +5450,20 @@ fn lay_out_abs_children(
         }
 
         let child = &mut parent.children[idx];
+
+        // CSS Anchor Positioning L1: check if this element is anchored via position-anchor.
+        // P4 will wire ComputedStyle.position_anchor and inset_area_{row,col} fields.
+        // For now, treat them as None (P2 stub — no-op).
+        // CSS: position-anchor, inset-area
+        let _anchored_pos = cs.position_anchor.as_ref().and_then(|anchor_name| {
+            crate::anchor::resolve_inset_area(
+                &anchors,
+                anchor_name,
+                crate::anchor::InsetAreaKeyword::None,  // P4 will provide from cs.inset_area_row
+                crate::anchor::InsetAreaKeyword::None,  // P4 will provide from cs.inset_area_col
+                cb,
+            )
+        });
 
         // Desired border-left edge.
         let new_x = match (left, right) {

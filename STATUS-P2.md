@@ -6,9 +6,13 @@
 
 ## In progress
 
-Нет активной задачи. Phase 2 завершена, Phase 3 готово. Следующее:
-- V-2 код уже выполнен P4 (2026-06-10)
-- V-3 (Anchor Positioning L1) следующий на очередь
+**V-3 | CSS Anchor Positioning L1** — Phase 0 (layout algorithm P2, CSS properties P4)
+Branch: `p2-v3-anchor-positioning`
+Status:
+- anchor.rs: 24 unit-тестов ✅ (collect_anchors, resolve_anchor_function, resolve_inset_area)
+- Integration: collect_anchors вызывается в lay_out_abs_children ✅, заглушка resolve_inset_area на месте
+- Graphic tests: TEST-85–89 добавлены (anchor-name, position-anchor, inset-area, нестед, множественные якоря)
+Next step: P4 подключит ComputedStyle поля и apply_declaration для anchor-name/position-anchor/inset-area
 
 ---
 
