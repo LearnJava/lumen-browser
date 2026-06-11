@@ -6,7 +6,8 @@
 
 ## In progress
 
-(none)
+In progress: BUG-123 — border/background скролл-контейнера срезаются собственным PushScrollLayer (реальная причина TEST-51; откат порога на 0.5%)  branch: p3-bug123-scroll-border-clip
+Next step: фикс box_layer_ops/fill_buckets  crates/engine/paint/src/display_list.rs:2116
 
 ## Next
 
