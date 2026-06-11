@@ -6,8 +6,9 @@
 
 ## In progress
 
-Нет активной задачи. W-2 Phase 3a (window.print API infrastructure) завершена ✅ 2026-06-12.
-Следующее: W-2b (Print preview UI) или взять другую Phase 3 фичу.
+**W-2 | Print PDF Phase 3b** — Print preview dialog, real PDF export via window.print()  
+Branch: `p2-w1-print-phase2`  
+Next step: Implement print dialog handler and PDF export in shell
 
 ---
 
