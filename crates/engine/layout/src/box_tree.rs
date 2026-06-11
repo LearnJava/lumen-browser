@@ -849,6 +849,7 @@ fn build_svg_children(
 }
 
 /// Recursively collects SVG shape and group boxes from the DOM subtree of `parent_id`.
+/// `use_stack` tracks NodeIds currently being expanded via `<use>` for cycle detection.
 /// Handles the HTML5 parser's incorrect nesting of self-closing SVG tags: when a `<rect/>`
 /// is parsed as an open element, its DOM children (intended siblings) are also scanned.
 #[allow(clippy::too_many_arguments)]
@@ -862,135 +863,215 @@ fn collect_svg_shapes(
     out: &mut Vec<LayoutBox>,
     dark_mode: bool,
 ) {
-    for child_id in flat.children_of(doc, parent_id) {
-        let child_id = *child_id;
-        let Some(name) = doc.get(child_id).element_name() else {
-            continue; // text node / comment / etc.
-        };
-        let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode);
-        if style.display == crate::style::Display::None {
-            continue;
-        }
-        let svg_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+    collect_svg_shapes_impl(doc, sheet, parent_id, inherited, viewport, flat, out, dark_mode, &[]);
+}
 
-        match name.local.as_str() {
-            "rect" => {
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape {
-                        shape: SvgShapeKind::Rect {
-                            x: svg_attr_f32(doc, child_id, "x"),
-                            y: svg_attr_f32(doc, child_id, "y"),
-                            width: svg_attr_f32(doc, child_id, "width"),
-                            height: svg_attr_f32(doc, child_id, "height"),
-                            rx: svg_attr_f32(doc, child_id, "rx"),
-                            ry: svg_attr_f32(doc, child_id, "ry"),
-                        },
-                        svg_transform: svg_transform.clone(),
-                    },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
-            }
-            "circle" => {
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape {
-                        shape: SvgShapeKind::Circle {
-                            cx: svg_attr_f32(doc, child_id, "cx"),
-                            cy: svg_attr_f32(doc, child_id, "cy"),
-                            r: svg_attr_f32(doc, child_id, "r"),
-                        },
-                        svg_transform: svg_transform.clone(),
-                    },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
-            }
-            "ellipse" => {
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape {
-                        shape: SvgShapeKind::Ellipse {
-                            cx: svg_attr_f32(doc, child_id, "cx"),
-                            cy: svg_attr_f32(doc, child_id, "cy"),
-                            rx: svg_attr_f32(doc, child_id, "rx"),
-                            ry: svg_attr_f32(doc, child_id, "ry"),
-                        },
-                        svg_transform: svg_transform.clone(),
-                    },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
-            }
-            "line" => {
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape {
-                        shape: SvgShapeKind::Line {
-                            x1: svg_attr_f32(doc, child_id, "x1"),
-                            y1: svg_attr_f32(doc, child_id, "y1"),
-                            x2: svg_attr_f32(doc, child_id, "x2"),
-                            y2: svg_attr_f32(doc, child_id, "y2"),
-                        },
-                        svg_transform: svg_transform.clone(),
-                    },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
-            }
-            "path" => {
-                let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
-            }
-            "text" | "tspan" | "textPath" => {
-                // SVG text element: collect text content from this element and descendants.
-                let text = collect_text_content(doc, child_id);
-                let text_anchor = parse_text_anchor(doc.get(child_id).get_attr("text-anchor"));
-                let dominant_baseline = parse_dominant_baseline(doc.get(child_id).get_attr("dominant-baseline"));
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgText {
-                        text,
+/// Inner recursive worker for `collect_svg_shapes`. Carries `use_stack` for cycle detection.
+#[allow(clippy::too_many_arguments)]
+fn collect_svg_shapes_impl(
+    doc: &Document,
+    sheet: &Stylesheet,
+    parent_id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    out: &mut Vec<LayoutBox>,
+    dark_mode: bool,
+    use_stack: &[NodeId],
+) {
+    for child_id in flat.children_of(doc, parent_id) {
+        process_svg_node(doc, sheet, *child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+    }
+}
+
+/// Processes a single SVG element node, appending layout boxes to `out`.
+/// Used by both the main `collect_svg_shapes_impl` loop and `<use>` clone expansion.
+#[allow(clippy::too_many_arguments)]
+fn process_svg_node(
+    doc: &Document,
+    sheet: &Stylesheet,
+    child_id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    out: &mut Vec<LayoutBox>,
+    dark_mode: bool,
+    use_stack: &[NodeId],
+) {
+    let Some(name) = doc.get(child_id).element_name() else {
+        return; // text node / comment / etc.
+    };
+    let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode);
+    if style.display == crate::style::Display::None {
+        return;
+    }
+    let svg_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+
+    match name.local.as_str() {
+        "rect" => {
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape {
+                    shape: SvgShapeKind::Rect {
                         x: svg_attr_f32(doc, child_id, "x"),
                         y: svg_attr_f32(doc, child_id, "y"),
-                        dx: svg_attr_f32(doc, child_id, "dx"),
-                        dy: svg_attr_f32(doc, child_id, "dy"),
-                        text_anchor,
-                        dominant_baseline,
-                        svg_transform: svg_transform.clone(),
+                        width: svg_attr_f32(doc, child_id, "width"),
+                        height: svg_attr_f32(doc, child_id, "height"),
+                        rx: svg_attr_f32(doc, child_id, "rx"),
+                        ry: svg_attr_f32(doc, child_id, "ry"),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                // Recurse for potential nested text/tspan/textPath elements.
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            });
+            // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "circle" => {
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape {
+                    shape: SvgShapeKind::Circle {
+                        cx: svg_attr_f32(doc, child_id, "cx"),
+                        cy: svg_attr_f32(doc, child_id, "cy"),
+                        r: svg_attr_f32(doc, child_id, "r"),
+                    },
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            });
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "ellipse" => {
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape {
+                    shape: SvgShapeKind::Ellipse {
+                        cx: svg_attr_f32(doc, child_id, "cx"),
+                        cy: svg_attr_f32(doc, child_id, "cy"),
+                        rx: svg_attr_f32(doc, child_id, "rx"),
+                        ry: svg_attr_f32(doc, child_id, "ry"),
+                    },
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            });
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "line" => {
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape {
+                    shape: SvgShapeKind::Line {
+                        x1: svg_attr_f32(doc, child_id, "x1"),
+                        y1: svg_attr_f32(doc, child_id, "y1"),
+                        x2: svg_attr_f32(doc, child_id, "x2"),
+                        y2: svg_attr_f32(doc, child_id, "y2"),
+                    },
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            });
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "path" => {
+            let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            });
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "text" | "tspan" | "textPath" => {
+            // SVG text element: collect text content from this element and descendants.
+            let text = collect_text_content(doc, child_id);
+            let text_anchor = parse_text_anchor(doc.get(child_id).get_attr("text-anchor"));
+            let dominant_baseline = parse_dominant_baseline(doc.get(child_id).get_attr("dominant-baseline"));
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgText {
+                    text,
+                    x: svg_attr_f32(doc, child_id, "x"),
+                    y: svg_attr_f32(doc, child_id, "y"),
+                    dx: svg_attr_f32(doc, child_id, "dx"),
+                    dy: svg_attr_f32(doc, child_id, "dy"),
+                    text_anchor,
+                    dominant_baseline,
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            });
+            // Recurse for potential nested text/tspan/textPath elements.
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "g" => {
+            // Group: collect children shapes, then wrap in a Block box.
+            let mut group_children: Vec<LayoutBox> = Vec::new();
+            collect_svg_shapes_impl(doc, sheet, child_id, &style, viewport, flat, &mut group_children, dark_mode, use_stack);
+            let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::Block,
+                children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0,
+            });
+        }
+        "use" => {
+            // SVG <use>: clone the referenced element at an optional (x, y) offset.
+            // SVG 2 §5.6 — shadow tree clone with cycle detection via `use_stack`.
+            let href_val = doc.get(child_id).get_attr("href")
+                .or_else(|| doc.get(child_id).get_attr("xlink:href"))
+                .unwrap_or_default();
+            let target_ref = href_val.trim_start_matches('#');
+            if target_ref.is_empty() {
+                return;
             }
-            "g" => {
-                // Group: collect children shapes, then wrap in a Block box.
-                let mut group_children: Vec<LayoutBox> = Vec::new();
-                collect_svg_shapes(doc, sheet, child_id, &style, viewport, flat, &mut group_children, dark_mode);
-                let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+            let Some(target_id) = doc.find_by_id(target_ref) else { return; };
+
+            // Cycle guard: skip if target is already on the use-expansion stack.
+            if use_stack.contains(&target_id) {
+                return;
+            }
+
+            // Build the combined transform: <use transform="..."> then translate(x, y).
+            let use_x = svg_attr_f32(doc, child_id, "x");
+            let use_y = svg_attr_f32(doc, child_id, "y");
+            let mut combined = svg_transform.clone();
+            if use_x != 0.0 || use_y != 0.0 {
+                combined.compose(&SvgTransform::translate(use_x, use_y));
+            }
+
+            // Build new stack with target pushed for nested <use> detection.
+            let mut new_stack: Vec<NodeId> = use_stack.to_vec();
+            new_stack.push(target_id);
+
+            // Collect the referenced subtree into a clone group.
+            let mut use_children: Vec<LayoutBox> = Vec::new();
+            let target_tag = doc.get(target_id).element_name()
+                .map(|n| n.local.as_str().to_owned())
+                .unwrap_or_default();
+
+            if matches!(target_tag.as_str(), "g" | "symbol") {
+                // Container: recursively collect its children as the clone content.
+                collect_svg_shapes_impl(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
+            } else {
+                // Single shape or other element: process the node directly.
+                process_svg_node(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
+            }
+
+            if !use_children.is_empty() {
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
                     kind: BoxKind::Block,
-                    children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0,
+                    children: use_children, col_span: 1, row_span: 1,
+                    svg_group_transform: Some(combined),
+                    scroll_x: 0.0, scroll_y: 0.0,
                 });
             }
-            "use" => {
-                // SVG <use> element: references another element by ID via href attribute.
-                // Phase 2: implement full clone support with cycle detection.
-                // Phase 1: skip <use> elements to avoid potential stack overflow from cyclic references.
-            }
-            _ => {
-                // Unknown SVG element: skip self, but scan children for shapes.
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode);
-            }
+        }
+        _ => {
+            // Unknown SVG element: skip self, but scan children for shapes.
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
         }
     }
 }
@@ -9874,12 +9955,116 @@ mod tests {
 
     #[test]
     fn svg_use_translate_x_y() {
-        // <use x="10" y="20"> should apply translate transform.
+        // <use x="10" y="20"> should apply a translate transform.
+        // The clone group's svg_group_transform should encode translate(10, 20).
         let html = "<svg><circle id=\"c1\" cx=\"0\" cy=\"0\" r=\"5\"/><use href=\"#c1\" x=\"10\" y=\"20\"/></svg>";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_use_group(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::Block)
+                    && child.svg_group_transform.is_some()
+                    && !child.children.is_empty()
+                {
+                    return Some(child);
+                }
+                if let Some(f) = find_use_group(child) { return Some(f); }
+            }
+            None
+        }
+
+        let group = find_use_group(&root);
+        assert!(group.is_some(), "<use> should produce a Block group with svg_group_transform");
+        if let Some(g) = group {
+            let m = g.svg_group_transform.as_ref().unwrap().matrix;
+            // translate(10, 20): [1, 0, 0, 1, 10, 20]
+            assert!((m[4] - 10.0).abs() < 0.1, "expected tx=10, got {}", m[4]);
+            assert!((m[5] - 20.0).abs() < 0.1, "expected ty=20, got {}", m[5]);
+        }
+    }
+
+    #[test]
+    fn svg_use_references_shape_in_defs() {
+        // <use href="#r"> where <rect id="r"> is inside <defs> should produce a clone.
+        let html = "<svg><defs><rect id=\"r\" x=\"5\" y=\"5\" width=\"30\" height=\"20\"/></defs>\
+                    <use href=\"#r\" x=\"50\" y=\"60\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_any_rect(b: &super::LayoutBox) -> bool {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) {
+                return true;
+            }
+            b.children.iter().any(find_any_rect)
+        }
+
+        assert!(find_any_rect(&root), "cloned <rect> should appear in layout tree");
+    }
+
+    #[test]
+    fn svg_use_references_group() {
+        // <use href="#g1"> where <g id="g1"> contains shapes clones the whole group.
+        let html = "<svg><g id=\"g1\"><rect x=\"0\" y=\"0\" width=\"10\" height=\"10\"/>\
+                    <circle cx=\"5\" cy=\"5\" r=\"3\"/></g>\
+                    <use href=\"#g1\" x=\"100\" y=\"0\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn count_rects(b: &super::LayoutBox) -> usize {
+            let self_count = if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) { 1 } else { 0 };
+            self_count + b.children.iter().map(count_rects).sum::<usize>()
+        }
+
+        let rect_count = count_rects(&root);
+        assert!(rect_count >= 2, "both original and cloned <rect> should be in layout; found {rect_count}");
+    }
+
+    #[test]
+    fn svg_use_cycle_does_not_panic() {
+        // Self-referential <use> must not cause infinite recursion.
+        // <g id="a"> <use href="#a"/> </g> — cycle via self
+        let html = "<svg><g id=\"a\"><rect x=\"0\" y=\"0\" width=\"10\" height=\"10\"/>\
+                    <use href=\"#a\"/></g><use href=\"#a\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        // Must not panic/hang.
         let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
-        // Verify no panic when processing <use> with x/y attributes.
+    }
+
+    #[test]
+    fn svg_use_xlink_href() {
+        // xlink:href should also work for legacy SVG 1.1 references.
+        let html = "<svg><circle id=\"c2\" cx=\"20\" cy=\"20\" r=\"8\"/>\
+                    <use xlink:href=\"#c2\" x=\"5\" y=\"5\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn has_any_shape(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::SvgShape { .. }) { return true; }
+            b.children.iter().any(has_any_shape)
+        }
+        assert!(has_any_shape(&root), "xlink:href <use> should produce shape in layout");
+    }
+
+    #[test]
+    fn svg_use_symbol_element() {
+        // <symbol id="s"> acts as a group; <use href="#s"> clones its children.
+        let html = "<svg><symbol id=\"s\"><rect x=\"0\" y=\"0\" width=\"20\" height=\"20\"/></symbol>\
+                    <use href=\"#s\" x=\"10\" y=\"30\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn has_any_shape(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::SvgShape { .. }) { return true; }
+            b.children.iter().any(has_any_shape)
+        }
+        assert!(has_any_shape(&root), "<symbol> target via <use> should produce shape in layout");
     }
 
     #[test]

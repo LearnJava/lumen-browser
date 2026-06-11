@@ -40,7 +40,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/bench/src/util.rs:9` **fn** `get_rss_bytes` — Returns the current process RSS (resident set size) in bytes
 `crates/bench/src/util.rs:48` **fn** `extract_style_blocks` — Concatenates all `<style>` text blocks from the document
 
-## lumen-canvas  (55 symbols)
+## lumen-canvas  (94 symbols)
 
 `crates/engine/canvas/src/color.rs:3` **struct** `CanvasColor` — RGBA color used by the Canvas 2D API
 `crates/engine/canvas/src/color.rs:11` **fn** `rgba`
@@ -52,51 +52,90 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/fp_noise.rs:56` **fn** `apply_noise_to_pixel` — Add per-channel noise to an RGBA pixel
 `crates/engine/canvas/src/fp_noise.rs:66` **fn** `apply_noise_to_buffer` — Apply noise to an entire RGBA buffer (row-major, top-left origin)
 `crates/engine/canvas/src/fp_noise.rs:77` **fn** `reset` — Reset the RNG state to the seed (for reproducibility)
-`crates/engine/canvas/src/lib.rs:29` **enum** `CompositeOperation` — CSS `globalCompositeOperation` — Porter-Duff compositing mode
-`crates/engine/canvas/src/lib.rs:68` **fn** `from_str` — Parse from the CSS string literal used in `ctx.globalCompositeOperation`
-`crates/engine/canvas/src/lib.rs:91` **fn** `as_str` — Canonical CSS string name for this operation
-`crates/engine/canvas/src/lib.rs:115` **enum** `LineCap` — CSS `lineCap` — how line endpoints are rendered
-`crates/engine/canvas/src/lib.rs:128` **fn** `from_str` — Parse from CSS string
-`crates/engine/canvas/src/lib.rs:140` **enum** `LineJoin` — CSS `lineJoin` — how line segments connect at corners
-`crates/engine/canvas/src/lib.rs:153` **fn** `from_str` — Parse from CSS string
-`crates/engine/canvas/src/lib.rs:170` **struct** `DrawState` — All drawing state captured by `save()` and restored by `restore()`
-`crates/engine/canvas/src/lib.rs:222` **struct** `Context2D` — HTML Canvas 2D rendering context
-`crates/engine/canvas/src/lib.rs:269` **fn** `new` — Create a new context with a transparent black buffer and identity CTM
-`crates/engine/canvas/src/lib.rs:296` **fn** `set_noise_generator` — Set the optional noise generator for fingerprint randomization
-`crates/engine/canvas/src/lib.rs:303` **fn** `get_image_data` — Get a copy of pixel data with optional noise applied (for `getImageData()`)
-`crates/engine/canvas/src/lib.rs:315` **fn** `from_pixels` — Create a context pre-filled with the given RGBA8 pixel buffer
-`crates/engine/canvas/src/lib.rs:325` **fn** `width` — Canvas width in device pixels
-`crates/engine/canvas/src/lib.rs:327` **fn** `height` — Canvas height in device pixels
-`crates/engine/canvas/src/lib.rs:330` **fn** `pixels` — Raw RGBA8 pixel data (no noise applied)
-`crates/engine/canvas/src/lib.rs:333` **fn** `resize` — Resize the canvas (clears the buffer and resets the CTM to identity)
-`crates/engine/canvas/src/lib.rs:345` **fn** `save` — `save()` — push the current drawing state onto the stack
-`crates/engine/canvas/src/lib.rs:362` **fn** `restore` — `restore()` — pop and restore the most recently saved drawing state
-`crates/engine/canvas/src/lib.rs:379` **fn** `translate` — `translate(tx, ty)` — apply a translation to the current CTM
-`crates/engine/canvas/src/lib.rs:386` **fn** `rotate` — `rotate(angle)` — rotate by `angle` radians clockwise around the origin
-`crates/engine/canvas/src/lib.rs:393` **fn** `scale` — `scale(sx, sy)` — apply a uniform or non-uniform scale
-`crates/engine/canvas/src/lib.rs:401` **fn** `transform` — `transform(a, b, c, d, e, f)` — post-multiply the CTM by the given matrix
-`crates/engine/canvas/src/lib.rs:414` **fn** `set_transform` — `setTransform(a, b, c, d, e, f)` — replace the CTM with the given matrix
-`crates/engine/canvas/src/lib.rs:419` **fn** `reset_transform` — `resetTransform()` — reset the CTM to the identity matrix
-`crates/engine/canvas/src/lib.rs:437` **fn** `clear_rect` — `clearRect(x, y, w, h)` — erase region to transparent black
-`crates/engine/canvas/src/lib.rs:455` **fn** `fill_rect` — `fillRect(x, y, w, h)` — fill region with current `fillStyle`
-`crates/engine/canvas/src/lib.rs:464` **fn** `stroke_rect` — `strokeRect(x, y, w, h)` — stroke the outline of a rectangle
-`crates/engine/canvas/src/lib.rs:474` **fn** `begin_path` — `beginPath()` — discard current path
-`crates/engine/canvas/src/lib.rs:480` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path at user-space `(x, y)`
-`crates/engine/canvas/src/lib.rs:488` **fn** `line_to` — `lineTo(x, y)` — add a line segment from pen to `(x, y)`
-`crates/engine/canvas/src/lib.rs:500` **fn** `close_path` — `closePath()` — add a line back to the current sub-path start
-`crates/engine/canvas/src/lib.rs:511` **fn** `bezier_curve_to` — `bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)` — cubic Bézier from pen
-`crates/engine/canvas/src/lib.rs:532` **fn** `quadratic_curve_to` — `quadraticCurveTo(cpx, cpy, x, y)` — quadratic Bézier from pen
-`crates/engine/canvas/src/lib.rs:545` **fn** `arc` — `arc(cx, cy, r, startAngle, endAngle[, anticlockwise])` — add circular arc
-`crates/engine/canvas/src/lib.rs:568` **fn** `ellipse` — `ellipse(cx, cy, rx, ry, rotation, startAngle, endAngle[, anticlockwise])`
-`crates/engine/canvas/src/lib.rs:615` **fn** `arc_to` — `arcTo(x1, y1, x2, y2, radius)` — tangent arc between two lines
-`crates/engine/canvas/src/lib.rs:665` **fn** `rect` — `rect(x, y, w, h)` — add a closed rectangle sub-path
-`crates/engine/canvas/src/lib.rs:674` **fn** `fill` — `fill()` — fill the current path with `fillStyle`
-`crates/engine/canvas/src/lib.rs:681` **fn** `stroke` — `stroke()` — stroke the current path with `strokeStyle`
+`crates/engine/canvas/src/lib.rs:34` **enum** `CompositeOperation` — CSS `globalCompositeOperation` — Porter-Duff compositing mode
+`crates/engine/canvas/src/lib.rs:73` **fn** `from_str` — Parse from the CSS string literal used in `ctx.globalCompositeOperation`
+`crates/engine/canvas/src/lib.rs:96` **fn** `as_str` — Canonical CSS string name for this operation
+`crates/engine/canvas/src/lib.rs:120` **enum** `LineCap` — CSS `lineCap` — how line endpoints are rendered
+`crates/engine/canvas/src/lib.rs:133` **fn** `from_str` — Parse from CSS string
+`crates/engine/canvas/src/lib.rs:145` **enum** `LineJoin` — CSS `lineJoin` — how line segments connect at corners
+`crates/engine/canvas/src/lib.rs:158` **fn** `from_str` — Parse from CSS string
+`crates/engine/canvas/src/lib.rs:175` **struct** `DrawState` — All drawing state captured by `save()` and restored by `restore()`
+`crates/engine/canvas/src/lib.rs:243` **struct** `ColorStop` — One colour stop in a [`CanvasGradient`]
+`crates/engine/canvas/src/lib.rs:252` **enum** `GradientKind` — Gradient kind — stores the defining geometry in user (pre-CTM) space
+`crates/engine/canvas/src/lib.rs:266` **struct** `CanvasGradient` — Canvas gradient object (`createLinearGradient` / `createRadialGradient` / `createConicGradient`)
+`crates/engine/canvas/src/lib.rs:275` **fn** `linear` — Create a linear gradient from `(x0,y0)` to `(x1,y1)`
+`crates/engine/canvas/src/lib.rs:279` **fn** `radial` — Create a radial gradient between two circles
+`crates/engine/canvas/src/lib.rs:283` **fn** `conic` — Create a conic gradient starting at `angle` (radians) around `(cx,cy)`
+`crates/engine/canvas/src/lib.rs:288` **fn** `add_color_stop` — Add a colour stop at `offset ∈ [0,1]`
+`crates/engine/canvas/src/lib.rs:294` **fn** `sample` — Sample the gradient colour at device pixel `(x, y)`
+`crates/engine/canvas/src/lib.rs:357` **enum** `RepeatMode` — Pattern repetition mode (`createPattern` second argument)
+`crates/engine/canvas/src/lib.rs:373` **struct** `CanvasPattern` — Canvas pattern object (`createPattern`)
+`crates/engine/canvas/src/lib.rs:386` **fn** `new` — Create a new pattern from RGBA8 pixel data
+`crates/engine/canvas/src/lib.rs:391` **fn** `sample` — Sample the pattern colour at device pixel `(x, y)`
+`crates/engine/canvas/src/lib.rs:423` **enum** `PaintSource` — Paint source: a solid colour, a gradient, or a pattern
+`crates/engine/canvas/src/lib.rs:438` **fn** `sample` — Sample the paint at device pixel centre `(x + 0.5, y + 0.5)`
+`crates/engine/canvas/src/lib.rs:449` **fn** `as_color_or_black` — Return the solid colour, or transparent black if this is a gradient/pattern
+`crates/engine/canvas/src/lib.rs:501` **struct** `Context2D` — HTML Canvas 2D rendering context
+`crates/engine/canvas/src/lib.rs:567` **fn** `new` — Create a new context with a transparent black buffer and identity CTM
+`crates/engine/canvas/src/lib.rs:602` **fn** `set_noise_generator` — Set the optional noise generator for fingerprint randomization
+`crates/engine/canvas/src/lib.rs:609` **fn** `get_image_data` — Get a copy of pixel data with optional noise applied (for `getImageData()`)
+`crates/engine/canvas/src/lib.rs:621` **fn** `from_pixels` — Create a context pre-filled with the given RGBA8 pixel buffer
+`crates/engine/canvas/src/lib.rs:631` **fn** `width` — Canvas width in device pixels
+`crates/engine/canvas/src/lib.rs:633` **fn** `height` — Canvas height in device pixels
+`crates/engine/canvas/src/lib.rs:636` **fn** `pixels` — Raw RGBA8 pixel data (no noise applied)
+`crates/engine/canvas/src/lib.rs:639` **fn** `resize` — Resize the canvas (clears the buffer and resets the CTM to identity)
+`crates/engine/canvas/src/lib.rs:651` **fn** `save` — `save()` — push the current drawing state onto the stack
+`crates/engine/canvas/src/lib.rs:676` **fn** `restore` — `restore()` — pop and restore the most recently saved drawing state
+`crates/engine/canvas/src/lib.rs:701` **fn** `translate` — `translate(tx, ty)` — apply a translation to the current CTM
+`crates/engine/canvas/src/lib.rs:708` **fn** `rotate` — `rotate(angle)` — rotate by `angle` radians clockwise around the origin
+`crates/engine/canvas/src/lib.rs:715` **fn** `scale` — `scale(sx, sy)` — apply a uniform or non-uniform scale
+`crates/engine/canvas/src/lib.rs:723` **fn** `transform` — `transform(a, b, c, d, e, f)` — post-multiply the CTM by the given matrix
+`crates/engine/canvas/src/lib.rs:736` **fn** `set_transform` — `setTransform(a, b, c, d, e, f)` — replace the CTM with the given matrix
+`crates/engine/canvas/src/lib.rs:741` **fn** `reset_transform` — `resetTransform()` — reset the CTM to the identity matrix
+`crates/engine/canvas/src/lib.rs:759` **fn** `clear_rect` — `clearRect(x, y, w, h)` — erase region to transparent black
+`crates/engine/canvas/src/lib.rs:777` **fn** `fill_rect` — `fillRect(x, y, w, h)` — fill region with current `fillStyle`
+`crates/engine/canvas/src/lib.rs:787` **fn** `stroke_rect` — `strokeRect(x, y, w, h)` — stroke the outline of a rectangle
+`crates/engine/canvas/src/lib.rs:798` **fn** `begin_path` — `beginPath()` — discard current path
+`crates/engine/canvas/src/lib.rs:804` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path at user-space `(x, y)`
+`crates/engine/canvas/src/lib.rs:812` **fn** `line_to` — `lineTo(x, y)` — add a line segment from pen to `(x, y)`
+`crates/engine/canvas/src/lib.rs:824` **fn** `close_path` — `closePath()` — add a line back to the current sub-path start
+`crates/engine/canvas/src/lib.rs:835` **fn** `bezier_curve_to` — `bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)` — cubic Bézier from pen
+`crates/engine/canvas/src/lib.rs:856` **fn** `quadratic_curve_to` — `quadraticCurveTo(cpx, cpy, x, y)` — quadratic Bézier from pen
+`crates/engine/canvas/src/lib.rs:869` **fn** `arc` — `arc(cx, cy, r, startAngle, endAngle[, anticlockwise])` — add circular arc
+`crates/engine/canvas/src/lib.rs:892` **fn** `ellipse` — `ellipse(cx, cy, rx, ry, rotation, startAngle, endAngle[, anticlockwise])`
+`crates/engine/canvas/src/lib.rs:939` **fn** `arc_to` — `arcTo(x1, y1, x2, y2, radius)` — tangent arc between two lines
+`crates/engine/canvas/src/lib.rs:989` **fn** `rect` — `rect(x, y, w, h)` — add a closed rectangle sub-path
+`crates/engine/canvas/src/lib.rs:998` **fn** `fill` — `fill()` — fill the current path with `fillStyle`
+`crates/engine/canvas/src/lib.rs:1011` **fn** `stroke` — `stroke()` — stroke the current path with `strokeStyle`
+`crates/engine/canvas/src/lib.rs:1038` **fn** `clip` — `clip()` — intersect the current clipping region with the current path (even-odd rule)
+`crates/engine/canvas/src/lib.rs:1055` **fn** `fill_with_path2d` — `fill(path2d)` — fill a `Path2D` object using the current `fillStyle`
+`crates/engine/canvas/src/lib.rs:1070` **fn** `stroke_with_path2d` — `stroke(path2d)` — stroke a `Path2D` object using the current `strokeStyle`
+`crates/engine/canvas/src/lib.rs:1086` **fn** `clip_with_path2d` — `clip(path2d)` — intersect the clipping region with a `Path2D` object (even-odd rule)
+`crates/engine/canvas/src/lib.rs:1101` **fn** `is_point_in_path2d` — `isPointInPath(path2d, x, y)` — test whether `(x, y)` lies inside a `Path2D`
+`crates/engine/canvas/src/lib.rs:1117` **fn** `draw_image` — `drawImage(src_pixels, src_w, src_h, dx, dy, dw, dh)` — blit source image onto canvas
+`crates/engine/canvas/src/lib.rs:1167` **fn** `put_image_data` — `putImageData(data, sw, sh, dx, dy)` — write RGBA8 pixel data directly to canvas
+`crates/engine/canvas/src/lib.rs:1190` **fn** `create_image_data` — `createImageData(sw, sh)` — return a zero-filled RGBA8 buffer of `sw × sh` pixels
+`crates/engine/canvas/src/lib.rs:1200` **fn** `fill_text_glyphs` — Draw pre-rasterized glyph bitmaps at text position
 `crates/engine/canvas/src/path.rs:3` **enum** `PathSegment` — A single segment in a 2D path (HTML Canvas 2D §4.12.4)
 `crates/engine/canvas/src/path.rs:16` **type** `PathCommand` — Alias kept for API symmetry with the HTML spec (`PathCommand` = verb)
-`crates/engine/canvas/src/rasterize.rs:7` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
-`crates/engine/canvas/src/rasterize.rs:42` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
-`crates/engine/canvas/src/rasterize.rs:70` **fn** `collect_lines` — Extract `(x0, y0, x1, y1)` line tuples from `path`, tessellating Bézier curves
+`crates/engine/canvas/src/path2d.rs:14` **struct** `Path2dData` — A reusable 2D path object independent of any rendering context
+`crates/engine/canvas/src/path2d.rs:25` **fn** `new` — Create an empty `Path2D`
+`crates/engine/canvas/src/path2d.rs:34` **fn** `from_svg_str` — Parse from an SVG path data string (`M 0 0 L 100 0 Z` etc.)
+`crates/engine/canvas/src/path2d.rs:41` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path at `(x, y)`
+`crates/engine/canvas/src/path2d.rs:48` **fn** `line_to` — `lineTo(x, y)` — add a straight line from the current pen to `(x, y)`
+`crates/engine/canvas/src/path2d.rs:59` **fn** `close_path` — `closePath()` — add a line back to the current sub-path start
+`crates/engine/canvas/src/path2d.rs:68` **fn** `bezier_curve_to` — `bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)` — cubic Bézier from pen
+`crates/engine/canvas/src/path2d.rs:84` **fn** `quadratic_curve_to` — `quadraticCurveTo(cpx, cpy, x, y)` — quadratic Bézier from pen
+`crates/engine/canvas/src/path2d.rs:95` **fn** `arc` — `arc(cx, cy, r, startAngle, endAngle[, ccw])` — circular arc tessellated to lines
+`crates/engine/canvas/src/path2d.rs:112` **fn** `arc_to` — `arcTo(x1, y1, x2, y2, radius)` — tangent arc
+`crates/engine/canvas/src/path2d.rs:150` **fn** `ellipse` — `ellipse(cx, cy, rx, ry, rotation, startAngle, endAngle[, ccw])` — elliptical arc
+`crates/engine/canvas/src/path2d.rs:187` **fn** `rect` — `rect(x, y, w, h)` — add a closed rectangle sub-path
+`crates/engine/canvas/src/path2d.rs:198` **fn** `add_path` — `addPath(path[, transform])` — append another path's segments, optionally transformed
+`crates/engine/canvas/src/path2d.rs:215` **fn** `to_device_space` — Return segments transformed by a CTM `[a, b, c, d, e, f]`
+`crates/engine/canvas/src/rasterize.rs:7` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm with the given paint source
+`crates/engine/canvas/src/rasterize.rs:45` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
+`crates/engine/canvas/src/rasterize.rs:73` **fn** `build_clip_mask` — Build a boolean clip mask by rasterizing `path` with even-odd rule
+`crates/engine/canvas/src/rasterize.rs:107` **fn** `collect_lines` — Extract `(x0, y0, x1, y1)` line tuples from `path`, tessellating Bézier curves
 
 ## lumen-core  (198 symbols)
 
@@ -983,8 +1022,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/broadcast_channel.rs:119` **fn** `close` — Remove the channel instance `id` from the global hub and this runtime
 `crates/js/src/broadcast_channel.rs:135` **fn** `drain` — Drain all pending messages addressed to this runtime's channels
 `crates/js/src/broadcast_channel.rs:150` **fn** `install_broadcast_channel_bindings` — Install the `_lumen_bc_*` native bindings and the `BroadcastChannel` JS class
-`crates/js/src/canvas2d.rs:69` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
-`crates/js/src/canvas2d.rs:96` **fn** `install_canvas2d_bindings` — Register the `_lumen_canvas2d_*` native functions on `globals`
+`crates/js/src/canvas2d.rs:247` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
+`crates/js/src/canvas2d.rs:274` **fn** `install_canvas2d_bindings` — Register the `_lumen_canvas2d_*` native functions on `globals`
 `crates/js/src/clipboard.rs:33` **fn** `set_clipboard_provider` — Install the host clipboard provider backing `navigator.clipboard`
 `crates/js/src/compute_pressure.rs:8` **fn** `install_compute_pressure_bindings` — Install Compute Pressure API bindings into the JS context
 `crates/js/src/contacts.rs:15` **fn** `init_contacts_manager` — Install the Contact Picker API stub into the JS context
@@ -1316,23 +1355,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:289` **fn** `transform_point` — Applies this transform to a point (x, y)
 `crates/engine/layout/src/box_tree.rs:298` **enum** `SvgShapeKind` — Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling)
 `crates/engine/layout/src/box_tree.rs:315` **enum** `FormControlKind` — Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
-`crates/engine/layout/src/box_tree.rs:1174` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
-`crates/engine/layout/src/box_tree.rs:1189` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
-`crates/engine/layout/src/box_tree.rs:1209` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
-`crates/engine/layout/src/box_tree.rs:1309` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:1336` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:1374` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:1392` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:1424` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:1714` **fn** `layout`
-`crates/engine/layout/src/box_tree.rs:1733` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
-`crates/engine/layout/src/box_tree.rs:1746` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:1778` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:6437` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:6620` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:6639` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:6669` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:7570` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:1255` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
+`crates/engine/layout/src/box_tree.rs:1270` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
+`crates/engine/layout/src/box_tree.rs:1290` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+`crates/engine/layout/src/box_tree.rs:1390` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree.rs:1417` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:1455` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:1473` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:1505` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:1795` **fn** `layout`
+`crates/engine/layout/src/box_tree.rs:1814` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
+`crates/engine/layout/src/box_tree.rs:1827` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:1859` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
+`crates/engine/layout/src/box_tree.rs:6518` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:6701` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:6720` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:6750` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:7651` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -3613,4 +3652,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3548 symbols in 20 crates*
+*Total: 3587 symbols in 20 crates*
