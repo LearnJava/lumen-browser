@@ -6,9 +6,13 @@
 
 ## In progress
 
-**V-3 | CSS Anchor Positioning L1** — `anchor-name`/`position-anchor` + `inset-area` resizing
+**V-3 | CSS Anchor Positioning L1** — Phase 0 (layout algorithm P2, CSS properties P4)
 Branch: `p2-v3-anchor-positioning`
-Next step: Спроектировать структуру данных для anchor placement (layout/src/anchor.rs)
+Status:
+- anchor.rs: 24 unit-тестов ✅ (collect_anchors, resolve_anchor_function, resolve_inset_area)
+- Integration: collect_anchors вызывается в lay_out_abs_children ✅, заглушка resolve_inset_area на месте
+- Graphic tests: TEST-85–89 добавлены (anchor-name, position-anchor, inset-area, нестед, множественные якоря)
+Next step: P4 подключит ComputedStyle поля и apply_declaration для anchor-name/position-anchor/inset-area
 
 ---
 
