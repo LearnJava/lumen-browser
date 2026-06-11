@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 104 mask + gradient + border-radius interaction</title>
+<style>
+  /* Interaction test: mask-image (TEST-26) × gradients (TEST-39/40) ×
+     border-radius (TEST-36). A gradient mask must multiply the alpha of the
+     FINAL element layer — including a gradient background and rounded corners. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+  .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+  .cell { position: absolute; width: 300px; height: 300px; }
+  .c0 { left: 24px;  top: 24px; }
+  .c1 { left: 364px; top: 24px; }
+  .c2 { left: 704px; top: 24px; }
+  .c3 { left: 24px;  top: 374px; }
+  .c4 { left: 364px; top: 374px; }
+  .c5 { left: 704px; top: 374px; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- c0: linear-gradient background + linear-gradient mask (fade to the right) + radius -->
+  <div class="cell c0" style="background:linear-gradient(to bottom,#e53e3e,#f6e05e);border-radius:40px;
+       mask-image:linear-gradient(to right, black, transparent);
+       -webkit-mask-image:linear-gradient(to right, black, transparent);"></div>
+
+  <!-- c1: radial-gradient background + radial mask (opaque centre, transparent edges) -->
+  <div class="cell c1" style="background:radial-gradient(circle at 50% 50%,#4299e1,#1a365d);
+       mask-image:radial-gradient(circle at 50% 50%, black 30%, transparent 75%);
+       -webkit-mask-image:radial-gradient(circle at 50% 50%, black 30%, transparent 75%);"></div>
+
+  <!-- c2: conic-gradient background + vertical linear mask (fade to the bottom) -->
+  <div class="cell c2" style="background:conic-gradient(from 0deg,#e53e3e,#f6e05e,#38a169,#4299e1,#e53e3e);
+       mask-image:linear-gradient(to bottom, black, transparent);
+       -webkit-mask-image:linear-gradient(to bottom, black, transparent);"></div>
+
+  <!-- c3: solid colour + circle shape (radius 50%) + horizontal mask fade -->
+  <div class="cell c3" style="background:#9f7aea;border-radius:50%;
+       mask-image:linear-gradient(to right, black, transparent);
+       -webkit-mask-image:linear-gradient(to right, black, transparent);"></div>
+
+  <!-- c4: CONTROL — same gradient + radius as c0 without mask (fully opaque) -->
+  <div class="cell c4" style="background:linear-gradient(to bottom,#e53e3e,#f6e05e);border-radius:40px;"></div>
+
+  <!-- c5: mask applies to the border box too — thick border must fade with the mask -->
+  <div class="cell c5" style="background:#2f855a;border:14px solid #9ae6b4;border-radius:30px;
+       mask-image:linear-gradient(to bottom, black, transparent);
+       -webkit-mask-image:linear-gradient(to bottom, black, transparent);"></div>
+
+</div>
+</body>
+</html>

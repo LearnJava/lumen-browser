@@ -8,6 +8,7 @@
     python graphic_tests/run.py --recheck           # перезапустить только FAIL из latest.json
     python graphic_tests/run.py --build             # cargo build --release перед запуском
     python graphic_tests/run.py --no-cache          # принудительная пересъёмка Edge-скриншотов
+    python graphic_tests/run.py --bisect 100        # юнит-зависимости interaction-теста + сам тест
 
 Workflow:
   1. Снимаем Edge headless + Lumen (gdigrab) для каждого теста по порядку.
@@ -140,7 +141,95 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('79', '79-text-underline-offset.html', 0.5, 'CSS Text Decoration L4: text-underline-offset (px/auto/negative) + text-underline-position (under) wired to push_text_decoration'),
     ('80', '80-border-collapse.html', 0.5, 'CSS Tables L2 §17.6: border-collapse separate (4px spacing) vs collapse (no spacing) + mixed border widths + cell backgrounds'),
     ('81', '81-view-transition-name.html', 0.5, 'CSS View Transitions L1 §10: view-transition-name property — named elements render identically to un-named elements (property has no visual effect outside a transition)'),
+    # --- Interaction-слой (серия 100–199): взаимодействие свойств, уже покрытых юнит-тестами 00–99.
+    # Падение здесь при зелёных юнит-зависимостях (см. DEPS) = баг взаимодействия, не свойства.
+    ('100', '100-transform-overflow.html',   0.5, 'INTERACTION: transform × overflow:hidden — клиппинг трансформированных слоёв, поворот самого клип-контейнера'),
+    ('101', '101-radius-overflow.html',      0.5, 'INTERACTION: border-radius × overflow:hidden — скруглённый клип детей (углы, круг, pill, вложенность)'),
+    ('102', '102-opacity-stacking.html',     0.5, 'INTERACTION: opacity × z-index — атомарный stacking context, групповая композиция без двойного затемнения, вложенная opacity'),
+    ('103', '103-filter-transform.html',     0.5, 'INTERACTION: filter × transform — фильтр поверх трансформированного слоя, filter как containing block'),
+    ('104', '104-mask-gradient-radius.html', 0.5, 'INTERACTION: mask-image × gradients × border-radius — градиентная маска поверх градиентного фона и скруглений'),
+    ('105', '105-float-clear-margin.html',   0.5, 'INTERACTION: float/clear × margin — отступы флоатов, clearance+margin, перенос флоатов на новую строку'),
+    ('106', '106-transform-zindex.html',     0.5, 'INTERACTION: transform × z-index — transform создаёт stacking context, z-дети заперты внутри'),
+    ('107', '107-shadow-radius-overflow.html', 0.5, 'INTERACTION: box-shadow × border-radius × overflow — скруглённый силуэт тени, клип тени родителем'),
+    ('108', '108-nested-transforms.html',    0.5, 'INTERACTION: вложенные transform — композиция матриц (rotate∘rotate⁻¹=identity, scale×translate, 3×rotate=сумма)'),
+    ('109', '109-clippath-transform.html',   0.5, 'INTERACTION: clip-path × transform × border-radius — клип в локальном боксе элемента сквозь трансформацию'),
 ]
+
+# --- Interaction-слой: зависимости и локализация ---
+
+# DEPS: interaction-id → юнит-тесты, свойства которых он комбинирует.
+# Используется выводом при FAIL и режимом --bisect: если юнит-зависимости зелёные,
+# а interaction-тест красный — баг во взаимодействии свойств, не в самом свойстве.
+DEPS: dict[str, list[str]] = {
+    '100': ['22', '14'],
+    '101': ['36', '14'],
+    '102': ['13', '38'],
+    '103': ['30', '22'],
+    '104': ['26', '39', '40', '36'],
+    '105': ['37', '09'],
+    '106': ['22', '38'],
+    '107': ['15', '36', '14'],
+    '108': ['22'],
+    '109': ['31', '22', '36'],
+}
+
+# Все interaction-тесты используют общую сетку из 6 ячеек 300×300.
+# Координаты — в системе кропнутого вьюпорта 1024×720 (магента-рамка = 1px по краям):
+# ячейка cN в .__f имеет left/top из файла + 1px рамки.
+_CELL_GRID: list[tuple[str, tuple[int, int, int, int]]] = [
+    ('c0', (25, 25, 325, 325)),
+    ('c1', (365, 25, 665, 325)),
+    ('c2', (705, 25, 1005, 325)),
+    ('c3', (25, 375, 325, 675)),
+    ('c4', (365, 375, 665, 675)),
+    ('c5', (705, 375, 1005, 675)),
+]
+
+# REGIONS: interaction-id → подписи сценариев в ячейках c0..c5 (порядок = _CELL_GRID).
+# При FAIL diff_region пересекается с ячейками → видно, какой сценарий разошёлся.
+REGIONS: dict[str, list[str]] = {
+    '100': ['translate clipped', 'rotate corners clipped', 'scale clipped',
+            'CONTROL no clip', 'negative translate clipped', 'rotated clip container'],
+    '101': ['rounded clip of bar', 'circle clip', 'CONTROL no clip',
+            'nested rounded clips', 'radius+border clip', 'pill clip'],
+    '102': ['z-index trapped by opacity', 'group opacity (no double-darken)',
+            'CONTROL per-child opacity', 'negative z inside opacity',
+            'nested opacity 0.6*0.5', 'reference opacity 0.3'],
+    '103': ['grayscale on rotated', 'blur on translated', 'filter inside rotated parent',
+            'filter as containing block', 'hue-rotate on scaled', 'CONTROL no filter'],
+    '104': ['linear mask + gradient + radius', 'radial mask + radial bg',
+            'linear mask + conic bg', 'mask + circle shape',
+            'CONTROL no mask', 'mask over border'],
+    '105': ['two left floats + margins', 'left+right float + middle block',
+            'clear:both + margin-top', 'float wrap to next line',
+            'tall float vs in-flow bg', 'CONTROL plain blocks'],
+    '106': ['negative z in transformed parent', 'transformed (z:0) vs z:1 sibling',
+            'z:2 over transformed z:1', 'z children in rotated parent',
+            'z children in scaled parent', 'CONTROL no transform'],
+    '107': ['rounded shadow', 'spread shadow on circle', 'shadow clipped by parent',
+            'CONTROL shadow escapes', 'two hard shadows + radius', 'blur shadow + radius + border'],
+    '108': ['rotate∘rotate⁻¹ = identity', 'REFERENCE axis-aligned', 'scale scales child translate',
+            'translate then rotate', '3× rotate(10deg)', 'REFERENCE rotate(30deg)'],
+    '109': ['circle clip on rotated', 'inset clip on scaled', 'triangle clip on translated',
+            'clipped parent, transformed child', 'clip-path ∩ border-radius', 'CONTROL no clip'],
+}
+
+
+def affected_objects(tid: str, region: dict | None) -> list[str]:
+    """Пересекает diff_region с сеткой ячеек interaction-теста.
+
+    Возвращает подписи сценариев, чьи ячейки пересекаются с bounding box диффа.
+    Для тестов вне interaction-слоя (нет в REGIONS) — пустой список.
+    """
+    labels = REGIONS.get(tid)
+    if not labels or not region:
+        return []
+    out: list[str] = []
+    for (cell, (x0, y0, x1, y1)), label in zip(_CELL_GRID, labels):
+        if (region['left'] <= x1 and region['right'] >= x0
+                and region['top'] <= y1 and region['bottom'] >= y0):
+            out.append(f'{cell}: {label}')
+    return out
 
 # --- PNG reader (stdlib only) ---
 
@@ -730,6 +819,9 @@ def main() -> int:
                         help='Пересобрать lumen-shell --release перед запуском')
     parser.add_argument('--no-cache', action='store_true',
                         help='Принудительная пересъёмка Edge-скриншотов (игнорировать кэш)')
+    parser.add_argument('--bisect', metavar='ID',
+                        help='Прогнать юнит-зависимости interaction-теста (DEPS), затем сам тест; '
+                             'вердикт: сломано свойство или взаимодействие')
     args = parser.parse_args()
 
     os.makedirs(SHOTS, exist_ok=True)
@@ -741,7 +833,19 @@ def main() -> int:
 
     # --- Определяем набор тестов для запуска ---
     run_filter: set[str] | None = None
-    if args.only:
+    if args.bisect:
+        if args.bisect not in DEPS:
+            known = ', '.join(sorted(DEPS))
+            print(f'--bisect: тест {args.bisect} не является interaction-тестом. Доступны: {known}')
+            return 1
+        run_filter = set(DEPS[args.bisect]) | {args.bisect}
+        crop_offset = _load_crop_offset()
+        if crop_offset is None:
+            run_filter.add('00')
+        # внутри бисекта первый провал не должен останавливать прогон
+        args.continue_on_fail = True
+        print(f'--bisect {args.bisect}: зависимости {", ".join(DEPS[args.bisect])} + сам тест')
+    elif args.only:
         run_filter = {args.only}
     elif args.recheck:
         latest = _load_latest()
@@ -777,7 +881,7 @@ def main() -> int:
             status = 'PASS'
         else:
             status = 'FAIL'
-        results.append({
+        entry = {
             'id': tid,
             'stem': html[:-5],
             'label': label,
@@ -786,13 +890,23 @@ def main() -> int:
             'status': status,
             'diff_pct': round(pct, 4),
             'diff_region': region,
-        })
+        }
+        if tid in DEPS:
+            entry['deps'] = DEPS[tid]
+            if status == 'FAIL':
+                affected = affected_objects(tid, region)
+                entry['affected'] = affected
+                if affected:
+                    print('         объекты: ' + ' · '.join(affected))
+                print(f'         юнит-зависимости: {", ".join(DEPS[tid])}'
+                      f'  (python graphic_tests/run.py --bisect {tid})')
+        results.append(entry)
         if not passed and not args.continue_on_fail:
             halted_at = tid
             break
 
     # --- Сохранение результатов ---
-    if not args.only:
+    if not args.only and not args.bisect:
         json_path = save_results(results, crop_offset, halted_at)
         html_path = json_path.replace('.json', '.html')
         print(f'\nРезультаты: {os.path.relpath(json_path, REPO)}')
@@ -801,9 +915,32 @@ def main() -> int:
         if prev:
             print_diff_vs_previous(results, prev)
 
+    # --- Вердикт бисекта ---
+    if args.bisect:
+        target = next((r for r in results if r['id'] == args.bisect), None)
+        dep_fails = [r['id'] for r in results
+                     if r['id'] in DEPS[args.bisect] and r['status'] != 'PASS']
+        print()
+        if target is None or target['status'] == 'ERROR':
+            print(f'Бисект не завершён: TEST-{args.bisect} не дал результата.')
+            return 1
+        if dep_fails:
+            print(f'Вердикт: сломано базовое свойство — юнит-тест(ы) '
+                  f'{", ".join("TEST-" + d for d in dep_fails)} FAIL. Чинить их первыми.')
+            return 1
+        if target['status'] == 'FAIL':
+            print(f'Вердикт: баг ВЗАИМОДЕЙСТВИЯ свойств — все юнит-зависимости PASS, '
+                  f'TEST-{args.bisect} FAIL.')
+            return 1
+        print(f'Вердикт: TEST-{args.bisect} и все его юнит-зависимости проходят.')
+        return 0
+
     # --- Итог ---
     if halted_at:
-        skipped = len([t for t in TESTS if t[0] > halted_at])
+        # порядок прогона = порядок в списке TESTS; строковое сравнение id
+        # некорректно для трёхзначной interaction-серии ('100' < '22')
+        ids = [t[0] for t in TESTS]
+        skipped = len(ids) - ids.index(halted_at) - 1
         print(f'\nPipeline stopped at TEST-{halted_at}. {skipped} tests skipped.')
         return 1
     failed = [r for r in results if r['status'] != 'PASS']

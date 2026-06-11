@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 108 nested transform composition</title>
+<style>
+  /* Interaction test: transform × transform (TEST-22 with itself).
+     Nested transforms compose as matrix products: parent rotation/scale
+     applies to the child's OWN transform. Reference cells render the
+     mathematically equivalent single transform — pairs must look identical. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+  .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+  .cell { position: absolute; width: 300px; height: 300px; }
+  .c0 { left: 24px;  top: 24px; }
+  .c1 { left: 364px; top: 24px; }
+  .c2 { left: 704px; top: 24px; }
+  .c3 { left: 24px;  top: 374px; }
+  .c4 { left: 364px; top: 374px; }
+  .c5 { left: 704px; top: 374px; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- c0: rotate(15) ∘ rotate(-15) cancels out — the inner box must be axis-aligned.
+       Both boxes share the same centre (150,150) so the rotations cancel exactly. -->
+  <div class="cell c0">
+    <div style="position:absolute;left:30px;top:30px;width:240px;height:240px;background:#2d3748;transform:rotate(15deg);">
+      <div style="position:absolute;left:40px;top:40px;width:160px;height:160px;background:#4299e1;transform:rotate(-15deg);"></div>
+    </div>
+  </div>
+
+  <!-- c1: REFERENCE for c0 — plain axis-aligned box of the same inner size/centre -->
+  <div class="cell c1">
+    <div style="position:absolute;left:70px;top:70px;width:160px;height:160px;background:#4299e1;"></div>
+  </div>
+
+  <!-- c2: parent scale(1.5) scales the child's translate(40px,40px) into 60px -->
+  <div class="cell c2">
+    <div style="position:absolute;left:50px;top:50px;width:200px;height:200px;background:#2d3748;transform:scale(1.5);">
+      <div style="position:absolute;left:20px;top:20px;width:80px;height:80px;background:#f6e05e;transform:translate(40px,40px);"></div>
+    </div>
+  </div>
+
+  <!-- c3: parent translate(40,40), child rotate(30) — rotation around the
+       child's translated centre -->
+  <div class="cell c3">
+    <div style="position:absolute;left:20px;top:20px;width:200px;height:200px;background:#2d3748;transform:translate(40px,40px);">
+      <div style="position:absolute;left:40px;top:40px;width:120px;height:120px;background:#48bb78;transform:rotate(30deg);"></div>
+    </div>
+  </div>
+
+  <!-- c4: three nested rotate(10deg) = 30deg total (innermost box only is coloured) -->
+  <div class="cell c4">
+    <div style="position:absolute;left:50px;top:50px;width:200px;height:200px;transform:rotate(10deg);">
+      <div style="position:absolute;left:0;top:0;width:200px;height:200px;transform:rotate(10deg);">
+        <div style="position:absolute;left:0;top:0;width:200px;height:200px;transform:rotate(10deg);">
+          <div style="position:absolute;left:30px;top:30px;width:140px;height:140px;background:#e53e3e;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- c5: REFERENCE for c4 — single rotate(30deg) wrapper, identical geometry -->
+  <div class="cell c5">
+    <div style="position:absolute;left:50px;top:50px;width:200px;height:200px;transform:rotate(30deg);">
+      <div style="position:absolute;left:30px;top:30px;width:140px;height:140px;background:#e53e3e;"></div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

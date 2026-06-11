@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 107 box-shadow + border-radius + overflow interaction</title>
+<style>
+  /* Interaction test: box-shadow (TEST-15) × border-radius (TEST-36) ×
+     overflow (TEST-14). Shadows must follow the rounded contour, and a
+     child's shadow must be clipped by an overflow:hidden ancestor. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+  .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+  .cell { position: absolute; width: 300px; height: 300px; }
+  .c0 { left: 24px;  top: 24px; }
+  .c1 { left: 364px; top: 24px; }
+  .c2 { left: 704px; top: 24px; }
+  .c3 { left: 24px;  top: 374px; }
+  .c4 { left: 364px; top: 374px; }
+  .c5 { left: 704px; top: 374px; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- c0: shadow on a rounded box — shadow silhouette must be ROUNDED too -->
+  <div class="cell c0">
+    <div style="width:180px;height:180px;margin:40px;background:#4299e1;border-radius:40px;
+         box-shadow:20px 20px 0 #000000;"></div>
+  </div>
+
+  <!-- c1: spread shadow on a circle — shadow is a larger concentric circle -->
+  <div class="cell c1">
+    <div style="width:160px;height:160px;margin:70px;background:#f6e05e;border-radius:50%;
+         box-shadow:0 0 0 24px #744210;"></div>
+  </div>
+
+  <!-- c2: child shadow CLIPPED by overflow:hidden parent — the shadow must not
+       escape the parent's box -->
+  <div class="cell c2" style="background:#2d3748;overflow:hidden;">
+    <div style="width:160px;height:160px;margin:100px 0 0 100px;background:#48bb78;
+         box-shadow:30px 30px 0 #e53e3e;"></div>
+  </div>
+
+  <!-- c3: CONTROL for c2 — overflow:visible: the red shadow escapes the parent -->
+  <div class="cell c3" style="background:#2d3748;">
+    <div style="width:160px;height:160px;margin:100px 0 0 100px;background:#48bb78;
+         box-shadow:30px 30px 0 #e53e3e;"></div>
+  </div>
+
+  <!-- c4: two hard shadows + radius — both follow the rounded contour -->
+  <div class="cell c4">
+    <div style="width:160px;height:160px;margin:55px;background:#9f7aea;border-radius:30px;
+         box-shadow:16px 16px 0 #553c9a, 32px 32px 0 #2d3748;"></div>
+  </div>
+
+  <!-- c5: blurred shadow + radius + border — soft rounded halo -->
+  <div class="cell c5">
+    <div style="width:170px;height:170px;margin:55px;background:#4fd1c5;border-radius:36px;
+         border:6px solid #234e52;box-shadow:0 18px 24px #000000;"></div>
+  </div>
+
+</div>
+</body>
+</html>

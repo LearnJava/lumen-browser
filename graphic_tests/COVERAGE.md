@@ -8,6 +8,16 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 
 **Пайплайн блокирующий.** Тест 00-calibration должен пройти первым (магента-маркеры найдены и совпадают), затем 01-sanity, потом по нумерации. Первый провал — остановка пайплайна, последующие тесты не выполняются.
 
+**Диапазоны нумерации.**
+
+| Диапазон | Слой | Назначение |
+|---|---|---|
+| `00–99` | Юнит-слой | Одно CSS-свойство на файл, изолированно. Падение = баг самого свойства. |
+| `100–199` | Interaction-слой | Комбинации свойств, уже покрытых юнит-тестами. Падение при зелёных зависимостях (`DEPS` в `run.py`) = баг взаимодействия. Диагностика: `python graphic_tests/run.py --bisect <id>`. |
+| `1000000` | Финал | Всё в одном окне, ручная проверка + CPU-снапшот. |
+
+Все interaction-тесты используют общую сетку из 6 ячеек 300×300 (координаты в `_CELL_GRID` в `run.py`); при FAIL `run.py` пересекает diff_region с ячейками и печатает, какой сценарий разошёлся.
+
 ---
 
 ## Файлы
@@ -81,6 +91,16 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 73-gap-rule.html | CSS Gap Decorations L1 `gap-rule-width/style/color` | 3 | flex-row 4 items solid red 2px rules · flex-wrap 5 items dashed cyan 3px rules · grid 3×2 solid orange 4px rules |
 | 74-font-stretch.html | CSS Fonts L4 §5.2 `font-stretch` | 3 | keyword values ultra-condensed→extra-expanded · percentage form 50%–200% · inheritance + no-double wdth injection |
 | 75-masonry-auto-flow.html | CSS Masonry Layout §9 `masonry-auto-flow` | 3 | masonry-auto-flow: next (source order) · ordered (CSS order property sorts items) · definite-first (explicit grid-column-start goes first) |
+| 100-transform-overflow.html | INTERACTION: transform × overflow (deps: 22, 14) | 6 | Клиппинг translate/rotate/scale-детей контейнером overflow:hidden · контроль без клипа · отрицательный translate · поворот самого клип-контейнера |
+| 101-radius-overflow.html | INTERACTION: border-radius × overflow (deps: 36, 14) | 6 | Скруглённый клип детей: срез углов бара · круг из квадрата · контроль без клипа · вложенные скругления · radius+border · pill |
+| 102-opacity-stacking.html | INTERACTION: opacity × z-index (deps: 13, 38) | 6 | z-index заперт в opacity-контексте · групповая композиция (нет двойного затемнения) · контроль per-child opacity · negative z внутри opacity · вложенная opacity 0.6×0.5 = эталон 0.3 |
+| 103-filter-transform.html | INTERACTION: filter × transform (deps: 30, 22) | 6 | grayscale на повёрнутом градиенте · blur на translate · фильтр внутри повёрнутого родителя · filter как containing block · hue-rotate на scale · контроль |
+| 104-mask-gradient-radius.html | INTERACTION: mask × gradients × radius (deps: 26, 39, 40, 36) | 6 | Линейная/радиальная маска поверх linear/radial/conic фона · маска на круге · контроль без маски · маска поверх бордера |
+| 105-float-clear-margin.html | INTERACTION: float/clear × margin (deps: 37, 09) | 6 | Два флоата с margin · left+right флоат + поток между · clearance+margin-top · перенос флоатов · высокий флоат vs in-flow фон · контроль |
+| 106-transform-zindex.html | INTERACTION: transform × z-index (deps: 22, 38) | 6 | negative z в transformed-родителе · transformed (z:0) vs z:1 сосед · z:2 над transformed z:1 · z-дети в rotate/scale-родителе · контроль |
+| 107-shadow-radius-overflow.html | INTERACTION: shadow × radius × overflow (deps: 15, 36, 14) | 6 | Скруглённый силуэт тени · spread на круге · тень клипится родителем · контроль (тень выходит) · две тени + radius · blur-тень + radius + border |
+| 108-nested-transforms.html | INTERACTION: вложенные transform (deps: 22) | 6 | rotate(15)∘rotate(−15)=identity vs эталон · scale масштабирует translate ребёнка · translate→rotate · 3×rotate(10°) vs эталон rotate(30°) |
+| 109-clippath-transform.html | INTERACTION: clip-path × transform × radius (deps: 31, 22, 36) | 6 | circle-клип на rotate · inset-клип на scale · polygon на translate · клип родителя режет transformed-ребёнка · clip-path ∩ border-radius · контроль |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~80 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) · linear/radial gradient (6 объектов) · conic gradient (5 объектов) |
 
 ---
