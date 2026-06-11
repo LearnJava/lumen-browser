@@ -25,8 +25,8 @@
 //! - CSS Blur filter: сохраняет состояние canvas без реального размытия.
 //! - Color-matrix фильтры (grayscale/sepia/hue-rotate/invert): аппроксимация через global_alpha.
 //! - Маски (PushMaskImage, PushMask*): аппроксимация через scissor (прямоугольная обрезка).
-//! - MixBlendMode: маппируются на CompositeOperation; Multiply/Screen и CSS-specific режимы
-//!   аппроксимируются через SourceOver (femtovg не поддерживает все CSS blend modes через OpenGL).
+//! - MixBlendMode: PA-3 реализует полный набор 15 CSS blend modes через offscreen-слой
+//!   (CPU mix_blend_rgba compositing). Normal → SourceOver fast path, PlusLighter → Lighter.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,6 +53,7 @@ use lumen_layout::{
 use lumen_core::geom::Rect;
 
 use crate::backend::{RenderBackend, RenderError};
+use crate::blend_modes::mix_blend_rgba;
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, fit_image_rect};
 use crate::gradient_math::{conic_sample_t, sample_gradient_color};
@@ -231,6 +232,14 @@ pub struct FemtovgBackend {
     /// GPU draw commands hold ImageIds by copy; we can only safely delete after
     /// all pending commands that reference the id have been flushed.
     filter_layer_pending_delete: Vec<femtovg::ImageId>,
+    /// Offscreen blend mode layer stack (PA-3). Each entry captures the backdrop
+    /// snapshot and the source-layer image for CPU mix_blend_rgba compositing.
+    blend_layer_stack: Vec<BlendLayerEntry>,
+    /// Images from blend layers queued for deletion after the next flush.
+    blend_layer_pending_delete: Vec<femtovg::ImageId>,
+    /// Currently active render target image. `None` means Screen.
+    /// Updated by [`Self::switch_render_target`] whenever the RT changes.
+    active_rt_image: Option<femtovg::ImageId>,
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -254,6 +263,30 @@ struct FilterLayerEntry {
     /// Filter chain to apply on PopFilter (CSS Filter Effects L1 §4.1).
     filters: Vec<lumen_layout::FilterFn>,
     /// Render target active before PushFilter — restored on PopFilter.
+    prev_render_target: femtovg::RenderTarget,
+}
+
+// ─── Blend layer support (PA-3) ──────────────────────────────────────────────
+
+/// Entry pushed onto `FemtovgBackend::blend_layer_stack` by `PushBlendMode`.
+///
+/// Between Push and Pop, all draws go into `src_image_id`. On `PopBlendMode`,
+/// `composite_blend_layer` blends `src_image_id` over `backdrop_rgba` using
+/// `mix_blend_rgba` (CSS Compositing L1 §5) and composites the result onto
+/// `prev_render_target`.
+struct BlendLayerEntry {
+    /// CSS blend mode to apply.
+    mode: BlendMode,
+    /// Offscreen image capturing the source layer (draws between Push and Pop).
+    src_image_id: femtovg::ImageId,
+    /// Snapshot of the previous render target taken at PushBlendMode time.
+    /// Premultiplied RGBA u8, dimensions `backdrop_w × backdrop_h`.
+    backdrop_rgba: Vec<u8>,
+    /// Width of the backdrop snapshot in pixels.
+    backdrop_w: usize,
+    /// Height of the backdrop snapshot in pixels.
+    backdrop_h: usize,
+    /// Render target active before PushBlendMode — restored on PopBlendMode.
     prev_render_target: femtovg::RenderTarget,
 }
 
@@ -537,7 +570,29 @@ impl FemtovgBackend {
             viewport_css_h: size.height as f32 / scale as f32,
             filter_layer_stack: Vec::new(),
             filter_layer_pending_delete: Vec::new(),
+            blend_layer_stack: Vec::new(),
+            blend_layer_pending_delete: Vec::new(),
+            active_rt_image: None,
         })
+    }
+
+    // ─── Render target helpers ────────────────────────────────────────────────
+
+    /// Returns the current femtovg render target (Screen or an offscreen Image).
+    fn current_rt(&self) -> femtovg::RenderTarget {
+        match self.active_rt_image {
+            Some(id) => femtovg::RenderTarget::Image(id),
+            None => femtovg::RenderTarget::Screen,
+        }
+    }
+
+    /// Sets the femtovg render target and updates `active_rt_image` accordingly.
+    fn switch_render_target(&mut self, rt: femtovg::RenderTarget) {
+        self.active_rt_image = match rt {
+            femtovg::RenderTarget::Image(id) => Some(id),
+            _ => None,
+        };
+        self.canvas.set_render_target(rt);
     }
 
     // ─── Drawing helpers ──────────────────────────────────────────────────────
@@ -763,7 +818,7 @@ impl FemtovgBackend {
         // then switch render target to current_id so screenshot() reads it.
         if has_color_matrix {
             // Switch to current_id so flush binds its FBO.
-            self.canvas.set_render_target(femtovg::RenderTarget::Image(current_id));
+            self.switch_render_target(femtovg::RenderTarget::Image(current_id));
             // Flush executes all pending commands (including filter_image if any).
             self.canvas.flush();
             // Now current_id's FBO is bound. Screenshot returns its pixels.
@@ -801,7 +856,7 @@ impl FemtovgBackend {
         }
 
         // ── Step 3: Restore previous render target ────────────────────────────
-        self.canvas.set_render_target(prev_render_target);
+        self.switch_render_target(prev_render_target);
 
         // ── Step 4: Composite filtered image onto the (now-current) target ───
         self.canvas.save();
@@ -816,6 +871,87 @@ impl FemtovgBackend {
 
         // Delete after flush (pending, not immediate — fill_path still holds the id).
         self.filter_layer_pending_delete.push(current_id);
+    }
+
+    /// Composites a blend-mode layer (PA-3) onto the previous render target.
+    ///
+    /// Algorithm:
+    /// 1. Flush so src_image_id FBO has latest content.
+    /// 2. Screenshot src_image to get source pixels (premultiplied RGBA u8).
+    /// 3. Restore prev_render_target.
+    /// 4. For each pixel: unpremultiply both source and backdrop → `mix_blend_rgba`
+    ///    (CSS Compositing L1 §5) → re-premultiply result.
+    /// 5. Upload result image and draw with `CompositeOperation::Source` to
+    ///    replace the backdrop area with the blended result.
+    fn composite_blend_layer(&mut self, entry: BlendLayerEntry) {
+        let BlendLayerEntry { mode, src_image_id, backdrop_rgba, backdrop_w, backdrop_h, prev_render_target } = entry;
+
+        // Step 1: flush pending commands so src_image_id is fully rendered.
+        self.canvas.flush();
+
+        // Step 2: screenshot the source offscreen image.
+        // We're currently rendering into src_image_id, so screenshot reads from it.
+        let src_rgba = self.canvas.screenshot()
+            .map(|img| img.buf().iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect::<Vec<u8>>())
+            .unwrap_or_default();
+
+        // Step 3: restore the previous render target.
+        self.switch_render_target(prev_render_target);
+
+        // Step 4+5: CPU pixel-level blend + composite with Source operation.
+        if src_rgba.len() == backdrop_rgba.len() && !src_rgba.is_empty() {
+            let n = src_rgba.len() / 4;
+            let mut result = vec![0u8; src_rgba.len()];
+            for i in 0..n {
+                let si = i * 4;
+                // Premultiplied → straight for source.
+                let sa = src_rgba[si + 3] as f32 / 255.0;
+                let s_str = if sa > 0.0 {
+                    [src_rgba[si] as f32 / 255.0 / sa,
+                     src_rgba[si + 1] as f32 / 255.0 / sa,
+                     src_rgba[si + 2] as f32 / 255.0 / sa,
+                     sa]
+                } else {
+                    [0.0; 4]
+                };
+                // Premultiplied → straight for backdrop.
+                let da = backdrop_rgba[si + 3] as f32 / 255.0;
+                let d_str = if da > 0.0 {
+                    [backdrop_rgba[si] as f32 / 255.0 / da,
+                     backdrop_rgba[si + 1] as f32 / 255.0 / da,
+                     backdrop_rgba[si + 2] as f32 / 255.0 / da,
+                     da]
+                } else {
+                    [0.0; 4]
+                };
+                let out = mix_blend_rgba(mode, s_str, d_str);
+                // Straight → premultiplied for output.
+                let ao = out[3];
+                result[si]     = ((out[0] * ao) * 255.0).round().clamp(0.0, 255.0) as u8;
+                result[si + 1] = ((out[1] * ao) * 255.0).round().clamp(0.0, 255.0) as u8;
+                result[si + 2] = ((out[2] * ao) * 255.0).round().clamp(0.0, 255.0) as u8;
+                result[si + 3] = (ao * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+            let pixels: Vec<rgb::RGBA8> = result.chunks_exact(4)
+                .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
+                .collect();
+            let img_ref = imgref::ImgRef::new(&pixels, backdrop_w, backdrop_h);
+            if let Ok(result_id) = self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED) {
+                self.canvas.save();
+                self.canvas.reset_transform();
+                // Source operation: replace dest pixels with the blended result image.
+                self.canvas.global_composite_operation(femtovg::CompositeOperation::Copy);
+                let css_w = (self.width as f64 / self.scale) as f32;
+                let css_h = (self.height as f64 / self.scale) as f32;
+                let paint = femtovg::Paint::image(result_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+                let mut path = femtovg::Path::new();
+                path.rect(0.0, 0.0, css_w, css_h);
+                self.canvas.fill_path(&path, &paint);
+                self.canvas.restore();
+                self.blend_layer_pending_delete.push(result_id);
+            }
+        }
+        self.blend_layer_pending_delete.push(src_image_id);
     }
 
     /// Рисует изображение из зарегистрированного URL в content box `rect`
@@ -1321,16 +1457,71 @@ impl FemtovgBackend {
                 }
             }
 
-            // ── Blend mode ───────────────────────────────────────────────────
+            // ── Blend mode (PA-3) ─────────────────────────────────────────────
+            // Normal → fast path (SourceOver). PlusLighter → fast path (Lighter).
+            // All other CSS blend modes → offscreen CPU compositing via mix_blend_rgba.
             DisplayCommand::PushBlendMode { mode } => {
-                self.canvas.save();
-                self.canvas.global_composite_operation(blend_to_composite(*mode));
-                self.layer_stack_depth += 1;
+                if *mode == BlendMode::Normal {
+                    self.canvas.save();
+                    self.layer_stack_depth += 1;
+                } else if *mode == BlendMode::PlusLighter {
+                    self.canvas.save();
+                    self.canvas.global_composite_operation(blend_to_composite(*mode));
+                    self.layer_stack_depth += 1;
+                } else {
+                    // Offscreen path: capture backdrop, redirect draws to src image.
+                    let prev_rt = self.current_rt();
+                    // Flush pending commands so backdrop is fully drawn in prev_rt.
+                    self.canvas.flush();
+                    // Screenshot the current RT to get the backdrop pixels.
+                    let (backdrop_rgba, backdrop_w, backdrop_h) =
+                        if let Ok(img) = self.canvas.screenshot() {
+                            let w = img.width();
+                            let h = img.height();
+                            let rgba = img.buf().iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+                            (rgba, w, h)
+                        } else {
+                            (vec![], 0, 0)
+                        };
+                    match self.canvas.create_image_empty(
+                        self.width as usize,
+                        self.height as usize,
+                        femtovg::PixelFormat::Rgba8,
+                        femtovg::ImageFlags::PREMULTIPLIED,
+                    ) {
+                        Ok(src_id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(src_id));
+                            self.canvas.clear_rect(
+                                0, 0, self.width, self.height,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            self.blend_layer_stack.push(BlendLayerEntry {
+                                mode: *mode,
+                                src_image_id: src_id,
+                                backdrop_rgba,
+                                backdrop_w,
+                                backdrop_h,
+                                prev_render_target: prev_rt,
+                            });
+                        }
+                        Err(_) => {
+                            // Fallback: draw without blend (content goes to prev_rt directly).
+                            self.canvas.save();
+                        }
+                    }
+                    self.layer_stack_depth += 1;
+                }
             }
             DisplayCommand::PopBlendMode => {
                 if self.layer_stack_depth > 0 {
-                    self.canvas.restore();
                     self.layer_stack_depth -= 1;
+                }
+                if let Some(entry) = self.blend_layer_stack.pop() {
+                    // Offscreen blend path: composite src layer over backdrop.
+                    self.composite_blend_layer(entry);
+                } else {
+                    // Fast path (Normal or PlusLighter): just restore canvas state.
+                    self.canvas.restore();
                 }
             }
 
@@ -1360,13 +1551,10 @@ impl FemtovgBackend {
                     .any(|f| !matches!(f, lumen_layout::FilterFn::Opacity(_)));
 
                 if needs_offscreen {
-                    // Create an offscreen image for this filter group.
-                    // The previous render target is the innermost active offscreen
-                    // layer, or Screen if no filters are currently nested.
-                    let prev_rt = match self.filter_layer_stack.last() {
-                        Some(outer) => femtovg::RenderTarget::Image(outer.image_id),
-                        None => femtovg::RenderTarget::Screen,
-                    };
+                    // Capture current RT before creating the new offscreen layer.
+                    // Uses active_rt_image (maintained by switch_render_target) to
+                    // correctly handle nesting with blend layers (PA-3).
+                    let prev_rt = self.current_rt();
                     match self.canvas.create_image_empty(
                         self.width as usize,
                         self.height as usize,
@@ -1375,7 +1563,7 @@ impl FemtovgBackend {
                     ) {
                         Ok(img_id) => {
                             // Redirect draws into the offscreen image.
-                            self.canvas.set_render_target(femtovg::RenderTarget::Image(img_id));
+                            self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                             // Clear to transparent so content composites correctly.
                             self.canvas.clear_rect(
                                 0, 0, self.width, self.height,
@@ -1530,11 +1718,14 @@ impl RenderBackend for FemtovgBackend {
 
         self.canvas.flush();
 
-        // Delete offscreen filter images that were queued for removal during the
-        // frame. Must happen AFTER flush so pending fill_path commands that
-        // reference these ImageIds have already been executed.
-        let to_delete: Vec<_> = self.filter_layer_pending_delete.drain(..).collect();
-        for id in to_delete {
+        // Delete offscreen images queued during the frame. Must happen AFTER flush
+        // so pending fill_path commands that reference the ImageIds are executed.
+        let filter_del: Vec<_> = self.filter_layer_pending_delete.drain(..).collect();
+        for id in filter_del {
+            self.canvas.delete_image(id);
+        }
+        let blend_del: Vec<_> = self.blend_layer_pending_delete.drain(..).collect();
+        for id in blend_del {
             self.canvas.delete_image(id);
         }
 
@@ -2209,5 +2400,76 @@ mod tests {
         assert!((fsin(std::f32::consts::FRAC_PI_2) - 1.0).abs() < 0.001, "sin(π/2) should be ~1");
         assert!((fcos(0.0) - 1.0).abs() < 0.001, "cos(0) should be ~1");
         assert!((fcos(std::f32::consts::FRAC_PI_2)).abs() < 0.001, "cos(π/2) should be ~0");
+    }
+
+    // ── PA-3: blend mode compositing (CPU pixel math) ────────────────────────
+
+    fn approx_u8(a: u8, b: u8) -> bool { (a as i32 - b as i32).abs() <= 2 }
+
+    fn blend_composite_pixel(mode: BlendMode, src: [u8; 4], dst: [u8; 4]) -> [u8; 4] {
+        let premul_to_str = |px: [u8; 4]| -> [f32; 4] {
+            let a = px[3] as f32 / 255.0;
+            if a > 0.0 {
+                [px[0] as f32 / 255.0 / a, px[1] as f32 / 255.0 / a, px[2] as f32 / 255.0 / a, a]
+            } else {
+                [0.0; 4]
+            }
+        };
+        let s = premul_to_str(src);
+        let d = premul_to_str(dst);
+        let out = mix_blend_rgba(mode, s, d);
+        let ao = out[3];
+        [(out[0]*ao*255.0).round().clamp(0.0,255.0) as u8,
+         (out[1]*ao*255.0).round().clamp(0.0,255.0) as u8,
+         (out[2]*ao*255.0).round().clamp(0.0,255.0) as u8,
+         (ao*255.0).round().clamp(0.0,255.0) as u8]
+    }
+
+    #[test]
+    fn blend_composite_multiply_opaque_on_opaque() {
+        // src=0.5 grey opaque, dst=0.5 grey opaque → multiply → 0.25 grey.
+        let result = blend_composite_pixel(BlendMode::Multiply,
+            [128, 128, 128, 255], [128, 128, 128, 255]);
+        // 0.25 * 255 ≈ 64 (premultiplied, alpha=1).
+        assert!(approx_u8(result[0], 64), "R: expected ≈64, got {}", result[0]);
+        assert!(approx_u8(result[3], 255), "A: expected 255, got {}", result[3]);
+    }
+
+    #[test]
+    fn blend_composite_screen_lightens() {
+        // src=0.5 grey, dst=0.5 grey → screen → 0.75 grey.
+        // screen(a,b) = a + b - a*b = 0.5+0.5-0.25 = 0.75.
+        let result = blend_composite_pixel(BlendMode::Screen,
+            [128, 128, 128, 255], [128, 128, 128, 255]);
+        // 0.75 * 255 ≈ 191
+        assert!(approx_u8(result[0], 191), "R: expected ≈191, got {}", result[0]);
+        assert!(approx_u8(result[3], 255));
+    }
+
+    #[test]
+    fn blend_composite_transparent_src_keeps_backdrop() {
+        // Fully transparent source → result equals backdrop.
+        let result = blend_composite_pixel(BlendMode::Multiply,
+            [0, 0, 0, 0], [200, 100, 50, 255]);
+        assert!(approx_u8(result[0], 200), "R: expected ≈200, got {}", result[0]);
+        assert!(approx_u8(result[1], 100), "G: expected ≈100, got {}", result[1]);
+    }
+
+    #[test]
+    fn blend_composite_difference_gives_abs_difference() {
+        // src=white opaque, dst=grey opaque → difference → grey.
+        // difference(1.0, 0.5) = |0.5-1.0| = 0.5 → ~128.
+        let result = blend_composite_pixel(BlendMode::Difference,
+            [255, 255, 255, 255], [128, 128, 128, 255]);
+        assert!(approx_u8(result[0], 127), "R: expected ≈127, got {}", result[0]);
+    }
+
+    #[test]
+    fn blend_composite_overlay_on_dark_backdrop_is_multiply_like() {
+        // Overlay with cb<0.5: result ≈ 2*cs*cb (multiply branch).
+        // cs=0.5 (128), cb=0.25 (64) → 2*0.5*0.25 = 0.25 → ≈64.
+        let result = blend_composite_pixel(BlendMode::Overlay,
+            [128, 128, 128, 255], [64, 64, 64, 255]);
+        assert!(approx_u8(result[0], 64), "R: expected ≈64, got {}", result[0]);
     }
 }
