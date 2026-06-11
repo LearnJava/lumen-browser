@@ -6,8 +6,7 @@
 
 ## In progress
 
-PA-3: femtovg полный набор blend modes  branch: p2-pa3-femtovg-blend
-Next step: BUGS.md → BUG-098 FIXED + STATUS update  STATUS-P2.md:25
+_(нет)_
 
 ---
 
@@ -24,7 +23,7 @@ gradient-масок и backdrop-filter — ~11 открытых багов за�
 |---|--------|--------|--------|
 | ~~PA-1~~ | ~~**Shared scalar modules**~~ — **выполнено** (см. Recent) | S | `lumen-paint` |
 | ~~PA-2~~ | ~~**femtovg: реальный blur + color-matrix**~~ — **выполнено** (см. Recent) | M | `lumen-paint` |
-| PA-3 | **femtovg: полный набор blend modes** через offscreen-слой + формулы из PA-1 (сейчас 2/17, остальные → SourceOver, `femtovg_backend.rs:260-267`) → BUG-098 | M | `lumen-paint` |
+| ~~PA-3~~ | ~~**femtovg: полный набор blend modes**~~ — **выполнено** (см. Recent) | M | `lumen-paint` |
 | PA-4 | **backdrop-filter**: femtovg (сейчас no-op `femtovg_backend.rs:1256-1265`) + wgpu-фиксы (silent skip `from_level<2` `renderer.rs:6139`; REPLACE-blend убивает альфу родителя `renderer.rs:6275`) → остаток BUG-082 | M | `lumen-paint` |
 | PA-5 | **cpu_raster: BorderStyle dashed/dotted** (сейчас игнорируется, `cpu_raster.rs:1094`) на общей dash-математике из PA-1 → BUG-080 для CPU-гейта | S | `lumen-paint` |
 
@@ -69,6 +68,14 @@ gradient-масок и backdrop-filter — ~11 открытых багов за�
 ---
 
 ## Current / Recently Merged
+
+**PA-3 | femtovg полный набор blend modes** ✅ 2026-06-11 (merged)
+- `BlendLayerEntry` + `blend_layer_stack/pending_delete` в `FemtovgBackend`
+- Normal → fast path (SourceOver default), PlusLighter → fast path (Lighter)
+- 13 остальных режимов: flush + screenshot backdrop → src offscreen → PopBlendMode mix_blend_rgba per-pixel + CompositeOperation::Copy
+- `switch_render_target / current_rt` helpers — исправляют вложение blend+filter (PA-2 PushFilter prev_rt теперь через active_rt_image)
+- BUG-098 → FIXED 2026-06-11
+- 679 тестов lumen-paint ✅ (+5), Clippy чист
 
 **PA-2 | femtovg реальный blur + color-matrix** ✅ 2026-06-11 (merged)
 - Offscreen ImageId создаётся на PushFilter; PopFilter вызывает `composite_filter_layer`
