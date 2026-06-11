@@ -6,9 +6,7 @@
 
 ## In progress
 
-**W-2b | Print preview UI dialog** branch: p2-w2b-print-preview
-- Interactive dialog для параметров печати: масштабирование, диапазон страниц, сохранение состояния  
-- Next step: существующая E-1 (print_panel.rs) требует состояния (save/load); расширить для W-2b с доп. полями
+Нет активной задачи.
 
 ---
 
@@ -18,7 +16,7 @@
 
 | # | Задача | Размер | Крейты | Статус |
 |---|--------|--------|--------|--------|
-| W-2b | **Print preview UI dialog** — interactive dialog для выбора параметров, сохранение в диалоге | M | `lumen-shell` | ⬜ (после W-2c) |
+| W-2b | **Print preview UI dialog** — interactive dialog для выбора параметров, сохранение в диалоге | M | `lumen-shell` | 🟡 (UI + storage done) |
 | W-2c | **Page break parsing** — полная реализация CSS `page-break-before/after` в layout | M | `lumen-layout` | ⬜ |
 
 ### Phase 3 — Graphics & Color (P2 будущее)
@@ -32,6 +30,16 @@
 ---
 
 ## Current / Recently Merged
+
+**W-2b | Print preview UI dialog (partial)** 🟡 2026-06-12 (branch: p2-w2b-print-preview)
+- `PrintPanel::scale` (i32, 50–200%): поле для масштабирования документа при печати
+- `PrintPrefs` + `PrintPrefsSnapshot`: SQLite-сохранение 7 параметров печати (scale, paper_size, orientation, margins, color_mode, page_range, output_path)
+- `emit_scale_row()`: UI-ряд с кнопками −/+ и дисплеем процента (новая строка в диалоге)
+- `PrintHit::ScaleDecrease / ScaleIncrease`: hit-test обработка кнопок масштабирования
+- Расширена панель с 400px до 420px для нового ряда масштабирования
+- lumen-storage: 5 тестов print_prefs ✅, lumen-shell: 14 тестов print_panel ✅
+- Clippy clean в обоих крейтах
+- Next: интеграция в shell handler + связь с document zoom уровнем при рендере
 
 **W-2c | Page break parsing** ✅ 2026-06-12 (merged: p2-w2c-page-breaks)
 - `page-break-before/after/inside` алиасы в apply_declaration для legacy CSS Fragmentation L3 § 3.4
