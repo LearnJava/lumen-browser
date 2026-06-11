@@ -21285,4 +21285,25 @@ mod tests {
         let v = rt.eval("window.scrollX").unwrap();
         assert_eq!(v, lumen_core::JsValue::Number(0.0));
     }
+
+    #[test]
+    fn print_request_default_values() {
+        let req = PrintRequest::default();
+        assert_eq!(req.margin_top, 48.0);
+        assert_eq!(req.margin_bottom, 48.0);
+        assert_eq!(req.margin_left, 48.0);
+        assert_eq!(req.margin_right, 48.0);
+        assert_eq!(req.paper_width_in, 8.5);
+        assert_eq!(req.paper_height_in, 11.0);
+        assert_eq!(req.output_path, None);
+    }
+
+    #[test]
+    fn multiple_print_calls_accumulate() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.print()").unwrap();
+        rt.eval("window.print()").unwrap();
+        let reqs = rt.take_print_requests();
+        assert_eq!(reqs.len(), 2);
+    }
 }
