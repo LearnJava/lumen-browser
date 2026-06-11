@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**Canvas 2D Phase 2** — branch: p2-canvas2d-phase2
+Next step: extend lumen-canvas Context2D: state stack + transforms + bezier curves  crates/engine/canvas/src/lib.rs:33
 
 ---
 

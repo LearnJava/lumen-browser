@@ -3303,6 +3303,10 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
     var _strokeStyle = '#000000';
     var _lineWidth = 1.0;
     var _globalAlpha = 1.0;
+    var _globalCompositeOperation = 'source-over';
+    var _lineCap = 'butt';
+    var _lineJoin = 'miter';
+    var _miterLimit = 10;
     var ctx = {
         canvas: canvasEl,
         get fillStyle() { return _fillStyle; },
@@ -3313,24 +3317,50 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
         set lineWidth(v) { var n = Number(v); if (isFinite(n) && n > 0) { _lineWidth = n; _lumen_canvas2d_set_line_width(nid, n); } },
         get globalAlpha() { return _globalAlpha; },
         set globalAlpha(v) { var n = Number(v); if (isFinite(n) && n >= 0 && n <= 1) { _globalAlpha = n; _lumen_canvas2d_set_global_alpha(nid, n); } },
+        get globalCompositeOperation() { return _globalCompositeOperation; },
+        set globalCompositeOperation(v) { var s = String(v); _globalCompositeOperation = s; _lumen_canvas2d_set_global_composite_operation(nid, s); },
+        get lineCap() { return _lineCap; },
+        set lineCap(v) { var s = String(v); _lineCap = s; _lumen_canvas2d_set_line_cap(nid, s); },
+        get lineJoin() { return _lineJoin; },
+        set lineJoin(v) { var s = String(v); _lineJoin = s; _lumen_canvas2d_set_line_join(nid, s); },
+        get miterLimit() { return _miterLimit; },
+        set miterLimit(v) { var n = Number(v); if (isFinite(n) && n > 0) { _miterLimit = n; _lumen_canvas2d_set_miter_limit(nid, n); } },
+        // Rect operations
         fillRect: function(x, y, w, h) { _lumen_canvas2d_fill_rect(nid, +x, +y, +w, +h); },
         clearRect: function(x, y, w, h) { _lumen_canvas2d_clear_rect(nid, +x, +y, +w, +h); },
         strokeRect: function(x, y, w, h) { _lumen_canvas2d_stroke_rect(nid, +x, +y, +w, +h); },
+        // Path operations
         beginPath: function() { _lumen_canvas2d_begin_path(nid); },
         moveTo: function(x, y) { _lumen_canvas2d_move_to(nid, +x, +y); },
         lineTo: function(x, y) { _lumen_canvas2d_line_to(nid, +x, +y); },
         closePath: function() { _lumen_canvas2d_close_path(nid); },
         arc: function(cx, cy, r, sa, ea, ccw) { _lumen_canvas2d_arc(nid, +cx, +cy, +r, +sa, +ea, !!ccw); },
+        ellipse: function(cx, cy, rx, ry, rot, sa, ea, ccw) {
+            // Implemented via transforms: save → translate(cx,cy) → rotate(rot) →
+            // scale(rx,ry) → arc(0,0,1,sa,ea,ccw) → restore.
+            _lumen_canvas2d_save(nid);
+            _lumen_canvas2d_translate(nid, +cx, +cy);
+            if (+rot !== 0) { _lumen_canvas2d_rotate(nid, +rot); }
+            _lumen_canvas2d_scale(nid, +rx, +ry);
+            _lumen_canvas2d_arc(nid, 0, 0, 1, +sa, +ea, !!ccw);
+            _lumen_canvas2d_restore(nid);
+        },
+        arcTo: function(x1, y1, x2, y2, r) { _lumen_canvas2d_arc_to(nid, +x1, +y1, +x2, +y2, +r); },
+        rect: function(x, y, w, h) { _lumen_canvas2d_rect(nid, +x, +y, +w, +h); },
+        bezierCurveTo: function(cp1x, cp1y, cp2x, cp2y, x, y) { _lumen_canvas2d_bezier_curve_to(nid, +cp1x, +cp1y, +cp2x, +cp2y, +x, +y); },
+        quadraticCurveTo: function(cpx, cpy, x, y) { _lumen_canvas2d_quadratic_curve_to(nid, +cpx, +cpy, +x, +y); },
         fill: function() { _lumen_canvas2d_fill(nid); },
         stroke: function() { _lumen_canvas2d_stroke(nid); },
-        rect: function(x, y, w, h) {
-            this.moveTo(x, y); this.lineTo(x + w, y);
-            this.lineTo(x + w, y + h); this.lineTo(x, y + h); this.closePath();
-        },
-        ellipse: function(x, y, rx, ry, rot, sa, ea, ccw) {
-            // Phase 0: approximate with a circle of the averaged radius.
-            this.arc(x, y, (Number(rx) + Number(ry)) / 2, sa, ea, ccw);
-        },
+        // State stack
+        save: function() { _lumen_canvas2d_save(nid); },
+        restore: function() { _lumen_canvas2d_restore(nid); },
+        // Transforms
+        translate: function(tx, ty) { _lumen_canvas2d_translate(nid, +tx, +ty); },
+        rotate: function(angle) { _lumen_canvas2d_rotate(nid, +angle); },
+        scale: function(sx, sy) { _lumen_canvas2d_scale(nid, +sx, +sy); },
+        transform: function(a, b, c, d, e, f) { _lumen_canvas2d_transform(nid, +a, +b, +c, +d, +e, +f); },
+        setTransform: function(a, b, c, d, e, f) { _lumen_canvas2d_set_transform(nid, +a, +b, +c, +d, +e, +f); },
+        resetTransform: function() { _lumen_canvas2d_reset_transform(nid); },
         getImageData: function(x, y, sw, sh) {
             var raw = _lumen_canvas2d_get_image_data(nid);
             if (!raw) { return { width: sw|0, height: sh|0, data: new Uint8ClampedArray((sw|0) * (sh|0) * 4) }; }
@@ -3343,17 +3373,12 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
             for (var i = 0; i < len; i++) { arr[i] = parseInt(hex.substr(i * 2, 2), 16); }
             return { width: w, height: h, data: arr };
         },
-        // Phase 0 no-ops / stubs (state save/restore, transforms, text, shadows).
-        save: function() {}, restore: function() {},
-        scale: function() {}, rotate: function() {}, translate: function() {},
-        transform: function() {}, setTransform: function() {}, resetTransform: function() {},
+        // Remaining stubs (not yet implemented)
         clip: function() {},
         putImageData: function() {},
         drawImage: function() {},
         fillText: function() {}, strokeText: function() {},
         measureText: function(t) { var s = String(t == null ? '' : t); return { width: s.length * 8, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; },
-        bezierCurveTo: function() {}, quadraticCurveTo: function() {},
-        arcTo: function() {},
         setLineDash: function() {}, getLineDash: function() { return []; },
         isPointInPath: function() { return false; }, isPointInStroke: function() { return false; },
         createLinearGradient: function() { return { addColorStop: function() {} }; },
@@ -3362,17 +3387,12 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
         createPattern: function() { return null; },
         createImageData: function(w, h) { return { width: w|0, height: h|0, data: new Uint8ClampedArray((w|0) * (h|0) * 4) }; },
     };
-    // Stub appearance/text properties accepted but not rendered in Phase 0.
+    // Stub appearance/text properties accepted but not rendered yet.
     var _stubProps = ['shadowColor','shadowBlur','shadowOffsetX','shadowOffsetY','font',
-        'textAlign','textBaseline','direction','globalCompositeOperation','lineCap',
-        'lineJoin','miterLimit','lineDashOffset','imageSmoothingEnabled','filter'];
+        'textAlign','textBaseline','direction','lineDashOffset','imageSmoothingEnabled','filter'];
     for (var _pi = 0; _pi < _stubProps.length; _pi++) {
         (function(name) {
-            var _val = (name === 'globalCompositeOperation') ? 'source-over'
-                : (name === 'lineCap') ? 'butt'
-                : (name === 'lineJoin') ? 'miter'
-                : (name === 'miterLimit') ? 10
-                : (name === 'imageSmoothingEnabled') ? true
+            var _val = (name === 'imageSmoothingEnabled') ? true
                 : (name === 'font') ? '10px sans-serif'
                 : (name === 'shadowColor') ? 'rgba(0, 0, 0, 0)'
                 : (name === 'filter') ? 'none' : 0;

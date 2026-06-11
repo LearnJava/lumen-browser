@@ -2,8 +2,11 @@
 //!
 //! Wires `canvas.getContext('2d')` to the CPU-rasterized [`lumen_canvas::Context2D`].
 //! Drawing operations: `fillRect`, `clearRect`, `strokeRect`, `beginPath`,
-//! `moveTo`, `lineTo`, `closePath`, `arc`, `fill`, `stroke`.
-//! Properties: `fillStyle`, `strokeStyle`, `lineWidth`, `globalAlpha`.
+//! `moveTo`, `lineTo`, `closePath`, `arc`, `ellipse`, `arcTo`, `rect`,
+//! `bezierCurveTo`, `quadraticCurveTo`, `fill`, `stroke`, `save`, `restore`.
+//! Transforms: `translate`, `rotate`, `scale`, `transform`, `setTransform`, `resetTransform`.
+//! Properties: `fillStyle`, `strokeStyle`, `lineWidth`, `globalAlpha`,
+//! `globalCompositeOperation`, `lineCap`, `lineJoin`, `miterLimit`.
 //!
 //! Each `<canvas>` is keyed by its DOM node index (`__nid__` on the JS side,
 //! `LayoutBox::node.index()` on the layout side). The display list emits a
@@ -16,7 +19,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use lumen_canvas::{CanvasColor, Context2D};
+use lumen_canvas::{CanvasColor, CompositeOperation, LineCap, LineJoin, Context2D};
 use rquickjs::Ctx;
 
 thread_local! {
@@ -228,6 +231,150 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
             // HTML LS §4.12.4: ignore values outside [0, 1] or non-finite.
             if a.is_finite() && (0.0..=1.0).contains(&a) {
                 with_canvas(nid, |c| c.global_alpha = a as f32);
+            }
+        }),
+    )?;
+
+    // ── State stack ───────────────────────────────────────────────────────────
+    g.set(
+        "_lumen_canvas2d_save",
+        rquickjs::Function::new(ctx.clone(), |nid: u32| {
+            with_canvas(nid, |c| c.save());
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_restore",
+        rquickjs::Function::new(ctx.clone(), |nid: u32| {
+            with_canvas(nid, |c| c.restore());
+        }),
+    )?;
+
+    // ── Transforms ────────────────────────────────────────────────────────────
+    g.set(
+        "_lumen_canvas2d_translate",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, tx: f64, ty: f64| {
+            with_canvas(nid, |c| c.translate(tx as f32, ty as f32));
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_rotate",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, angle: f64| {
+            with_canvas(nid, |c| c.rotate(angle as f32));
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_scale",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, sx: f64, sy: f64| {
+            with_canvas(nid, |c| c.scale(sx as f32, sy as f32));
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_transform",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |nid: u32, a: f64, b: f64, c2: f64, d: f64, e: f64, f2: f64| {
+                with_canvas(nid, |c| {
+                    c.transform(a as f32, b as f32, c2 as f32, d as f32, e as f32, f2 as f32);
+                });
+            },
+        ),
+    )?;
+    g.set(
+        "_lumen_canvas2d_set_transform",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |nid: u32, a: f64, b: f64, c2: f64, d: f64, e: f64, f2: f64| {
+                with_canvas(nid, |c| {
+                    c.set_transform(a as f32, b as f32, c2 as f32, d as f32, e as f32, f2 as f32);
+                });
+            },
+        ),
+    )?;
+    g.set(
+        "_lumen_canvas2d_reset_transform",
+        rquickjs::Function::new(ctx.clone(), |nid: u32| {
+            with_canvas(nid, |c| c.reset_transform());
+        }),
+    )?;
+
+    // ── Bézier curves and additional path operations ───────────────────────────
+    g.set(
+        "_lumen_canvas2d_bezier_curve_to",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |nid: u32, cp1x: f64, cp1y: f64, cp2x: f64, cp2y: f64, x: f64, y: f64| {
+                with_canvas(nid, |c| {
+                    c.bezier_curve_to(
+                        cp1x as f32, cp1y as f32,
+                        cp2x as f32, cp2y as f32,
+                        x as f32, y as f32,
+                    );
+                });
+            },
+        ),
+    )?;
+    g.set(
+        "_lumen_canvas2d_quadratic_curve_to",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |nid: u32, cpx: f64, cpy: f64, x: f64, y: f64| {
+                with_canvas(nid, |c| {
+                    c.quadratic_curve_to(cpx as f32, cpy as f32, x as f32, y as f32);
+                });
+            },
+        ),
+    )?;
+    // Note: `ellipse` is implemented in the JS shim via save/translate/scale/rotate/arc/restore
+    // because rquickjs supports max 7 closure params and ellipse needs 8 (cx,cy,rx,ry,rot,sa,ea,ccw).
+    g.set(
+        "_lumen_canvas2d_arc_to",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |nid: u32, x1: f64, y1: f64, x2: f64, y2: f64, r: f64| {
+                with_canvas(nid, |c| {
+                    c.arc_to(x1 as f32, y1 as f32, x2 as f32, y2 as f32, r as f32);
+                });
+            },
+        ),
+    )?;
+    g.set(
+        "_lumen_canvas2d_rect",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, x: f64, y: f64, w: f64, h: f64| {
+            with_canvas(nid, |c| c.rect(x as f32, y as f32, w as f32, h as f32));
+        }),
+    )?;
+
+    // ── Additional property setters ───────────────────────────────────────────
+    g.set(
+        "_lumen_canvas2d_set_global_composite_operation",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, op: String| {
+            if let Some(op) = CompositeOperation::from_str(&op) {
+                with_canvas(nid, |c| c.composite_operation = op);
+            }
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_set_line_cap",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, cap: String| {
+            if let Some(cap) = LineCap::from_str(&cap) {
+                with_canvas(nid, |c| c.line_cap = cap);
+            }
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_set_line_join",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, join: String| {
+            if let Some(join) = LineJoin::from_str(&join) {
+                with_canvas(nid, |c| c.line_join = join);
+            }
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_set_miter_limit",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, limit: f64| {
+            // HTML LS §4.12.4: ignore zero/negative/non-finite values.
+            if limit.is_finite() && limit > 0.0 {
+                with_canvas(nid, |c| c.miter_limit = limit as f32);
             }
         }),
     )?;

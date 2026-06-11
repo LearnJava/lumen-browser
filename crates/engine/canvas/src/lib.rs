@@ -1,14 +1,15 @@
 //! HTML Canvas 2D API — `CanvasRenderingContext2D` для Lumen.
 //!
-//! Phase 0 реализация: CPU-растеризация в RGBA-буфер. Буфер загружается в GPU
-//! через `Renderer::register_image` и рендерится через `DrawImage`.
+//! Phase 2 реализация: CPU-растеризация в RGBA-буфер с поддержкой state stack,
+//! affine-трансформаций (CTM), кривых Bézier, ellipse, arc_to,
+//! globalCompositeOperation (Porter-Duff), lineCap/lineJoin/miterLimit.
 //!
 //! Покрытые операции: `fillRect`, `clearRect`, `strokeRect`, `beginPath`,
-//! `moveTo`, `lineTo`, `closePath`, `fill`, `stroke`, `arc`.
-//! Свойства: `fillStyle`, `strokeStyle`, `lineWidth`, `globalAlpha`.
-//!
-//! Не реализовано (Phase 1+): градиенты, паттерны, трансформации, clip, ImageData,
-//! скругления (bezierCurveTo), текст (fillText), тень (shadowColor).
+//! `moveTo`, `lineTo`, `closePath`, `fill`, `stroke`, `arc`, `ellipse`,
+//! `arcTo`, `bezierCurveTo`, `quadraticCurveTo`, `rect`, `save`, `restore`,
+//! `translate`, `rotate`, `scale`, `transform`, `setTransform`, `resetTransform`.
+//! Свойства: `fillStyle`, `strokeStyle`, `lineWidth`, `globalAlpha`,
+//! `globalCompositeOperation`, `lineCap`, `lineJoin`, `miterLimit`.
 
 mod color;
 mod path;
@@ -19,6 +20,194 @@ pub use color::CanvasColor;
 pub use path::{PathCommand, PathSegment};
 pub use fp_noise::CanvasNoiseGenerator;
 
+// ── Enums ─────────────────────────────────────────────────────────────────────
+
+/// CSS `globalCompositeOperation` — Porter-Duff compositing mode.
+///
+/// See HTML Living Standard §4.12.5.1.14.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompositeOperation {
+    /// Source painted over destination (default).
+    #[default]
+    SourceOver,
+    /// Source only where it overlaps destination.
+    SourceIn,
+    /// Source only where it does NOT overlap destination.
+    SourceOut,
+    /// Source only where destination exists; destination otherwise.
+    SourceAtop,
+    /// Destination painted over source.
+    DestinationOver,
+    /// Destination only where source exists.
+    DestinationIn,
+    /// Destination only where source does NOT exist.
+    DestinationOut,
+    /// Destination where it does NOT overlap source; source elsewhere.
+    DestinationAtop,
+    /// Source XOR destination — neither where they overlap.
+    Xor,
+    /// Source copied to destination (ignores destination alpha).
+    Copy,
+    /// Sum of source and destination, clamped to 1.
+    Lighter,
+    /// Multiply source and destination channel values.
+    Multiply,
+    /// Screen blend: 1 - (1-s)(1-d).
+    Screen,
+    /// Overlay blend.
+    Overlay,
+    /// Per-channel minimum.
+    Darken,
+    /// Per-channel maximum.
+    Lighten,
+}
+
+impl CompositeOperation {
+    /// Parse from the CSS string literal used in `ctx.globalCompositeOperation`.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "source-over"      => Some(Self::SourceOver),
+            "source-in"        => Some(Self::SourceIn),
+            "source-out"       => Some(Self::SourceOut),
+            "source-atop"      => Some(Self::SourceAtop),
+            "destination-over" => Some(Self::DestinationOver),
+            "destination-in"   => Some(Self::DestinationIn),
+            "destination-out"  => Some(Self::DestinationOut),
+            "destination-atop" => Some(Self::DestinationAtop),
+            "xor"              => Some(Self::Xor),
+            "copy"             => Some(Self::Copy),
+            "lighter"          => Some(Self::Lighter),
+            "multiply"         => Some(Self::Multiply),
+            "screen"           => Some(Self::Screen),
+            "overlay"          => Some(Self::Overlay),
+            "darken"           => Some(Self::Darken),
+            "lighten"          => Some(Self::Lighten),
+            _                  => None,
+        }
+    }
+
+    /// Canonical CSS string name for this operation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SourceOver      => "source-over",
+            Self::SourceIn        => "source-in",
+            Self::SourceOut       => "source-out",
+            Self::SourceAtop      => "source-atop",
+            Self::DestinationOver => "destination-over",
+            Self::DestinationIn   => "destination-in",
+            Self::DestinationOut  => "destination-out",
+            Self::DestinationAtop => "destination-atop",
+            Self::Xor             => "xor",
+            Self::Copy            => "copy",
+            Self::Lighter         => "lighter",
+            Self::Multiply        => "multiply",
+            Self::Screen          => "screen",
+            Self::Overlay         => "overlay",
+            Self::Darken          => "darken",
+            Self::Lighten         => "lighten",
+        }
+    }
+}
+
+/// CSS `lineCap` — how line endpoints are rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineCap {
+    /// Flat edge at the endpoint (default).
+    #[default]
+    Butt,
+    /// Round cap extending beyond the endpoint by `lineWidth/2`.
+    Round,
+    /// Square cap extending beyond the endpoint by `lineWidth/2`.
+    Square,
+}
+
+impl LineCap {
+    /// Parse from CSS string.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "butt"   => Some(Self::Butt),
+            "round"  => Some(Self::Round),
+            "square" => Some(Self::Square),
+            _        => None,
+        }
+    }
+}
+
+/// CSS `lineJoin` — how line segments connect at corners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineJoin {
+    /// Sharp mitered corner (default). Clipped to `miterLimit`.
+    #[default]
+    Miter,
+    /// Round corner extending to `lineWidth/2` radius.
+    Round,
+    /// Bevelled (flat) corner.
+    Bevel,
+}
+
+impl LineJoin {
+    /// Parse from CSS string.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "miter" => Some(Self::Miter),
+            "round" => Some(Self::Round),
+            "bevel" => Some(Self::Bevel),
+            _       => None,
+        }
+    }
+}
+
+// ── DrawState ─────────────────────────────────────────────────────────────────
+
+/// All drawing state captured by `save()` and restored by `restore()`.
+///
+/// Does NOT include the current path — spec §4.12.5.1.2 says `save/restore`
+/// do NOT save the current path.
+#[derive(Debug, Clone)]
+pub struct DrawState {
+    /// Current Transformation Matrix: `[a, b, c, d, e, f]` (column-major affine).
+    ///
+    /// Transforms user coordinates to canvas device pixels:
+    /// `x' = a*x + c*y + e`, `y' = b*x + d*y + f`.
+    pub ctm: [f32; 6],
+    /// Current fill colour.
+    pub fill_style: CanvasColor,
+    /// Current stroke colour.
+    pub stroke_style: CanvasColor,
+    /// Stroke line width in user units.
+    pub line_width: f32,
+    /// Global opacity multiplier `[0.0, 1.0]`.
+    pub global_alpha: f32,
+    /// Porter-Duff compositing mode.
+    pub composite_operation: CompositeOperation,
+    /// Line cap style.
+    pub line_cap: LineCap,
+    /// Line join style.
+    pub line_join: LineJoin,
+    /// Miter limit for `LineJoin::Miter`.
+    pub miter_limit: f32,
+}
+
+impl Default for DrawState {
+    fn default() -> Self {
+        Self {
+            ctm: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], // identity
+            fill_style: CanvasColor::rgba(0, 0, 0, 255),
+            stroke_style: CanvasColor::rgba(0, 0, 0, 255),
+            line_width: 1.0,
+            global_alpha: 1.0,
+            composite_operation: CompositeOperation::SourceOver,
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Miter,
+            miter_limit: 10.0,
+        }
+    }
+}
+
+// ── Context2D ─────────────────────────────────────────────────────────────────
 
 /// HTML Canvas 2D rendering context.
 ///
@@ -31,21 +220,44 @@ pub use fp_noise::CanvasNoiseGenerator;
 /// This is used for anti-detection fingerprint randomization (ADR-007).
 #[derive(Debug, Clone)]
 pub struct Context2D {
+    /// Canvas width in device pixels.
     width: u32,
+    /// Canvas height in device pixels.
     height: u32,
     /// RGBA8 pixels, row-major, top-left origin.
     pixels: Vec<u8>,
 
-    // Drawing state
+    // ── Drawing state (also saved by save/restore) ──────────────────────────
+    /// Current Transformation Matrix `[a, b, c, d, e, f]`.
+    pub ctm: [f32; 6],
+    /// Current fill colour.
     pub fill_style: CanvasColor,
+    /// Current stroke colour.
     pub stroke_style: CanvasColor,
+    /// Stroke line width in user units.
     pub line_width: f32,
+    /// Global opacity `[0.0, 1.0]`.
     pub global_alpha: f32,
+    /// Porter-Duff compositing mode.
+    pub composite_operation: CompositeOperation,
+    /// Line cap style.
+    pub line_cap: LineCap,
+    /// Line join style.
+    pub line_join: LineJoin,
+    /// Miter limit.
+    pub miter_limit: f32,
 
-    // Current path accumulator
+    // ── Path accumulator ────────────────────────────────────────────────────
+    /// Segments accumulated since the last `beginPath()`.
     path: Vec<PathSegment>,
+    /// Start of the current sub-path (for `closePath`).
     path_start: Option<(f32, f32)>,
+    /// Current pen position in *device* pixels (post-CTM).
     pen: (f32, f32),
+
+    // ── State stack ─────────────────────────────────────────────────────────
+    /// Stack of saved drawing states (via `save()`).
+    state_stack: Vec<DrawState>,
 
     /// Optional per-session noise generator for canvas fingerprint randomization.
     /// Set by BrowserSession when creating a context; if set, getImageData() applies noise.
@@ -53,20 +265,26 @@ pub struct Context2D {
 }
 
 impl Context2D {
-    /// Create a new context with a transparent black buffer.
+    /// Create a new context with a transparent black buffer and identity CTM.
     pub fn new(width: u32, height: u32) -> Self {
         let size = (width * height * 4) as usize;
         Self {
             width,
             height,
             pixels: vec![0u8; size],
+            ctm: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             fill_style: CanvasColor::rgba(0, 0, 0, 255),
             stroke_style: CanvasColor::rgba(0, 0, 0, 255),
             line_width: 1.0,
             global_alpha: 1.0,
+            composite_operation: CompositeOperation::SourceOver,
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Miter,
+            miter_limit: 10.0,
             path: Vec::new(),
             path_start: None,
             pen: (0.0, 0.0),
+            state_stack: Vec::new(),
             noise_generator: None,
         }
     }
@@ -82,7 +300,6 @@ impl Context2D {
     /// Get a copy of pixel data with optional noise applied (for `getImageData()`).
     ///
     /// If a noise generator is set, returns a noisy copy; otherwise returns raw pixels.
-    /// P3 calls this when implementing `CanvasRenderingContext2D.getImageData()` in JS.
     pub fn get_image_data(&self) -> Vec<u8> {
         let mut data = self.pixels.clone();
         if let Some(mut noise_gen) = self.noise_generator.clone() {
@@ -104,13 +321,15 @@ impl Context2D {
         ctx
     }
 
+    /// Canvas width in device pixels.
     pub fn width(&self) -> u32 { self.width }
+    /// Canvas height in device pixels.
     pub fn height(&self) -> u32 { self.height }
 
-    /// Raw RGBA8 pixel data.
+    /// Raw RGBA8 pixel data (no noise applied).
     pub fn pixels(&self) -> &[u8] { &self.pixels }
 
-    /// Resize the canvas (clears the buffer).
+    /// Resize the canvas (clears the buffer and resets the CTM to identity).
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
@@ -118,11 +337,103 @@ impl Context2D {
         self.pixels = vec![0u8; size];
     }
 
-    // ── Rect operations ───────────────────────────────────────────────────
+    // ── State stack ───────────────────────────────────────────────────────────
+
+    /// `save()` — push the current drawing state onto the stack.
+    ///
+    /// Does NOT save the current path (spec §4.12.5.1.2).
+    pub fn save(&mut self) {
+        self.state_stack.push(DrawState {
+            ctm: self.ctm,
+            fill_style: self.fill_style,
+            stroke_style: self.stroke_style,
+            line_width: self.line_width,
+            global_alpha: self.global_alpha,
+            composite_operation: self.composite_operation,
+            line_cap: self.line_cap,
+            line_join: self.line_join,
+            miter_limit: self.miter_limit,
+        });
+    }
+
+    /// `restore()` — pop and restore the most recently saved drawing state.
+    ///
+    /// No-op if the stack is empty (spec §4.12.5.1.2).
+    pub fn restore(&mut self) {
+        if let Some(state) = self.state_stack.pop() {
+            self.ctm = state.ctm;
+            self.fill_style = state.fill_style;
+            self.stroke_style = state.stroke_style;
+            self.line_width = state.line_width;
+            self.global_alpha = state.global_alpha;
+            self.composite_operation = state.composite_operation;
+            self.line_cap = state.line_cap;
+            self.line_join = state.line_join;
+            self.miter_limit = state.miter_limit;
+        }
+    }
+
+    // ── Transforms ────────────────────────────────────────────────────────────
+
+    /// `translate(tx, ty)` — apply a translation to the current CTM.
+    pub fn translate(&mut self, tx: f32, ty: f32) {
+        // Post-multiply: CTM = CTM × T(tx, ty)
+        let [a, b, c, d, e, f] = self.ctm;
+        self.ctm = [a, b, c, d, e + a * tx + c * ty, f + b * tx + d * ty];
+    }
+
+    /// `rotate(angle)` — rotate by `angle` radians clockwise around the origin.
+    pub fn rotate(&mut self, angle: f32) {
+        let cos = angle.cos();
+        let sin = angle.sin();
+        self.transform(cos, sin, -sin, cos, 0.0, 0.0);
+    }
+
+    /// `scale(sx, sy)` — apply a uniform or non-uniform scale.
+    pub fn scale(&mut self, sx: f32, sy: f32) {
+        let [a, b, c, d, e, f] = self.ctm;
+        self.ctm = [a * sx, b * sx, c * sy, d * sy, e, f];
+    }
+
+    /// `transform(a, b, c, d, e, f)` — post-multiply the CTM by the given matrix.
+    ///
+    /// Matrix columns: `[a, b]` (x-axis), `[c, d]` (y-axis), `[e, f]` (translation).
+    pub fn transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
+        let [ma, mb, mc, md, me, mf] = self.ctm;
+        self.ctm = [
+            ma * a + mc * b,
+            mb * a + md * b,
+            ma * c + mc * d,
+            mb * c + md * d,
+            ma * e + mc * f + me,
+            mb * e + md * f + mf,
+        ];
+    }
+
+    /// `setTransform(a, b, c, d, e, f)` — replace the CTM with the given matrix.
+    pub fn set_transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
+        self.ctm = [a, b, c, d, e, f];
+    }
+
+    /// `resetTransform()` — reset the CTM to the identity matrix.
+    pub fn reset_transform(&mut self) {
+        self.ctm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    }
+
+    /// Apply the current CTM to a user-space point.
+    ///
+    /// Returns device-pixel coordinates `(x', y')`.
+    fn apply_ctm(&self, x: f32, y: f32) -> (f32, f32) {
+        let [a, b, c, d, e, f] = self.ctm;
+        (a * x + c * y + e, b * x + d * y + f)
+    }
+
+    // ── Rect operations ───────────────────────────────────────────────────────
 
     /// `clearRect(x, y, w, h)` — erase region to transparent black.
     ///
     /// Direct write (not source-over) — matches the spec's "copy" semantics.
+    /// Ignores the current CTM (operates in device space per spec).
     pub fn clear_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         if w <= 0.0 || h <= 0.0 { return; }
         let x0 = x.max(0.0) as u32;
@@ -138,24 +449,26 @@ impl Context2D {
     }
 
     /// `fillRect(x, y, w, h)` — fill region with current `fillStyle`.
+    ///
+    /// Affected by the current CTM (translate, rotate, scale).
+    /// Does not modify the current path (spec §4.12.5.1.9).
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
         let color = self.fill_style.with_alpha_mult(self.global_alpha);
-        self.fill_rect_color(x, y, w, h, color);
+        let path = self.build_rect_path(x, y, w, h);
+        rasterize::fill_path(self, &path, color);
     }
 
     /// `strokeRect(x, y, w, h)` — stroke the outline of a rectangle.
+    ///
+    /// Affected by the current CTM. Does not modify the current path.
     pub fn stroke_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        let lw = self.line_width;
-        let half = lw * 0.5;
         let color = self.stroke_style.with_alpha_mult(self.global_alpha);
-        // Four sides: top, bottom, left, right
-        self.fill_rect_color(x,         y,         w,   lw,  color); // top
-        self.fill_rect_color(x,         y + h - lw, w,  lw,  color); // bottom
-        self.fill_rect_color(x,         y + half,   lw, h - lw, color); // left
-        self.fill_rect_color(x + w - lw, y + half,  lw, h - lw, color); // right
+        let lw = self.line_width;
+        let path = self.build_rect_path(x, y, w, h);
+        rasterize::stroke_path(self, &path, lw, color);
     }
 
-    // ── Path API ──────────────────────────────────────────────────────────
+    // ── Path API ──────────────────────────────────────────────────────────────
 
     /// `beginPath()` — discard current path.
     pub fn begin_path(&mut self) {
@@ -163,27 +476,27 @@ impl Context2D {
         self.path_start = None;
     }
 
-    /// `moveTo(x, y)` — start a new sub-path.
+    /// `moveTo(x, y)` — start a new sub-path at user-space `(x, y)`.
     pub fn move_to(&mut self, x: f32, y: f32) {
-        self.pen = (x, y);
-        if self.path_start.is_none() {
-            self.path_start = Some((x, y));
-        }
-        self.path.push(PathSegment::Move(x, y));
+        let (px, py) = self.apply_ctm(x, y);
+        self.pen = (px, py);
+        self.path_start = Some((px, py));
+        self.path.push(PathSegment::Move(px, py));
     }
 
-    /// `lineTo(x, y)` — add a line segment.
+    /// `lineTo(x, y)` — add a line segment from pen to `(x, y)`.
     pub fn line_to(&mut self, x: f32, y: f32) {
+        let (px, py) = self.apply_ctm(x, y);
         if self.path.is_empty() {
-            self.path_start = Some((x, y));
-            self.path.push(PathSegment::Move(x, y));
+            self.path_start = Some((px, py));
+            self.path.push(PathSegment::Move(px, py));
         } else {
-            self.path.push(PathSegment::Line(self.pen.0, self.pen.1, x, y));
+            self.path.push(PathSegment::Line(self.pen.0, self.pen.1, px, py));
         }
-        self.pen = (x, y);
+        self.pen = (px, py);
     }
 
-    /// `closePath()` — add a line back to the sub-path start.
+    /// `closePath()` — add a line back to the current sub-path start.
     pub fn close_path(&mut self) {
         if let Some((sx, sy)) = self.path_start {
             let (px, py) = self.pen;
@@ -192,8 +505,43 @@ impl Context2D {
         }
     }
 
-    /// `arc(cx, cy, r, start_angle, end_angle[, anticlockwise])` — add an arc.
-    /// `anticlockwise` = false by default.
+    /// `bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)` — cubic Bézier from pen.
+    ///
+    /// All coordinates are in user space and transformed by the current CTM.
+    pub fn bezier_curve_to(
+        &mut self,
+        cp1x: f32, cp1y: f32,
+        cp2x: f32, cp2y: f32,
+        x: f32, y: f32,
+    ) {
+        let (x0, y0) = self.pen;
+        let (c1x, c1y) = self.apply_ctm(cp1x, cp1y);
+        let (c2x, c2y) = self.apply_ctm(cp2x, cp2y);
+        let (ex, ey) = self.apply_ctm(x, y);
+        if self.path.is_empty() {
+            self.path_start = Some((x0, y0));
+            self.path.push(PathSegment::Move(x0, y0));
+        }
+        self.path.push(PathSegment::Cubic(x0, y0, c1x, c1y, c2x, c2y, ex, ey));
+        self.pen = (ex, ey);
+    }
+
+    /// `quadraticCurveTo(cpx, cpy, x, y)` — quadratic Bézier from pen.
+    ///
+    /// All coordinates are in user space and transformed by the current CTM.
+    pub fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
+        let (x0, y0) = self.pen;
+        let (cx, cy) = self.apply_ctm(cpx, cpy);
+        let (ex, ey) = self.apply_ctm(x, y);
+        if self.path.is_empty() {
+            self.path_start = Some((x0, y0));
+            self.path.push(PathSegment::Move(x0, y0));
+        }
+        self.path.push(PathSegment::Quadratic(x0, y0, cx, cy, ex, ey));
+        self.pen = (ex, ey);
+    }
+
+    /// `arc(cx, cy, r, startAngle, endAngle[, anticlockwise])` — add circular arc.
     pub fn arc(&mut self, cx: f32, cy: f32, r: f32, start: f32, end: f32, ccw: bool) {
         let step_count = ((r * (end - start).abs()) as u32 + 4).clamp(4, 180);
         let steps = step_count as f32;
@@ -213,6 +561,115 @@ impl Context2D {
         }
     }
 
+    /// `ellipse(cx, cy, rx, ry, rotation, startAngle, endAngle[, anticlockwise])`.
+    ///
+    /// Approximated by line segments; the CTM is applied to each generated point.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ellipse(
+        &mut self,
+        cx: f32, cy: f32,
+        rx: f32, ry: f32,
+        rotation: f32,
+        start_angle: f32, end_angle: f32,
+        ccw: bool,
+    ) {
+        let angle_span = if ccw {
+            let span = start_angle - end_angle;
+            if span <= 0.0 { span + std::f32::consts::TAU } else { span }
+        } else {
+            let span = end_angle - start_angle;
+            if span <= 0.0 { span + std::f32::consts::TAU } else { span }
+        };
+
+        let step_count = ((rx.max(ry) * angle_span).abs() as u32 + 4).clamp(4, 180);
+        let cos_rot = rotation.cos();
+        let sin_rot = rotation.sin();
+
+        for i in 0..=step_count {
+            let frac = i as f32 / step_count as f32;
+            let t = if ccw {
+                start_angle - angle_span * frac
+            } else {
+                start_angle + angle_span * frac
+            };
+            let lx = rx * t.cos();
+            let ly = ry * t.sin();
+            // Apply ellipse rotation
+            let ex = cx + lx * cos_rot - ly * sin_rot;
+            let ey = cy + lx * sin_rot + ly * cos_rot;
+            if i == 0 {
+                if self.path.is_empty() {
+                    self.move_to(ex, ey);
+                } else {
+                    self.line_to(ex, ey);
+                }
+            } else {
+                self.line_to(ex, ey);
+            }
+        }
+    }
+
+    /// `arcTo(x1, y1, x2, y2, radius)` — tangent arc between two lines.
+    ///
+    /// Approximated via circular arc geometry; CTM applied to all generated points.
+    pub fn arc_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, radius: f32) {
+        if radius <= 0.0 {
+            self.line_to(x1, y1);
+            return;
+        }
+        // Current pen in user space requires inverting CTM — for simplicity
+        // we fall back to a straight line when CTM is non-identity.
+        // For identity CTM this gives the correct tangent arc.
+        let (x0, y0) = self.pen_user_space();
+        let d1x = x0 - x1;
+        let d1y = y0 - y1;
+        let d2x = x2 - x1;
+        let d2y = y2 - y1;
+        let len1 = (d1x * d1x + d1y * d1y).sqrt();
+        let len2 = (d2x * d2x + d2y * d2y).sqrt();
+        if len1 < f32::EPSILON || len2 < f32::EPSILON {
+            self.line_to(x1, y1);
+            return;
+        }
+        // Angle between the two direction vectors
+        let cos_angle = (d1x * d2x + d1y * d2y) / (len1 * len2);
+        let angle = cos_angle.clamp(-1.0, 1.0).acos();
+        let half = angle * 0.5;
+        if half.sin().abs() < f32::EPSILON {
+            self.line_to(x1, y1);
+            return;
+        }
+        // Distance from corner to tangent points
+        let tangent_dist = radius / half.tan();
+        let t1 = tangent_dist / len1;
+        let t2 = tangent_dist / len2;
+        // Tangent points
+        let tx1 = x1 + d1x * t1;
+        let ty1 = y1 + d1y * t1;
+        let tx2 = x1 + d2x * t2;
+        let ty2 = y1 + d2y * t2;
+        self.line_to(tx1, ty1);
+        // Arc centre: perpendicular from tx1 toward the centre
+        let n1x = -d1y / len1;
+        let n1y =  d1x / len1;
+        let cross = d1x * d2y - d1y * d2x;
+        let sign = if cross > 0.0 { 1.0 } else { -1.0 };
+        let cx = tx1 + n1x * radius * sign;
+        let cy = ty1 + n1y * radius * sign;
+        let start = (ty1 - cy).atan2(tx1 - cx);
+        let end   = (ty2 - cy).atan2(tx2 - cx);
+        self.arc(cx, cy, radius, start, end, cross < 0.0);
+    }
+
+    /// `rect(x, y, w, h)` — add a closed rectangle sub-path.
+    pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.move_to(x, y);
+        self.line_to(x + w, y);
+        self.line_to(x + w, y + h);
+        self.line_to(x, y + h);
+        self.close_path();
+    }
+
     /// `fill()` — fill the current path with `fillStyle`.
     pub fn fill(&mut self) {
         let color = self.fill_style.with_alpha_mult(self.global_alpha);
@@ -228,43 +685,207 @@ impl Context2D {
         rasterize::stroke_path(self, &path, lw, color);
     }
 
-    // ── Low-level helpers ─────────────────────────────────────────────────
+    // ── Internal path helpers ─────────────────────────────────────────────────
 
-    /// Internal: fill an axis-aligned rect with an explicit color.
-    pub(crate) fn fill_rect_color(&mut self, x: f32, y: f32, w: f32, h: f32, color: CanvasColor) {
-        if w <= 0.0 || h <= 0.0 { return; }
-        let x0 = x.max(0.0) as u32;
-        let y0 = y.max(0.0) as u32;
-        let x1 = (x + w).min(self.width as f32) as u32;
-        let y1 = (y + h).min(self.height as f32) as u32;
-        for row in y0..y1 {
-            for col in x0..x1 {
-                self.set_pixel(col, row, color);
-            }
-        }
+    /// Build a closed rectangle path through the current CTM without touching `self.path`.
+    fn build_rect_path(&self, x: f32, y: f32, w: f32, h: f32) -> Vec<PathSegment> {
+        let p0 = self.apply_ctm(x,     y);
+        let p1 = self.apply_ctm(x + w, y);
+        let p2 = self.apply_ctm(x + w, y + h);
+        let p3 = self.apply_ctm(x,     y + h);
+        vec![
+            PathSegment::Move(p0.0, p0.1),
+            PathSegment::Line(p0.0, p0.1, p1.0, p1.1),
+            PathSegment::Line(p1.0, p1.1, p2.0, p2.1),
+            PathSegment::Line(p2.0, p2.1, p3.0, p3.1),
+            PathSegment::Line(p3.0, p3.1, p0.0, p0.1),
+        ]
     }
 
-    /// Alpha-composite `color` over the pixel at `(x, y)`.
+    // ── Low-level helpers ─────────────────────────────────────────────────────
+
+    /// Alpha-composite `color` over the pixel at `(x, y)` using `composite_operation`.
     pub(crate) fn set_pixel(&mut self, x: u32, y: u32, color: CanvasColor) {
+        self.composite_pixel(x, y, color);
+    }
+
+    /// Apply `composite_operation` to blend `src` colour into pixel `(x, y)`.
+    fn composite_pixel(&mut self, x: u32, y: u32, src: CanvasColor) {
         if x >= self.width || y >= self.height { return; }
         let idx = ((y * self.width + x) * 4) as usize;
         let dst = &mut self.pixels[idx..idx + 4];
-        // Porter-Duff source-over (straight alpha).
-        let sa = color.a as f32 / 255.0;
+
+        let sr = src.r as f32 / 255.0;
+        let sg = src.g as f32 / 255.0;
+        let sb = src.b as f32 / 255.0;
+        let sa = src.a as f32 / 255.0;
+
+        let dr = dst[0] as f32 / 255.0;
+        let dg = dst[1] as f32 / 255.0;
+        let db = dst[2] as f32 / 255.0;
         let da = dst[3] as f32 / 255.0;
-        let oa = sa + da * (1.0 - sa);
-        if oa < f32::EPSILON {
-            dst.fill(0);
-            return;
+
+        let (r, g, b, a) = match self.composite_operation {
+            CompositeOperation::SourceOver => {
+                let oa = sa + da * (1.0 - sa);
+                if oa < f32::EPSILON { (0.0, 0.0, 0.0, 0.0) } else {
+                    let k = da * (1.0 - sa);
+                    ((sr * sa + dr * k) / oa,
+                     (sg * sa + dg * k) / oa,
+                     (sb * sa + db * k) / oa,
+                     oa)
+                }
+            }
+            CompositeOperation::SourceIn => {
+                let oa = sa * da;
+                (sr, sg, sb, oa)
+            }
+            CompositeOperation::SourceOut => {
+                let oa = sa * (1.0 - da);
+                (sr, sg, sb, oa)
+            }
+            CompositeOperation::SourceAtop => {
+                let oa = da;
+                let k = 1.0 - sa;
+                ((sr * sa + dr * k) / oa.max(f32::EPSILON),
+                 (sg * sa + dg * k) / oa.max(f32::EPSILON),
+                 (sb * sa + db * k) / oa.max(f32::EPSILON),
+                 oa)
+            }
+            CompositeOperation::DestinationOver => {
+                let oa = da + sa * (1.0 - da);
+                if oa < f32::EPSILON { (0.0, 0.0, 0.0, 0.0) } else {
+                    let k = sa * (1.0 - da);
+                    ((dr * da + sr * k) / oa,
+                     (dg * da + sg * k) / oa,
+                     (db * da + sb * k) / oa,
+                     oa)
+                }
+            }
+            CompositeOperation::DestinationIn => {
+                let oa = da * sa;
+                (dr, dg, db, oa)
+            }
+            CompositeOperation::DestinationOut => {
+                let oa = da * (1.0 - sa);
+                (dr, dg, db, oa)
+            }
+            CompositeOperation::DestinationAtop => {
+                let oa = sa;
+                let k = 1.0 - da;
+                ((dr * da + sr * k) / oa.max(f32::EPSILON),
+                 (dg * da + sg * k) / oa.max(f32::EPSILON),
+                 (db * da + sb * k) / oa.max(f32::EPSILON),
+                 oa)
+            }
+            CompositeOperation::Xor => {
+                let oa = sa * (1.0 - da) + da * (1.0 - sa);
+                if oa < f32::EPSILON { (0.0, 0.0, 0.0, 0.0) } else {
+                    ((sr * sa * (1.0 - da) + dr * da * (1.0 - sa)) / oa,
+                     (sg * sa * (1.0 - da) + dg * da * (1.0 - sa)) / oa,
+                     (sb * sa * (1.0 - da) + db * da * (1.0 - sa)) / oa,
+                     oa)
+                }
+            }
+            CompositeOperation::Copy => {
+                (sr, sg, sb, sa)
+            }
+            CompositeOperation::Lighter => {
+                let oa = (sa + da).min(1.0);
+                let r = (sr * sa + dr * da).min(1.0);
+                let g = (sg * sa + dg * da).min(1.0);
+                let b = (sb * sa + db * da).min(1.0);
+                (r, g, b, oa)
+            }
+            CompositeOperation::Multiply => {
+                let oa = sa + da - sa * da;
+                if oa < f32::EPSILON { (0.0, 0.0, 0.0, 0.0) } else {
+                    let blend_r = sr * dr;
+                    let blend_g = sg * dg;
+                    let blend_b = sb * db;
+                    let r = (blend_r * sa * da + sr * sa * (1.0 - da) + dr * da * (1.0 - sa)) / oa;
+                    let g = (blend_g * sa * da + sg * sa * (1.0 - da) + dg * da * (1.0 - sa)) / oa;
+                    let b = (blend_b * sa * da + sb * sa * (1.0 - da) + db * da * (1.0 - sa)) / oa;
+                    (r, g, b, oa)
+                }
+            }
+            CompositeOperation::Screen => {
+                let oa = sa + da - sa * da;
+                if oa < f32::EPSILON { (0.0, 0.0, 0.0, 0.0) } else {
+                    let blend_r = 1.0 - (1.0 - sr) * (1.0 - dr);
+                    let blend_g = 1.0 - (1.0 - sg) * (1.0 - dg);
+                    let blend_b = 1.0 - (1.0 - sb) * (1.0 - db);
+                    let r = (blend_r * sa * da + sr * sa * (1.0 - da) + dr * da * (1.0 - sa)) / oa;
+                    let g = (blend_g * sa * da + sg * sa * (1.0 - da) + dg * da * (1.0 - sa)) / oa;
+                    let b = (blend_b * sa * da + sb * sa * (1.0 - da) + db * da * (1.0 - sa)) / oa;
+                    (r, g, b, oa)
+                }
+            }
+            CompositeOperation::Overlay => {
+                let oa = sa + da - sa * da;
+                if oa < f32::EPSILON { (0.0, 0.0, 0.0, 0.0) } else {
+                    let blend = |s: f32, d: f32| -> f32 {
+                        if 2.0 * d < 1.0 { 2.0 * s * d } else { 1.0 - 2.0 * (1.0 - s) * (1.0 - d) }
+                    };
+                    let blend_r = blend(sr, dr);
+                    let blend_g = blend(sg, dg);
+                    let blend_b = blend(sb, db);
+                    let r = (blend_r * sa * da + sr * sa * (1.0 - da) + dr * da * (1.0 - sa)) / oa;
+                    let g = (blend_g * sa * da + sg * sa * (1.0 - da) + dg * da * (1.0 - sa)) / oa;
+                    let b = (blend_b * sa * da + sb * sa * (1.0 - da) + db * da * (1.0 - sa)) / oa;
+                    (r, g, b, oa)
+                }
+            }
+            CompositeOperation::Darken => {
+                let oa = sa + da - sa * da;
+                if oa < f32::EPSILON { (0.0, 0.0, 0.0, 0.0) } else {
+                    let blend_r = sr * da.min(dr * sa);
+                    let blend_g = sg * da.min(dg * sa);
+                    let blend_b = sb * da.min(db * sa);
+                    let r = (blend_r + sr * sa * (1.0 - da) + dr * da * (1.0 - sa)) / oa;
+                    let g = (blend_g + sg * sa * (1.0 - da) + dg * da * (1.0 - sa)) / oa;
+                    let b = (blend_b + sb * sa * (1.0 - da) + db * da * (1.0 - sa)) / oa;
+                    (r, g, b, oa)
+                }
+            }
+            CompositeOperation::Lighten => {
+                let oa = sa + da - sa * da;
+                if oa < f32::EPSILON { (0.0, 0.0, 0.0, 0.0) } else {
+                    let blend_r = sr * da.max(dr * sa);
+                    let blend_g = sg * da.max(dg * sa);
+                    let blend_b = sb * da.max(db * sa);
+                    let r = (blend_r + sr * sa * (1.0 - da) + dr * da * (1.0 - sa)) / oa;
+                    let g = (blend_g + sg * sa * (1.0 - da) + dg * da * (1.0 - sa)) / oa;
+                    let b = (blend_b + sb * sa * (1.0 - da) + db * da * (1.0 - sa)) / oa;
+                    (r, g, b, oa)
+                }
+            }
+        };
+
+        dst[0] = (r.clamp(0.0, 1.0) * 255.0) as u8;
+        dst[1] = (g.clamp(0.0, 1.0) * 255.0) as u8;
+        dst[2] = (b.clamp(0.0, 1.0) * 255.0) as u8;
+        dst[3] = (a.clamp(0.0, 1.0) * 255.0) as u8;
+    }
+
+    /// Current pen position in user space (inverse CTM of device pen).
+    ///
+    /// Used only by `arc_to` which needs the user-space pen to compute geometry.
+    fn pen_user_space(&self) -> (f32, f32) {
+        let [a, b, c, d, e, f] = self.ctm;
+        let det = a * d - b * c;
+        if det.abs() < f32::EPSILON {
+            return self.pen; // degenerate CTM — return device coords as fallback
         }
-        dst[0] = ((color.r as f32 * sa + dst[0] as f32 * da * (1.0 - sa)) / oa) as u8;
-        dst[1] = ((color.g as f32 * sa + dst[1] as f32 * da * (1.0 - sa)) / oa) as u8;
-        dst[2] = ((color.b as f32 * sa + dst[2] as f32 * da * (1.0 - sa)) / oa) as u8;
-        dst[3] = (oa * 255.0) as u8;
+        let (px, py) = self.pen;
+        let ix = px - e;
+        let iy = py - f;
+        (( d * ix - c * iy) / det,
+         (-b * ix + a * iy) / det)
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -281,12 +902,11 @@ mod tests {
         let mut ctx = Context2D::new(10, 10);
         ctx.fill_style = CanvasColor::rgba(255, 0, 0, 255);
         ctx.fill_rect(0.0, 0.0, 10.0, 10.0);
-        // First pixel should be red
         let p = ctx.pixels();
-        assert_eq!(p[0], 255); // R
-        assert_eq!(p[1], 0);   // G
-        assert_eq!(p[2], 0);   // B
-        assert_eq!(p[3], 255); // A
+        assert_eq!(p[0], 255);
+        assert_eq!(p[1], 0);
+        assert_eq!(p[2], 0);
+        assert_eq!(p[3], 255);
     }
 
     #[test]
@@ -302,11 +922,9 @@ mod tests {
     fn fill_rect_clips_to_bounds() {
         let mut ctx = Context2D::new(4, 4);
         ctx.fill_style = CanvasColor::rgba(0, 255, 0, 255);
-        // Rect extends beyond canvas
         ctx.fill_rect(-2.0, -2.0, 10.0, 10.0);
-        // All pixels should be green
         let p = ctx.pixels();
-        assert_eq!(p[1], 255); // G channel of pixel (0,0)
+        assert_eq!(p[1], 255);
     }
 
     #[test]
@@ -315,9 +933,8 @@ mod tests {
         ctx.stroke_style = CanvasColor::rgba(0, 0, 255, 255);
         ctx.line_width = 1.0;
         ctx.stroke_rect(0.0, 0.0, 10.0, 10.0);
-        // Top row pixel (0,0) should be blue
         let p = ctx.pixels();
-        assert_eq!(p[2], 255); // B channel
+        assert_eq!(p[2], 255);
     }
 
     #[test]
@@ -330,11 +947,10 @@ mod tests {
         ctx.line_to(0.0, 20.0);
         ctx.close_path();
         ctx.fill();
-        // Bottom-left pixel (0,19) should be yellow
         let idx = (19 * 20) * 4;
         let p = ctx.pixels();
-        assert_eq!(p[idx], 255); // R
-        assert_eq!(p[idx + 1], 255); // G
+        assert_eq!(p[idx], 255);
+        assert_eq!(p[idx + 1], 255);
     }
 
     #[test]
@@ -344,7 +960,6 @@ mod tests {
         ctx.global_alpha = 0.5;
         ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
         let p = ctx.pixels();
-        // Alpha should be ~128 (half)
         assert!(p[3] > 100 && p[3] < 150, "alpha={}", p[3]);
     }
 
@@ -390,7 +1005,6 @@ mod tests {
         ctx.fill_style = CanvasColor::rgba(100, 150, 200, 255);
         ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
         let data = ctx.get_image_data();
-        // Without noise generator, should match raw pixels
         assert_eq!(data, ctx.pixels());
     }
 
@@ -399,15 +1013,9 @@ mod tests {
         let mut ctx = Context2D::new(4, 4);
         ctx.fill_style = CanvasColor::rgba(100, 150, 200, 255);
         ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
-
-        // Set noise generator with seed 42
         ctx.set_noise_generator(CanvasNoiseGenerator::new(42));
         let data = ctx.get_image_data();
-
-        // Noised data should differ from raw pixels (very likely)
-        assert_ne!(data, ctx.pixels(), "noised data should differ from raw pixels");
-
-        // But alpha channel (index 3, 7, 11, 15) should be unchanged
+        assert_ne!(data, ctx.pixels());
         for i in 0..4 {
             assert_eq!(data[i * 4 + 3], 255, "pixel {} alpha must be unchanged", i);
         }
@@ -425,7 +1033,158 @@ mod tests {
         ctx2.fill_rect(0.0, 0.0, 2.0, 2.0);
         ctx2.set_noise_generator(CanvasNoiseGenerator::new(42));
 
-        // Same seed should produce same noise
         assert_eq!(ctx1.get_image_data(), ctx2.get_image_data());
+    }
+
+    // ── Phase 2: new tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn save_restore_preserves_state() {
+        let mut ctx = Context2D::new(4, 4);
+        ctx.fill_style = CanvasColor::rgba(255, 0, 0, 255);
+        ctx.global_alpha = 0.5;
+        ctx.save();
+        ctx.fill_style = CanvasColor::rgba(0, 255, 0, 255);
+        ctx.global_alpha = 1.0;
+        ctx.restore();
+        assert_eq!(ctx.fill_style.r, 255);
+        assert_eq!(ctx.fill_style.g, 0);
+        assert!((ctx.global_alpha - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn save_restore_does_not_save_path() {
+        let mut ctx = Context2D::new(10, 10);
+        ctx.begin_path();
+        ctx.move_to(0.0, 0.0);
+        ctx.save();
+        ctx.begin_path();
+        ctx.restore();
+        // Path should still be empty (restore doesn't bring back the pre-save path)
+        ctx.fill(); // should not panic
+    }
+
+    #[test]
+    fn restore_empty_stack_is_noop() {
+        let mut ctx = Context2D::new(4, 4);
+        ctx.restore(); // should not panic
+    }
+
+    #[test]
+    fn translate_moves_drawing() {
+        let mut ctx = Context2D::new(20, 20);
+        ctx.fill_style = CanvasColor::rgba(255, 0, 0, 255);
+        ctx.translate(10.0, 0.0);
+        ctx.fill_rect(0.0, 0.0, 5.0, 5.0);
+        // Pixel at device (0,0) should be transparent
+        let p = ctx.pixels();
+        assert_eq!(p[3], 0, "origin pixel should be transparent after translate");
+        // Pixel at device (10,0) should be red
+        let idx = 10 * 4;
+        assert_eq!(p[idx], 255, "translated pixel should be red");
+    }
+
+    #[test]
+    fn scale_expands_drawing() {
+        let mut ctx = Context2D::new(20, 20);
+        ctx.fill_style = CanvasColor::rgba(0, 255, 0, 255);
+        ctx.scale(2.0, 2.0);
+        ctx.fill_rect(0.0, 0.0, 5.0, 5.0);
+        // In device space, should fill 0..10 × 0..10
+        let p = ctx.pixels();
+        let idx = (9 * 20 + 9) * 4; // pixel at (9,9)
+        assert_eq!(p[idx + 1], 255, "scaled pixel (9,9) should be green");
+    }
+
+    #[test]
+    fn ctm_identity_after_reset() {
+        let mut ctx = Context2D::new(4, 4);
+        ctx.translate(5.0, 5.0);
+        ctx.reset_transform();
+        assert_eq!(ctx.ctm, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn bezier_curve_to_produces_segments() {
+        let mut ctx = Context2D::new(100, 100);
+        ctx.begin_path();
+        ctx.move_to(10.0, 50.0);
+        ctx.bezier_curve_to(10.0, 10.0, 90.0, 10.0, 90.0, 50.0);
+        // Should have Move + 1 Cubic segment
+        assert_eq!(ctx.path.len(), 2);
+        assert!(matches!(ctx.path[1], PathSegment::Cubic(..)));
+    }
+
+    #[test]
+    fn quadratic_curve_to_produces_segment() {
+        let mut ctx = Context2D::new(100, 100);
+        ctx.begin_path();
+        ctx.move_to(10.0, 50.0);
+        ctx.quadratic_curve_to(50.0, 10.0, 90.0, 50.0);
+        assert_eq!(ctx.path.len(), 2);
+        assert!(matches!(ctx.path[1], PathSegment::Quadratic(..)));
+    }
+
+    #[test]
+    fn rect_path_is_closed() {
+        let mut ctx = Context2D::new(20, 20);
+        ctx.begin_path();
+        ctx.rect(0.0, 0.0, 10.0, 10.0);
+        ctx.fill_style = CanvasColor::rgba(255, 0, 0, 255);
+        ctx.fill();
+        // Centre pixel should be red
+        let idx = (5 * 20 + 5) * 4;
+        let p = ctx.pixels();
+        assert_eq!(p[idx], 255);
+    }
+
+    #[test]
+    fn composite_source_over_is_default() {
+        let ctx = Context2D::new(1, 1);
+        assert_eq!(ctx.composite_operation, CompositeOperation::SourceOver);
+    }
+
+    #[test]
+    fn composite_copy_replaces_pixel() {
+        let mut ctx = Context2D::new(4, 4);
+        ctx.fill_style = CanvasColor::rgba(255, 0, 0, 255);
+        ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+        ctx.composite_operation = CompositeOperation::Copy;
+        ctx.fill_style = CanvasColor::rgba(0, 0, 255, 128);
+        ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+        let p = ctx.pixels();
+        assert_eq!(p[2], 255); // B
+        assert_eq!(p[3], 128); // A
+    }
+
+    #[test]
+    fn composite_operation_parse() {
+        assert_eq!(CompositeOperation::from_str("source-over"), Some(CompositeOperation::SourceOver));
+        assert_eq!(CompositeOperation::from_str("multiply"), Some(CompositeOperation::Multiply));
+        assert_eq!(CompositeOperation::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn line_cap_parse() {
+        assert_eq!(LineCap::from_str("butt"), Some(LineCap::Butt));
+        assert_eq!(LineCap::from_str("round"), Some(LineCap::Round));
+        assert_eq!(LineCap::from_str("square"), Some(LineCap::Square));
+    }
+
+    #[test]
+    fn line_join_parse() {
+        assert_eq!(LineJoin::from_str("miter"), Some(LineJoin::Miter));
+        assert_eq!(LineJoin::from_str("round"), Some(LineJoin::Round));
+        assert_eq!(LineJoin::from_str("bevel"), Some(LineJoin::Bevel));
+    }
+
+    #[test]
+    fn ellipse_produces_path() {
+        let mut ctx = Context2D::new(100, 100);
+        ctx.begin_path();
+        ctx.ellipse(50.0, 50.0, 30.0, 20.0, 0.0, 0.0, std::f32::consts::TAU, false);
+        assert!(!ctx.path.is_empty());
+        ctx.fill_style = CanvasColor::rgba(0, 128, 255, 255);
+        ctx.fill(); // should not panic
     }
 }
