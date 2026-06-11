@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+PA-3: femtovg полный набор blend modes  branch: p2-pa3-femtovg-blend
+Next step: BUGS.md → BUG-098 FIXED + STATUS update  STATUS-P2.md:25
 
 ---
 
