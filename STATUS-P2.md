@@ -6,7 +6,8 @@
 
 ## In progress
 
-(нет)
+G-3: `scroll-behavior: smooth` — rAF-based smooth scrolling  branch: p2-g3-scroll-behavior-smooth
+Next step: navigate_fragment respects scroll-behavior, window.scrollTo/By/X/Y  main.rs + dom.rs
 
 ---
 

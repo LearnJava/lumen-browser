@@ -81,7 +81,7 @@ use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolv
 use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
 #[cfg(feature = "quickjs")]
 use lumen_layout::collect_computed_styles;
-use lumen_layout::style::ComputedStyle;
+use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
 use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
 use lumen_layout::Cursor as CssCursor;
@@ -4585,8 +4585,24 @@ impl Lumen {
         });
         click_log::log_fragment(&fragment, target_y.is_some());
         if let Some(y) = target_y {
-            self.scroll_to(y);
+            // CSS Scroll Behavior L1 §3: respect scroll-behavior on the scrolling box.
+            // The page viewport's scroll-behavior comes from the root (<html>) element.
+            if self.page_scroll_behavior() == ScrollBehavior::Smooth {
+                self.start_smooth_scroll(y);
+            } else {
+                self.scroll_to(y);
+            }
         }
+    }
+
+    /// Returns the effective `scroll-behavior` for the page viewport (CSS Scroll Behavior L1 §3).
+    /// Reads from the first non-root layout box (the `<html>` element's style).
+    fn page_scroll_behavior(&self) -> ScrollBehavior {
+        self.layout_box
+            .as_ref()
+            .and_then(|lb| lb.children.first())
+            .map(|html_box| html_box.style.scroll_behavior)
+            .unwrap_or(ScrollBehavior::Auto)
     }
 
     /// Перезагрузить текущий источник: fetch/parse/layout/paint снова. На
@@ -5426,6 +5442,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
+                }
+            }
+        }
+
+        // Page-level scroll requests from JS window.scrollTo / window.scrollBy.
+        // Smooth requests go through the rAF-based animation; instant ones set
+        // scroll_y directly (CSS Scroll Behavior L1 §3).
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let page_reqs = js.take_page_scroll_requests();
+            for (target_y, smooth) in page_reqs {
+                if smooth {
+                    self.start_smooth_scroll(target_y);
+                } else {
+                    self.scroll_to(target_y);
                 }
             }
         }
@@ -6993,6 +7024,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 if self.advance_momentum(timestamp_ms) {
                     self.request_redraw();
+                }
+                // Sync window.scrollY to current scroll_y so JS reads are accurate.
+                #[cfg(feature = "quickjs")]
+                if let Some(js) = &self.js_ctx {
+                    js.set_page_scroll_y(self.scroll_y);
                 }
                 // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
                 self.try_discard_offscreen_images();

@@ -220,6 +220,8 @@ pub fn install_dom_api(
     sw_backend: Option<Arc<dyn SwBackend>>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
+    pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
+    page_scroll_y: Arc<Mutex<f32>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
@@ -227,7 +229,7 @@ pub fn install_dom_api(
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -327,6 +329,8 @@ fn install_primitives(
     sw_backend: Option<Arc<dyn SwBackend>>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
+    pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
+    page_scroll_y: Arc<Mutex<f32>>,
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
     window_open_requests: Arc<Mutex<Vec<PopupRequest>>>,
     deterministic_seed: Option<u64>,
@@ -1591,6 +1595,21 @@ fn install_primitives(
         let ps = Arc::clone(&pending_scrolls);
         reg!("_lumen_request_scroll", move |nid: u32, x: f64, y: f64| {
             ps.lock().unwrap().push((nid, x as f32, y as f32));
+        });
+    }
+    // Queues a page-level scroll request from window.scrollTo/scrollBy.
+    // `smooth=1` → start_smooth_scroll; `smooth=0` → scroll_to (instant).
+    {
+        let pps = Arc::clone(&pending_page_scrolls);
+        reg!("_lumen_request_page_scroll", move |y: f64, smooth: u32| {
+            pps.lock().unwrap().push((y as f32, smooth != 0));
+        });
+    }
+    // Returns current page scroll Y for window.scrollY / window.pageYOffset.
+    {
+        let psy = Arc::clone(&page_scroll_y);
+        reg!("_lumen_get_page_scroll_y", move || -> f64 {
+            f64::from(*psy.lock().unwrap())
         });
     }
 
@@ -8274,6 +8293,29 @@ var matchMedia = function(media) {
     return mql;
 };
 window.matchMedia            = matchMedia;
+
+// ── window scroll API (CSSOM View Module §4) ────────────────────────────────
+// window.scrollX / scrollY / pageXOffset / pageYOffset — read current page scroll.
+// window.scrollTo / scroll / scrollBy — programmatic page scroll with behavior option.
+Object.defineProperties(window, {
+    scrollY: { get: function() { return _lumen_get_page_scroll_y(); }, enumerable: true },
+    scrollX: { get: function() { return 0; }, enumerable: true },
+    pageYOffset: { get: function() { return _lumen_get_page_scroll_y(); }, enumerable: true },
+    pageXOffset: { get: function() { return 0; }, enumerable: true }
+});
+window.scrollTo = function(x, y) {
+    var top, smooth;
+    if (typeof x === 'object' && x !== null) { top = +(x.top || 0); smooth = x.behavior === 'smooth' ? 1 : 0; }
+    else { top = +(y || 0); smooth = 0; }
+    _lumen_request_page_scroll(top, smooth);
+};
+window.scroll = window.scrollTo;
+window.scrollBy = function(x, y) {
+    var dy, smooth;
+    if (typeof x === 'object' && x !== null) { dy = +(x.top || 0); smooth = x.behavior === 'smooth' ? 1 : 0; }
+    else { dy = +(y || 0); smooth = 0; }
+    _lumen_request_page_scroll(_lumen_get_page_scroll_y() + dy, smooth);
+};
 
 // ── window.CSS (CSS Object Model L1 §5 + CSS Conditional Rules L3 §6) ────────
 // CSS.supports(property, value) — two-argument form.
@@ -21123,5 +21165,68 @@ mod tests {
             typeof window.DataTransferItemList === 'function'
         "#).unwrap();
         assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── window scroll API (CSSOM View Module §4) ─────────────────────────────
+
+    #[test]
+    fn window_scroll_y_initially_zero() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("window.scrollY").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn window_page_y_offset_alias() {
+        let rt = runtime_with_dom(make_doc());
+        rt.set_page_scroll_y(150.0);
+        let v = rt.eval("window.pageYOffset").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(150.0));
+    }
+
+    #[test]
+    fn window_scroll_to_instant_queues_page_request() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.scrollTo(0, 500)").unwrap();
+        let reqs = rt.take_page_scroll_requests();
+        assert_eq!(reqs.len(), 1);
+        assert!((reqs[0].0 - 500.0).abs() < 0.1, "target_y should be 500");
+        assert!(!reqs[0].1, "smooth should be false for instant scroll");
+    }
+
+    #[test]
+    fn window_scroll_to_smooth_sets_smooth_flag() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.scrollTo({ top: 300, behavior: 'smooth' })").unwrap();
+        let reqs = rt.take_page_scroll_requests();
+        assert_eq!(reqs.len(), 1);
+        assert!((reqs[0].0 - 300.0).abs() < 0.1, "target_y should be 300");
+        assert!(reqs[0].1, "smooth should be true");
+    }
+
+    #[test]
+    fn window_scroll_by_adds_to_current_page_scroll() {
+        let rt = runtime_with_dom(make_doc());
+        rt.set_page_scroll_y(200.0);
+        rt.eval("window.scrollBy(0, 100)").unwrap();
+        let reqs = rt.take_page_scroll_requests();
+        assert_eq!(reqs.len(), 1);
+        assert!((reqs[0].0 - 300.0).abs() < 0.1, "target_y should be 300 (200+100)");
+    }
+
+    #[test]
+    fn window_scroll_alias_works() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.scroll(0, 400)").unwrap();
+        let reqs = rt.take_page_scroll_requests();
+        assert_eq!(reqs.len(), 1);
+        assert!((reqs[0].0 - 400.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn window_scroll_x_is_zero() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("window.scrollX").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(0.0));
     }
 }
