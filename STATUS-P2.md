@@ -6,9 +6,8 @@
 
 ## In progress
 
-**W-1 | Print PDF Phase 2: Renderer** — DisplayCommand → PDF output (page layout, rasterization).
-Branch: `p2-w1-print-pdf-phase2`
-Next step: Implement `PdfRenderer` struct, migrate PageContent → PDF instructions (images, text, paths)
+Нет активной задачи. W-1 Phase 2 (Print PDF Renderer) завершена ✅ 2026-06-12.
+Следующее: W-2 (Print preview UI) или взять другую Phase 3 фичу.
 
 ---
 
@@ -32,6 +31,15 @@ Next step: Implement `PdfRenderer` struct, migrate PageContent → PDF instructi
 ---
 
 ## Current / Recently Merged
+
+**W-1 | Print PDF Phase 2: Renderer** ✅ 2026-06-12 (completed: DisplayCommand → PDF)
+- `Renderer::render_print_pages(pages, w, h)` ✅ — каждую страницу в Image через headless renderer
+- `encode_images_as_pdf(images, w, h)` ✅ — PDF encoding с pdf_writer: страницы + XObject + content stream
+- `split_at_page_breaks(cmds: Vec<DisplayCommand>)` ✅ — разделяет display list по PageBreak маркерам
+- Shell `--print-to-pdf <output.pdf> <source>` ✅ — end-to-end CLI: load → layout → paginate → render → PDF
+- Integration: `attach_page_boxes` добавляет номера страниц в margin-boxes (page N of M)
+- Тестирование: ✅ Простые HTML + многостраничные документы с page-break-before создают PDF-файлы
+- Узкое место: CSS `page-break-before` не полностью реализована в layout (Phase 3)
 
 **V-3 | CSS Anchor Positioning L1 (Phase 0)** ✅ 2026-06-12 (merged: P2 layout algorithm foundation)
 - anchor.rs: 24 unit-тестов ✅ (collect_anchors, resolve_anchor_function, resolve_inset_area)
