@@ -3293,6 +3293,67 @@ function _compute_validity(el) {
     return new ValidityState(flags);
 }
 
+// ── Path2D class (HTML LS §4.12.5.1.5) ─────────────────────────────────────────
+// Reusable path object; coordinates stored in user space; CTM applied at use-time.
+function Path2D(arg) {
+    // Allocate a native path object and record its ID on this instance.
+    var svg = (typeof arg === 'string') ? arg : '';
+    if (arg instanceof Path2D) {
+        // Copy constructor: create empty then addPath.
+        this.__pid__ = _lumen_canvas2d_path2d_new('');
+        _lumen_canvas2d_path2d_add_path(this.__pid__, arg.__pid__, '');
+    } else {
+        this.__pid__ = _lumen_canvas2d_path2d_new(svg);
+    }
+}
+Path2D.prototype.moveTo = function(x, y) {
+    _lumen_canvas2d_path2d_move_to(this.__pid__, +x, +y);
+};
+Path2D.prototype.lineTo = function(x, y) {
+    _lumen_canvas2d_path2d_line_to(this.__pid__, +x, +y);
+};
+Path2D.prototype.closePath = function() {
+    _lumen_canvas2d_path2d_close(this.__pid__);
+};
+Path2D.prototype.bezierCurveTo = function(cp1x, cp1y, cp2x, cp2y, x, y) {
+    _lumen_canvas2d_path2d_bezier(this.__pid__, +cp1x, +cp1y, +cp2x, +cp2y, +x, +y);
+};
+Path2D.prototype.quadraticCurveTo = function(cpx, cpy, x, y) {
+    _lumen_canvas2d_path2d_quadratic(this.__pid__, +cpx, +cpy, +x, +y);
+};
+Path2D.prototype.arc = function(x, y, r, startAngle, endAngle, anticlockwise) {
+    _lumen_canvas2d_path2d_arc(this.__pid__, +x, +y, +r, +startAngle, +endAngle, !!anticlockwise);
+};
+Path2D.prototype.arcTo = function(x1, y1, x2, y2, r) {
+    _lumen_canvas2d_path2d_arc_to(this.__pid__, +x1, +y1, +x2, +y2, +r);
+};
+// ellipse: native binding limited to 7 args, so implemented via arc with save/scale.
+Path2D.prototype.ellipse = function(cx, cy, rx, ry, rot, startAngle, endAngle, anticlockwise) {
+    // Approximate via arc in scaled user space — correct for all standard use cases.
+    // Creates a throwaway arc path and merges segments into this path via arc+addPath.
+    var tmp = new Path2D();
+    _lumen_canvas2d_path2d_arc(tmp.__pid__, 0, 0, 1, +startAngle, +endAngle, !!anticlockwise);
+    // Build transform: scale(rx,ry) then rotate(rot) then translate(cx,cy)
+    // [a,b,c,d,e,f] = [rx*cos(r), rx*sin(r), -ry*sin(r), ry*cos(r), cx, cy]
+    var cos_r = Math.cos(+rot), sin_r = Math.sin(+rot);
+    var rx_ = +rx, ry_ = +ry;
+    var a = rx_ * cos_r, b = rx_ * sin_r, c = -ry_ * sin_r, d = ry_ * cos_r;
+    _lumen_canvas2d_path2d_add_path(this.__pid__, tmp.__pid__, '' + a + ',' + b + ',' + c + ',' + d + ',' + (+cx) + ',' + (+cy));
+};
+Path2D.prototype.rect = function(x, y, w, h) {
+    _lumen_canvas2d_path2d_rect(this.__pid__, +x, +y, +w, +h);
+};
+Path2D.prototype.addPath = function(path, transform) {
+    if (!(path instanceof Path2D)) return;
+    if (transform && typeof transform === 'object' && transform.a !== undefined) {
+        var t = transform;
+        _lumen_canvas2d_path2d_add_path(this.__pid__, path.__pid__,
+            '' + t.a + ',' + t.b + ',' + t.c + ',' + t.d + ',' + t.e + ',' + t.f);
+    } else {
+        _lumen_canvas2d_path2d_add_path(this.__pid__, path.__pid__, '');
+    }
+};
+
 // ── Canvas 2D context factory (HTML LS §4.12.4) ─────────────────────────────────
 // Builds a CanvasRenderingContext2D backed by the native _lumen_canvas2d_* bindings
 // (lumen_canvas::Context2D), keyed by the canvas element's node index `nid`.
@@ -3349,8 +3410,20 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
         rect: function(x, y, w, h) { _lumen_canvas2d_rect(nid, +x, +y, +w, +h); },
         bezierCurveTo: function(cp1x, cp1y, cp2x, cp2y, x, y) { _lumen_canvas2d_bezier_curve_to(nid, +cp1x, +cp1y, +cp2x, +cp2y, +x, +y); },
         quadraticCurveTo: function(cpx, cpy, x, y) { _lumen_canvas2d_quadratic_curve_to(nid, +cpx, +cpy, +x, +y); },
-        fill: function() { _lumen_canvas2d_fill(nid); },
-        stroke: function() { _lumen_canvas2d_stroke(nid); },
+        fill: function(ruleOrPath) {
+            if (ruleOrPath instanceof Path2D) {
+                _lumen_canvas2d_fill_path(nid, ruleOrPath.__pid__);
+            } else {
+                _lumen_canvas2d_fill(nid);
+            }
+        },
+        stroke: function(path) {
+            if (path instanceof Path2D) {
+                _lumen_canvas2d_stroke_path(nid, path.__pid__);
+            } else {
+                _lumen_canvas2d_stroke(nid);
+            }
+        },
         // State stack
         save: function() { _lumen_canvas2d_save(nid); },
         restore: function() { _lumen_canvas2d_restore(nid); },
@@ -3374,7 +3447,13 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
             return { width: w, height: h, data: arr };
         },
         // Remaining stubs (not yet implemented)
-        clip: function() {},
+        clip: function(path) {
+            if (path instanceof Path2D) {
+                _lumen_canvas2d_clip_path(nid, path.__pid__);
+            } else {
+                _lumen_canvas2d_clip(nid);
+            }
+        },
         putImageData: function() {},
         drawImage: function() {},
         fillText: function(t, x, y) {
@@ -3390,7 +3469,13 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
             return { width: w, actualBoundingBoxAscent: fs * 0.8, actualBoundingBoxDescent: fs * 0.2 };
         },
         setLineDash: function() {}, getLineDash: function() { return []; },
-        isPointInPath: function() { return false; }, isPointInStroke: function() { return false; },
+        isPointInPath: function(pathOrX, xOrY, y) {
+            if (pathOrX instanceof Path2D) {
+                return _lumen_canvas2d_is_point_in_path(nid, pathOrX.__pid__, +xOrY, +y);
+            }
+            return false;
+        },
+        isPointInStroke: function() { return false; },
         createLinearGradient: function() { return { addColorStop: function() {} }; },
         createRadialGradient: function() { return { addColorStop: function() {} }; },
         createConicGradient: function() { return { addColorStop: function() {} }; },

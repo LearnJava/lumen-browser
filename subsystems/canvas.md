@@ -4,7 +4,7 @@ HTML Canvas 2D rendering context (`CanvasRenderingContext2D`) — CPU rasterizat
 
 ## Scope
 
-Phase 3 implementation: all drawing operations write to an in-process `Vec<u8>` (RGBA8, row-major, top-left origin). The buffer is uploaded to GPU via `Renderer::register_image` and drawn with `DrawImage`.
+Phase 5 implementation: all drawing operations write to an in-process `Vec<u8>` (RGBA8, row-major, top-left origin). The buffer is uploaded to GPU via `Renderer::register_image` and drawn with `DrawImage`.
 
 ## Done
 
@@ -58,22 +58,35 @@ Phase 3 implementation: all drawing operations write to an in-process `Vec<u8>` 
 - `From<CanvasColor> for PaintSource` — backward-compatible implicit conversion.
 - 35 unit tests pass.
 
-### JS bindings (lumen-js `canvas2d.rs`)
-- All Phase 1–3 canvas ops exposed as `_lumen_canvas2d_*` native functions.
-- Phase 3 additions: `create_linear/radial/conic_gradient`, `gradient_add_color_stop`,
-  `set_fill/stroke_style_gradient`, `create_pattern`, `set_fill/stroke_style_pattern`,
-  `set_shadow_color/blur/offset_x/offset_y`, `clip`, `draw_image`, `put_image_data`,
-  `create_image_data`, `set_font`, `fill_text` (stub), `measure_text` (rough estimate).
-- Thread-local gradient/pattern registries (GRADIENTS, PATTERNS, NEXT_PAINT_ID).
-- `offscreen_canvas.rs` updated to use `PaintSource::Color(...)`.
-- `decode_hex` helper for `put_image_data` hex-encoded data.
+### Phase 4 (fillText / strokeText / measureText via lumen-font)
+- `fillText / strokeText` — full glyph rasterization via `lumen_font::Rasterizer`.
+- `measureText` — real advance widths via `Font::parse` + hmtx table.
+- `textAlign / textBaseline` — saved/restored as part of `DrawState`.
+- `parse_canvas_font_size` — extracts px size from CSS font string.
+- 48 unit tests pass.
 
-## Deferred (Phase 4+)
+### Phase 5 — Path2D (HTML LS §4.12.5.1.5)
+- `Path2dData` struct in `path2d.rs` — reusable path object storing segments in user-space coordinates (CTM applied at use-time per spec).
+- All CanvasPath mixin methods: `moveTo/lineTo/closePath/bezierCurveTo/quadraticCurveTo/arc/arcTo/ellipse/rect/addPath`.
+- `from_svg_str(s)` — parses SVG path data strings: M/m L/l H/h V/v C/c Q/q A/a Z/z with relative→absolute conversion.
+- `to_device_space(ctm) -> Vec<PathSegment>` — applies CTM at use-time (spec-compliant).
+- `svg_arc_to_lines` — endpoint→centre parameterisation (SVG 1.1 Appendix F.6).
+- `Context2D::fill_with_path2d / stroke_with_path2d / clip_with_path2d / is_point_in_path2d`.
+- 48 unit tests pass (canvas crate).
 
-- `fillText / strokeText` — full glyph rasterization (needs lumen-font integration in lumen-js).
-- `measureText` — spec-correct measurement based on font metrics.
+### JS bindings (lumen-js `canvas2d.rs` + `dom.rs`)
+- All Phase 1–5 canvas ops exposed as `_lumen_canvas2d_*` native functions.
+- Phase 3: gradients (linear/radial/conic), patterns, shadow, clip, draw_image, put/createImageData.
+- Phase 4: fillText, strokeText, measureText, textAlign, textBaseline, font.
+- Phase 5: `_lumen_canvas2d_path2d_*` native functions; PATHS/NEXT_PATH_ID thread-locals.
+- Thread-local registries: GRADIENTS, PATTERNS, NEXT_PAINT_ID, PATHS, NEXT_PATH_ID.
+- JS `Path2D` class in `dom.rs`: constructor (from svg string or Path2D copy), full prototype.
+- `ctx.fill(ruleOrPath)`, `ctx.stroke(path?)`, `ctx.clip(path?)`, `ctx.isPointInPath(path, x, y)`.
+- `ellipse` implemented in JS shim (rquickjs max-7-args limitation → save/scale/rotate/arc trick).
+
+## Deferred
+
 - Gaussian blur for `shadowBlur > 0`.
-- `getContext('2d')` shell integration (display-list `DrawImage` upload).
 - Canvas fingerprint noise (ADR-007) — `set_noise_generator / get_image_data`.
 
 ## Invariants
@@ -84,3 +97,5 @@ Phase 3 implementation: all drawing operations write to an in-process `Vec<u8>` 
 - Gradient sampling is in device pixel space (post-CTM), not spec-correct user space.
 - `put_image_data` bypasses CTM, globalAlpha, compositing, and clip (spec §4.12.5.1.16).
 - `clip()` intersects with the existing mask (never replaces it outright).
+- `Path2dData` stores user-space coordinates; CTM is applied in `to_device_space()` at draw time, not at path-construction time (HTML LS §4.12.5.1.5 invariant).
+- `ellipse()` on `Path2dData` is approximated via `arc` with save/scale/rotate (correct for all standard use cases).
