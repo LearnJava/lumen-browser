@@ -6,11 +6,14 @@
 
 ## In progress
 
-(нет)
+Canvas 2D Phase 5 — Path2D  branch: p2-canvas2d-phase5
+Next step: коммит + /lumen-task-finish
 
 ---
 
 ## Next
+
+### ~~Canvas 2D Phase 5~~ — Path2D (HTML LS §4.12.5.1.5) — **выполнено** (см. Recent)
 
 ### PA — Paint-Arch: итоги архитектурной ревизии paint-пайплайна (2026-06-10)
 

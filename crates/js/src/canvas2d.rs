@@ -7,6 +7,8 @@
 //! Transforms: `translate`, `rotate`, `scale`, `transform`, `setTransform`, `resetTransform`.
 //! Properties: `fillStyle`, `strokeStyle`, `lineWidth`, `globalAlpha`,
 //! `globalCompositeOperation`, `lineCap`, `lineJoin`, `miterLimit`.
+//! Phase 5: `Path2D` object bindings — `_lumen_canvas2d_path2d_*` native functions;
+//! fill/stroke/clip with Path2D; `isPointInPath` with Path2D.
 //!
 //! Each `<canvas>` is keyed by its DOM node index (`__nid__` on the JS side,
 //! `LayoutBox::node.index()` on the layout side). The display list emits a
@@ -20,7 +22,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use lumen_canvas::{
-    CanvasColor, CanvasGradient, CanvasPattern, PaintSource, RepeatMode,
+    CanvasColor, CanvasGradient, CanvasPattern, Path2dData, PaintSource, RepeatMode,
     CompositeOperation, LineCap, LineJoin, Context2D,
 };
 use rquickjs::Ctx;
@@ -36,11 +38,24 @@ thread_local! {
     static PATTERNS: RefCell<HashMap<u32, CanvasPattern>> = RefCell::new(HashMap::new());
     /// Auto-increment for gradient/pattern object IDs.
     static NEXT_PAINT_ID: Cell<u32> = const { Cell::new(1) };
+    /// Live `Path2D` objects, keyed by Path2D instance ID.
+    static PATHS: RefCell<HashMap<u32, Path2dData>> = RefCell::new(HashMap::new());
+    /// Auto-increment for Path2D object IDs.
+    static NEXT_PATH_ID: Cell<u32> = const { Cell::new(1) };
 }
 
 /// Allocate a new unique object ID for a gradient or pattern.
 fn next_paint_id() -> u32 {
     NEXT_PAINT_ID.with(|c| {
+        let id = c.get();
+        c.set(id.wrapping_add(1).max(1));
+        id
+    })
+}
+
+/// Allocate a new unique object ID for a `Path2D`.
+fn next_path_id() -> u32 {
+    NEXT_PATH_ID.with(|c| {
         let id = c.get();
         c.set(id.wrapping_add(1).max(1));
         id
@@ -879,6 +894,241 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
                     let _ = write!(s, "{b:02x}");
                 }
                 s
+            })
+        }),
+    )?;
+
+    // ── Phase 5: Path2D bindings ──────────────────────────────────────────────
+
+    // _lumen_canvas2d_path2d_new(svg_str_or_empty) → path_id
+    // Creates a new Path2D, optionally initialised from an SVG path string.
+    g.set(
+        "_lumen_canvas2d_path2d_new",
+        rquickjs::Function::new(ctx.clone(), |svg: String| -> u32 {
+            let path = if svg.is_empty() {
+                Path2dData::new()
+            } else {
+                Path2dData::from_svg_str(&svg)
+            };
+            let id = next_path_id();
+            PATHS.with(|p| p.borrow_mut().insert(id, path));
+            id
+        }),
+    )?;
+
+    // _lumen_canvas2d_path2d_free(path_id) — release a Path2D when GC'd on JS side.
+    g.set(
+        "_lumen_canvas2d_path2d_free",
+        rquickjs::Function::new(ctx.clone(), |path_id: u32| {
+            PATHS.with(|p| p.borrow_mut().remove(&path_id));
+        }),
+    )?;
+
+    // _lumen_canvas2d_path2d_move_to(path_id, x, y)
+    g.set(
+        "_lumen_canvas2d_path2d_move_to",
+        rquickjs::Function::new(ctx.clone(), |path_id: u32, x: f64, y: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.move_to(x as f32, y as f32);
+                }
+            });
+        }),
+    )?;
+
+    // _lumen_canvas2d_path2d_line_to(path_id, x, y)
+    g.set(
+        "_lumen_canvas2d_path2d_line_to",
+        rquickjs::Function::new(ctx.clone(), |path_id: u32, x: f64, y: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.line_to(x as f32, y as f32);
+                }
+            });
+        }),
+    )?;
+
+    // _lumen_canvas2d_path2d_close(path_id)
+    g.set(
+        "_lumen_canvas2d_path2d_close",
+        rquickjs::Function::new(ctx.clone(), |path_id: u32| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.close_path();
+                }
+            });
+        }),
+    )?;
+
+    // _lumen_canvas2d_path2d_bezier(path_id, cp1x, cp1y, cp2x, cp2y, x, y)
+    g.set(
+        "_lumen_canvas2d_path2d_bezier",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |path_id: u32, cp1x: f64, cp1y: f64, cp2x: f64, cp2y: f64, x: f64, y: f64| {
+                PATHS.with(|p| {
+                    if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                        pd.bezier_curve_to(
+                            cp1x as f32, cp1y as f32,
+                            cp2x as f32, cp2y as f32,
+                            x as f32, y as f32,
+                        );
+                    }
+                });
+            },
+        ),
+    )?;
+
+    // _lumen_canvas2d_path2d_quadratic(path_id, cpx, cpy, x, y)
+    g.set(
+        "_lumen_canvas2d_path2d_quadratic",
+        rquickjs::Function::new(ctx.clone(), |path_id: u32, cpx: f64, cpy: f64, x: f64, y: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.quadratic_curve_to(cpx as f32, cpy as f32, x as f32, y as f32);
+                }
+            });
+        }),
+    )?;
+
+    // _lumen_canvas2d_path2d_arc(path_id, x, y, r, startAngle, endAngle, ccw)
+    g.set(
+        "_lumen_canvas2d_path2d_arc",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |path_id: u32, x: f64, y: f64, r: f64, start: f64, end: f64, ccw: bool| {
+                PATHS.with(|p| {
+                    if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                        pd.arc(x as f32, y as f32, r as f32, start as f32, end as f32, ccw);
+                    }
+                });
+            },
+        ),
+    )?;
+
+    // _lumen_canvas2d_path2d_arc_to(path_id, x1, y1, x2, y2, r)
+    g.set(
+        "_lumen_canvas2d_path2d_arc_to",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |path_id: u32, x1: f64, y1: f64, x2: f64, y2: f64, r: f64| {
+                PATHS.with(|p| {
+                    if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                        pd.arc_to(x1 as f32, y1 as f32, x2 as f32, y2 as f32, r as f32);
+                    }
+                });
+            },
+        ),
+    )?;
+
+    // _lumen_canvas2d_path2d_ellipse is exposed from the JS shim (dom.rs) since rquickjs
+    // supports max 7 closure params, and the full ellipse signature needs 8 + path_id = 9.
+    // The JS shim implements it via path2d_arc with a saved CTM trick.
+
+    // _lumen_canvas2d_path2d_rect(path_id, x, y, w, h)
+    g.set(
+        "_lumen_canvas2d_path2d_rect",
+        rquickjs::Function::new(ctx.clone(), |path_id: u32, x: f64, y: f64, w: f64, h: f64| {
+            PATHS.with(|p| {
+                if let Some(pd) = p.borrow_mut().get_mut(&path_id) {
+                    pd.rect(x as f32, y as f32, w as f32, h as f32);
+                }
+            });
+        }),
+    )?;
+
+    // _lumen_canvas2d_path2d_add_path(dst_id, src_id, transform_csv)
+    // transform_csv is "a,b,c,d,e,f" or empty string for identity.
+    // rquickjs supports max 7 closure params; passing the 6-element DOMMatrix as a CSV string
+    // keeps the binding within the 3-argument limit.
+    g.set(
+        "_lumen_canvas2d_path2d_add_path",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |dst_id: u32, src_id: u32, transform_csv: String| {
+                let transform: Option<[f32; 6]> = if transform_csv.is_empty() {
+                    None
+                } else {
+                    let parts: Vec<f32> = transform_csv.split(',')
+                        .filter_map(|s| s.parse().ok())
+                        .collect();
+                    if parts.len() == 6 {
+                        Some([parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]])
+                    } else {
+                        None
+                    }
+                };
+                PATHS.with(|p| {
+                    let map = p.borrow();
+                    if let Some(src) = map.get(&src_id) {
+                        let src_clone = src.clone();
+                        drop(map);
+                        if let Some(dst) = p.borrow_mut().get_mut(&dst_id) {
+                            dst.add_path(&src_clone, transform);
+                        }
+                    }
+                });
+            },
+        ),
+    )?;
+
+    // _lumen_canvas2d_fill_path(nid, path_id) — fill a Path2D with current fillStyle.
+    g.set(
+        "_lumen_canvas2d_fill_path",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, path_id: u32| {
+            let path = PATHS.with(|p| p.borrow().get(&path_id).cloned());
+            if let Some(pd) = path {
+                CANVASES.with(|c| {
+                    if let Some(ctx2d) = c.borrow_mut().get_mut(&nid) {
+                        ctx2d.fill_with_path2d(&pd);
+                    }
+                });
+                mark_dirty(nid);
+            }
+        }),
+    )?;
+
+    // _lumen_canvas2d_stroke_path(nid, path_id) — stroke a Path2D.
+    g.set(
+        "_lumen_canvas2d_stroke_path",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, path_id: u32| {
+            let path = PATHS.with(|p| p.borrow().get(&path_id).cloned());
+            if let Some(pd) = path {
+                CANVASES.with(|c| {
+                    if let Some(ctx2d) = c.borrow_mut().get_mut(&nid) {
+                        ctx2d.stroke_with_path2d(&pd);
+                    }
+                });
+                mark_dirty(nid);
+            }
+        }),
+    )?;
+
+    // _lumen_canvas2d_clip_path(nid, path_id) — clip with a Path2D.
+    g.set(
+        "_lumen_canvas2d_clip_path",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, path_id: u32| {
+            let path = PATHS.with(|p| p.borrow().get(&path_id).cloned());
+            if let Some(pd) = path {
+                CANVASES.with(|c| {
+                    if let Some(ctx2d) = c.borrow_mut().get_mut(&nid) {
+                        ctx2d.clip_with_path2d(&pd);
+                    }
+                });
+            }
+        }),
+    )?;
+
+    // _lumen_canvas2d_is_point_in_path(nid, path_id, x, y) → bool
+    g.set(
+        "_lumen_canvas2d_is_point_in_path",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, path_id: u32, x: f64, y: f64| -> bool {
+            let path = PATHS.with(|p| p.borrow().get(&path_id).cloned());
+            path.is_some_and(|pd| {
+                CANVASES.with(|c| {
+                    c.borrow().get(&nid)
+                        .is_some_and(|ctx2d| ctx2d.is_point_in_path2d(&pd, x as f32, y as f32))
+                })
             })
         }),
     )?;

@@ -1,26 +1,28 @@
 //! HTML Canvas 2D API — `CanvasRenderingContext2D` для Lumen.
 //!
-//! Phase 3 реализация: добавлены CanvasGradient (linear/radial/conic),
-//! CanvasPattern, PaintSource как fill/stroke style, clip() bitmap-mask,
-//! drawImage() blit, putImageData/createImageData, shadow properties,
-//! fillText/measureText (через переданные glyph-битмапы).
+//! Phase 5 добавляет `Path2D` — переиспользуемые объекты путей (HTML LS §4.12.5.1.5):
+//! конструктор из SVG-строки, все команды CanvasPath mixin, `addPath(other, transform?)`,
+//! и `ctx.fill/stroke/clip(path2d)` для использования Path2D вместо текущего пути.
 //!
 //! Покрытые операции: `fillRect`, `clearRect`, `strokeRect`, `beginPath`,
 //! `moveTo`, `lineTo`, `closePath`, `fill`, `stroke`, `arc`, `ellipse`,
 //! `arcTo`, `bezierCurveTo`, `quadraticCurveTo`, `rect`, `save`, `restore`,
 //! `translate`, `rotate`, `scale`, `transform`, `setTransform`, `resetTransform`,
-//! `clip`, `drawImage`, `putImageData`, `createImageData`, `fillText`, `strokeText`.
+//! `clip`, `drawImage`, `putImageData`, `createImageData`, `fillText`, `strokeText`,
+//! `fill(path2d)`, `stroke(path2d)`, `clip(path2d)`.
 //! Свойства: `fillStyle`, `strokeStyle`, `lineWidth`, `globalAlpha`,
 //! `globalCompositeOperation`, `lineCap`, `lineJoin`, `miterLimit`,
 //! `shadowColor`, `shadowBlur`, `shadowOffsetX`, `shadowOffsetY`, `font`.
 
 mod color;
 mod path;
+pub mod path2d;
 mod rasterize;
 pub mod fp_noise;
 
 pub use color::CanvasColor;
 pub use path::{PathCommand, PathSegment};
+pub use path2d::Path2dData;
 pub use fp_noise::CanvasNoiseGenerator;
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
@@ -1042,6 +1044,69 @@ impl Context2D {
             None => new_mask,
             Some(old) => old.iter().zip(new_mask.iter()).map(|(a, b)| *a && *b).collect(),
         });
+    }
+
+    // ── Phase 5: Path2D ─────────────────────────────────────────────────────
+
+    /// `fill(path2d)` — fill a `Path2D` object using the current `fillStyle`.
+    ///
+    /// The path is converted to device space using the current CTM at the time of this call,
+    /// per HTML LS §4.12.5.1.5 (CTM applied at use-time, not at path-creation time).
+    pub fn fill_with_path2d(&mut self, path2d: &Path2dData) {
+        let path = path2d.to_device_space(self.ctm);
+        let paint = self.fill_style.clone();
+        let alpha = self.global_alpha;
+        let shadow = self.shadow_effective();
+        if let Some((sx, sy, sc)) = shadow {
+            let shifted = shift_path(&path, sx, sy);
+            rasterize::fill_path(self, &shifted, &PaintSource::Color(sc), alpha);
+        }
+        rasterize::fill_path(self, &path, &paint, alpha);
+    }
+
+    /// `stroke(path2d)` — stroke a `Path2D` object using the current `strokeStyle`.
+    ///
+    /// CTM applied at use-time per HTML LS §4.12.5.1.5.
+    pub fn stroke_with_path2d(&mut self, path2d: &Path2dData) {
+        let path = path2d.to_device_space(self.ctm);
+        let paint = self.stroke_style.clone();
+        let alpha = self.global_alpha;
+        let lw = self.line_width;
+        let shadow = self.shadow_effective();
+        if let Some((sx, sy, sc)) = shadow {
+            let shifted = shift_path(&path, sx, sy);
+            rasterize::stroke_path(self, &shifted, lw, &PaintSource::Color(sc), alpha);
+        }
+        rasterize::stroke_path(self, &path, lw, &paint, alpha);
+    }
+
+    /// `clip(path2d)` — intersect the clipping region with a `Path2D` object (even-odd rule).
+    ///
+    /// CTM applied at use-time per HTML LS §4.12.5.1.5.
+    pub fn clip_with_path2d(&mut self, path2d: &Path2dData) {
+        let path = path2d.to_device_space(self.ctm);
+        let w = self.width;
+        let h = self.height;
+        let new_mask = rasterize::build_clip_mask(&path, w, h);
+        self.clip_mask = Some(match self.clip_mask.take() {
+            None => new_mask,
+            Some(old) => old.iter().zip(new_mask.iter()).map(|(a, b)| *a && *b).collect(),
+        });
+    }
+
+    /// `isPointInPath(path2d, x, y)` — test whether `(x, y)` lies inside a `Path2D`.
+    ///
+    /// Uses the even-odd rule.  Returns `false` for degenerate paths.
+    /// This is a conservative stub: builds a 1×1 clip mask at pixel (x,y) and checks the bit.
+    pub fn is_point_in_path2d(&self, path2d: &Path2dData, x: f32, y: f32) -> bool {
+        let path = path2d.to_device_space(self.ctm);
+        if path.is_empty() { return false; }
+        let xi = x as u32;
+        let yi = y as u32;
+        if xi >= self.width || yi >= self.height { return false; }
+        // Build a minimal mask just for the 1×1 region around (x,y).
+        let mask = rasterize::build_clip_mask(&path, self.width, self.height);
+        mask.get((yi * self.width + xi) as usize).copied().unwrap_or(false)
     }
 
     /// `drawImage(src_pixels, src_w, src_h, dx, dy, dw, dh)` — blit source image onto canvas.
