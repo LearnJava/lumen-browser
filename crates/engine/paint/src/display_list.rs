@@ -1498,17 +1498,13 @@ pub fn build_display_list_with_anim(
 ///   SC-creating потомков — те идут в свои buckets).
 /// - `post`: парные Pop-команды, в обратном порядке к `pre`.
 ///
-/// **Phase 0 ограничение для layer-ops:** `pre` / `post` SC-owner-а охватывают
-/// только `root_bg + contents` собственного SC, **не** child-SC потомков (они
-/// рисуются после `InlineContent` parent-SC в линейном порядке, а `post` уже
-/// эмитится в той же `InlineContent`-фазе). Для строгой семантики
-/// `opacity / blend-mode` родителя на child-SC потребуется либо stack-based
-/// эмиссия с явным end-of-SC маркером в `PaintOrder`, либо группировка
-/// child-SC внутри parent-bucket. Renderer сейчас всё равно игнорирует
-/// Push/Pop (роадмап P2 п.1B шаг (c) — реальный layer-pipeline), так что
-/// текущая эмиссия — interface-level: парность сохранена, потребители
-/// (compositor) видят сами триггеры; уточнение охвата child-SC — отдельный
-/// шаг при реальном compositor pipeline.
+/// **Layer-ops nesting invariant:** `pre` / `post` SC-owner-а охватывают
+/// `root_bg + contents` собственного SC **и все child-SC потомков**. Это
+/// реализуется через `PaintPhase::CloseLayer`: `post` эмитится в `CloseLayer`,
+/// которая добавляется в `paint_sc` последней — уже ПОСЛЕ всех дочерних SC.
+/// Таким образом Pop-команды родителя (PopTransform и т.д.) приходят после
+/// Push-команд всех детей — nested transforms и opacity корректно компонуются
+/// (BUG-139). Старый подход (post в InlineContent) был Phase-0-заглушкой.
 pub fn build_display_list_ordered(
     root: &LayoutBox,
     tree: &StackingTree,
@@ -1545,6 +1541,13 @@ pub fn build_display_list_ordered_dpr(
             }
             PaintPhase::InlineContent => {
                 out.append(&mut bucket.contents);
+                // post (PopTransform / PopOpacity / etc.) is now in CloseLayer —
+                // emitted AFTER all child SCs so nested transforms compose correctly
+                // (BUG-139). Do NOT move post back here.
+            }
+            // CloseLayer is emitted last in paint_sc, after all child SCs, so the
+            // parent's Pop-commands wrap the children's Push-commands correctly.
+            PaintPhase::CloseLayer => {
                 out.append(&mut bucket.post);
             }
             // Phase 0: BlockBackgrounds / Floats merged into InlineContent;
@@ -1599,6 +1602,13 @@ pub fn build_display_list_ordered_with_anim_dpr(
             }
             PaintPhase::InlineContent => {
                 out.append(&mut bucket.contents);
+                // post (PopTransform / PopOpacity / etc.) is now in CloseLayer —
+                // emitted AFTER all child SCs so nested transforms compose correctly
+                // (BUG-139). Do NOT move post back here.
+            }
+            // CloseLayer is emitted last in paint_sc, after all child SCs, so the
+            // parent's Pop-commands wrap the children's Push-commands correctly.
+            PaintPhase::CloseLayer => {
                 out.append(&mut bucket.post);
             }
             _ => {}
@@ -7900,6 +7910,83 @@ mod tests {
         let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopOpacity));
         assert_eq!(pushes, 2);
         assert_eq!(pops, 2);
+    }
+
+    #[test]
+    fn ordered_nested_transforms_emit_two_pairs() {
+        // BUG-139 регрессия: внешний div с transform, внутренний div с transform.
+        // Каждый создаёт свой SC; должно быть ровно 2 пары PushTransform/PopTransform.
+        let dl = build_ordered(
+            r#"<div class="outer"><div class="inner">x</div></div>"#,
+            ".outer { transform: rotate(15deg); } .inner { transform: rotate(-15deg); }",
+        );
+        let pushes =
+            count_variant(&dl, |c| matches!(c, DisplayCommand::PushTransform { .. }));
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopTransform));
+        assert_eq!(pushes, 2, "два вложенных transform → два PushTransform");
+        assert_eq!(pops, 2, "и два парных PopTransform");
+    }
+
+    #[test]
+    fn ordered_nested_transforms_parent_wraps_child() {
+        // BUG-139 регрессия: Pop-команды родителя должны приходить ПОСЛЕ
+        // Push/Pop-команд ребёнка. До фикса родительский PopTransform эмитился
+        // в PaintPhase::InlineContent (до рендера дочерних SC), из-за чего
+        // вложенные transforms не компоновались.
+        let dl = build_ordered(
+            r#"<div class="outer"><div class="inner">x</div></div>"#,
+            ".outer { transform: rotate(10deg); } .inner { transform: translateX(50px); }",
+        );
+        // Позиции первого и второго вхождения
+        let push_positions: Vec<usize> = dl
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                if matches!(c, DisplayCommand::PushTransform { .. }) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let pop_positions: Vec<usize> = dl
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                if matches!(c, DisplayCommand::PopTransform) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(push_positions.len(), 2, "ожидается 2 PushTransform");
+        assert_eq!(pop_positions.len(), 2, "ожидается 2 PopTransform");
+        // Родительский Push идёт раньше дочернего Push
+        assert!(
+            push_positions[0] < push_positions[1],
+            "родительский PushTransform (idx {}) должен предшествовать дочернему (idx {})",
+            push_positions[0],
+            push_positions[1]
+        );
+        // Дочерний Pop идёт раньше родительского Pop — ключевая инварианта BUG-139
+        assert!(
+            pop_positions[0] < pop_positions[1],
+            "дочерний PopTransform (idx {}) должен предшествовать родительскому (idx {}), \
+             иначе вложенные transforms не компонуются",
+            pop_positions[0],
+            pop_positions[1]
+        );
+        // Дочерний Push идёт ПОСЛЕ родительского Push (внутри родительского слоя)
+        assert!(
+            push_positions[0] < push_positions[1],
+            "дочерний PushTransform должен быть внутри родительского слоя"
+        );
+        // Дочерний Pop идёт ДО родительского Pop (закрывается раньше)
+        assert!(
+            pop_positions[0] < pop_positions[1],
+            "дочерний PopTransform должен закрыться до родительского"
+        );
     }
 
     #[test]
