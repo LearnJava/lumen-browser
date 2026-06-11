@@ -6,7 +6,9 @@
 
 ## In progress
 
-Нет активной задачи.
+**W-2b | Print preview UI dialog** branch: p2-w2b-print-preview
+- Interactive dialog для параметров печати: масштабирование, диапазон страниц, сохранение состояния  
+- Next step: существующая E-1 (print_panel.rs) требует состояния (save/load); расширить для W-2b с доп. полями
 
 ---
 
