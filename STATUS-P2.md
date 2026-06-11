@@ -6,7 +6,8 @@
 
 ## In progress
 
-(нет)
+Canvas 2D Phase 3  branch: p2-canvas2d-phase3
+Next step: CanvasGradient + CanvasPattern (PaintSource enum) в lib.rs; shadow fields; clip(); drawImage; fillText/measureText; putImageData/createImageData; JS bindings в canvas2d.rs
 
 ---
 
