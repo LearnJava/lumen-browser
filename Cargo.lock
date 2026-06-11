@@ -1853,6 +1853,7 @@ dependencies = [
  "lumen-core",
  "lumen-css-parser",
  "lumen-dom",
+ "lumen-font",
  "lumen-layout",
  "lumen-paint",
  "p256",

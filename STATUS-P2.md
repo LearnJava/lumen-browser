@@ -6,7 +6,8 @@
 
 ## In progress
 
-(нет)
+Canvas 2D Phase 4 — реальный fillText/strokeText/measureText через lumen-font  branch: p2-canvas2d-phase4
+Next step: коммит завершён, merge → main  crates/js/src/canvas2d.rs:render_text_to_canvas
 
 ---
 

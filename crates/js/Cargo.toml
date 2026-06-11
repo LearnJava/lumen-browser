@@ -25,6 +25,10 @@ lumen-css-parser = { workspace = true }
 # (compound selectors, combinators, pseudo-classes). No circular dep: layout does not
 # depend on lumen-js. Workspace-internal, no new external dependency.
 lumen-layout = { workspace = true }
+# lumen-font: needed for Canvas 2D text rendering — fillText/strokeText/measureText (Phase 4).
+# Workspace-internal crate (no new external dep) — provides Font::parse, Rasterizer, cmap/hmtx
+# tables needed to lay out and rasterize glyph bitmaps for the canvas drawing surface.
+lumen-font = { workspace = true }
 # Permanent #5 (§5): JS engine. QuickJS for Phase 0–1; rusty_v8 planned for v1.0+.
 # Rationale: writing a JS engine from scratch is not in scope for Lumen.
 # `loader` feature: enables ES6 module resolver/loader API (Resolver + Loader traits +
