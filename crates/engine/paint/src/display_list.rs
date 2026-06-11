@@ -25,7 +25,7 @@ use lumen_layout::{
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
     ScrollbarWidth, SelectionHighlight,
-    StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
+    StackingContextId, StackingTree, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
     TransformStyle,
     Visibility,
@@ -5168,6 +5168,7 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
     let style = frag.style.text_decoration_style;
     let x = container_x + frag.x;
     let color = frag.style.text_decoration_color.resolve(frag.style.color);
+    let skip_ink = frag.style.text_decoration_skip_ink;
 
     if decoration.underline {
         // CSS Text Decoration L4 §5.1: text-underline-position.
@@ -5179,15 +5180,34 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
         };
         // CSS Text Decoration L4 §5.3: text-underline-offset adds an explicit shift.
         let extra = frag.style.text_underline_offset.unwrap_or(0.0);
-        emit_decoration_line(out, x, baseline_y + base_offset + extra, frag.width, thickness, color, style);
+        let deco_y = baseline_y + base_offset + extra;
+        // CSS Text Decoration L4 §3.5: text-decoration-skip-ink.
+        // `None` — continuous line; `Auto` — skip under descenders; `All` — skip every char.
+        match skip_ink {
+            TextDecorationSkipInk::None => {
+                emit_decoration_line(out, x, deco_y, frag.width, thickness, color, style);
+            }
+            TextDecorationSkipInk::Auto => {
+                emit_decoration_line_skip_ink(out, x, deco_y, frag.width, thickness, color, style, &frag.text, false);
+            }
+            TextDecorationSkipInk::All => {
+                emit_decoration_line_skip_ink(out, x, deco_y, frag.width, thickness, color, style, &frag.text, true);
+            }
+        }
     }
     if decoration.line_through {
+        // line-through sits on the mid-ascent; skip-ink does not apply (spec §3.5).
         let y = baseline_y - fs * 0.30;
         emit_decoration_line(out, x, y, frag.width, thickness, color, style);
     }
     if decoration.overline {
         let y = baseline_y - fs * 0.78;
-        emit_decoration_line(out, x, y, frag.width, thickness, color, style);
+        // `All` skips over all glyphs including those above/below the line (spec §3.5).
+        if skip_ink == TextDecorationSkipInk::All {
+            emit_decoration_line_skip_ink(out, x, y, frag.width, thickness, color, style, &frag.text, true);
+        } else {
+            emit_decoration_line(out, x, y, frag.width, thickness, color, style);
+        }
     }
 }
 
@@ -5205,6 +5225,85 @@ fn resolve_decoration_thickness(value: TextDecorationThickness, font_size: f32) 
         }
         TextDecorationThickness::Length(px) => px.max(0.0),
         TextDecorationThickness::Percentage(frac) => (frac * font_size).max(0.0),
+    }
+}
+
+/// Returns `true` when the character has ink below the alphabetic baseline
+/// that would visually cross a standard underline (CSS Text Decoration L4 §3.5).
+///
+/// Phase 0: covers the most common Latin descenders. Non-Latin scripts and
+/// italic `f` are not yet tracked — future work when per-glyph metrics are
+/// available at paint time.
+fn char_has_ink_descender(ch: char) -> bool {
+    // ASCII descenders: g j p q y; Q and J have tails in many typefaces.
+    matches!(ch, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q' | 'J')
+}
+
+/// Emits a decoration line (underline or overline) that skips over glyphs
+/// with ink that would cross it — CSS Text Decoration L4 §3.5
+/// `text-decoration-skip-ink`.
+///
+/// `skip_all`: when `true` (value `all`) every character gets a gap; when
+/// `false` (value `auto`) only characters with known descenders get gaps.
+///
+/// Algorithm: divide the fragment into equal-width character cells based on
+/// `frag.width / char_count` (Phase 0 approximation — no per-glyph metrics
+/// at paint time). For each cell that needs a gap, extend a gap margin of
+/// `thickness + 1` px on each side, then draw the remaining segments.
+fn emit_decoration_line_skip_ink(
+    out: &mut DisplayList,
+    x: f32,
+    y: f32,
+    width: f32,
+    thickness: f32,
+    color: Color,
+    style: TextDecorationStyle,
+    text: &str,
+    skip_all: bool,
+) {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n == 0 {
+        emit_decoration_line(out, x, y, width, thickness, color, style);
+        return;
+    }
+
+    let char_w = width / n as f32;
+    // Gap margin: enough to visibly clear the glyph ink on both sides.
+    let margin = (thickness + 1.0).min(char_w * 0.4);
+
+    // Build merged gap intervals.
+    let mut gaps: Vec<(f32, f32)> = Vec::new();
+    for (i, &ch) in chars.iter().enumerate() {
+        if skip_all || char_has_ink_descender(ch) {
+            let cell_x = x + i as f32 * char_w;
+            let gap_start = (cell_x - margin).max(x);
+            let gap_end = (cell_x + char_w + margin).min(x + width);
+            if let Some(last) = gaps.last_mut() {
+                if gap_start <= last.1 {
+                    last.1 = last.1.max(gap_end);
+                    continue;
+                }
+            }
+            gaps.push((gap_start, gap_end));
+        }
+    }
+
+    if gaps.is_empty() {
+        emit_decoration_line(out, x, y, width, thickness, color, style);
+        return;
+    }
+
+    // Draw segments between gaps.
+    let mut seg_x = x;
+    for (gap_start, gap_end) in &gaps {
+        if seg_x < *gap_start {
+            emit_decoration_line(out, seg_x, y, gap_start - seg_x, thickness, color, style);
+        }
+        seg_x = *gap_end;
+    }
+    if seg_x < x + width - f32::EPSILON {
+        emit_decoration_line(out, seg_x, y, x + width - seg_x, thickness, color, style);
     }
 }
 
