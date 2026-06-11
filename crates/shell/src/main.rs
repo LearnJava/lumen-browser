@@ -593,12 +593,17 @@ fn do_print_to_pdf_with_opts(
     event_sink: Arc<dyn EventSink>,
     margin_tb: f32,
     margin_lr: f32,
+    scale: i32,
 ) -> Result<usize, Box<dyn Error>> {
     use lumen_layout::{paginate, PaginationContext};
     use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
 
     let raw = source.load_bytes(event_sink.clone(), None)?;
-    let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
+    // Apply scale to viewport (W-2b): 50–200% zoom
+    let scale_factor = scale as f32 / 100.0;
+    let scaled_w = (PDF_PAGE_W as f32 * scale_factor).ceil() as f32;
+    let scaled_h = (PDF_PAGE_H as f32 * scale_factor).ceil() as f32;
+    let vp = Size::new(scaled_w, scaled_h);
     let parsed = parse_and_layout(
         &raw.bytes,
         raw.content_type,
@@ -617,8 +622,8 @@ fn do_print_to_pdf_with_opts(
     )?;
 
     let ctx = PaginationContext {
-        page_width: PDF_PAGE_W as f32,
-        page_height: PDF_PAGE_H as f32,
+        page_width: scaled_w,
+        page_height: scaled_h,
         margin_top: margin_tb,
         margin_bottom: margin_tb,
         margin_left: margin_lr,
@@ -6348,12 +6353,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 let source = self.source.clone();
                                 let sink = Arc::clone(&self.event_sink);
                                 let (margin_tb, margin_lr) = self.print_panel.margin_px();
+                                let scale = self.print_panel.scale;
                                 if let Err(e) = do_print_to_pdf_with_opts(
                                     &source,
                                     &path,
                                     sink,
                                     margin_tb,
                                     margin_lr,
+                                    scale,
                                 ) {
                                     eprintln!("Ошибка печати: {e}");
                                 }
@@ -6367,6 +6374,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                             PrintHit::Margins(m) => {
                                 self.print_panel.margins = m;
+                            }
+                            PrintHit::ScaleDecrease => {
+                                self.print_panel.scale = (self.print_panel.scale - 10).max(50);
+                            }
+                            PrintHit::ScaleIncrease => {
+                                self.print_panel.scale = (self.print_panel.scale + 10).min(200);
                             }
                             PrintHit::PageRangeField => {
                                 self.print_panel.editing_field =
@@ -9673,6 +9686,7 @@ impl Lumen {
             self.event_sink.clone(),
             (margin_top + margin_bottom) / 2.0,  // Simplified: average for TB and LR.
             (margin_left + margin_right) / 2.0,
+            100,  // Default scale: 100%
         ) {
             Ok(page_count) => {
                 eprintln!(

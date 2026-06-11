@@ -31,14 +31,18 @@ None. Last task: W-2b (see Recent below).
 
 ## Current / Recently Merged
 
-**W-2b | Print preview UI dialog** ✅ 2026-06-12 (branch: p2-w2b-print-preview)
-- Shell handler для кликов на scale −/+ кнопки (ScaleDecrease / ScaleIncrease)
-- Передача параметра `scale` в `do_print_to_pdf_with_opts(scale: i32)`
-- Применение масштаба к viewport: scale 50–200% → viewport width/height пересчитываются
-- PaginationContext использует масштабированные размеры для пагинации
-- Интеграция: window.print() использует масштаб 100% (default); print dialog использует текущий scale
-- 2 новых unit-теста: проверка отображения "Масштаб" в диалоге, проверка вывода процента
-- Next: мержить в main, работать над X-series (color management)
+**W-2b | Print preview UI dialog** ✅ 2026-06-12 (merged: p2-w2b-print-preview)
+- `PrintPanel::scale` (i32, 50–200%): поле для масштабирования документа при печати
+- `PrintPrefs` + `PrintPrefsSnapshot`: SQLite-сохранение 7 параметров печати (scale, paper_size, orientation, margins, color_mode, page_range, output_path)
+- `emit_scale_row()`: UI-ряд с кнопками −/+ и дисплеем процента (новая строка в диалоге)
+- `PrintHit::ScaleDecrease / ScaleIncrease`: hit-test обработка + shell handler (ScaleDecrease: -10%, ScaleIncrease: +10%)
+- Расширена панель с 400px до 420px для нового ряда масштабирования
+- Shell `do_print_to_pdf_with_opts()` принимает параметр `scale: i32`
+- Viewport масштабирование: PDF_PAGE_W/H * (scale/100) → пересчёт layout + pagination
+- window.print() использует масштаб 100% (default); print dialog использует текущий scale
+- lumen-storage: 5 тестов print_prefs ✅, lumen-shell: 16 тестов (14 старых + 2 новых) ✅
+- Clippy clean в обоих крейтах
+- Phase 1 завершена; Phase 2 (сохранение preferences, автоматическое восстановление scale между сессиями) отложена
 
 **W-2c | Page break parsing** ✅ 2026-06-12 (merged: p2-w2c-page-breaks)
 - `page-break-before/after/inside` алиасы в apply_declaration для legacy CSS Fragmentation L3 § 3.4
