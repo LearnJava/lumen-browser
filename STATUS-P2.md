@@ -6,14 +6,11 @@
 
 ## In progress
 
-Canvas 2D Phase 5 — Path2D  branch: p2-canvas2d-phase5
-Next step: коммит + /lumen-task-finish
+(нет)
 
 ---
 
 ## Next
-
-### ~~Canvas 2D Phase 5~~ — Path2D (HTML LS §4.12.5.1.5) — **выполнено** (см. Recent)
 
 ### PA — Paint-Arch: итоги архитектурной ревизии paint-пайплайна (2026-06-10)
 
@@ -71,6 +68,19 @@ gradient-масок и backdrop-filter — ~11 открытых багов за�
 ---
 
 ## Current / Recently Merged
+
+**Canvas 2D Phase 5 — Path2D** ✅ 2026-06-11 (merged p2-canvas2d-phase5)
+- `Path2dData` struct в `path2d.rs`: сегменты в user-space, `to_device_space(ctm)` применяет CTM при использовании (HTML LS §4.12.5.1.5)
+- Все методы CanvasPath mixin: moveTo/lineTo/closePath/bezierCurveTo/quadraticCurveTo/arc/arcTo/ellipse/rect/addPath
+- `from_svg_str(s)`: парсит SVG path data (M/m L/l H/h V/v C/c Q/q A/a Z/z) с relative→absolute
+- `svg_arc_to_lines`: endpoint→centre параметризация (SVG 1.1 App. F.6)
+- `fill_with_path2d / stroke_with_path2d / clip_with_path2d / is_point_in_path2d` на Context2D
+- JS: `_lumen_canvas2d_path2d_*` native bindings; PATHS/NEXT_PATH_ID thread-locals
+- JS `Path2D` класс в dom.rs: конструктор(svg?/Path2D copy), полный прототип
+- `ctx.fill/stroke/clip(path?)` принимают Path2D; `ctx.isPointInPath(path, x, y)`
+- `addPath(path, DOMMatrix?)` — передаёт transform как CSV-строку (rquickjs 7-args limit)
+- `ellipse` реализован в JS шиме через save/arc+transform (9 args > лимит rquickjs)
+- lumen-canvas 48 тестов ✅, lumen-js 1859 тестов ✅, workspace Clippy чист
 
 **Canvas 2D Phase 4** ✅ 2026-06-11 (merged p2-canvas2d-phase4)
 - `parse_canvas_font_size`: извлекает px-размер из CSS font-строки (spec §4.12.4)
