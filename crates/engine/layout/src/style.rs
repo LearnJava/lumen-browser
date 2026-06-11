@@ -22915,6 +22915,68 @@ mod tests {
         assert_eq!(style.text_underline_offset, Some(-2.0));
     }
 
+    // ── text-decoration-skip-ink ──────────────────────────────────────────────
+
+    #[test]
+    fn text_decoration_skip_ink_initial_auto() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_all() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: all; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::All);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_auto_explicit() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+        assert_eq!(span_style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: edges; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Invalid keyword — property stays at inherited initial (Auto).
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
+    }
+
     // ── color-scheme ──────────────────────────────────────────────────────────
 
     #[test]

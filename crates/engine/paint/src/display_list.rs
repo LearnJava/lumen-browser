@@ -5188,10 +5188,16 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
                 emit_decoration_line(out, x, deco_y, frag.width, thickness, color, style);
             }
             TextDecorationSkipInk::Auto => {
-                emit_decoration_line_skip_ink(out, x, deco_y, frag.width, thickness, color, style, &frag.text, false);
+                emit_decoration_line_skip_ink(out, SkipInkParams {
+                    x, y: deco_y, width: frag.width, thickness, color, style,
+                    text: &frag.text, skip_all: false,
+                });
             }
             TextDecorationSkipInk::All => {
-                emit_decoration_line_skip_ink(out, x, deco_y, frag.width, thickness, color, style, &frag.text, true);
+                emit_decoration_line_skip_ink(out, SkipInkParams {
+                    x, y: deco_y, width: frag.width, thickness, color, style,
+                    text: &frag.text, skip_all: true,
+                });
             }
         }
     }
@@ -5204,7 +5210,10 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
         let y = baseline_y - fs * 0.78;
         // `All` skips over all glyphs including those above/below the line (spec §3.5).
         if skip_ink == TextDecorationSkipInk::All {
-            emit_decoration_line_skip_ink(out, x, y, frag.width, thickness, color, style, &frag.text, true);
+            emit_decoration_line_skip_ink(out, SkipInkParams {
+                x, y, width: frag.width, thickness, color, style,
+                text: &frag.text, skip_all: true,
+            });
         } else {
             emit_decoration_line(out, x, y, frag.width, thickness, color, style);
         }
@@ -5239,28 +5248,32 @@ fn char_has_ink_descender(ch: char) -> bool {
     matches!(ch, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q' | 'J')
 }
 
-/// Emits a decoration line (underline or overline) that skips over glyphs
-/// with ink that would cross it — CSS Text Decoration L4 §3.5
-/// `text-decoration-skip-ink`.
-///
-/// `skip_all`: when `true` (value `all`) every character gets a gap; when
-/// `false` (value `auto`) only characters with known descenders get gaps.
-///
-/// Algorithm: divide the fragment into equal-width character cells based on
-/// `frag.width / char_count` (Phase 0 approximation — no per-glyph metrics
-/// at paint time). For each cell that needs a gap, extend a gap margin of
-/// `thickness + 1` px on each side, then draw the remaining segments.
-fn emit_decoration_line_skip_ink(
-    out: &mut DisplayList,
+/// Parameters for `emit_decoration_line_skip_ink` — bundles geometry to stay
+/// within the 7-argument clippy limit.
+struct SkipInkParams<'a> {
     x: f32,
     y: f32,
     width: f32,
     thickness: f32,
     color: Color,
     style: TextDecorationStyle,
-    text: &str,
+    /// Fragment text used to locate descender characters.
+    text: &'a str,
+    /// `true` for `text-decoration-skip-ink: all` (skip every glyph);
+    /// `false` for `auto` (skip only known descenders).
     skip_all: bool,
-) {
+}
+
+/// Emits a decoration line (underline or overline) that skips over glyphs
+/// with ink that would cross it — CSS Text Decoration L4 §3.5
+/// `text-decoration-skip-ink`.
+///
+/// Algorithm: divide the fragment into equal-width character cells based on
+/// `width / char_count` (Phase 0 approximation — no per-glyph metrics at
+/// paint time). For each cell that needs a gap, extend a gap margin of
+/// `thickness + 1` px on each side, then draw the remaining segments.
+fn emit_decoration_line_skip_ink(out: &mut DisplayList, p: SkipInkParams<'_>) {
+    let SkipInkParams { x, y, width, thickness, color, style, text, skip_all } = p;
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     if n == 0 {
@@ -5279,11 +5292,11 @@ fn emit_decoration_line_skip_ink(
             let cell_x = x + i as f32 * char_w;
             let gap_start = (cell_x - margin).max(x);
             let gap_end = (cell_x + char_w + margin).min(x + width);
-            if let Some(last) = gaps.last_mut() {
-                if gap_start <= last.1 {
-                    last.1 = last.1.max(gap_end);
-                    continue;
-                }
+            if let Some(last) = gaps.last_mut()
+                && gap_start <= last.1
+            {
+                last.1 = last.1.max(gap_end);
+                continue;
             }
             gaps.push((gap_start, gap_end));
         }
@@ -6242,9 +6255,11 @@ mod tests {
     /// `Dashed` — серия штрихов длиной `2 × thickness`, count > 3.
     #[test]
     fn style_dashed_emits_dashes() {
+        // skip-ink: none disables the default skip-ink behaviour so the dashed
+        // pattern is continuous and individual dash widths are predictable.
         let dl = build_wrapped(
             "<p><a>longertext</a></p>",
-            "a { text-decoration: underline dashed; }",
+            "a { text-decoration: underline dashed; text-decoration-skip-ink: none; }",
             800.0,
         );
         let rects = fill_rects(&dl);
@@ -11758,4 +11773,79 @@ mod highlight_tests {
             assert_eq!(font_variation_axes, &axes);
             assert_eq!(highlight_name.as_ref(), Some(&"variable-font".to_string()));
         }
+    }
+
+    // ── text-decoration-skip-ink ──────────────────────────────────────────────
+
+    #[test]
+    fn skip_ink_auto_no_descenders_single_segment() {
+        // skip-ink: auto on text without descenders → single contiguous FillRect.
+        let mut out = Vec::new();
+        emit_decoration_line_skip_ink(&mut out, SkipInkParams {
+            x: 0.0, y: 10.0, width: 100.0, thickness: 1.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "art", skip_all: false,
+        });
+        let count = out.iter().filter(|c| matches!(c, DisplayCommand::FillRect { .. })).count();
+        // 'a', 'r', 't' have no descenders — full line, single rect.
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn skip_ink_auto_gaps_for_descenders() {
+        // skip-ink: auto on "xpx": 'x' has no descender, 'p' has one.
+        // Expected: two segments flanking the gap around 'p'.
+        let mut out_descender = Vec::new();
+        emit_decoration_line_skip_ink(&mut out_descender, SkipInkParams {
+            x: 0.0, y: 10.0, width: 90.0, thickness: 1.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "xpx", skip_all: false,
+        });
+        // skip-ink: auto on "abc" (no descenders) → one continuous FillRect.
+        let mut out_plain = Vec::new();
+        emit_decoration_line_skip_ink(&mut out_plain, SkipInkParams {
+            x: 0.0, y: 10.0, width: 90.0, thickness: 1.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "abc", skip_all: false,
+        });
+        let count_descender = out_descender.iter().filter(|c| {
+            matches!(c, DisplayCommand::FillRect { .. })
+        }).count();
+        let count_plain = out_plain.iter().filter(|c| {
+            matches!(c, DisplayCommand::FillRect { .. })
+        }).count();
+        // "xpx": gap around 'p' splits the line into two segments.
+        assert!(count_descender >= 2, "expected ≥2 segments around 'p' gap, got {count_descender}");
+        // "abc": no gaps → single segment.
+        assert_eq!(count_plain, 1);
+    }
+
+    #[test]
+    fn skip_ink_all_gaps_for_every_char() {
+        // skip-ink: all → skip_all=true → every character gets a gap.
+        let mut out = Vec::new();
+        emit_decoration_line_skip_ink(&mut out, SkipInkParams {
+            x: 0.0, y: 10.0, width: 60.0, thickness: 1.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "abc", skip_all: true,
+        });
+        // With 3 chars each getting a gap, segments are drawn only between/around cells.
+        // The total painted width must be strictly less than the full 60px.
+        let total: f32 = out.iter().filter_map(|c| {
+            if let DisplayCommand::FillRect { rect, .. } = c { Some(rect.width) } else { None }
+        }).sum();
+        assert!(total < 60.0, "expected gaps to reduce total painted width, got {total}");
+    }
+
+    #[test]
+    fn char_has_ink_descender_common_cases() {
+        assert!(char_has_ink_descender('g'));
+        assert!(char_has_ink_descender('j'));
+        assert!(char_has_ink_descender('p'));
+        assert!(char_has_ink_descender('q'));
+        assert!(char_has_ink_descender('y'));
+        assert!(char_has_ink_descender('Q'));
+        assert!(char_has_ink_descender('J'));
+        // non-descenders
+        assert!(!char_has_ink_descender('a'));
+        assert!(!char_has_ink_descender('e'));
+        assert!(!char_has_ink_descender('m'));
+        assert!(!char_has_ink_descender('x'));
+        assert!(!char_has_ink_descender('z'));
     }

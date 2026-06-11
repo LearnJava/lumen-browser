@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<!--
+  TEST-84: text-decoration-skip-ink (CSS Text Decoration L4 §3.5)
+  Layout: 1024×720, magenta (#ff00ff) 1px frame around .__f
+  Each row shows underlined text at large size so skip-ink gaps are visible.
+  Row 1: skip-ink: auto  (default) — gaps at g j p q y Q J
+  Row 2: skip-ink: none  — continuous solid underline
+  Row 3: skip-ink: all   — every character gets a gap
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {
+    margin: 0; padding: 0;
+    background: #ff00ff;
+    width: 1024px; height: 720px;
+  }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 30px 40px;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  .row {
+    margin-bottom: 28px;
+  }
+  .label {
+    font-family: monospace;
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 6px;
+    text-decoration: none;
+  }
+  .demo {
+    font-size: 48px;
+    font-weight: 400;
+    color: #e0e0e0;
+    white-space: nowrap;
+  }
+  /* Row 1: default (auto) */
+  .skip-auto {
+    text-decoration: underline;
+    text-decoration-color: #60b0ff;
+    text-decoration-skip-ink: auto;
+  }
+  /* Row 2: none — continuous underline */
+  .skip-none {
+    text-decoration: underline;
+    text-decoration-color: #ff8060;
+    text-decoration-skip-ink: none;
+  }
+  /* Row 3: all — skip under every glyph */
+  .skip-all {
+    text-decoration: underline;
+    text-decoration-color: #80ff80;
+    text-decoration-skip-ink: all;
+  }
+  /* Row 4: mix — auto with thick underline to make gaps more visible */
+  .skip-thick {
+    text-decoration: underline;
+    text-decoration-color: #f0c040;
+    text-decoration-skip-ink: auto;
+    text-decoration-thickness: 3px;
+    text-underline-offset: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <div class="label">skip-ink: auto (default) — gaps at descenders g j p q y</div>
+    <div class="demo skip-auto">Typography gjpqy</div>
+  </div>
+  <div class="row">
+    <div class="label">skip-ink: none — continuous underline</div>
+    <div class="demo skip-none">Typography gjpqy</div>
+  </div>
+  <div class="row">
+    <div class="label">skip-ink: all — gap under every glyph</div>
+    <div class="demo skip-all">Typography gjpqy</div>
+  </div>
+  <div class="row">
+    <div class="label">skip-ink: auto, thickness: 3px, offset: 4px</div>
+    <div class="demo skip-thick">Typography gjpqy</div>
+  </div>
+</div>
+</body>
+</html>
