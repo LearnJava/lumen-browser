@@ -16,10 +16,13 @@
 //! After any draw operation the canvas is marked "dirty". The shell drains
 //! dirty buffers via [`flush_dirty`] each frame and uploads them to the GPU.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use lumen_canvas::{CanvasColor, CompositeOperation, LineCap, LineJoin, Context2D};
+use lumen_canvas::{
+    CanvasColor, CanvasGradient, CanvasPattern, PaintSource, RepeatMode,
+    CompositeOperation, LineCap, LineJoin, Context2D,
+};
 use rquickjs::Ctx;
 
 thread_local! {
@@ -27,6 +30,44 @@ thread_local! {
     static CANVASES: RefCell<HashMap<u32, Context2D>> = RefCell::new(HashMap::new());
     /// Node indices whose pixel buffer changed since the last [`flush_dirty`].
     static DIRTY: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    /// In-flight gradients awaiting `setFillStyle`/`setStrokeStyle`, keyed by object ID.
+    static GRADIENTS: RefCell<HashMap<u32, CanvasGradient>> = RefCell::new(HashMap::new());
+    /// In-flight patterns, keyed by object ID.
+    static PATTERNS: RefCell<HashMap<u32, CanvasPattern>> = RefCell::new(HashMap::new());
+    /// Auto-increment for gradient/pattern object IDs.
+    static NEXT_PAINT_ID: Cell<u32> = const { Cell::new(1) };
+}
+
+/// Allocate a new unique object ID for a gradient or pattern.
+fn next_paint_id() -> u32 {
+    NEXT_PAINT_ID.with(|c| {
+        let id = c.get();
+        c.set(id.wrapping_add(1).max(1));
+        id
+    })
+}
+
+/// Decode a hex string (`"ff00aa"`) into bytes. Silently ignores odd-length or bad chars.
+fn decode_hex(s: &str) -> Vec<u8> {
+    let s = s.trim_start_matches("0x");
+    let n = s.len() / 2;
+    let mut out = Vec::with_capacity(n);
+    let bytes = s.as_bytes();
+    for i in 0..n {
+        let hi = hex_nibble(bytes[i * 2]);
+        let lo = hex_nibble(bytes[i * 2 + 1]);
+        out.push((hi << 4) | lo);
+    }
+    out
+}
+
+fn hex_nibble(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => 0,
+    }
 }
 
 /// Maximum canvas dimension in CSS pixels. Clamps hostile/oversized buffers.
@@ -201,7 +242,7 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         rquickjs::Function::new(ctx.clone(), |nid: u32, css: String| {
             with_canvas(nid, |c| {
                 if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.fill_style = color;
+                    c.fill_style = PaintSource::Color(color);
                 }
             });
         }),
@@ -211,7 +252,7 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         rquickjs::Function::new(ctx.clone(), |nid: u32, css: String| {
             with_canvas(nid, |c| {
                 if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.stroke_style = color;
+                    c.stroke_style = PaintSource::Color(color);
                 }
             });
         }),
@@ -376,6 +417,281 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
             if limit.is_finite() && limit > 0.0 {
                 with_canvas(nid, |c| c.miter_limit = limit as f32);
             }
+        }),
+    )?;
+
+    // ── Phase 3: Gradients ────────────────────────────────────────────────────
+
+    // _lumen_canvas2d_create_linear_gradient(nid, x0, y0, x1, y1) -> grad_id
+    g.set(
+        "_lumen_canvas2d_create_linear_gradient",
+        rquickjs::Function::new(ctx.clone(), |_nid: u32, x0: f64, y0: f64, x1: f64, y1: f64| -> u32 {
+            let id = next_paint_id();
+            GRADIENTS.with(|gs| {
+                if let Ok(mut map) = gs.try_borrow_mut() {
+                    map.insert(id, CanvasGradient::linear(x0 as f32, y0 as f32, x1 as f32, y1 as f32));
+                }
+            });
+            id
+        }),
+    )?;
+
+    // _lumen_canvas2d_create_radial_gradient(nid, x0, y0, r0, x1, y1, r1) -> grad_id
+    g.set(
+        "_lumen_canvas2d_create_radial_gradient",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |_nid: u32, x0: f64, y0: f64, r0: f64, x1: f64, y1: f64, r1: f64| -> u32 {
+                let id = next_paint_id();
+                GRADIENTS.with(|gs| {
+                    if let Ok(mut map) = gs.try_borrow_mut() {
+                        map.insert(id, CanvasGradient::radial(
+                            x0 as f32, y0 as f32, r0 as f32,
+                            x1 as f32, y1 as f32, r1 as f32,
+                        ));
+                    }
+                });
+                id
+            },
+        ),
+    )?;
+
+    // _lumen_canvas2d_create_conic_gradient(nid, angle, cx, cy) -> grad_id
+    g.set(
+        "_lumen_canvas2d_create_conic_gradient",
+        rquickjs::Function::new(ctx.clone(), |_nid: u32, angle: f64, cx: f64, cy: f64| -> u32 {
+            let id = next_paint_id();
+            GRADIENTS.with(|gs| {
+                if let Ok(mut map) = gs.try_borrow_mut() {
+                    map.insert(id, CanvasGradient::conic(angle as f32, cx as f32, cy as f32));
+                }
+            });
+            id
+        }),
+    )?;
+
+    // _lumen_canvas2d_gradient_add_color_stop(grad_id, offset, css_color)
+    g.set(
+        "_lumen_canvas2d_gradient_add_color_stop",
+        rquickjs::Function::new(ctx.clone(), |grad_id: u32, offset: f64, css: String| {
+            if let Some(color) = CanvasColor::from_css_str(&css) {
+                GRADIENTS.with(|gs| {
+                    if let Ok(mut map) = gs.try_borrow_mut()
+                        && let Some(g) = map.get_mut(&grad_id)
+                    {
+                        g.add_color_stop(offset as f32, color);
+                    }
+                });
+            }
+        }),
+    )?;
+
+    // _lumen_canvas2d_set_fill_style_gradient(nid, grad_id) — clones gradient into fill_style
+    g.set(
+        "_lumen_canvas2d_set_fill_style_gradient",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, grad_id: u32| {
+            let grad = GRADIENTS.with(|gs| {
+                gs.try_borrow().ok()?.get(&grad_id).cloned()
+            });
+            if let Some(g) = grad {
+                with_canvas(nid, |c| c.fill_style = PaintSource::Gradient(g));
+            }
+        }),
+    )?;
+
+    // _lumen_canvas2d_set_stroke_style_gradient(nid, grad_id)
+    g.set(
+        "_lumen_canvas2d_set_stroke_style_gradient",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, grad_id: u32| {
+            let grad = GRADIENTS.with(|gs| {
+                gs.try_borrow().ok()?.get(&grad_id).cloned()
+            });
+            if let Some(g) = grad {
+                with_canvas(nid, |c| c.stroke_style = PaintSource::Gradient(g));
+            }
+        }),
+    )?;
+
+    // ── Phase 3: Patterns ─────────────────────────────────────────────────────
+
+    // _lumen_canvas2d_create_pattern(src_nid, repeat_mode) -> pat_id
+    // repeat_mode: "repeat"|"repeat-x"|"repeat-y"|"no-repeat"
+    g.set(
+        "_lumen_canvas2d_create_pattern",
+        rquickjs::Function::new(ctx.clone(), |src_nid: u32, repeat_str: String| -> u32 {
+            let repeat = match repeat_str.as_str() {
+                "repeat-x"  => RepeatMode::RepeatX,
+                "repeat-y"  => RepeatMode::RepeatY,
+                "no-repeat" => RepeatMode::NoRepeat,
+                _            => RepeatMode::Repeat,
+            };
+            let pat = CANVASES.with(|c| {
+                let map = c.try_borrow().ok()?;
+                let src = map.get(&src_nid)?;
+                Some(CanvasPattern::new(src.pixels().to_vec(), src.width(), src.height(), repeat))
+            });
+            let Some(p) = pat else { return 0; };
+            let id = next_paint_id();
+            PATTERNS.with(|ps| {
+                if let Ok(mut map) = ps.try_borrow_mut() {
+                    map.insert(id, p);
+                }
+            });
+            id
+        }),
+    )?;
+
+    // _lumen_canvas2d_set_fill_style_pattern(nid, pat_id)
+    g.set(
+        "_lumen_canvas2d_set_fill_style_pattern",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, pat_id: u32| {
+            let pat = PATTERNS.with(|ps| {
+                ps.try_borrow().ok()?.get(&pat_id).cloned()
+            });
+            if let Some(p) = pat {
+                with_canvas(nid, |c| c.fill_style = PaintSource::Pattern(p));
+            }
+        }),
+    )?;
+
+    // _lumen_canvas2d_set_stroke_style_pattern(nid, pat_id)
+    g.set(
+        "_lumen_canvas2d_set_stroke_style_pattern",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, pat_id: u32| {
+            let pat = PATTERNS.with(|ps| {
+                ps.try_borrow().ok()?.get(&pat_id).cloned()
+            });
+            if let Some(p) = pat {
+                with_canvas(nid, |c| c.stroke_style = PaintSource::Pattern(p));
+            }
+        }),
+    )?;
+
+    // ── Phase 3: Shadow ───────────────────────────────────────────────────────
+
+    g.set(
+        "_lumen_canvas2d_set_shadow_color",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, css: String| {
+            with_canvas(nid, |c| {
+                if let Some(color) = CanvasColor::from_css_str(&css) {
+                    c.shadow_color = color;
+                }
+            });
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_set_shadow_blur",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, v: f64| {
+            if v.is_finite() && v >= 0.0 {
+                with_canvas(nid, |c| c.shadow_blur = v as f32);
+            }
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_set_shadow_offset_x",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, v: f64| {
+            if v.is_finite() {
+                with_canvas(nid, |c| c.shadow_offset_x = v as f32);
+            }
+        }),
+    )?;
+    g.set(
+        "_lumen_canvas2d_set_shadow_offset_y",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, v: f64| {
+            if v.is_finite() {
+                with_canvas(nid, |c| c.shadow_offset_y = v as f32);
+            }
+        }),
+    )?;
+
+    // ── Phase 3: Clip ─────────────────────────────────────────────────────────
+
+    g.set(
+        "_lumen_canvas2d_clip",
+        rquickjs::Function::new(ctx.clone(), |nid: u32| {
+            with_canvas(nid, |c| c.clip());
+        }),
+    )?;
+
+    // ── Phase 3: drawImage ────────────────────────────────────────────────────
+
+    // _lumen_canvas2d_draw_image(dst_nid, src_nid, dx, dy, dw, dh)
+    // Blits another canvas's pixels onto this canvas with scaling.
+    g.set(
+        "_lumen_canvas2d_draw_image",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |dst_nid: u32, src_nid: u32, dx: f64, dy: f64, dw: f64, dh: f64| {
+                let (pixels, sw, sh) = CANVASES.with(|c| {
+                    let map = c.try_borrow().ok()?;
+                    let src = map.get(&src_nid)?;
+                    Some((src.pixels().to_vec(), src.width(), src.height()))
+                }).unwrap_or_default();
+                if sw > 0 && sh > 0 {
+                    with_canvas(dst_nid, |c| {
+                        c.draw_image(&pixels, sw, sh, dx as f32, dy as f32, dw as f32, dh as f32);
+                    });
+                    mark_dirty(dst_nid);
+                }
+            },
+        ),
+    )?;
+
+    // ── Phase 3: ImageData ────────────────────────────────────────────────────
+
+    // _lumen_canvas2d_put_image_data(nid, hex_data, sw, sh, dx, dy)
+    g.set(
+        "_lumen_canvas2d_put_image_data",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |nid: u32, hex: String, sw: u32, sh: u32, dx: i32, dy: i32| {
+                let data = decode_hex(&hex);
+                with_canvas(nid, |c| c.put_image_data(&data, sw, sh, dx, dy));
+                mark_dirty(nid);
+            },
+        ),
+    )?;
+
+    // _lumen_canvas2d_create_image_data(sw, sh) -> hex string
+    g.set(
+        "_lumen_canvas2d_create_image_data",
+        rquickjs::Function::new(ctx.clone(), |sw: u32, sh: u32| -> String {
+            let data = Context2D::create_image_data(sw, sh);
+            let mut s = String::with_capacity(data.len() * 2);
+            use std::fmt::Write;
+            for b in &data {
+                let _ = write!(s, "{b:02x}");
+            }
+            s
+        }),
+    )?;
+
+    // ── Phase 3: Text / Font ──────────────────────────────────────────────────
+
+    // _lumen_canvas2d_set_font(nid, css_font) — stores font string for later use
+    g.set(
+        "_lumen_canvas2d_set_font",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, font: String| {
+            with_canvas(nid, |c| c.font = font);
+        }),
+    )?;
+
+    // _lumen_canvas2d_fill_text(nid, text, x, y) — Phase 3 stub: no glyph rendering yet.
+    // Full text layout + rasterization is deferred to Phase 4 (needs lumen-font integration).
+    g.set(
+        "_lumen_canvas2d_fill_text",
+        rquickjs::Function::new(ctx.clone(), |_nid: u32, _text: String, _x: f64, _y: f64| {
+            // Stub: text rendering wired in Phase 4.
+        }),
+    )?;
+
+    // _lumen_canvas2d_measure_text(nid, text) -> approximate width in pixels
+    // Phase 3 stub: estimates 0.6× pixel_size per character (rough sans-serif approximation).
+    g.set(
+        "_lumen_canvas2d_measure_text",
+        rquickjs::Function::new(ctx.clone(), |_nid: u32, text: String| -> f64 {
+            // Very rough approximation until Phase 4 wires lumen-font.
+            text.len() as f64 * 6.0
         }),
     )?;
 

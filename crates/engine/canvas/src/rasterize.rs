@@ -1,10 +1,10 @@
-use crate::{CanvasColor, Context2D, PathSegment};
+use crate::{Context2D, PaintSource, PathSegment};
 
 /// Number of line segments to use when tessellating a Bézier curve.
 const BEZIER_STEPS: usize = 32;
 
-/// Fill `path` using the even-odd scanline algorithm.
-pub fn fill_path(ctx: &mut Context2D, path: &[PathSegment], color: CanvasColor) {
+/// Fill `path` using the even-odd scanline algorithm with the given paint source.
+pub fn fill_path(ctx: &mut Context2D, path: &[PathSegment], paint: &PaintSource, alpha: f32) {
     if path.is_empty() { return; }
 
     let segments = collect_lines(path);
@@ -31,7 +31,10 @@ pub fn fill_path(ctx: &mut Context2D, path: &[PathSegment], color: CanvasColor) 
             let xa = xs[i].max(0.0) as u32;
             let xb = xs[i + 1].min(w as f32) as u32;
             for x in xa..xb {
-                ctx.set_pixel(x, y, color);
+                if !ctx.pixel_allowed(x, y) { i += 2; break; }
+                let mut color = paint.sample(x as f32 + 0.5, y as f32 + 0.5);
+                color.a = (color.a as f32 * alpha) as u8;
+                ctx.composite_pixel(x, y, color);
             }
             i += 2;
         }
@@ -39,7 +42,7 @@ pub fn fill_path(ctx: &mut Context2D, path: &[PathSegment], color: CanvasColor) 
 }
 
 /// Stroke `path` by drawing each line segment as a thick rectangle.
-pub fn stroke_path(ctx: &mut Context2D, path: &[PathSegment], lw: f32, color: CanvasColor) {
+pub fn stroke_path(ctx: &mut Context2D, path: &[PathSegment], lw: f32, paint: &PaintSource, alpha: f32) {
     if path.is_empty() { return; }
     let half = lw * 0.5;
     let segments = collect_lines(path);
@@ -60,8 +63,42 @@ pub fn stroke_path(ctx: &mut Context2D, path: &[PathSegment], lw: f32, color: Ca
             (x1 + nx, y1 + ny),
         ];
 
-        fill_quad(ctx, &corners, color);
+        fill_quad(ctx, &corners, paint, alpha);
     }
+}
+
+/// Build a boolean clip mask by rasterizing `path` with even-odd rule.
+///
+/// Returns a `width × height` flat vector; `true` = pixel is inside the path.
+pub fn build_clip_mask(path: &[PathSegment], w: u32, h: u32) -> Vec<bool> {
+    let segments = collect_lines(path);
+    let mut mask = vec![false; (w * h) as usize];
+
+    for y in 0..h {
+        let yf = y as f32 + 0.5;
+        let mut xs: Vec<f32> = Vec::new();
+
+        for &(x0, y0, x1, y1) in &segments {
+            let (miny, maxy) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+            if yf < miny || yf >= maxy { continue; }
+            let t = (yf - y0) / (y1 - y0);
+            xs.push(x0 + t * (x1 - x0));
+        }
+
+        xs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let mut i = 0;
+        while i + 1 < xs.len() {
+            let xa = xs[i].max(0.0) as u32;
+            let xb = xs[i + 1].min(w as f32) as u32;
+            for x in xa..xb {
+                mask[(y * w + x) as usize] = true;
+            }
+            i += 2;
+        }
+    }
+
+    mask
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -133,11 +170,10 @@ fn tessellate_quadratic(
 }
 
 /// Scanline-fill an arbitrary convex quad (4 vertices, winding order ignored).
-fn fill_quad(ctx: &mut Context2D, pts: &[(f32, f32); 4], color: CanvasColor) {
+fn fill_quad(ctx: &mut Context2D, pts: &[(f32, f32); 4], paint: &PaintSource, alpha: f32) {
     let raw_miny = pts.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
     let raw_maxy = pts.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
 
-    // Extend maxy by 1 so edge-straddling scanlines (e.g. 1px stroke at y=0) are included.
     let miny = raw_miny.max(0.0) as u32;
     let maxy = ((raw_maxy + 1.0).ceil()).min(ctx.height() as f32) as u32;
 
@@ -154,10 +190,8 @@ fn fill_quad(ctx: &mut Context2D, pts: &[(f32, f32); 4], color: CanvasColor) {
         let mut xs: Vec<f32> = Vec::new();
 
         for &(x0, y0, x1, y1) in &edges {
-            // Skip horizontal edges — they never cross a scanline.
             if (y1 - y0).abs() < f32::EPSILON { continue; }
             let (miny_e, maxy_e) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
-            // Use inclusive top (<=) so strokes exactly at pixel centre are caught.
             if yf < miny_e || yf > maxy_e { continue; }
             let t = (yf - y0) / (y1 - y0);
             xs.push(x0 + t * (x1 - x0));
@@ -168,7 +202,10 @@ fn fill_quad(ctx: &mut Context2D, pts: &[(f32, f32); 4], color: CanvasColor) {
         let xa = xs[0].max(0.0) as u32;
         let xb = xs[xs.len() - 1].min(ctx.width() as f32) as u32;
         for x in xa..xb {
-            ctx.set_pixel(x, y, color);
+            if !ctx.pixel_allowed(x, y) { continue; }
+            let mut color = paint.sample(x as f32 + 0.5, y as f32 + 0.5);
+            color.a = (color.a as f32 * alpha) as u8;
+            ctx.composite_pixel(x, y, color);
         }
     }
 }
