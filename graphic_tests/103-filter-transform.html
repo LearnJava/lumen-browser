@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 103 filter + transform interaction</title>
+<style>
+  /* Interaction test: CSS filter (TEST-30) × transform (TEST-22).
+     Filters must apply to the TRANSFORMED layer (rotate/scale first, then
+     filter the result — or equivalently filter in layer space); a filter also
+     creates a stacking context and a containing block for positioned children. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+  .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+  .cell { position: absolute; width: 300px; height: 300px; }
+  .c0 { left: 24px;  top: 24px; }
+  .c1 { left: 364px; top: 24px; }
+  .c2 { left: 704px; top: 24px; }
+  .c3 { left: 24px;  top: 374px; }
+  .c4 { left: 364px; top: 374px; }
+  .c5 { left: 704px; top: 374px; }
+
+  .grad { background: linear-gradient(135deg, #e53e3e, #f6e05e, #38a169); }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- c0: grayscale on a rotated gradient box — result must be a rotated GREY box -->
+  <div class="cell c0">
+    <div class="grad" style="width:200px;height:200px;margin:50px;transform:rotate(20deg);filter:grayscale(1);"></div>
+  </div>
+
+  <!-- c1: blur on a translated box — blur halo follows the translated position -->
+  <div class="cell c1">
+    <div style="width:160px;height:160px;margin:30px;background:#4299e1;transform:translate(60px,60px);filter:blur(6px);"></div>
+  </div>
+
+  <!-- c2: rotated PARENT, filtered child — filter applies inside the rotated space -->
+  <div class="cell c2">
+    <div style="width:240px;height:240px;margin:30px;background:#2d3748;transform:rotate(-15deg);">
+      <div class="grad" style="width:180px;height:180px;margin:30px;filter:grayscale(1);"></div>
+    </div>
+  </div>
+
+  <!-- c3: filter creates a containing block: the absolutely positioned child
+       positions relative to the FILTERED parent, not the page. -->
+  <div class="cell c3">
+    <div style="position:absolute;left:20px;top:20px;width:260px;height:260px;background:#2b6cb0;filter:saturate(0.3);">
+      <div style="position:absolute;left:40px;top:40px;width:120px;height:120px;background:#ed8936;"></div>
+    </div>
+  </div>
+
+  <!-- c4: hue-rotate on a scaled gradient box -->
+  <div class="cell c4">
+    <div class="grad" style="width:150px;height:150px;margin:75px;transform:scale(1.6);filter:hue-rotate(120deg);"></div>
+  </div>
+
+  <!-- c5: CONTROL — same rotated gradient as c0 without filter (full colour) -->
+  <div class="cell c5">
+    <div class="grad" style="width:200px;height:200px;margin:50px;transform:rotate(20deg);"></div>
+  </div>
+
+</div>
+</body>
+</html>

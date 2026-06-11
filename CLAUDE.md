@@ -307,7 +307,7 @@ Not needed in cmd / PowerShell — PATH is correct there.
 
 ## Graphic tests
 
-`graphic_tests/NN-*.html` — 22 pages (00 calibration + 01-20 properties + `1000000-final.html`), one visual effect each, viewport 1024×720. Graphics only, no text.
+`graphic_tests/NN-*.html` — 70+ pages (00 calibration + 01–81 unit properties + 100–109 interactions + `1000000-final.html`), one visual effect each, viewport 1024×720. Graphics only, no text.
 
 **00-calibration.html** — required first test: magenta stripes (`#ff00ff`) 1024 px wide at top and bottom of body. Used to detect crop offset in the Lumen desktop screenshot.
 
@@ -327,6 +327,16 @@ Not needed in cmd / PowerShell — PATH is correct there.
 
 The 1px magenta body background shows through `.__f`'s margins on all 4 sides. Crop offset comes from TEST-00 (calibration), not from this frame. Trigger phrases: "find bugs from screenshots", "run graphic_tests".
 
+**Test layers (numbering ranges).**
+
+| Range | Layer | Purpose |
+|---|---|---|
+| `00–99` | Unit | One CSS property per file, isolated. A failure = bug in that property. |
+| `100–199` | Interaction | Combinations of properties already covered by unit tests (transform×overflow, opacity×z-index, …). A failure while the unit deps are green = bug in the *interaction*. Deps map: `DEPS` in `run.py`. |
+| `1000000` | Final | Kitchen-sink page; manual check in the Edge pipeline + CPU snapshot baseline. |
+
+Interaction tests share a fixed 6-cell 300×300 grid (`_CELL_GRID` in `run.py`); on FAIL `run.py` intersects the diff bounding box with the cells and prints which scenario diverged. To diagnose a failing interaction test run `python graphic_tests/run.py --bisect <id>` — it runs the unit deps first, then the test, and prints a verdict (broken property vs broken interaction).
+
 ### Running
 
 ```bash
@@ -336,6 +346,7 @@ python graphic_tests/run.py --continue-on-fail       # diagnostic: run all, coll
 python graphic_tests/run.py --recheck                # re-run only FAIL tests from latest.json
 python graphic_tests/run.py --build                  # cargo build --release first, then run
 python graphic_tests/run.py --no-cache               # force re-capture Edge screenshots
+python graphic_tests/run.py --bisect 100             # run unit deps of an interaction test, then the test; prints verdict
 ```
 
 Results are saved to `graphic_tests/results/`:
@@ -397,7 +408,8 @@ resample of page-space layer through affine) / PushBlendMode + PopBlendMode (all
 PushFilter + PopFilter (Gaussian blur + 7 colour filters) / PushBackdropFilter + PopBackdropFilter /
 PushMaskLinearGradient + PushMaskRadialGradient + PushMaskConicGradient + PushMaskImage + PopMask.
 
-`PAGES` in `snapshot_cpu.rs` covers all 57 html files in `graphic_tests/`. Regenerate references:
+`PAGES` in `snapshot_cpu.rs` covers the unit pages plus the interaction series (100–109) and
+`1000000-final`. Regenerate references:
 `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render`.
 
 Next: 8A.7 (shell as first BrowserSession client, Phase 4) — not scheduled.

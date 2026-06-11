@@ -168,6 +168,25 @@ const PAGES: &[&str] = &[
     "58-first-letter-line",
     // б-22: CSS Images L4 §5/§4 — image-set() + cross-fade()
     "59-image-set-cross-fade",
+    // Interaction layer (series 100+): pairwise property combinations whose unit
+    // tests already pass individually. A regression here with green unit pages
+    // points at the interaction (clip-of-transformed-layer, stacking-context
+    // atomicity, matrix composition, …), not at the property itself.
+    // Deps map lives in graphic_tests/run.py (DEPS) — same ids.
+    "100-transform-overflow",
+    "101-radius-overflow",
+    "102-opacity-stacking",
+    "103-filter-transform",
+    "104-mask-gradient-radius",
+    "105-float-clear-margin",
+    "106-transform-zindex",
+    "107-shadow-radius-overflow",
+    "108-nested-transforms",
+    "109-clippath-transform",
+    // Kitchen-sink final page: ~80 objects combining every implemented property.
+    // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
+    // broad regression baseline for the CPU path.
+    "1000000-final",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).

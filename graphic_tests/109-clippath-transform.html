@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 109 clip-path + transform interaction</title>
+<style>
+  /* Interaction test: clip-path (TEST-31) × transform (TEST-22) ×
+     border-radius (TEST-36). clip-path is defined in the element's local
+     box and must be carried through the element's transform. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+  .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+  .cell { position: absolute; width: 300px; height: 300px; }
+  .c0 { left: 24px;  top: 24px; }
+  .c1 { left: 364px; top: 24px; }
+  .c2 { left: 704px; top: 24px; }
+  .c3 { left: 24px;  top: 374px; }
+  .c4 { left: 364px; top: 374px; }
+  .c5 { left: 704px; top: 374px; }
+
+  .grad { background: linear-gradient(135deg, #4299e1, #9f7aea); }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- c0: circle clip on a ROTATED gradient box — a circle stays a circle,
+       but its centre follows the rotation -->
+  <div class="cell c0">
+    <div class="grad" style="width:220px;height:220px;margin:40px;transform:rotate(25deg);
+         clip-path:circle(40% at 50% 50%);"></div>
+  </div>
+
+  <!-- c1: inset clip on a SCALED box — the inset margins scale with the element -->
+  <div class="cell c1">
+    <div style="width:160px;height:160px;margin:70px;background:#48bb78;transform:scale(1.6);
+         clip-path:inset(20px);"></div>
+  </div>
+
+  <!-- c2: polygon (triangle) clip on a translated box -->
+  <div class="cell c2">
+    <div style="width:200px;height:200px;margin:20px;background:#f6e05e;transform:translate(40px,40px);
+         clip-path:polygon(50% 0%, 100% 100%, 0% 100%);"></div>
+  </div>
+
+  <!-- c3: clipped PARENT with a transformed child inside — the child is cut by
+       the parent's clip-path -->
+  <div class="cell c3">
+    <div style="width:300px;height:300px;background:#2b6cb0;clip-path:inset(30px);">
+      <div style="width:160px;height:160px;margin:70px;background:#ed8936;transform:rotate(45deg) scale(1.4);"></div>
+    </div>
+  </div>
+
+  <!-- c4: clip-path + border-radius together — the painted area is the
+       INTERSECTION of the rounded box and the clip shape -->
+  <div class="cell c4">
+    <div style="width:240px;height:240px;margin:30px;background:#fc8181;border-radius:60px;
+         clip-path:inset(0 0 0 120px);"></div>
+  </div>
+
+  <!-- c5: CONTROL — same rotated gradient as c0 without clip-path -->
+  <div class="cell c5">
+    <div class="grad" style="width:220px;height:220px;margin:40px;transform:rotate(25deg);"></div>
+  </div>
+
+</div>
+</body>
+</html>
