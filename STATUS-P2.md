@@ -6,18 +6,35 @@
 
 ## In progress
 
-(нет)
+**Q | Phase 2 Completion & Phase 3 Planning** (p2-phase2-conclusion)
+- Обновление STATUS-P2.md: завершение Phase 2 (G-series + Paint-Arch), планирование Phase 3
+- Первые Phase 3-приоритеты для P2: View Transitions API + Motion Path + Anchor Positioning
+- Next step: запустить graphic_tests, убедиться в отсутствии регрессий, затем взять V-series (Phase 3)
 
 ---
 
 ## Next
 
+### Q — Phase 3 Planning: View Transitions + Interactions
+
+После завершения Phase 2 (G-series 2026-06-11 + Paint-Arch 2026-06-11 + Canvas 2D 2026-06-11),
+P2 переходит на Phase 3 приоритеты. Основной fokus: View Transitions API (Document.startViewTransition),
+CSS Motion Path L1 (offset-path/distance/rotate), CSS Anchor Positioning L1 (anchor-name/position-anchor).
+Взять в следующей волне после текущей задачи.
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| V-1 | **View Transitions API Phase 1** — `document.startViewTransition(callback)` + `ViewTransition` interface | M | `lumen-js`, `lumen-shell`, `lumen-paint` |
+| V-2 | **CSS Motion Path L1** — `offset-path: path/ray/url()` + `offset-distance` + `offset-rotate` layout + paint | L | `lumen-layout`, `lumen-paint` |
+| V-3 | **CSS Anchor Positioning L1** — `anchor-name`/`position-anchor` + `inset-area` resizing | L | `lumen-layout`, `lumen-paint` |
+
 ### PA — Paint-Arch: итоги архитектурной ревизии paint-пайплайна (2026-06-10)
 
+*(уже выполнено)*
 Полный отчёт: [docs/paint-pipeline-review-2026-06.md](docs/paint-pipeline-review-2026-06.md).
 Ключевой вывод: run.py меряет femtovg (дефолтный бэкенд), у которого нет blur, 15/17 blend modes,
 gradient-масок и backdrop-filter — ~11 открытых багов закрываются 3-4 фичами, а не точечными фиксами.
-**PA-1..PA-4 делать до canvas 2D и View Transitions** (обе фичи сидят на той же layer-модели).
+**PA-1..PA-4 выполнено** (canvas 2D и View Transitions лежат на той же layer-модели).
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
