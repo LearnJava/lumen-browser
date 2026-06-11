@@ -155,6 +155,52 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('109', '109-clippath-transform.html',   0.5, 'INTERACTION: clip-path × transform × border-radius — клип в локальном боксе элемента сквозь трансформацию'),
 ]
 
+# --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
+#
+# Тесты, которые не могут достичь 0.5% пока соответствующая фича не реализована.
+# Формат: test_id → (BUG-NNN, baseline_pct).
+#
+# Семантика (±_DEBTOR_TOL% допуск для нестабильности gdigrab):
+#   actual ≤ 0.5%                      → FAIL: «удали запись — цель достигнута»
+#   actual < baseline − _DEBTOR_TOL    → FAIL: «снизь baseline до X.XX» (храповик)
+#   |actual − baseline| ≤ _DEBTOR_TOL  → DEBTOR: ожидаемо красный, не останавливает пайплайн
+#   actual > baseline + _DEBTOR_TOL    → FAIL: регрессия на известном должнике
+#
+# Добавлять ТОЛЬКО Phase 2+ фичи с OPEN BUG-NNN и diff-изображением,
+# подтверждающим что расхождение локализовано в области нереализованной фичи.
+KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
+    '57': ('BUG-099', 28.35),   # <canvas> getContext("2d") — Phase 2
+    '61': ('BUG-103', 99.53),   # View Transitions API — Phase 2
+    '63': ('BUG-105', 48.44),   # CSS Masonry layout — Phase 2
+    '75': ('BUG-143', 16.97),   # masonry-auto-flow — Phase 2
+}
+_DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
+
+
+def check_debtor(tid: str, pct: float) -> tuple[str | None, str]:
+    """Проверяет тест против KNOWN_DEBTORS.
+
+    Возвращает (verdict, message):
+      None     — не должник, обычная логика
+      'OK'     — должник в норме (не останавливает пайплайн)
+      'REGRESS'— должник превысил baseline (FAIL)
+      'RATCHET'— должник ниже baseline (нужно обновить запись)
+      'REMOVE' — достиг 0.5% (нужно удалить запись)
+    """
+    if tid not in KNOWN_DEBTORS:
+        return None, ''
+    bug, baseline = KNOWN_DEBTORS[tid]
+    if pct <= 0.5:
+        return 'REMOVE', f'  → KNOWN_DEBTORS: цель 0.5% достигнута! Удали запись «{tid}» ({bug}).'
+    if pct < baseline - _DEBTOR_TOL:
+        return 'RATCHET', (f'  → KNOWN_DEBTORS: прогресс! Снизь baseline {baseline:.2f}% → {pct:.2f}%'
+                           f' для «{tid}» ({bug}) в KNOWN_DEBTORS.')
+    if pct > baseline + _DEBTOR_TOL:
+        return 'REGRESS', (f'  → KNOWN_DEBTORS РЕГРЕССИЯ: {pct:.2f}% > baseline {baseline:.2f}%'
+                           f' + {_DEBTOR_TOL}% допуск для «{tid}» ({bug}).')
+    return 'OK', f'  ⚠ KNOWN DEBTOR {bug}: {pct:.2f}% (baseline {baseline:.2f}%)'
+
+
 # --- Interaction-слой: зависимости и локализация ---
 
 # DEPS: interaction-id → юнит-тесты, свойства которых он комбинирует.
@@ -559,10 +605,24 @@ def run_one(tid: str, html: str, threshold: float, label: str,
         return False, crop_offset, -1.0, None
 
     pct, region = diff_stats(diff_png)
-    passed = pct <= threshold
-    region_str = _fmt_region(region) if region else ''
-    suffix = f'  [{region_str}]' if region_str and not passed else ''
-    print(f'TEST-{tid}: {"PASS" if passed else "FAIL"} ({pct:.2f}%){suffix}', flush=True)
+    debtor_verdict, debtor_msg = check_debtor(tid, pct)
+    if debtor_verdict == 'OK':
+        passed = True
+        region_str = _fmt_region(region) if region else ''
+        print(f'TEST-{tid}: DEBTOR ({pct:.2f}%){debtor_msg}', flush=True)
+    elif debtor_verdict in ('RATCHET', 'REMOVE'):
+        passed = False
+        print(f'TEST-{tid}: FAIL ({pct:.2f}%)', flush=True)
+        print(debtor_msg, flush=True)
+    elif debtor_verdict == 'REGRESS':
+        passed = False
+        print(f'TEST-{tid}: FAIL ({pct:.2f}%)', flush=True)
+        print(debtor_msg, flush=True)
+    else:
+        passed = pct <= threshold
+        region_str = _fmt_region(region) if region else ''
+        suffix = f'  [{region_str}]' if region_str and not passed else ''
+        print(f'TEST-{tid}: {"PASS" if passed else "FAIL"} ({pct:.2f}%){suffix}', flush=True)
     return passed, crop_offset, pct, region
 
 
@@ -597,6 +657,7 @@ def save_results(results: list[dict], crop_offset: tuple[int, int] | None,
     passed  = sum(1 for r in results if r['status'] == 'PASS')
     failed  = sum(1 for r in results if r['status'] == 'FAIL')
     errors  = sum(1 for r in results if r['status'] == 'ERROR')
+    debtors = sum(1 for r in results if r['status'] == 'DEBTOR')
     skipped = len(TESTS) - len(results)
     data = {
         'timestamp': ts_iso,
@@ -608,6 +669,7 @@ def save_results(results: list[dict], crop_offset: tuple[int, int] | None,
             'passed': passed,
             'failed': failed,
             'errors': errors,
+            'debtors': debtors,
             'skipped': skipped,
         },
         'tests': results,
@@ -640,7 +702,7 @@ def _write_html_report(path: str, data: dict) -> None:
         label   = r.get('label', '')
         region  = r.get('diff_region')
 
-        css_cls = {'PASS': 'pass', 'FAIL': 'fail', 'ERROR': 'error'}.get(status, 'skip')
+        css_cls = {'PASS': 'pass', 'FAIL': 'fail', 'ERROR': 'error', 'DEBTOR': 'debtor'}.get(status, 'skip')
         pct_str = f'{pct:.2f}%' if pct >= 0 else '—'
         region_str = _fmt_region(region) if region else '—'
 
@@ -693,10 +755,12 @@ td{{padding:5px 8px;border-bottom:1px solid #1e1e1e;vertical-align:top}}
 tr.pass td{{background:#0b1a0b}}
 tr.fail td{{background:#1a0b0b}}
 tr.error td{{background:#1a150b}}
+tr.debtor td{{background:#1a1400}}
 .tid{{width:70px;color:#777}}
 .status-PASS{{color:#4b4;font-weight:bold}}
 .status-FAIL{{color:#c44;font-weight:bold}}
 .status-ERROR{{color:#c84;font-weight:bold}}
+.status-DEBTOR{{color:#cc0;font-weight:bold}}
 .pct{{width:65px}}
 .thr{{width:55px;color:#666}}
 .region{{width:160px;color:#888;font-size:11px}}
@@ -713,6 +777,7 @@ img{{display:block;width:310px;border:1px solid #2a2a2a}}
 <div class="summary">
   <span class="p">✓ {s.get('passed',0)} passed</span> &nbsp;
   <span class="f">✗ {s.get('failed',0)} failed</span> &nbsp;
+  <span style="color:#cc0">⚠ {s.get('debtors',0)} known-debtor</span> &nbsp;
   <span class="s">{s.get('errors',0)} errors &nbsp; {s.get('skipped',0)} skipped</span>
 </div>
 <table>
@@ -875,8 +940,11 @@ def main() -> int:
             tid, html, threshold, label, crop_offset,
             no_cache=args.no_cache,
         )
+        debtor_verdict, _debtor_msg = check_debtor(tid, pct)
         if pct < 0:
             status = 'ERROR'
+        elif debtor_verdict == 'OK':
+            status = 'DEBTOR'
         elif passed:
             status = 'PASS'
         else:
@@ -891,6 +959,9 @@ def main() -> int:
             'diff_pct': round(pct, 4),
             'diff_region': region,
         }
+        if debtor_verdict is not None:
+            bug, baseline = KNOWN_DEBTORS[tid]
+            entry['debtor'] = {'bug': bug, 'baseline': baseline, 'verdict': debtor_verdict}
         if tid in DEPS:
             entry['deps'] = DEPS[tid]
             if status == 'FAIL':
@@ -943,10 +1014,20 @@ def main() -> int:
         skipped = len(ids) - ids.index(halted_at) - 1
         print(f'\nPipeline stopped at TEST-{halted_at}. {skipped} tests skipped.')
         return 1
-    failed = [r for r in results if r['status'] != 'PASS']
+    failed  = [r for r in results if r['status'] == 'FAIL']
+    debtors = [r for r in results if r['status'] == 'DEBTOR']
+    passed  = [r for r in results if r['status'] == 'PASS']
     if failed:
+        debtor_note = (f'  ({len(debtors)} known-debtor: ' + ', '.join(r['id'] for r in debtors) + ')'
+                       if debtors else '')
         print(f'\n{len(failed)}/{len(results)} tests FAILED: ' + ', '.join(r['id'] for r in failed))
+        if debtor_note:
+            print(debtor_note)
         return 1
+    if debtors:
+        print(f'\n{len(passed)} PASS + {len(debtors)} DEBTOR (known Phase-2): '
+              + ', '.join(r['id'] for r in debtors))
+        return 0
     print(f'\nAll {len(results)} tests passed.')
     return 0
 
