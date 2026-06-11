@@ -224,9 +224,13 @@ pub struct FemtovgBackend {
     viewport_css_w: f32,
     /// CSS высота viewport (height / scale), нужна для sticky-вычислений.
     viewport_css_h: f32,
-    /// Stack of pending blur sigma values. Non-zero = blur filter is active.
-    /// Push on PushFilter(Blur), pop on PopFilter.
-    blur_sigma_stack: Vec<f32>,
+    /// Offscreen filter layer stack. Each entry holds an offscreen ImageId and
+    /// the filter chain to apply on PopFilter. Supports nested filters.
+    filter_layer_stack: Vec<FilterLayerEntry>,
+    /// Images queued for deletion after the next canvas.flush() in render().
+    /// GPU draw commands hold ImageIds by copy; we can only safely delete after
+    /// all pending commands that reference the id have been flushed.
+    filter_layer_pending_delete: Vec<femtovg::ImageId>,
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -236,6 +240,157 @@ pub struct FemtovgBackend {
 // содержит raw pointer, но мы гарантируем единственного владельца в каждый
 // момент. Этот паттерн — стандартный для single-threaded GL рендереров.
 unsafe impl Send for FemtovgBackend {}
+
+// ─── Filter layer support ─────────────────────────────────────────────────────
+
+/// Entry pushed onto `FemtovgBackend::filter_layer_stack` by `PushFilter`.
+///
+/// The offscreen `image_id` receives all draw commands between Push and Pop.
+/// On `PopFilter`, the GPU Gaussian blur (if any) and CPU colour-matrix filters
+/// are applied to this image before it is composited onto `prev_render_target`.
+struct FilterLayerEntry {
+    /// Offscreen image that filter-group content renders into.
+    image_id: femtovg::ImageId,
+    /// Filter chain to apply on PopFilter (CSS Filter Effects L1 §4.1).
+    filters: Vec<lumen_layout::FilterFn>,
+    /// Render target active before PushFilter — restored on PopFilter.
+    prev_render_target: femtovg::RenderTarget,
+}
+
+/// Apply a single CSS colour-matrix filter to a flat RGBA8 buffer in place.
+///
+/// Pixels are assumed premultiplied (as stored in femtovg offscreen images).
+/// The function unpremultiplies, applies the filter in straight-colour space,
+/// then re-premultiplies — matching the CPU raster path in `cpu_raster.rs`.
+fn apply_filter_rgba(rgba: &mut [u8], filter: &lumen_layout::FilterFn) {
+    use lumen_layout::FilterFn;
+    // Mirrors cpu_raster::apply_color_filter (same colour-matrix formulas, same
+    // unpremultiply → filter in straight [0,1] → re-premultiply idiom).
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3] as f32;
+        if a == 0.0 {
+            continue;
+        }
+        // Unpremultiply: result is straight colour in [0,1].
+        let mut r = (px[0] as f32) / a;
+        let mut g = (px[1] as f32) / a;
+        let mut b = (px[2] as f32) / a;
+        let mut a_unit = a / 255.0;
+
+        match filter {
+            FilterFn::Blur(_) => {} // GPU-only, handled before this call
+            FilterFn::Brightness(amt) => {
+                r = (r * amt).clamp(0.0, 1.0);
+                g = (g * amt).clamp(0.0, 1.0);
+                b = (b * amt).clamp(0.0, 1.0);
+            }
+            FilterFn::Contrast(amt) => {
+                r = ((r - 0.5) * amt + 0.5).clamp(0.0, 1.0);
+                g = ((g - 0.5) * amt + 0.5).clamp(0.0, 1.0);
+                b = ((b - 0.5) * amt + 0.5).clamp(0.0, 1.0);
+            }
+            FilterFn::Grayscale(amt) => {
+                let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                r = fmix(r, lum, *amt);
+                g = fmix(g, lum, *amt);
+                b = fmix(b, lum, *amt);
+            }
+            FilterFn::HueRotate(rad) => {
+                let (c, s) = (fcos(*rad), fsin(*rad));
+                let nr = (r * (0.213 + 0.787 * c - 0.213 * s)
+                    + g * (0.715 - 0.715 * c - 0.715 * s)
+                    + b * (0.072 - 0.072 * c + 0.928 * s))
+                    .clamp(0.0, 1.0);
+                let ng = (r * (0.213 - 0.213 * c + 0.143 * s)
+                    + g * (0.715 + 0.285 * c + 0.140 * s)
+                    + b * (0.072 - 0.072 * c - 0.283 * s))
+                    .clamp(0.0, 1.0);
+                let nb = (r * (0.213 - 0.213 * c - 0.787 * s)
+                    + g * (0.715 - 0.715 * c + 0.715 * s)
+                    + b * (0.072 + 0.928 * c + 0.072 * s))
+                    .clamp(0.0, 1.0);
+                r = nr;
+                g = ng;
+                b = nb;
+            }
+            FilterFn::Invert(amt) => {
+                r = fmix(r, 1.0 - r, *amt);
+                g = fmix(g, 1.0 - g, *amt);
+                b = fmix(b, 1.0 - b, *amt);
+            }
+            FilterFn::Opacity(amt) => {
+                a_unit = (a_unit * amt).clamp(0.0, 1.0);
+            }
+            FilterFn::Saturate(amt) => {
+                let nr = (r * (0.213 + 0.787 * amt)
+                    + g * (0.715 - 0.715 * amt)
+                    + b * (0.072 - 0.072 * amt))
+                    .clamp(0.0, 1.0);
+                let ng = (r * (0.213 - 0.213 * amt)
+                    + g * (0.715 + 0.285 * amt)
+                    + b * (0.072 - 0.072 * amt))
+                    .clamp(0.0, 1.0);
+                let nb = (r * (0.213 - 0.213 * amt)
+                    + g * (0.715 - 0.715 * amt)
+                    + b * (0.072 + 0.928 * amt))
+                    .clamp(0.0, 1.0);
+                r = nr;
+                g = ng;
+                b = nb;
+            }
+            FilterFn::Sepia(amt) => {
+                let sr = (0.393 * r + 0.769 * g + 0.189 * b).clamp(0.0, 1.0);
+                let sg = (0.349 * r + 0.686 * g + 0.168 * b).clamp(0.0, 1.0);
+                let sb = (0.272 * r + 0.534 * g + 0.131 * b).clamp(0.0, 1.0);
+                r = fmix(r, sr, *amt);
+                g = fmix(g, sg, *amt);
+                b = fmix(b, sb, *amt);
+            }
+        }
+
+        // Re-premultiply: na is new alpha (f32 0..255), channel = straight * na.
+        let na = (a_unit * 255.0).round().clamp(0.0, 255.0);
+        let to_u8 = |c: f32| (c * na).round().clamp(0.0, 255.0) as u8;
+        px[0] = to_u8(r);
+        px[1] = to_u8(g);
+        px[2] = to_u8(b);
+        px[3] = na as u8;
+    }
+}
+
+/// Linear interpolation `x·(1−t) + y·t`.
+#[inline]
+fn fmix(x: f32, y: f32, t: f32) -> f32 {
+    x * (1.0 - t) + y * t
+}
+
+/// Deterministic, libm-free cosine for hue-rotate (mirrors cpu_raster::cos_approx).
+#[inline]
+fn fcos(rad: f32) -> f32 {
+    fsin(rad + std::f32::consts::FRAC_PI_2)
+}
+
+/// Deterministic, libm-free sine for hue-rotate (mirrors cpu_raster::sin_approx).
+#[inline]
+fn fsin(mut rad: f32) -> f32 {
+    rad %= 2.0 * std::f32::consts::PI;
+    if rad < 0.0 {
+        rad += 2.0 * std::f32::consts::PI;
+    }
+    // Minimax polynomial on [0, π/2]; exploits symmetry for full range.
+    let (x, neg) = if rad <= std::f32::consts::FRAC_PI_2 {
+        (rad, false)
+    } else if rad <= std::f32::consts::PI {
+        (std::f32::consts::PI - rad, false)
+    } else if rad <= 3.0 * std::f32::consts::FRAC_PI_2 {
+        (rad - std::f32::consts::PI, true)
+    } else {
+        (2.0 * std::f32::consts::PI - rad, true)
+    };
+    let x2 = x * x;
+    let v = x * (1.0 - x2 * (1.0 / 6.0 - x2 * (1.0 / 120.0 - x2 / 5040.0)));
+    if neg { -v } else { v }
+}
 
 // ─── Box blur helper ──────────────────────────────────────────────────────────
 
@@ -380,7 +535,8 @@ impl FemtovgBackend {
             scroll_x: 0.0,
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
-            blur_sigma_stack: Vec::new(),
+            filter_layer_stack: Vec::new(),
+            filter_layer_pending_delete: Vec::new(),
         })
     }
 
@@ -558,6 +714,108 @@ impl FemtovgBackend {
         }
         paint.set_font_size(font_size);
         let _ = self.canvas.fill_text(x, y + font_size * 0.8, text, &paint);
+    }
+
+    /// Применяет filter-chain к offscreen-слою и композирует результат на
+    /// предыдущий render target (экран или внешний offscreen-слой).
+    ///
+    /// Реализует PA-2: GPU Gaussian blur через `filter_image` + CPU colour-matrix
+    /// через flush → screenshot → pixel process → re-upload.
+    fn composite_filter_layer(&mut self, entry: FilterLayerEntry) {
+        let FilterLayerEntry { image_id: src_id, filters, prev_render_target } = entry;
+
+        let has_blur = filters.iter().any(|f| matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0));
+        let has_color_matrix = filters.iter().any(|f| {
+            !matches!(
+                f,
+                lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
+            )
+        });
+
+        // current_id tracks which image has the latest filtered content.
+        let mut current_id = src_id;
+
+        // ── Step 1: GPU Gaussian blur (no CPU round-trip needed) ─────────────
+        if has_blur {
+            for f in &filters {
+                if let lumen_layout::FilterFn::Blur(sigma) = f
+                    && *sigma > 0.0
+                    && let Ok(dst) = self.canvas.create_image_empty(
+                        self.width as usize,
+                        self.height as usize,
+                        femtovg::PixelFormat::Rgba8,
+                        femtovg::ImageFlags::PREMULTIPLIED,
+                    )
+                {
+                    self.canvas.filter_image(
+                        dst,
+                        femtovg::ImageFilter::GaussianBlur { sigma: *sigma },
+                        current_id,
+                    );
+                    self.filter_layer_pending_delete.push(current_id);
+                    current_id = dst;
+                }
+            }
+        }
+
+        // ── Step 2: CPU colour-matrix filters ────────────────────────────────
+        // Need to flush so GL actually renders content into current_id's FBO,
+        // then switch render target to current_id so screenshot() reads it.
+        if has_color_matrix {
+            // Switch to current_id so flush binds its FBO.
+            self.canvas.set_render_target(femtovg::RenderTarget::Image(current_id));
+            // Flush executes all pending commands (including filter_image if any).
+            self.canvas.flush();
+            // Now current_id's FBO is bound. Screenshot returns its pixels.
+            if let Ok(img) = self.canvas.screenshot() {
+                let iw = img.width();
+                let ih = img.height();
+                let mut rgba: Vec<u8> = img
+                    .buf()
+                    .iter()
+                    .flat_map(|p| [p.r, p.g, p.b, p.a])
+                    .collect();
+                // Apply colour-matrix filters left to right (CSS spec §4.1).
+                for f in &filters {
+                    if !matches!(
+                        f,
+                        lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
+                    ) {
+                        apply_filter_rgba(&mut rgba, f);
+                    }
+                }
+                // Re-upload processed pixels.
+                let pixels: Vec<rgb::RGBA8> = rgba
+                    .chunks_exact(4)
+                    .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
+                    .collect();
+                let img_src = imgref::ImgRef::new(&pixels, iw, ih);
+                if let Ok(dst) = self.canvas.create_image(
+                    img_src,
+                    femtovg::ImageFlags::PREMULTIPLIED,
+                ) {
+                    self.filter_layer_pending_delete.push(current_id);
+                    current_id = dst;
+                }
+            }
+        }
+
+        // ── Step 3: Restore previous render target ────────────────────────────
+        self.canvas.set_render_target(prev_render_target);
+
+        // ── Step 4: Composite filtered image onto the (now-current) target ───
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let css_w = (self.width as f64 / self.scale) as f32;
+        let css_h = (self.height as f64 / self.scale) as f32;
+        let paint = femtovg::Paint::image(current_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+        let mut path = femtovg::Path::new();
+        path.rect(0.0, 0.0, css_w, css_h);
+        self.canvas.fill_path(&path, &paint);
+        self.canvas.restore();
+
+        // Delete after flush (pending, not immediate — fill_path still holds the id).
+        self.filter_layer_pending_delete.push(current_id);
     }
 
     /// Рисует изображение из зарегистрированного URL в content box `rect`
@@ -1093,38 +1351,71 @@ impl FemtovgBackend {
             }
 
             // ── Filter ───────────────────────────────────────────────────────
-            // femtovg не поддерживает GPU blur/color-matrix. Opacity-filter
-            // применяем через global_alpha; остальные — save/restore без визуального эффекта.
+            // PA-2: реальный Gaussian blur (GPU via filter_image) и colour-matrix
+            // (CPU via flush+screenshot) через offscreen-слой.
+            // Только Opacity — легкий путь через set_global_alpha без offscreen.
             DisplayCommand::PushFilter { filters } => {
-                self.canvas.save();
-                for f in filters {
-                    match f {
-                        lumen_layout::FilterFn::Opacity(v) => {
-                            self.canvas.set_global_alpha(v.clamp(0.0, 1.0));
+                let needs_offscreen = filters
+                    .iter()
+                    .any(|f| !matches!(f, lumen_layout::FilterFn::Opacity(_)));
+
+                if needs_offscreen {
+                    // Create an offscreen image for this filter group.
+                    // The previous render target is the innermost active offscreen
+                    // layer, or Screen if no filters are currently nested.
+                    let prev_rt = match self.filter_layer_stack.last() {
+                        Some(outer) => femtovg::RenderTarget::Image(outer.image_id),
+                        None => femtovg::RenderTarget::Screen,
+                    };
+                    match self.canvas.create_image_empty(
+                        self.width as usize,
+                        self.height as usize,
+                        femtovg::PixelFormat::Rgba8,
+                        femtovg::ImageFlags::PREMULTIPLIED,
+                    ) {
+                        Ok(img_id) => {
+                            // Redirect draws into the offscreen image.
+                            self.canvas.set_render_target(femtovg::RenderTarget::Image(img_id));
+                            // Clear to transparent so content composites correctly.
+                            self.canvas.clear_rect(
+                                0, 0, self.width, self.height,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            self.filter_layer_stack.push(FilterLayerEntry {
+                                image_id: img_id,
+                                filters: filters.clone(),
+                                prev_render_target: prev_rt,
+                            });
+                            self.layer_stack_depth += 1;
                         }
-                        lumen_layout::FilterFn::Blur(sigma) => {
-                            // Phase 1: record sigma, draw content normally.
-                            // Actual blur pass deferred (femtovg has no native blur).
-                            self.blur_sigma_stack.push(*sigma);
-                        }
-                        _ => {
-                            // Other filters (Brightness, Contrast, Grayscale, etc.)
-                            // are not supported in Phase 2; no-op.
+                        Err(_) => {
+                            // Fallback: no-op save (content draws to screen without filter).
+                            self.canvas.save();
+                            self.layer_stack_depth += 1;
                         }
                     }
+                } else {
+                    // Opacity-only path: existing lightweight approach.
+                    self.canvas.save();
+                    for f in filters {
+                        if let lumen_layout::FilterFn::Opacity(v) = f {
+                            self.canvas.set_global_alpha(v.clamp(0.0, 1.0));
+                        }
+                    }
+                    self.layer_stack_depth += 1;
                 }
-                self.layer_stack_depth += 1;
             }
             DisplayCommand::PopFilter => {
-                if let Some(sigma) = self.blur_sigma_stack.pop() {
-                    // Phase 1: sigma recorded but no actual blur applied.
-                    // TODO Phase 2: capture offscreen buffer, apply box blur,
-                    // draw blurred image. Needs femtovg screenshot() API.
-                    let _ = sigma; // suppress unused warning
-                }
-                if self.layer_stack_depth > 0 {
-                    self.canvas.restore();
-                    self.layer_stack_depth -= 1;
+                if let Some(entry) = self.filter_layer_stack.pop() {
+                    // Offscreen path: apply filter chain and composite.
+                    self.composite_filter_layer(entry);
+                    self.layer_stack_depth = self.layer_stack_depth.saturating_sub(1);
+                } else {
+                    // Opacity-only path.
+                    if self.layer_stack_depth > 0 {
+                        self.canvas.restore();
+                        self.layer_stack_depth -= 1;
+                    }
                 }
             }
 
@@ -1238,6 +1529,14 @@ impl RenderBackend for FemtovgBackend {
         }
 
         self.canvas.flush();
+
+        // Delete offscreen filter images that were queued for removal during the
+        // frame. Must happen AFTER flush so pending fill_path commands that
+        // reference these ImageIds have already been executed.
+        let to_delete: Vec<_> = self.filter_layer_pending_delete.drain(..).collect();
+        for id in to_delete {
+            self.canvas.delete_image(id);
+        }
 
         self.gl_surface
             .swap_buffers(&self.gl_context)
@@ -1826,5 +2125,89 @@ mod tests {
         // Middle pixel (index 1) should now be average of all three: 255+0+255/3 = 170
         let mid_r = px[4]; // offset 1*4 + 0
         assert!(mid_r > 100, "middle pixel should be brightened by blur: got {mid_r}");
+    }
+
+    // ── apply_filter_rgba tests ──────────────────────────────────────────────
+
+    /// Helper: create a single premultiplied RGBA pixel (full opacity → premul = straight).
+    fn px(r: u8, g: u8, b: u8) -> Vec<u8> {
+        vec![r, g, b, 255]
+    }
+
+    #[test]
+    fn apply_filter_rgba_grayscale_full() {
+        // Fully red pixel → grayscale(1.0) → grey luma value.
+        let mut buf = px(255, 0, 0);
+        apply_filter_rgba(&mut buf, &lumen_layout::FilterFn::Grayscale(1.0));
+        // R≈G≈B (luma of pure red ≈ 0.2126 * 255 ≈ 54).
+        let r = buf[0]; let g = buf[1]; let b = buf[2];
+        assert!((r as i32 - g as i32).abs() <= 2, "R/G should be equal after grayscale");
+        assert!((g as i32 - b as i32).abs() <= 2, "G/B should be equal after grayscale");
+        assert!(r > 20 && r < 70, "grayscale luma for red should be ~54, got {r}");
+    }
+
+    #[test]
+    fn apply_filter_rgba_grayscale_zero_noop() {
+        // grayscale(0) → image unchanged.
+        let mut buf = px(200, 100, 50);
+        apply_filter_rgba(&mut buf, &lumen_layout::FilterFn::Grayscale(0.0));
+        assert_eq!(&buf, &[200, 100, 50, 255]);
+    }
+
+    #[test]
+    fn apply_filter_rgba_invert_full() {
+        // invert(1.0) → each channel = 255 - original.
+        let mut buf = px(100, 150, 200);
+        apply_filter_rgba(&mut buf, &lumen_layout::FilterFn::Invert(1.0));
+        // After invert(1.0): r=255-100=155, g=255-150=105, b=255-200=55.
+        assert!((buf[0] as i32 - 155).abs() <= 2, "expected R≈155 after invert, got {}", buf[0]);
+        assert!((buf[1] as i32 - 105).abs() <= 2, "expected G≈105 after invert, got {}", buf[1]);
+        assert!((buf[2] as i32 - 55).abs() <= 2, "expected B≈55 after invert, got {}", buf[2]);
+    }
+
+    #[test]
+    fn apply_filter_rgba_sepia_full() {
+        // sepia(1.0) on white → known reference values.
+        let mut buf = px(255, 255, 255);
+        apply_filter_rgba(&mut buf, &lumen_layout::FilterFn::Sepia(1.0));
+        // sepia output for white: r=min(1,0.393+0.769+0.189)=1, g=0.349+0.686+0.168=1.203→1, b=0.272+0.534+0.131=0.937.
+        assert_eq!(buf[0], 255, "R should be 255 for white sepia");
+        assert_eq!(buf[1], 255, "G should be 255 for white sepia");
+        assert!((buf[2] as i32 - 239).abs() <= 3, "B should be ~239 for white sepia, got {}", buf[2]);
+    }
+
+    #[test]
+    fn apply_filter_rgba_transparent_pixel_skipped() {
+        // Alpha=0 pixel must remain untouched (avoid divide-by-zero).
+        let mut buf = vec![255u8, 0, 0, 0]; // premultiplied transparent
+        apply_filter_rgba(&mut buf, &lumen_layout::FilterFn::Grayscale(1.0));
+        assert_eq!(&buf, &[255, 0, 0, 0], "transparent pixel should not be modified");
+    }
+
+    #[test]
+    fn apply_filter_rgba_brightness_doubles() {
+        // brightness(2.0) on mid-grey → close to white.
+        let mut buf = px(128, 128, 128);
+        apply_filter_rgba(&mut buf, &lumen_layout::FilterFn::Brightness(2.0));
+        assert!(buf[0] > 200, "R should be near 255 after brightness(2), got {}", buf[0]);
+    }
+
+    #[test]
+    fn apply_filter_rgba_saturate_zero_desaturates() {
+        // saturate(0) desaturates completely → grey.
+        let mut buf = px(255, 0, 0);
+        apply_filter_rgba(&mut buf, &lumen_layout::FilterFn::Saturate(0.0));
+        let r = buf[0]; let g = buf[1]; let b = buf[2];
+        assert!((r as i32 - g as i32).abs() <= 2, "saturate(0) R/G should be equal, got r={r} g={g}");
+        assert!((g as i32 - b as i32).abs() <= 2, "saturate(0) G/B should be equal, got g={g} b={b}");
+    }
+
+    #[test]
+    fn fsin_cos_basic_values() {
+        // fsin(0) = 0, fsin(π/2) ≈ 1.
+        assert!((fsin(0.0)).abs() < 0.001, "sin(0) should be ~0");
+        assert!((fsin(std::f32::consts::FRAC_PI_2) - 1.0).abs() < 0.001, "sin(π/2) should be ~1");
+        assert!((fcos(0.0) - 1.0).abs() < 0.001, "cos(0) should be ~1");
+        assert!((fcos(std::f32::consts::FRAC_PI_2)).abs() < 0.001, "cos(π/2) should be ~0");
     }
 }
