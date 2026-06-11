@@ -31,6 +31,7 @@ pub mod hsts;
 pub mod http_cache;
 pub mod indexed_db;
 pub mod notifications;
+pub mod print_prefs;
 pub mod permissions;
 pub mod permissions_policy;
 pub mod plugins;
@@ -72,6 +73,7 @@ pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
 pub use indexed_db::IdbStore;
 pub use notifications::{Notification, Notifications};
+pub use print_prefs::{PrintPrefs, PrintPrefsSnapshot};
 pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
 pub use permissions_policy::{
     parse_permissions_policy, PermissionsAllowlist, PermissionsPolicies, PermissionsPolicy,

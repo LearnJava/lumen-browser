@@ -1,10 +1,11 @@
-//! Print dialog panel (E-1).
+//! Print dialog panel (E-1 + W-2b).
 //!
-//! A centred 560×400 px modal opened by `Ctrl+P`. Exposes print settings:
+//! A centred 560×420 px modal opened by `Ctrl+P`. Exposes print settings:
 //!
 //! - **Paper size** — A4 / Letter / Legal pill-buttons.
 //! - **Orientation** — Portrait / Landscape pill-buttons.
 //! - **Margins** — Normal / Narrow / Wide pill-buttons.
+//! - **Scale** — document zoom 50–200% (W-2b new field).
 //! - **Page range** — editable text field (`"all"` by default).
 //! - **Color mode** — Color / Grayscale pill-buttons.
 //! - **Output file** — editable text field (default `"output.pdf"`).
@@ -20,8 +21,8 @@ use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 /// Panel width in CSS px.
 pub const PANEL_W: f32 = 560.0;
-/// Panel height in CSS px.
-pub const PANEL_H: f32 = 400.0;
+/// Panel height in CSS px (expanded for W-2b scale field).
+pub const PANEL_H: f32 = 420.0;
 /// Header bar height.
 const HEADER_H: f32 = 36.0;
 /// Content row height.
@@ -136,6 +137,8 @@ pub struct PrintPanel {
     pub orientation: Orientation,
     /// Selected margin preset.
     pub margins: MarginPreset,
+    /// Document zoom level in percent (50–200%, W-2b new field).
+    pub scale: i32,
     /// Page range string: `"all"` or an explicit range such as `"1-3,5"`.
     pub page_range: String,
     /// Output colour mode.
@@ -154,6 +157,7 @@ impl PrintPanel {
             paper: PaperSize::A4,
             orientation: Orientation::Portrait,
             margins: MarginPreset::Normal,
+            scale: 100,
             page_range: "all".to_owned(),
             color_mode: ColorMode::Color,
             output_path: "output.pdf".to_owned(),
@@ -224,6 +228,10 @@ pub enum PrintHit {
     Orientation(Orientation),
     /// A margin preset pill was clicked.
     Margins(MarginPreset),
+    /// The scale decrease (−) button was clicked (W-2b).
+    ScaleDecrease,
+    /// The scale increase (+) button was clicked (W-2b).
+    ScaleIncrease,
     /// The page-range text field was clicked.
     PageRangeField,
     /// A colour-mode pill was clicked.
@@ -331,9 +339,26 @@ pub fn hit_test(panel: &PrintPanel, x: f32, y: f32, win_w: f32, win_h: f32) -> P
         return PrintHit::Inside;
     }
 
-    // Row 3: Page range text field.
+    // Row 3: Scale +/- buttons (W-2b).
     let r3 = row_y(3);
     if ly >= r3 && ly < r3 + ROW_H {
+        let field_x = PAD_H + LABEL_W;
+        let btn_w = 36.0;
+        let btn_gap = 4.0;
+        let decrease_x = field_x;
+        let increase_x = field_x + btn_w + btn_gap;
+        if lx >= decrease_x && lx < decrease_x + btn_w {
+            return PrintHit::ScaleDecrease;
+        }
+        if lx >= increase_x && lx < increase_x + btn_w {
+            return PrintHit::ScaleIncrease;
+        }
+        return PrintHit::Inside;
+    }
+
+    // Row 4: Page range text field (was row 3).
+    let r4 = row_y(4);
+    if ly >= r4 && ly < r4 + ROW_H {
         let field_x = PAD_H + LABEL_W;
         if lx >= field_x {
             return PrintHit::PageRangeField;
@@ -341,9 +366,9 @@ pub fn hit_test(panel: &PrintPanel, x: f32, y: f32, win_w: f32, win_h: f32) -> P
         return PrintHit::Inside;
     }
 
-    // Row 4: Color mode.
-    let r4 = row_y(4);
-    if ly >= r4 && ly < r4 + ROW_H {
+    // Row 5: Color mode (was row 4).
+    let r5 = row_y(5);
+    if ly >= r5 && ly < r5 + ROW_H {
         const MODES: [ColorMode; 2] = [ColorMode::Color, ColorMode::Grayscale];
         let pill_w = avail_w / 2.0;
         let pills_x = PAD_H + LABEL_W;
@@ -356,9 +381,9 @@ pub fn hit_test(panel: &PrintPanel, x: f32, y: f32, win_w: f32, win_h: f32) -> P
         return PrintHit::Inside;
     }
 
-    // Row 5: Output path text field.
-    let r5 = row_y(5);
-    if ly >= r5 && ly < r5 + ROW_H {
+    // Row 6: Output path text field (was row 5).
+    let r6 = row_y(6);
+    if ly >= r6 && ly < r6 + ROW_H {
         let field_x = PAD_H + LABEL_W;
         if lx >= field_x {
             return PrintHit::OutputPathField;
@@ -426,12 +451,13 @@ pub fn build_panel(panel: &PrintPanel, px: f32, py: f32) -> DisplayList {
     emit_paper_row(&mut out, panel, px, py);
     emit_orientation_row(&mut out, panel, px, py);
     emit_margins_row(&mut out, panel, px, py);
+    emit_scale_row(&mut out, panel, px, py);
     emit_page_range_row(&mut out, panel, px, py);
     emit_color_row(&mut out, panel, px, py);
     emit_output_path_row(&mut out, panel, px, py);
 
     // Separator before buttons.
-    let sep_y = row_y(6);
+    let sep_y = row_y(7);
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + PAD_H, py + sep_y, PANEL_W - PAD_H * 2.0, 1.0),
         color: SEPARATOR,
@@ -480,9 +506,65 @@ fn emit_margins_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32)
     emit_pills_3(out, &MARGINS, panel.margins, px, ry, |a, b| a == b);
 }
 
-fn emit_page_range_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
     let ry = py + row_y(3);
     emit_row_bg(out, px, ry, 1);
+    emit_label(out, "Масштаб", px, ry);
+    let field_x = px + PAD_H + LABEL_W;
+    let field_y = ry + (ROW_H - FIELD_H) / 2.0;
+    let btn_w = 36.0;
+    let btn_gap = 4.0;
+
+    // − button
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(field_x, field_y, btn_w, FIELD_H),
+        color: FIELD_BG,
+        radii: uniform_radii(3.0),
+    });
+    out.push(make_text(
+        "−".to_owned(),
+        field_x + 2.0,
+        field_y + (FIELD_H - FONT_SIZE) / 2.0 - 2.0,
+        btn_w - 4.0,
+        FONT_SIZE + 2.0,
+        FontWeight::NORMAL,
+        FIELD_TEXT,
+    ));
+
+    // + button
+    let plus_x = field_x + btn_w + btn_gap;
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(plus_x, field_y, btn_w, FIELD_H),
+        color: FIELD_BG,
+        radii: uniform_radii(3.0),
+    });
+    out.push(make_text(
+        "+".to_owned(),
+        plus_x + 2.0,
+        field_y + (FIELD_H - FONT_SIZE) / 2.0 - 2.0,
+        btn_w - 4.0,
+        FONT_SIZE + 2.0,
+        FontWeight::NORMAL,
+        FIELD_TEXT,
+    ));
+
+    // Scale value display
+    let display_x = plus_x + btn_w + btn_gap;
+    let display_w = (PANEL_W - PAD_H * 2.0 - LABEL_W) - (btn_w * 2.0 + btn_gap * 2.0);
+    out.push(make_text(
+        format!("{}%", panel.scale),
+        display_x + 4.0,
+        field_y + (FIELD_H - FONT_SIZE) / 2.0,
+        display_w,
+        FONT_SIZE,
+        FontWeight::NORMAL,
+        FIELD_TEXT,
+    ));
+}
+
+fn emit_page_range_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+    let ry = py + row_y(4);
+    emit_row_bg(out, px, ry, 0);
     emit_label(out, "Страницы", px, ry);
     let field_x = px + PAD_H + LABEL_W;
     let field_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
@@ -492,8 +574,8 @@ fn emit_page_range_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f
 }
 
 fn emit_color_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
-    let ry = py + row_y(4);
-    emit_row_bg(out, px, ry, 0);
+    let ry = py + row_y(5);
+    emit_row_bg(out, px, ry, 1);
     emit_label(out, "Цвет", px, ry);
     const MODES: [(ColorMode, &str); 2] = [
         (ColorMode::Color, "Цветной"),
@@ -503,8 +585,8 @@ fn emit_color_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
 }
 
 fn emit_output_path_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
-    let ry = py + row_y(5);
-    emit_row_bg(out, px, ry, 1);
+    let ry = py + row_y(6);
+    emit_row_bg(out, px, ry, 0);
     emit_label(out, "Файл", px, ry);
     let field_x = px + PAD_H + LABEL_W;
     let field_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
@@ -703,6 +785,7 @@ mod tests {
         assert_eq!(p.paper, PaperSize::A4);
         assert_eq!(p.orientation, Orientation::Portrait);
         assert_eq!(p.margins, MarginPreset::Normal);
+        assert_eq!(p.scale, 100);
         assert_eq!(p.page_range, "all");
         assert_eq!(p.color_mode, ColorMode::Color);
         assert_eq!(p.output_path, "output.pdf");
@@ -762,6 +845,22 @@ mod tests {
         assert_eq!(p.margin_px(), (18.0, 18.0));
         p.margins = MarginPreset::Wide;
         assert_eq!(p.margin_px(), (72.0, 72.0));
+    }
+
+    #[test]
+    fn scale_default_100_percent() {
+        let p = make_panel();
+        assert_eq!(p.scale, 100);
+    }
+
+    #[test]
+    fn scale_can_increase_decrease() {
+        let mut p = make_panel();
+        p.scale = 100;
+        p.scale = (p.scale + 10).min(200);
+        assert_eq!(p.scale, 110);
+        p.scale = (p.scale - 10).max(50);
+        assert_eq!(p.scale, 100);
     }
 
     // ── hit_test ──────────────────────────────────────────────────────────────
@@ -844,6 +943,30 @@ mod tests {
         let btn_y_abs = py + PANEL_H - BTN_H - PAD_V * 2.0 + BTN_H / 2.0;
         let cancel_x = px + PANEL_W - PAD_H - BTN_W + BTN_W / 2.0;
         assert_eq!(hit_test(&p, cancel_x, btn_y_abs, 800.0, 600.0), PrintHit::Cancel);
+    }
+
+    #[test]
+    fn hit_scale_decrease_button() {
+        let mut p = make_panel();
+        p.visible = true;
+        let (px, py) = panel_origin(800.0, 600.0);
+        let row_abs_y = py + row_y(3) + ROW_H / 2.0;
+        let field_x = px + PAD_H + LABEL_W;
+        let hit = hit_test(&p, field_x + 6.0, row_abs_y, 800.0, 600.0);
+        assert_eq!(hit, PrintHit::ScaleDecrease);
+    }
+
+    #[test]
+    fn hit_scale_increase_button() {
+        let mut p = make_panel();
+        p.visible = true;
+        let (px, py) = panel_origin(800.0, 600.0);
+        let row_abs_y = py + row_y(3) + ROW_H / 2.0;
+        let field_x = px + PAD_H + LABEL_W;
+        let btn_w = 36.0;
+        let btn_gap = 4.0;
+        let hit = hit_test(&p, field_x + btn_w + btn_gap + 6.0, row_abs_y, 800.0, 600.0);
+        assert_eq!(hit, PrintHit::ScaleIncrease);
     }
 
     // ── Rendering ─────────────────────────────────────────────────────────────
