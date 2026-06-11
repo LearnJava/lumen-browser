@@ -69,6 +69,8 @@ use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
+#[cfg(feature = "quickjs")]
+use lumen_js;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_storage::{BfCache, BfCacheEntry, History, SearchHistory};
 use lumen_dom::{
@@ -1321,7 +1323,7 @@ pub(crate) trait PersistentJs {
     /// Shell drains these in `about_to_wait`: each entry triggers print-preview
     /// dialog or direct PDF export.
     #[allow(dead_code)]
-    fn take_print_requests(&self) -> Vec<(f32, f32, f32, f32)>;
+    fn take_print_requests(&self) -> Vec<lumen_js::PrintRequest>;
     /// Adjust the QuickJS GC based on the tab's lifecycle tier (10L).
     ///
     /// `level` encodes aggressiveness: 0 = Soft (active tab, reset threshold),
@@ -1545,12 +1547,8 @@ impl PersistentJs for QuickPersistentJs {
             })
             .collect()
     }
-    fn take_print_requests(&self) -> Vec<(f32, f32, f32, f32)> {
-        self.rt
-            .take_print_requests()
-            .into_iter()
-            .map(|req| (req.margin_top, req.margin_bottom, req.margin_left, req.margin_right))
-            .collect()
+    fn take_print_requests(&self) -> Vec<lumen_js::PrintRequest> {
+        self.rt.take_print_requests()
     }
     fn run_gc_pass(&self, level: u8) {
         use lumen_js::gc_policy::GcLevel;
@@ -5377,14 +5375,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
-        // Print API: window.print() opens print preview dialog (W-2).
+        // Print API: window.print() exports current document as PDF (W-2).
         #[cfg(feature = "quickjs")]
         if let Some(js) = &self.js_ctx {
             let print_reqs = js.take_print_requests();
-            for (_margin_top, _margin_bottom, _margin_left, _margin_right) in print_reqs {
-                eprintln!("[shell] window.print() TODO: Print preview dialog not yet implemented");
-                // Phase 2 W-2b: open print-preview dialog with options
-                // Phase 2a stub: just log for now
+            for req in print_reqs {
+                self.handle_print_request(&req);
             }
         }
 
@@ -9635,6 +9631,60 @@ impl Lumen {
                         return true;
                     }
                 false
+            }
+        }
+    }
+
+    /// Export current document as PDF using parameters from PrintRequest (W-2 Phase 3b).
+    fn handle_print_request(&mut self, req: &lumen_js::PrintRequest) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // Determine output path: use provided path or generate default.
+        let output_path = if let Some(custom_path) = &req.output_path {
+            std::path::PathBuf::from(custom_path)
+        } else {
+            // Default: document.pdf in current directory (or Documents folder).
+            let mut path = std::env::current_dir().unwrap_or_default();
+            path.push("document.pdf");
+
+            // If file exists, append timestamp to avoid overwrite.
+            if path.exists() {
+                let ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let filename = format!("document_{}.pdf", ts);
+                path.set_file_name(filename);
+            }
+            path
+        };
+
+        // Convert margins from CSS px (96 DPI) to points (1 point = 1/72 inch).
+        // 1 CSS px at 96 DPI = 72/96 points = 0.75 points (not used here; we keep px).
+
+        let margin_top = req.margin_top;
+        let margin_bottom = req.margin_bottom;
+        let margin_left = req.margin_left;
+        let margin_right = req.margin_right;
+
+        match do_print_to_pdf_with_opts(
+            &self.source,
+            &output_path,
+            self.event_sink.clone(),
+            (margin_top + margin_bottom) / 2.0,  // Simplified: average for TB and LR.
+            (margin_left + margin_right) / 2.0,
+        ) {
+            Ok(page_count) => {
+                eprintln!(
+                    "[shell] PDF exported to {}: {} pages",
+                    output_path.display(),
+                    page_count
+                );
+                // Phase 2 future: show user feedback notification.
+            }
+            Err(e) => {
+                eprintln!("[shell] PDF export failed: {}", e);
+                // Phase 2 future: show error dialog to user.
             }
         }
     }

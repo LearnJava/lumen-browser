@@ -163,6 +163,11 @@ pub struct PrintRequest {
     pub margin_bottom: f32,
     pub margin_left: f32,
     pub margin_right: f32,
+    /// Paper size in inches: (width, height). Defaults: letter 8.5 x 11.0.
+    pub paper_width_in: f32,
+    pub paper_height_in: f32,
+    /// Output PDF path. If None, use default (e.g., "document.pdf").
+    pub output_path: Option<String>,
 }
 
 impl Default for PrintRequest {
@@ -172,6 +177,9 @@ impl Default for PrintRequest {
             margin_bottom: 48.0,
             margin_left: 48.0,
             margin_right: 48.0,
+            paper_width_in: 8.5,  // US Letter width
+            paper_height_in: 11.0, // US Letter height
+            output_path: None,
         }
     }
 }
