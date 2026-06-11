@@ -6,27 +6,40 @@
 
 ## In progress
 
-Нет активной задачи. Phase 3 фичи (V-1, V-2, V-3) разделены между P2 и P4.
-Следующее: следующий пункт из Phase 3 или координация с P4 по V-3 CSS-wiring.
+Нет активной задачи. W-1 Phase 2 (Print PDF Renderer) завершена ✅ 2026-06-12.
+Следующее: W-2 (Print preview UI) или взять другую Phase 3 фичу.
 
 ---
 
 ## Next
 
-### Phase 3 приоритеты для P2
+### Phase 3 — Printing & Advanced Rendering (P2 приоритет)
 
-После завершения Phase 2 (G-series + Paint-Arch + Canvas 2D): View Transitions API, CSS Motion Path, CSS Anchor Positioning.
+| # | Задача | Размер | Крейты | Блокирует |
+|---|--------|--------|--------|-----------|
+| W-1 | **Print PDF Phase 2** — `PdfRenderer` → PDF stream, page coordinate transform, rasterization | L | `lumen-pdf`, `lumen-paint`, `lumen-shell` | Print preview UI (P3) |
+| W-2 | **Print PDF Phase 3** — Print preview dialog, `window.print()` capture, page break UI | L | `lumen-shell` | — |
 
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| V-1 | **View Transitions API Phase 1** — `document.startViewTransition(callback)` + `ViewTransition` interface (In progress) | M | `lumen-js`, `lumen-shell`, `lumen-paint` |
-| V-2 | **CSS Motion Path L1** — `offset-path: path/ray/url()` + `offset-distance` + `offset-rotate` layout + paint | L | `lumen-layout`, `lumen-paint` |
-| V-3 | **CSS Anchor Positioning L1** — `anchor-name`/`position-anchor` + `inset-area` resizing | L | `lumen-layout`, `lumen-paint` |
+### Phase 3 — Graphics & Color (P2 будущее)
+
+| # | Задача | Размер | Крейты | После |
+|---|--------|--------|--------|-------|
+| X-1 | **Color management: ICC profiles** — sRGB/Display P3/Rec2020 colour space detection & tone mapping | M | `lumen-paint` | Canvas/img color management |
+| X-2 | **CSS Color L4 system colors** — Canvas/CanvasText/ButtonFace/… runtime resolution (p4-system-colors P4 CSS wiring awaits) | S | `lumen-layout` (system_color fn) | — |
 
 
 ---
 
 ## Current / Recently Merged
+
+**W-1 | Print PDF Phase 2: Renderer** ✅ 2026-06-12 (completed: DisplayCommand → PDF)
+- `Renderer::render_print_pages(pages, w, h)` ✅ — каждую страницу в Image через headless renderer
+- `encode_images_as_pdf(images, w, h)` ✅ — PDF encoding с pdf_writer: страницы + XObject + content stream
+- `split_at_page_breaks(cmds: Vec<DisplayCommand>)` ✅ — разделяет display list по PageBreak маркерам
+- Shell `--print-to-pdf <output.pdf> <source>` ✅ — end-to-end CLI: load → layout → paginate → render → PDF
+- Integration: `attach_page_boxes` добавляет номера страниц в margin-boxes (page N of M)
+- Тестирование: ✅ Простые HTML + многостраничные документы с page-break-before создают PDF-файлы
+- Узкое место: CSS `page-break-before` не полностью реализована в layout (Phase 3)
 
 **V-3 | CSS Anchor Positioning L1 (Phase 0)** ✅ 2026-06-12 (merged: P2 layout algorithm foundation)
 - anchor.rs: 24 unit-тестов ✅ (collect_anchors, resolve_anchor_function, resolve_inset_area)
