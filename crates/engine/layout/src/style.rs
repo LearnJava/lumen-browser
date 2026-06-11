@@ -538,6 +538,29 @@ pub enum TextDecorationThickness {
     Percentage(f32),
 }
 
+/// CSS Text Decoration L4 §3.5 — `text-decoration-skip-ink`. Controls whether
+/// underlines and overlines skip over glyph ink (descenders).
+///
+/// Spec inherited: yes. Initial: `Auto`.
+///
+/// - `Auto` — UA may skip underlines/overlines where they cross glyph ink.
+///   Only characters with known ink below baseline (g, j, p, q, y, Q, J)
+///   receive gaps. Applies to underlines; overlines are unaffected (they sit
+///   above the cap height in normal text).
+/// - `All` — UA must skip over all glyphs, including those wholly above/below
+///   the decoration line (more aggressive than Auto).
+/// - `None` — Never skip; decoration is always a continuous line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextDecorationSkipInk {
+    /// Skip where decoration crosses glyph descenders (default).
+    #[default]
+    Auto,
+    /// Skip over all glyphs, even those above/below the line.
+    All,
+    /// Never skip; draw a continuous line.
+    None,
+}
+
 /// CSS Text Decoration L4 §5.3 — `text-emphasis-style`. Форма emphasis-marks
 /// (точечный набор над/под глифами).
 ///
@@ -1952,6 +1975,9 @@ pub struct ComputedStyle {
     /// Initial: `None` (auto ≡ 0). `Some(px)` = additional offset added to
     /// the intrinsic underline position. Positive shifts down (away from text).
     pub text_underline_offset: Option<f32>,
+    /// CSS Text Decoration L4 §3.5 — `text-decoration-skip-ink`. Inherited.
+    /// Initial: `Auto`. Controls whether underlines skip over glyph descenders.
+    pub text_decoration_skip_ink: TextDecorationSkipInk,
     /// Явная ширина (CSS `width`). `None` = auto. Typed `Length`; `%`
     /// резолвится при layout с known cb_width.
     pub width: Option<Length>,
@@ -4446,6 +4472,7 @@ impl ComputedStyle {
             text_emphasis_position: TextEmphasisPosition::OverRight,
             text_underline_position: TextUnderlinePosition::Auto,
             text_underline_offset: None,
+            text_decoration_skip_ink: TextDecorationSkipInk::Auto,
             width: None,
             height: None,
             min_width: None,
@@ -4727,6 +4754,7 @@ pub fn compute_style(
         text_emphasis_position: inherited.text_emphasis_position,
         text_underline_position: inherited.text_underline_position,
         text_underline_offset: inherited.text_underline_offset,
+        text_decoration_skip_ink: inherited.text_decoration_skip_ink,
         accent_color: inherited.accent_color,
         color_scheme: inherited.color_scheme,
         // CSS Color Adjustment L1 §4: forced-color-adjust is NOT inherited — reset.
@@ -5665,6 +5693,7 @@ pub fn compute_pseudo_element_style(
     style.text_emphasis_position = parent.text_emphasis_position;
     style.text_underline_position = parent.text_underline_position;
     style.text_underline_offset = parent.text_underline_offset;
+    style.text_decoration_skip_ink = parent.text_decoration_skip_ink;
     style.accent_color = parent.accent_color;
     style.color_scheme = parent.color_scheme;
     style.custom_props = parent.custom_props.clone();
@@ -12442,6 +12471,15 @@ fn apply_declaration(
                 parse_length_px(val.trim())
             };
         }
+        "text-decoration-skip-ink" => {
+            // CSS Text Decoration L4 §3.5: auto | all | none.
+            style.text_decoration_skip_ink = match val.trim() {
+                "auto" => TextDecorationSkipInk::Auto,
+                "all" => TextDecorationSkipInk::All,
+                "none" => TextDecorationSkipInk::None,
+                _ => return,
+            };
+        }
         "text-emphasis" => {
             // CSS Text Decoration L4 §5.6 — shorthand для -style и -color
             // (НЕ включает -position по spec). Сбрасывает обе longhand-ы в
@@ -13538,6 +13576,13 @@ fn apply_css_wide_keyword(
                 inherited.text_underline_offset
             } else {
                 init.text_underline_offset
+            };
+        }
+        "text-decoration-skip-ink" => {
+            style.text_decoration_skip_ink = if inh {
+                inherited.text_decoration_skip_ink
+            } else {
+                init.text_decoration_skip_ink
             };
         }
         "text-shadow" => {
@@ -22868,6 +22913,68 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_underline_offset, Some(-2.0));
+    }
+
+    // ── text-decoration-skip-ink ──────────────────────────────────────────────
+
+    #[test]
+    fn text_decoration_skip_ink_initial_auto() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_all() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: all; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::All);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_auto_explicit() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+        assert_eq!(span_style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: edges; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Invalid keyword — property stays at inherited initial (Auto).
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
     }
 
     // ── color-scheme ──────────────────────────────────────────────────────────

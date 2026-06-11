@@ -6,7 +6,8 @@
 
 ## In progress
 
-(нет)
+G-4: CSS text-decoration-skip-ink  branch: p2-g4-text-decoration-skip-ink
+Next step: add unit tests + graphic test  display_list.rs:5231
 
 ---
 
