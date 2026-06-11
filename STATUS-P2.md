@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**PA-4 | backdrop-filter**  branch: p2-pa4-backdrop-filter
+Next step: femtovg offscreen backdrop screenshot + filter + blit (femtovg_backend.rs:1610); wgpu from_level<2 fix (renderer.rs:6139)
 
 ---
 

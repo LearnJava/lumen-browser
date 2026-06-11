@@ -2908,7 +2908,9 @@ impl Renderer {
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    // Write only RGB — preserve destination alpha so the parent
+                    // layer's opacity isn't reduced by blur-edge transparency.
+                    write_mask: wgpu::ColorWrites::COLOR,
                 })],
                 compilation_options: Default::default(),
             }),
@@ -6132,13 +6134,19 @@ impl Renderer {
                 //   3. blit scratch → parent at bounds with optional color filter (REPLACE blend)
                 //   4. composite element layer → parent (ALPHA_BLENDING, same as FilterComposite)
                 //
-                // Phase 0 limitation: skipped when from_level <= 1 (parent = surface texture,
-                // which lacks TEXTURE_BINDING and cannot be used as a copy source).
+                // When from_level < 2 (parent = surface texture, lacks TEXTURE_BINDING),
+                // steps 1-3 are skipped (can't copy from surface), but step 4 still runs so
+                // the element content is visible (no silent drop).
                 RenderPlanItem::BackdropFilterComposite(plan) => {
-                    // Need from_level >= 2: parent_idx = from_level - 2 indexes layer_textures.
-                    if plan.from_level < 2 { continue; }
                     let Some(cvb) = &comp_vbuf else { continue };
+                    // from_level < 2 means parent is the surface — backdrop blur/blit impossible.
+                    let skip_backdrop = plan.from_level < 2;
 
+                    // Ordinals evicted by `store()` whose textures must be freed once the
+                    // current element's passes (which borrow the cache map) have ended.
+                    let mut evicted_ordinals: Vec<u32> = Vec::new();
+
+                    if !skip_backdrop {
                     let parent_idx = plan.from_level - 2;
                     let parent_w = self.layer_textures[parent_idx].width;
                     let parent_h = self.layer_textures[parent_idx].height;
@@ -6164,9 +6172,6 @@ impl Renderer {
                         _ => None,
                     });
 
-                    // Ordinals evicted by `store()` whose textures must be freed once the
-                    // current element's passes (which borrow the cache map) have ended.
-                    let mut evicted_ordinals: Vec<u32> = Vec::new();
                     if !cache_hit {
                         if let Some(sigma) = blur_sigma {
                             // Step 1: copy parent layer → scratch (blur H-pass input).
@@ -6272,9 +6277,10 @@ impl Renderer {
                         }
                     }
 
-                    // Step 3: blit cache texture → parent at element bounds (REPLACE blend).
+                    // Step 3: blit cache texture → parent at element bounds.
+                    // Uses backdrop_blit_pipeline (REPLACE RGB, preserve dst alpha) to
+                    // write the filtered backdrop into the parent layer at element bounds.
                     // Applies color filters (count > 0) or passthrough (count = 0).
-                    // Bounded quad ensures only the element's bounds region is overwritten.
                     let mut bd_entries = [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8];
                     let mut bd_color_count = 0u32;
                     for f in &plan.filters {
@@ -6289,8 +6295,7 @@ impl Renderer {
                     };
                     let bd_fp_buf = make_filter_param_buf(&self.device, &bd_filter_params);
                     let parent_dst_view = &self.layer_textures[parent_idx].view;
-                    // Source is the cache texture — holds the blurred (or copied) backdrop,
-                    // whether freshly produced this frame or reused from a previous frame.
+                    // Source is the cache texture — holds the blurred (or copied) backdrop.
                     let bd_src_view = &self.backdrop_cache_textures[&plan.ordinal].view;
                     let bd_blit_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("backdrop-blit-bg"),
@@ -6325,9 +6330,20 @@ impl Renderer {
                         pass.draw(plan.bounds_v_start..plan.bounds_v_start + 6, 0..1);
                     }
 
+                    } // end if !skip_backdrop
+
                     // Step 4: composite element layer → parent (ALPHA_BLENDING).
-                    // This is identical to FilterComposite's color-filter pass but with
-                    // count=0 (no element-level filter here; PushFilter handles that separately).
+                    // Runs even when skip_backdrop (from_level < 2) so element content
+                    // is always visible; only the filtered backdrop blit is skipped.
+                    let parent_dst_view4 = if plan.from_level >= 2 {
+                        &self.layer_textures[plan.from_level - 2].view as *const _
+                    } else {
+                        &frame_view as *const _
+                    };
+                    // SAFETY: we hold &mut self for the encoder lifetime and frame_view
+                    // is valid for the duration of this frame. layer_textures is not
+                    // mutated after this point within the current plan item.
+                    let parent_dst_view4: &wgpu::TextureView = unsafe { &*parent_dst_view4 };
                     let elem_filter_params = FilterParamsCpu {
                         count: 0, _pad0: 0, _pad1: 0, _pad2: 0,
                         entries: [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8],
@@ -6348,7 +6364,7 @@ impl Renderer {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("backdrop-elem-composite-pass"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: parent_dst_view,
+                                view: parent_dst_view4,
                                 resolve_target: None,
                                 depth_slice: None,
                                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },

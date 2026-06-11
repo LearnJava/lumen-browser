@@ -237,6 +237,11 @@ pub struct FemtovgBackend {
     blend_layer_stack: Vec<BlendLayerEntry>,
     /// Images from blend layers queued for deletion after the next flush.
     blend_layer_pending_delete: Vec<femtovg::ImageId>,
+    /// Offscreen backdrop-filter layer stack (PA-4). Each entry holds the filtered
+    /// backdrop image and element content image for compositing on PopBackdropFilter.
+    backdrop_filter_layer_stack: Vec<BackdropFilterLayerEntry>,
+    /// Images from backdrop-filter layers queued for deletion after the next flush.
+    backdrop_filter_pending_delete: Vec<femtovg::ImageId>,
     /// Currently active render target image. `None` means Screen.
     /// Updated by [`Self::switch_render_target`] whenever the RT changes.
     active_rt_image: Option<femtovg::ImageId>,
@@ -287,6 +292,25 @@ struct BlendLayerEntry {
     /// Height of the backdrop snapshot in pixels.
     backdrop_h: usize,
     /// Render target active before PushBlendMode — restored on PopBlendMode.
+    prev_render_target: femtovg::RenderTarget,
+}
+
+// ─── Backdrop filter layer support (PA-4) ────────────────────────────────────
+
+/// Entry pushed onto `FemtovgBackend::backdrop_filter_layer_stack` by `PushBackdropFilter`.
+///
+/// `elem_image_id` receives all draws between Push and Pop. `filtered_backdrop_id` holds
+/// the full-canvas backdrop snapshot with the filter chain applied (blur + colour-matrix).
+/// On `PopBackdropFilter`, `composite_backdrop_filter_layer` blits the filtered backdrop
+/// region at `bounds`, then composites element content on top (CSS Filter Effects L2 §2).
+struct BackdropFilterLayerEntry {
+    /// Offscreen image capturing element content (draws between Push and Pop).
+    elem_image_id: femtovg::ImageId,
+    /// Full-canvas filtered backdrop snapshot — blurred and/or colour-filtered.
+    filtered_backdrop_id: femtovg::ImageId,
+    /// Element bounds in CSS pixels — the region where the filtered backdrop is visible.
+    bounds: lumen_core::geom::Rect,
+    /// Render target active before PushBackdropFilter — restored on PopBackdropFilter.
     prev_render_target: femtovg::RenderTarget,
 }
 
@@ -572,6 +596,8 @@ impl FemtovgBackend {
             filter_layer_pending_delete: Vec::new(),
             blend_layer_stack: Vec::new(),
             blend_layer_pending_delete: Vec::new(),
+            backdrop_filter_layer_stack: Vec::new(),
+            backdrop_filter_pending_delete: Vec::new(),
             active_rt_image: None,
         })
     }
@@ -952,6 +978,141 @@ impl FemtovgBackend {
             }
         }
         self.blend_layer_pending_delete.push(src_image_id);
+    }
+
+    /// Applies `filters` to a full-canvas snapshot of the current render target.
+    ///
+    /// Flush must be called before this. Returns the filtered image id (or `None`
+    /// on failure). Intermediate images are queued in `filter_layer_pending_delete`.
+    /// After return the active render target may have changed; caller must
+    /// `switch_render_target` to the desired next target.
+    fn apply_backdrop_filters(
+        &mut self,
+        filters: &[lumen_layout::FilterFn],
+    ) -> Option<femtovg::ImageId> {
+        // Screenshot the current RT (flush must have been called already).
+        let screenshot = self.canvas.screenshot().ok()?;
+        let iw = screenshot.width();
+        let ih = screenshot.height();
+        let pixels: Vec<rgb::RGBA8> = screenshot.buf().iter()
+            .map(|p| rgb::RGBA8 { r: p.r, g: p.g, b: p.b, a: p.a })
+            .collect();
+        let img_src = imgref::ImgRef::new(&pixels, iw, ih);
+        let raw_id = self.canvas.create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED).ok()?;
+        let mut current_id = raw_id;
+
+        // GPU Gaussian blur: filter_image needs the destination set as current RT before flush.
+        for f in filters {
+            if let lumen_layout::FilterFn::Blur(sigma) = f
+                && *sigma > 0.0 {
+                    let Ok(blur_dst) = self.canvas.create_image_empty(
+                        self.width as usize,
+                        self.height as usize,
+                        femtovg::PixelFormat::Rgba8,
+                        femtovg::ImageFlags::PREMULTIPLIED,
+                    ) else {
+                        continue;
+                    };
+                    self.canvas.filter_image(
+                        blur_dst,
+                        femtovg::ImageFilter::GaussianBlur { sigma: *sigma },
+                        current_id,
+                    );
+                    self.switch_render_target(femtovg::RenderTarget::Image(blur_dst));
+                    self.canvas.flush();
+                    self.filter_layer_pending_delete.push(current_id);
+                    current_id = blur_dst;
+                }
+        }
+
+        // CPU colour-matrix filters (unpremultiply → apply → re-premultiply).
+        let has_color = filters.iter().any(|f| {
+            !matches!(f, lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_))
+        });
+        if has_color {
+            // Ensure current_id is the active RT so screenshot reads from it.
+            let needs_rt_switch = !filters.iter().any(|f| {
+                matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0)
+            });
+            if needs_rt_switch {
+                self.switch_render_target(femtovg::RenderTarget::Image(current_id));
+                self.canvas.flush();
+            }
+            if let Ok(img) = self.canvas.screenshot() {
+                let iw2 = img.width();
+                let ih2 = img.height();
+                let mut rgba: Vec<u8> = img.buf().iter()
+                    .flat_map(|p| [p.r, p.g, p.b, p.a])
+                    .collect();
+                for f in filters {
+                    if !matches!(
+                        f,
+                        lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
+                    ) {
+                        apply_filter_rgba(&mut rgba, f);
+                    }
+                }
+                let cm_pixels: Vec<rgb::RGBA8> = rgba.chunks_exact(4)
+                    .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
+                    .collect();
+                let cm_ref = imgref::ImgRef::new(&cm_pixels, iw2, ih2);
+                if let Ok(cm_dst) = self.canvas.create_image(cm_ref, femtovg::ImageFlags::PREMULTIPLIED) {
+                    self.filter_layer_pending_delete.push(current_id);
+                    current_id = cm_dst;
+                }
+            }
+        }
+
+        Some(current_id)
+    }
+
+    /// Composites a backdrop-filter layer (PA-4) onto the previous render target.
+    ///
+    /// Algorithm:
+    /// 1. Flush so `elem_image_id` contains the final element content.
+    /// 2. Switch to `prev_render_target`.
+    /// 3. Draw `filtered_backdrop_id` at element `bounds` using Copy (replace-in-place).
+    /// 4. Draw `elem_image_id` (full canvas) with SourceOver to composite element on top.
+    fn composite_backdrop_filter_layer(&mut self, entry: BackdropFilterLayerEntry) {
+        let BackdropFilterLayerEntry {
+            elem_image_id,
+            filtered_backdrop_id,
+            bounds,
+            prev_render_target,
+        } = entry;
+
+        // Flush pending draws into elem_image_id.
+        self.canvas.flush();
+
+        // Restore previous render target.
+        self.switch_render_target(prev_render_target);
+
+        let css_w = (self.width as f64 / self.scale) as f32;
+        let css_h = (self.height as f64 / self.scale) as f32;
+
+        // Step 1: blit filtered backdrop at element bounds (Copy = pixel-replace).
+        // The paint maps the full filtered_backdrop image to the full canvas; only
+        // the path rect (element bounds) receives pixels, everything else is untouched.
+        self.canvas.save();
+        self.canvas.reset_transform();
+        self.canvas.global_composite_operation(femtovg::CompositeOperation::Copy);
+        let bd_paint = femtovg::Paint::image(filtered_backdrop_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+        let mut bd_path = femtovg::Path::new();
+        bd_path.rect(bounds.x, bounds.y, bounds.width, bounds.height);
+        self.canvas.fill_path(&bd_path, &bd_paint);
+        self.canvas.restore();
+
+        // Step 2: composite element content on top (SourceOver = normal CSS compositing).
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let elem_paint = femtovg::Paint::image(elem_image_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0);
+        let mut elem_path = femtovg::Path::new();
+        elem_path.rect(0.0, 0.0, css_w, css_h);
+        self.canvas.fill_path(&elem_path, &elem_paint);
+        self.canvas.restore();
+
+        self.backdrop_filter_pending_delete.push(filtered_backdrop_id);
+        self.backdrop_filter_pending_delete.push(elem_image_id);
     }
 
     /// Рисует изображение из зарегистрированного URL в content box `rect`
@@ -1607,16 +1768,62 @@ impl FemtovgBackend {
                 }
             }
 
-            // ── Backdrop filter ──────────────────────────────────────────────
-            // femtovg не имеет поддержки backdrop-filter. save/restore без эффекта.
-            DisplayCommand::PushBackdropFilter { .. } => {
-                self.canvas.save();
+            // ── Backdrop filter (PA-4) ───────────────────────────────────────
+            // Real offscreen implementation: flush current RT → screenshot backdrop →
+            // apply filter chain (GPU blur + CPU colour-matrix) → redirect element
+            // draws to an offscreen layer. PopBackdropFilter blits the filtered backdrop
+            // at element bounds (Copy op) then composites element content on top.
+            DisplayCommand::PushBackdropFilter { filters, bounds } => {
+                let prev_rt = self.current_rt();
+                // Flush so backdrop has all content rendered.
+                self.canvas.flush();
+                // Apply filters to a screenshot of the current RT.
+                let filtered_backdrop_id = self.apply_backdrop_filters(filters);
+
+                if let Some(filt_id) = filtered_backdrop_id {
+                    // Restore prev_rt after apply_backdrop_filters may have switched.
+                    self.switch_render_target(prev_rt);
+                    match self.canvas.create_image_empty(
+                        self.width as usize,
+                        self.height as usize,
+                        femtovg::PixelFormat::Rgba8,
+                        femtovg::ImageFlags::PREMULTIPLIED,
+                    ) {
+                        Ok(elem_id) => {
+                            self.switch_render_target(femtovg::RenderTarget::Image(elem_id));
+                            self.canvas.clear_rect(
+                                0, 0, self.width, self.height,
+                                femtovg::Color::rgba(0, 0, 0, 0),
+                            );
+                            self.backdrop_filter_layer_stack.push(BackdropFilterLayerEntry {
+                                elem_image_id: elem_id,
+                                filtered_backdrop_id: filt_id,
+                                bounds: *bounds,
+                                prev_render_target: prev_rt,
+                            });
+                        }
+                        Err(_) => {
+                            // Fallback: queue filtered_id for deletion, draw to prev_rt.
+                            self.backdrop_filter_pending_delete.push(filt_id);
+                            self.canvas.save();
+                        }
+                    }
+                } else {
+                    // Screenshot failed: no-op fallback.
+                    self.canvas.save();
+                }
                 self.layer_stack_depth += 1;
             }
             DisplayCommand::PopBackdropFilter => {
                 if self.layer_stack_depth > 0 {
-                    self.canvas.restore();
                     self.layer_stack_depth -= 1;
+                }
+                if let Some(entry) = self.backdrop_filter_layer_stack.pop() {
+                    // Real path: blit filtered backdrop + composite element content.
+                    self.composite_backdrop_filter_layer(entry);
+                } else {
+                    // Fallback path: PushBackdropFilter issued canvas.save() — restore it.
+                    self.canvas.restore();
                 }
             }
 
@@ -1726,6 +1933,10 @@ impl RenderBackend for FemtovgBackend {
         }
         let blend_del: Vec<_> = self.blend_layer_pending_delete.drain(..).collect();
         for id in blend_del {
+            self.canvas.delete_image(id);
+        }
+        let backdrop_del: Vec<_> = self.backdrop_filter_pending_delete.drain(..).collect();
+        for id in backdrop_del {
             self.canvas.delete_image(id);
         }
 
