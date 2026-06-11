@@ -6,22 +6,27 @@
 
 ## In progress
 
-Нет активной задачи. Phase 3 фичи (V-1, V-2, V-3) разделены между P2 и P4.
-Следующее: следующий пункт из Phase 3 или координация с P4 по V-3 CSS-wiring.
+**W-1 | Print PDF Phase 2: Renderer** — DisplayCommand → PDF output (page layout, rasterization).
+Branch: `p2-w1-print-pdf-phase2`
+Next step: Implement `PdfRenderer` struct, migrate PageContent → PDF instructions (images, text, paths)
 
 ---
 
 ## Next
 
-### Phase 3 приоритеты для P2
+### Phase 3 — Printing & Advanced Rendering (P2 приоритет)
 
-После завершения Phase 2 (G-series + Paint-Arch + Canvas 2D): View Transitions API, CSS Motion Path, CSS Anchor Positioning.
+| # | Задача | Размер | Крейты | Блокирует |
+|---|--------|--------|--------|-----------|
+| W-1 | **Print PDF Phase 2** — `PdfRenderer` → PDF stream, page coordinate transform, rasterization | L | `lumen-pdf`, `lumen-paint`, `lumen-shell` | Print preview UI (P3) |
+| W-2 | **Print PDF Phase 3** — Print preview dialog, `window.print()` capture, page break UI | L | `lumen-shell` | — |
 
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| V-1 | **View Transitions API Phase 1** — `document.startViewTransition(callback)` + `ViewTransition` interface (In progress) | M | `lumen-js`, `lumen-shell`, `lumen-paint` |
-| V-2 | **CSS Motion Path L1** — `offset-path: path/ray/url()` + `offset-distance` + `offset-rotate` layout + paint | L | `lumen-layout`, `lumen-paint` |
-| V-3 | **CSS Anchor Positioning L1** — `anchor-name`/`position-anchor` + `inset-area` resizing | L | `lumen-layout`, `lumen-paint` |
+### Phase 3 — Graphics & Color (P2 будущее)
+
+| # | Задача | Размер | Крейты | После |
+|---|--------|--------|--------|-------|
+| X-1 | **Color management: ICC profiles** — sRGB/Display P3/Rec2020 colour space detection & tone mapping | M | `lumen-paint` | Canvas/img color management |
+| X-2 | **CSS Color L4 system colors** — Canvas/CanvasText/ButtonFace/… runtime resolution (p4-system-colors P4 CSS wiring awaits) | S | `lumen-layout` (system_color fn) | — |
 
 
 ---
