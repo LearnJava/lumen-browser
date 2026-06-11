@@ -4,7 +4,8 @@
 //! across Windows/macOS/Linux.
 
 use lumen_image::Image;
-use lumen_layout::{Color, FilterFn, GradientStop};
+use lumen_layout::{BorderStyle, Color, FilterFn, GradientStop};
+use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 use crate::{DisplayCommand, CornerRadii};
@@ -156,10 +157,10 @@ pub(crate) fn rasterize_cpu(
                     layers.last_mut().expect("base layer"), rect, color, radii, c,
                 )?;
             }
-            DisplayCommand::DrawBorder { rect, widths, colors, styles: _, radii } => {
+            DisplayCommand::DrawBorder { rect, widths, colors, styles, radii } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_draw_border(
-                    layers.last_mut().expect("base layer"), rect, widths, colors, radii, c,
+                    layers.last_mut().expect("base layer"), rect, widths, colors, styles, radii, c,
                 )?;
             }
             DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
@@ -1083,87 +1084,113 @@ fn rasterize_draw_border(
     rect: &Rect,
     widths: &[f32; 4],
     colors: &[Color; 4],
+    styles: &[BorderStyle; 4],
     _radii: &CornerRadii,
     clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use tiny_skia::Paint;
-
+    // Border edges are axis-aligned quads. `anti_alias: false` is both visually
+    // correct (GPU renderer draws without per-edge AA) and required to avoid
+    // tiny-skia's hairline_aa::fill_dot8 debug_assert for sub-pixel rects (BUG-052).
     let [top_w, right_w, bottom_w, left_w] = widths;
     let [top_c, right_c, bottom_c, left_c] = colors;
+    let [top_s, right_s, bottom_s, left_s] = styles;
 
-    // Simple solid border drawing (dashed/dotted skipped for now).
-    //
-    // Border edges are axis-aligned solid quads (the GPU renderer paints them
-    // without per-edge AA), so `anti_alias: false` is both visually correct and
-    // necessary: tiny-skia's AA `fill_rect` fast-path (`hairline_aa::fill_dot8`)
-    // hits a `debug_assert!(false)` for thin, sub-pixel-positioned rects whose
-    // fixed-point inner span rounds to zero width — which crashes the
-    // debug-assertions-on test profile (BUG-052). The non-AA path pixel-snaps
-    // and never enters that code.
-
-    // Top border.
-    if *top_w > 0.0 {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(color_to_skia(*top_c)),
-            anti_alias: false,
-            force_hq_pipeline: false,
-            blend_mode: tiny_skia::BlendMode::SourceOver,
-        };
-        let r = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, *top_w)
-            .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
-    }
-
-    // Right border.
-    if *right_w > 0.0 {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(color_to_skia(*right_c)),
-            anti_alias: false,
-            force_hq_pipeline: false,
-            blend_mode: tiny_skia::BlendMode::SourceOver,
-        };
-        let r = tiny_skia::Rect::from_xywh(
-            rect.x + rect.width - right_w,
-            rect.y,
-            *right_w,
-            rect.height,
-        )
-        .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
-    }
-
-    // Bottom border.
-    if *bottom_w > 0.0 {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(color_to_skia(*bottom_c)),
-            anti_alias: false,
-            force_hq_pipeline: false,
-            blend_mode: tiny_skia::BlendMode::SourceOver,
-        };
-        let r = tiny_skia::Rect::from_xywh(
-            rect.x,
-            rect.y + rect.height - bottom_w,
-            rect.width,
-            *bottom_w,
-        )
-        .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
-    }
-
-    // Left border.
-    if *left_w > 0.0 {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(color_to_skia(*left_c)),
-            anti_alias: false,
-            force_hq_pipeline: false,
-            blend_mode: tiny_skia::BlendMode::SourceOver,
-        };
-        let r =
-            tiny_skia::Rect::from_xywh(rect.x, rect.y, *left_w, rect.height).ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
-    }
-
+    draw_border_side_h(pixmap, rect.x, rect.y, rect.width, *top_w, *top_c, *top_s, clip)?;
+    draw_border_side_v(pixmap, rect.x + rect.width - right_w, rect.y, *right_w, rect.height, *right_c, *right_s, clip)?;
+    draw_border_side_h(pixmap, rect.x, rect.y + rect.height - bottom_w, rect.width, *bottom_w, *bottom_c, *bottom_s, clip)?;
+    draw_border_side_v(pixmap, rect.x, rect.y, *left_w, rect.height, *left_c, *left_s, clip)?;
     Ok(())
+}
+
+/// Draw one horizontal border side using segments from `dash_math` for
+/// Dashed/Dotted, or a single fill_rect for Solid/Double.
+fn draw_border_side_h(
+    pixmap: &mut tiny_skia::Pixmap,
+    x0: f32,
+    y: f32,
+    total: f32,
+    h: f32,
+    color: Color,
+    style: BorderStyle,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if h <= 0.0 || total <= 0.0 {
+        return Ok(());
+    }
+    let paint = border_paint(color);
+    match style {
+        BorderStyle::None => {}
+        BorderStyle::Dashed => {
+            for (off, len) in dashed_border_offsets(total, h) {
+                if let Some(r) = tiny_skia::Rect::from_xywh(x0 + off, y, len, h) {
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+                }
+            }
+        }
+        BorderStyle::Dotted => {
+            for (off, len) in dotted_border_offsets(total, h) {
+                if let Some(r) = tiny_skia::Rect::from_xywh(x0 + off, y, len, h) {
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+                }
+            }
+        }
+        _ => {
+            if let Some(r) = tiny_skia::Rect::from_xywh(x0, y, total, h) {
+                pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Draw one vertical border side using segments from `dash_math` for
+/// Dashed/Dotted, or a single fill_rect for Solid/Double.
+fn draw_border_side_v(
+    pixmap: &mut tiny_skia::Pixmap,
+    x: f32,
+    y0: f32,
+    w: f32,
+    total: f32,
+    color: Color,
+    style: BorderStyle,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if w <= 0.0 || total <= 0.0 {
+        return Ok(());
+    }
+    let paint = border_paint(color);
+    match style {
+        BorderStyle::None => {}
+        BorderStyle::Dashed => {
+            for (off, len) in dashed_border_offsets(total, w) {
+                if let Some(r) = tiny_skia::Rect::from_xywh(x, y0 + off, w, len) {
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+                }
+            }
+        }
+        BorderStyle::Dotted => {
+            for (off, len) in dotted_border_offsets(total, w) {
+                if let Some(r) = tiny_skia::Rect::from_xywh(x, y0 + off, w, len) {
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+                }
+            }
+        }
+        _ => {
+            if let Some(r) = tiny_skia::Rect::from_xywh(x, y0, w, total) {
+                pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn border_paint(color: Color) -> tiny_skia::Paint<'static> {
+    tiny_skia::Paint {
+        shader: tiny_skia::Shader::SolidColor(color_to_skia(color)),
+        anti_alias: false,
+        force_hq_pipeline: false,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+    }
 }
 
 fn rasterize_draw_outline(
@@ -2355,6 +2382,93 @@ mod tests {
         // Pre-fix this would panic via debug_assert! in tiny-skia hairline_aa::fill_dot8.
         let img = rasterize_cpu(128, 128, &cmds, 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 64, 64), (255, 255, 255, 255), "interior stays white");
+    }
+
+    /// Dashed border: top edge must have visible dashes (some red pixels) with
+    /// gaps between them (some white pixels). Interior must remain white.
+    #[test]
+    fn draw_border_dashed_top_has_gaps() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // 100px wide box, 4px top dash border; all other sides None.
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(10.0, 10.0, 100.0, 60.0),
+            widths: [4.0, 0.0, 0.0, 0.0],
+            colors: [red, red, red, red],
+            styles: [
+                lumen_layout::BorderStyle::Dashed,
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::None,
+            ],
+            radii: CornerRadii::default(),
+        }];
+        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        // Interior must be white.
+        assert_eq!(px(&img, 60, 40), (255, 255, 255, 255), "interior white");
+        // The top edge (y=11) should have at least one red pixel and one white pixel
+        // to confirm dashes (not a solid band) are drawn.
+        let has_red: bool = (10..110).any(|x| {
+            let (r, ..) = px(&img, x, 11);
+            r > 200
+        });
+        let has_gap: bool = (10..110).any(|x| {
+            let (r, g, b, _) = px(&img, x, 11);
+            r > 200 && g > 200 && b > 200
+        });
+        assert!(has_red, "dashed top border: no red pixels found on top edge");
+        assert!(has_gap, "dashed top border: no gaps (white pixels) found on top edge");
+    }
+
+    /// Dotted border: left vertical edge must have visible dots with gaps.
+    #[test]
+    fn draw_border_dotted_left_has_gaps() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        // 60px tall box, 4px left dotted border.
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(10.0, 10.0, 80.0, 60.0),
+            widths: [0.0, 0.0, 0.0, 4.0],
+            colors: [blue; 4],
+            styles: [
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::Dotted,
+            ],
+            radii: CornerRadii::default(),
+        }];
+        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        // Interior must be white.
+        assert_eq!(px(&img, 60, 40), (255, 255, 255, 255), "interior white");
+        // Left edge (x=11) should have at least one blue and one white pixel.
+        let has_blue: bool = (10..70).any(|y| {
+            let (.., b, _) = px(&img, 11, y);
+            b > 200
+        });
+        let has_gap: bool = (10..70).any(|y| {
+            let (r, g, b, _) = px(&img, 11, y);
+            r > 200 && g > 200 && b > 200
+        });
+        assert!(has_blue, "dotted left border: no blue pixels found");
+        assert!(has_gap, "dotted left border: no gaps (white pixels) found");
+    }
+
+    /// Dashed border: `BorderStyle::None` sides render nothing (zero colored pixels).
+    #[test]
+    fn draw_border_none_style_renders_nothing() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(10.0, 10.0, 80.0, 60.0),
+            widths: [4.0, 4.0, 4.0, 4.0],
+            colors: [red; 4],
+            styles: [lumen_layout::BorderStyle::None; 4],
+            radii: CornerRadii::default(),
+        }];
+        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        // All pixels should remain white.
+        let colored = (0..200u32)
+            .flat_map(|x| (0..100u32).map(move |y| (x, y)))
+            .any(|(x, y)| px(&img, x, y).0 < 200);
+        assert!(!colored, "BorderStyle::None must render nothing");
     }
 
     /// `mask-image: url(...)` has no decoded source on the deterministic CPU path,

@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+PA-5 | cpu_raster: BorderStyle dashed/dotted  branch: p2-pa5-border-dash
+Next step: rasterize_draw_border → принять styles, dashed_border_offsets/dotted_border_offsets  cpu_raster.rs:1081
 
 ---
 
