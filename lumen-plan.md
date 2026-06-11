@@ -227,6 +227,7 @@
 | 4.5.3 | ✅ transform_stack + CPU-side vertex transformation | `paint/src/renderer.rs` | 2026-05-20 |
 | 5A | ✅ **Canvas 2D basic context** — CPU rasterizer, `CanvasRenderingContext2D` Phase 0 | `engine/canvas/` | 2026-05-22 |
 | 5A.2 | ✅ **Canvas 2D JS bindings** — `canvas.getContext('2d')` → `lumen_canvas::Context2D`; `BoxKind::Canvas` replaced element; `DrawImage` keyed `canvas:{nid}`; dirty-buffer flush to renderer | `js/src/canvas2d.rs` + `layout/box_tree.rs` + `paint/display_list.rs` + `shell` | 2026-06-02 |
+| 5A.5 | ✅ **Canvas 2D Phase 5 — Path2D** (HTML LS §4.12.5.1.5) — `Path2dData` user-space segments + SVG parser; fill/stroke/clip_with_path2d; JS `Path2D` class; CTM applied at use-time | `engine/canvas/src/path2d.rs`, `js/src/canvas2d.rs`, `js/src/dom.rs` | 2026-06-11 |
 | 5B | ✅ **WOFF2/WOFF1 decoder** — brotli + zlib, glyf transform, sfnt rebuild | `engine/font/src/woff2.rs` | 2026-05-22 |
 | 5+ | ✅ **GPU linear/radial gradient pipeline** — WGSL шейдер + CPU uniform + DrawOp::Gradient | `paint/src/renderer.rs` | 2026-05-22 |
 | 5++ | ✅ **Extras**: object-fit ✅, variable fonts ✅, Print PDF Phase 1 (✅ pagination module) | `layout/src/pagination.rs` | 2026-05-28 |
