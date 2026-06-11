@@ -6,8 +6,7 @@
 
 ## In progress
 
-**Canvas 2D Phase 2** — branch: p2-canvas2d-phase2
-Next step: extend lumen-canvas Context2D: state stack + transforms + bezier curves  crates/engine/canvas/src/lib.rs:33
+(нет)
 
 ---
 
@@ -687,6 +686,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-canvas2d-phase2** ✅ 2026-06-11 — Canvas 2D Phase 2. `lumen-canvas`: DrawState + save()/restore() state stack; CTM `[a,b,c,d,e,f]` + translate/rotate/scale/transform/setTransform/resetTransform; bezier_curve_to (cubic), quadratic_curve_to; ellipse, arc_to, rect; CompositeOperation (16 Porter-Duff/CSS blend modes) + composite_pixel dispatch; LineCap/LineJoin/miterLimit; fill_rect + stroke_rect CTM-aware через build_rect_path; PathSegment::Cubic + Quadratic + tessellation 32-step; fill_quad исправлен для edge-straddling сканлайнов. `lumen-js`: 15+ новых native bindings в canvas2d.rs (save/restore, transforms, bezierCurveTo, quadraticCurveTo, arcTo, rect, setGlobalCompositeOperation, setLineCap, setLineJoin, setMiterLimit); DOM-шим расширен — все Phase 0 стабы заменены. ellipse в JS через save/translate/scale/arc/restore (rquickjs 7-param limit). 35 unit-тестов lumen-canvas ✅, 1849 lumen-js ✅. Clippy чист.
 
 - **p2-svg-layout-improvements** ✅ 2026-06-04 — A-8: Inline SVG layout improvements Phase 1. `<defs>` контейнер обрабатывается как invisible (BoxKind::Skip). SVG intrinsic ratio из viewBox: функция `svg_intrinsic_ratio(view_box: &Option<ViewBox>) -> Option<f32>` вычисляет width/height для aspect-ratio preserved sizing. `SvgTransform::translate(tx, ty)` конструктор для x/y трансформов. Handoff комментарии для P4: `object-fit`, `object-position` могут переопределять viewBox scaling (Phase 2). Новые функции проверки: `is_svg_defs()`, `is_svg_use()`. `<use href="#id">` элементы отложены на Phase 2 (требуют cycle detection). 7 новых unit-тестов (svg_defs, intrinsic_ratio, preserve_aspect_ratio variants). lumen-layout: 2293 тестов ✅ (было 2286). Clippy чист. Phase 1 завершена (intrinsic ratio + <defs> invisible). Phase 2 (future): `<use>` с cycle detection, object-fit override.
 
