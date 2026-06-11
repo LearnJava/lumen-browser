@@ -6,85 +6,36 @@
 
 ## In progress
 
-**Q | Phase 2 Completion & Phase 3 Planning** (p2-phase2-conclusion)
-- Обновление STATUS-P2.md: завершение Phase 2 (G-series + Paint-Arch), планирование Phase 3
-- Первые Phase 3-приоритеты для P2: View Transitions API + Motion Path + Anchor Positioning
-- Next step: запустить graphic_tests, убедиться в отсутствии регрессий, затем взять V-series (Phase 3)
+**V-1 | View Transitions API Phase 1** (p2-v1-view-transitions)
+- Реализация `document.startViewTransition(updateCallback)` + `ViewTransition` interface
+- Next step: JS интеграция + shell эффекты перехода
 
 ---
 
 ## Next
 
-### Q — Phase 3 Planning: View Transitions + Interactions
+### Phase 3 приоритеты для P2
 
-После завершения Phase 2 (G-series 2026-06-11 + Paint-Arch 2026-06-11 + Canvas 2D 2026-06-11),
-P2 переходит на Phase 3 приоритеты. Основной fokus: View Transitions API (Document.startViewTransition),
-CSS Motion Path L1 (offset-path/distance/rotate), CSS Anchor Positioning L1 (anchor-name/position-anchor).
-Взять в следующей волне после текущей задачи.
+После завершения Phase 2 (G-series + Paint-Arch + Canvas 2D): View Transitions API, CSS Motion Path, CSS Anchor Positioning.
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| V-1 | **View Transitions API Phase 1** — `document.startViewTransition(callback)` + `ViewTransition` interface | M | `lumen-js`, `lumen-shell`, `lumen-paint` |
+| V-1 | **View Transitions API Phase 1** — `document.startViewTransition(callback)` + `ViewTransition` interface (In progress) | M | `lumen-js`, `lumen-shell`, `lumen-paint` |
 | V-2 | **CSS Motion Path L1** — `offset-path: path/ray/url()` + `offset-distance` + `offset-rotate` layout + paint | L | `lumen-layout`, `lumen-paint` |
 | V-3 | **CSS Anchor Positioning L1** — `anchor-name`/`position-anchor` + `inset-area` resizing | L | `lumen-layout`, `lumen-paint` |
 
-### PA — Paint-Arch: итоги архитектурной ревизии paint-пайплайна (2026-06-10)
-
-*(уже выполнено)*
-Полный отчёт: [docs/paint-pipeline-review-2026-06.md](docs/paint-pipeline-review-2026-06.md).
-Ключевой вывод: run.py меряет femtovg (дефолтный бэкенд), у которого нет blur, 15/17 blend modes,
-gradient-масок и backdrop-filter — ~11 открытых багов закрываются 3-4 фичами, а не точечными фиксами.
-**PA-1..PA-4 выполнено** (canvas 2D и View Transitions лежат на той же layer-модели).
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~PA-1~~ | ~~**Shared scalar modules**~~ — **выполнено** (см. Recent) | S | `lumen-paint` |
-| ~~PA-2~~ | ~~**femtovg: реальный blur + color-matrix**~~ — **выполнено** (см. Recent) | M | `lumen-paint` |
-| ~~PA-3~~ | ~~**femtovg: полный набор blend modes**~~ — **выполнено** (см. Recent) | M | `lumen-paint` |
-| ~~PA-4~~ | ~~**backdrop-filter**~~ — **выполнено** (см. Recent) | M | `lumen-paint` |
-| ~~PA-5~~ | ~~**cpu_raster: BorderStyle dashed/dotted**~~ — **выполнено** (см. Recent) | S | `lumen-paint` |
-
-### N — Закрытие Phase 1 (после A-1 — следующий приоритет)
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~N-1~~ | ~~**10A: TabState state machine T0–T4**~~ — **выполнено P1** (коммит fcf9fc78) | M | `lumen-shell`, `lumen-storage` |
-| ~~N-2~~ | ~~**10E.4: Scroll-discard**~~ — **выполнено P1** (коммит в `shell/src/scroll/decode_gating.rs`) | XS | `lumen-shell`, `lumen-image` |
-
-### O — Закрытие Phase 2
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~O-1~~ | ~~**8H.3: BiDi gaps (продолжение)**~~ — **выполнено** (коммит b0cfabda) | M | `lumen-shell` (`bidi/`) |
-| ~~O-2~~ | ~~**10I: T2 → SQLite JS heap persistence**~~ — **выполнено** (коммит 13a3c7f7) | M | `lumen-storage`, `lumen-shell` |
-| ~~O-3~~ | ~~**10K: UI tier indication**~~ — **выполнено** (коммит 934315b6, Phase 1: «Z»-глиф + fade-opacity; loading-spinner Phase 2 отложен) | S | `lumen-shell` |
-| ~~O-4~~ | ~~**10M: `samples/heavy.html`**~~ — **передано P1 (P1-O-7)** | XS | — |
-| ~~O-5~~ | ~~**6+ (forms): Native form pickers + validation tooltip UI**~~ — **передано P1 (P1-O-8)** | M | `lumen-shell`, `lumen-js` |
-| ~~O-6~~ | ~~**Кастомизация UI**~~ — **передано P1 (P1-O-9)** | L | `lumen-shell`, `lumen-paint` |
-
-### L — Волна 4 HTML Interactive Elements + Rendering
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~L-1~~ | ~~**`<details>`/`<summary>` interactive collapse/expand**~~ — **выполнено** | S | `lumen-shell`, `lumen-js` |
-| ~~L-2~~ | ~~**`<dialog>` modal overlay rendering + `::backdrop`**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
-| ~~L-3~~ | ~~**`<input type="range">` slider visual rendering + drag**~~ — **выполнено** | S | `lumen-shell`, `lumen-layout`, `lumen-paint` |
-| ~~L-4~~ | ~~**`<meter>`/`<progress>` visual fill rendering**~~ — **выполнено** | S | `lumen-layout`, `lumen-paint` |
-| ~~L-5~~ | ~~CSS Scroll-Driven Animations Phase 1 shell wiring~~ — **передано P1 (P1-O-10)** | M | `lumen-shell`, `lumen-layout` |
-
-### K — Волна 3 Web Platform APIs
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| ~~K-1~~ | ~~**WebAssembly Phase 0 stub**~~ — **выполнено** | S | `lumen-js` |
-| ~~K-2~~ | ~~**`<select>` interactive dropdown**~~ — **выполнено** | M | `lumen-shell`, `lumen-layout` |
-| ~~K-3~~ | ~~**Fetch streaming body (ReadableStream)**~~ — **выполнено** | M | `lumen-js`, `lumen-network` |
-| ~~K-4~~ | ~~**`<form>` multipart/form-data encoding**~~ — **выполнено** | S | `lumen-js`, `lumen-core` |
-| ~~K-5~~ | ~~**CSS `local()` system font matching**~~ — **выполнено** | S | `lumen-shell`, `lumen-font` |
 
 ---
 
 ## Current / Recently Merged
+
+**Phase 2 завершена** ✅ 2026-06-12
+- Волна O (UI/BiDi/T2-persistence), волна L (HTML interactive elements), волна K (Web Platform APIs)
+- Волна J (API stubs), волна I (JS platform features)
+- G-series (CSS Text Decoration): G-1 (SVG <use>), G-2 (scroll-behavior: smooth), G-3 (animation-timeline), G-4 (text-decoration-skip-ink)
+- Paint-Arch (PA 1-5): shared scalar modules, femtovg blur + color-matrix, blend modes, backdrop-filter, cpu_raster borders
+- Canvas 2D (Phase 1-5): contexts, drawing, gradients, images, patterns, text rendering, Path2D
+- Итого: 138 новых unit-тестов + 6 graphic-тестов; workspace Clippy чист; graphic_tests: старые баги P3 (54 FAIL, 4 DEBTOR) — не регрессии от Phase 2
 
 **G-4 | CSS text-decoration-skip-ink** ✅ 2026-06-11 (merged p2-g4-text-decoration-skip-ink)
 - `TextDecorationSkipInk` enum (Auto/All/None) в `style.rs`; inherited, initial Auto
