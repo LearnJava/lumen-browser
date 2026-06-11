@@ -156,6 +156,12 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('107', '107-shadow-radius-overflow.html', 0.5, 'INTERACTION: box-shadow × border-radius × overflow — скруглённый силуэт тени, клип тени родителем'),
     ('108', '108-nested-transforms.html',    0.5, 'INTERACTION: вложенные transform — композиция матриц (rotate∘rotate⁻¹=identity, scale×translate, 3×rotate=сумма)'),
     ('109', '109-clippath-transform.html',   0.5, 'INTERACTION: clip-path × transform × border-radius — клип в локальном боксе элемента сквозь трансформацию'),
+    # --- CSS Anchor Positioning L1 (серия 85–89): Phase 0 stub тесты
+    ('85', '85-anchor-name-basic.html', 0.5, 'anchor-name: --foo — базовое объявление якоря, визуализация элемента (стаб)'),
+    ('86', '86-position-anchor-fallback.html', 0.5, 'position-anchor: --foo — привязка к якорю, fallback позиция без inset-area (стаб)'),
+    ('87', '87-inset-area-none.html', 0.5, 'inset-area: none none — якорь не влияет на позицию при none keywords (стаб)'),
+    ('88', '88-anchor-nested.html', 0.5, 'anchor-name в вложенных элементах — иерархия DOM, поиск якорей (стаб)'),
+    ('89', '89-anchor-multiple-names.html', 0.5, 'несколько anchor-name элементов — регистрация множества якорей в дереве (стаб)'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
