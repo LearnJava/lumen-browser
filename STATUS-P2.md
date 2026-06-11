@@ -6,10 +6,8 @@
 
 ## In progress
 
-**W-2 | Print PDF Phase 3** — Print preview dialog & `window.print()` capture
-- branch: `p2-w2-print-preview`
-- Next step: Research page-break CSS, print dialog behavior, window.print API; sketch UI; implement print capture + preview renderer
-- Files: lumen-shell/src/shell.rs (print handler), lumen-layout/src/page.rs (page break layout), lumen-paint/src/renderer.rs (print capture)
+Нет активной задачи. W-2 Phase 3a (window.print API infrastructure) завершена ✅ 2026-06-12.
+Следующее: W-2b (Print preview UI) или взять другую Phase 3 фичу.
 
 ---
 
@@ -33,6 +31,15 @@
 ---
 
 ## Current / Recently Merged
+
+**W-2 | Print PDF Phase 3a: window.print() API infrastructure** ✅ 2026-06-12 (merged: p2-w2-print-preview)
+- `window.print()` JavaScript function → calls `_lumen_print_dialog()` Rust binding
+- `PrintRequest` структура в dom.rs (margin_top/bottom/left/right)
+- `QuickJsRuntime.print_requests: Arc<Mutex<Vec<PrintRequest>>>` очередь запросов
+- `take_print_requests()` getter — shell дренирует в about_to_wait
+- Unit тест `window_print_emits_request` ✅ — проверяет, что request создаётся
+- Shell обработчик добавлен (пока заглушка)
+- Следующее (W-2b): Print preview UI dialog + real PDF export
 
 **W-1 | Print PDF Phase 2: Renderer** ✅ 2026-06-12 (completed: DisplayCommand → PDF)
 - `Renderer::render_print_pages(pages, w, h)` ✅ — каждую страницу в Image через headless renderer
