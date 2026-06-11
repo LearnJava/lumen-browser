@@ -31,6 +31,14 @@
 
 ## Current / Recently Merged
 
+**W-2c | Page break parsing** ✅ 2026-06-12 (merged: p2-w2c-page-breaks)
+- `page-break-before/after/inside` алиасы в apply_declaration для legacy CSS Fragmentation L3 § 3.4
+- `page-break-*` добавлены в CSS-парсер SUPPORTED_PROPERTIES list
+- parse_break_value(): поддержка `left`/`right` значений (optional breakpoints → Always)
+- pagination.rs уже использует break_before/after для page splitting
+- Unit-тесты для W-2c ожидают завершения W-2b (print dialog state save/load)
+- Next: W-2b (Print preview UI dialog with parameter persistence)
+
 **W-2 | Print PDF Phase 3b: PDF export via window.print()** ✅ 2026-06-12 (merged: p2-w1-print-phase2)
 - PrintRequest структура расширена: paper_width_in/height_in, output_path fields
 - `handle_print_request()` в shell: экспорт документа в PDF через существующий pipeline
