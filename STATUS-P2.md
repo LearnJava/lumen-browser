@@ -6,8 +6,7 @@
 
 ## In progress
 
-PA-5 | cpu_raster: BorderStyle dashed/dotted  branch: p2-pa5-border-dash
-Next step: rasterize_draw_border → принять styles, dashed_border_offsets/dotted_border_offsets  cpu_raster.rs:1081
+_(нет)_
 
 ---
 
@@ -26,7 +25,7 @@ gradient-масок и backdrop-filter — ~11 открытых багов за�
 | ~~PA-2~~ | ~~**femtovg: реальный blur + color-matrix**~~ — **выполнено** (см. Recent) | M | `lumen-paint` |
 | ~~PA-3~~ | ~~**femtovg: полный набор blend modes**~~ — **выполнено** (см. Recent) | M | `lumen-paint` |
 | ~~PA-4~~ | ~~**backdrop-filter**~~ — **выполнено** (см. Recent) | M | `lumen-paint` |
-| PA-5 | **cpu_raster: BorderStyle dashed/dotted** (сейчас игнорируется, `cpu_raster.rs:1094`) на общей dash-математике из PA-1 → BUG-080 для CPU-гейта | S | `lumen-paint` |
+| ~~PA-5~~ | ~~**cpu_raster: BorderStyle dashed/dotted**~~ — **выполнено** (см. Recent) | S | `lumen-paint` |
 
 ### N — Закрытие Phase 1 (после A-1 — следующий приоритет)
 
@@ -69,6 +68,14 @@ gradient-масок и backdrop-filter — ~11 открытых багов за�
 ---
 
 ## Current / Recently Merged
+
+**PA-5 | cpu_raster BorderStyle dashed/dotted** ✅ 2026-06-11 (merged)
+- `rasterize_draw_border` принимает `styles: &[BorderStyle; 4]`; `styles: _` → `styles` в call site
+- `draw_border_side_h` / `draw_border_side_v` — хелперы горизонтальных/вертикальных сторон
+- Dashed → `dashed_border_offsets(total, width)`, Dotted → `dotted_border_offsets(total, width)` из PA-1 `dash_math`
+- `border_paint()` — единая точка с `anti_alias: false` (BUG-052 safe)
+- 3 новых теста: dashed_top_has_gaps / dotted_left_has_gaps / none_style_renders_nothing
+- BUG-080 → FIXED 2026-06-11
 
 **PA-4 | backdrop-filter** ✅ 2026-06-11 (merged)
 - `BackdropFilterLayerEntry` + `backdrop_filter_layer_stack/pending_delete` в `FemtovgBackend`
