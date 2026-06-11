@@ -106,18 +106,18 @@ BUG-090 | OPEN   | layout         | -webkit-line-clamp multi-line truncation not
 BUG-091 | FIXED 2026-06-08 | paint | background-blend-mode: bottom layer wrapped in PushBlendMode (should be suppressed per CSS Compositing L1 §8.3) — TEST-49: 30.62% | crates/engine/paint/src/display_list.rs
 BUG-092 | OPEN   | css-parser/layout | CSS variables var() not propagating correctly through cascade — TEST-50: 17.26%; values appear resolved but rendering wrong | crates/engine/layout/src/style.rs
 BUG-093 | FIXED 2026-06-11 | paint | scrollbar rendering TEST-51: 1.39% — **2026-06-10 closure was wrong**: threshold calibration 0.5→2.0% masked a real defect (no scrollbar skin involved — neither Edge headless nor Lumen drew scrollbars on this page). Real cause = BUG-123 (scroll container's own border/background clipped by its PushScrollLayer scissor). Thresholds reverted to 0.5; **threshold changes are forbidden** — fix the engine instead | graphic_tests/run.py
-BUG-094 | OPEN   | paint          | text-shadow with blur PushFilter wrapper ~7% deviation — TEST-52: 6.82% (thr 4.0%) | crates/engine/paint/src/display_list.rs
+BUG-094 | OPEN   | paint          | text-shadow with blur PushFilter wrapper ~7% deviation — TEST-52: 6.82% | crates/engine/paint/src/display_list.rs
 BUG-095 | FIXED 2026-06-09 | layout/paint   | background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78%→11.55%; femtovg (default) backend stretched bg-image over whole box, ignoring background-size/position/repeat/origin/clip. Ported wgpu tiling math to femtovg `draw_background_image`. Residual 11.55% = BUG-113 row drift + image resample/text AA | crates/engine/paint/src/backends/femtovg_backend.rs
 BUG-096 | FIXED 2026-06-09 | paint/layout | SVG <path> stroke tessellation not rendered — TEST-54: 9.50%. Two causes: (1) `emit_svg_shape` 0×0 guard dropped every `<path>` (path bbox is deferred to paint, so the box rect is zero) → exempted Path from the guard; (2) SVG presentation attributes (`fill`/`stroke`/`stroke-width` as XML attrs) were never read into ComputedStyle, so `fill="none" stroke="#e94560"` paths painted as black blobs → added `apply_svg_presentational_hints`. | crates/engine/paint/src/display_list.rs:4811 + crates/engine/layout/src/style.rs
 BUG-097 | FIXED 2026-06-09 | layout/paint   | <video> placeholder: posterless video painted grey placeholder; Edge renders empty media transparent → suppress DrawImage when no poster | crates/engine/paint/src/display_list.rs
 BUG-098 | OPEN   | paint          | mix-blend-mode: PushBlendMode/PopBlendMode layers ~14% deviation — TEST-56: 14.12%; compositing order or blending formula | crates/engine/paint/src/renderer.rs
 BUG-099 | OPEN   | js/paint       | <canvas> 2D context not implemented — TEST-57: 28.66%; getContext("2d") stub; Phase 2 | crates/js/src/dom.rs
-BUG-100 | OPEN   | layout         | ::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04% (thr 2.0%); CSS Pseudo-elements L4 §5.3-5.4 | crates/engine/layout/src/box_tree.rs
-BUG-101 | OPEN   | css-parser/paint | image-set() DPR selection / cross-fade() blend not implemented — TEST-59: 27.63% (thr 2.0%); CSS Images L4 §5/§4 | crates/engine/css-parser/src/lib.rs
-BUG-102 | OPEN   | paint          | SVG stroke-linecap/linejoin/dasharray advanced attributes not rendered — TEST-60: 11.51% (thr 1.0%); Phase 1 | crates/engine/paint/src/display_list.rs
-BUG-103 | OPEN   | js             | View Transitions API not implemented — TEST-61: 99.53% (thr 1.0%); document.startViewTransition(); Phase 2 | crates/js/src/dom.rs
-BUG-104 | OPEN   | layout         | CSS Scroll Snap not implemented — TEST-62: 63.70% (thr 1.0%); scroll-snap-type/align/stop; Phase 1 | crates/engine/layout/src/style.rs
-BUG-105 | OPEN   | layout         | CSS Masonry layout not implemented — TEST-63: 26.13% (thr 1.0%); waterfall grid; Phase 2 | crates/engine/layout/src/box_tree.rs
+BUG-100 | OPEN   | layout         | ::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04%; CSS Pseudo-elements L4 §5.3-5.4 | crates/engine/layout/src/box_tree.rs
+BUG-101 | OPEN   | css-parser/paint | image-set() DPR selection / cross-fade() blend not implemented — TEST-59: 27.63%; CSS Images L4 §5/§4 | crates/engine/css-parser/src/lib.rs
+BUG-102 | OPEN   | paint          | SVG stroke-linecap/linejoin/dasharray advanced attributes not rendered — TEST-60: 11.51% (thr 0.5%); Phase 1 | crates/engine/paint/src/display_list.rs
+BUG-103 | OPEN   | js             | View Transitions API not implemented — TEST-61: 99.53% (thr 0.5%); document.startViewTransition(); Phase 2 | crates/js/src/dom.rs
+BUG-104 | OPEN   | layout         | CSS Scroll Snap not implemented — TEST-62: 63.70% (thr 0.5%); scroll-snap-type/align/stop; Phase 1 | crates/engine/layout/src/style.rs
+BUG-105 | OPEN   | layout         | CSS Masonry layout not implemented — TEST-63: 26.13% (thr 0.5%); waterfall grid; Phase 2 | crates/engine/layout/src/box_tree.rs
 BUG-106 | FIXED 2026-06-09 | layout | TEST-64 table 24.85%→14.90%. Dominant cause was NOT table layout but missing UA heading defaults: `<h3>` rendered at 16px with no margins, so both tables sat ~25px too high vs Edge (offset compounded down the page). Fix: apply_ua_heading_style (style.rs) sets UA font-size (h1 2em…h6 0.67em) + vertical margins (em of own font-size, HTML Rendering §15.3.3); author font-size overrides via pre-pass, author margin via main-pass. Residual ~15% is content-based auto table column widths (Lumen splits available width equally, Edge sizes columns to content) — filed BUG-116. | crates/engine/layout/src/style.rs
 BUG-116 | FIXED 2026-06-09 | layout | auto table column widths: CSS 2.1 §17.5.2 content-based auto sizing. Added box_min_max_content_w (recursive InlineRun/Block traversal), cell_min_max_border_box_w, scan_row_content_widths (rowspan-aware per-column pass). compute_table_col_widths now takes measurer: each auto column gets ≥min-content; extra distributed proportional to max-content weight. Without measurer: equal distribution fallback preserved. | crates/engine/layout/src/box_tree.rs:4670
 BUG-117 | FIXED 2026-06-09 | layout | multi-column greedy assignment two bugs (TEST-33 16.14%): (1) in balance mode an item taller than the balanced target (total/n_cols) triggered height_overflow on the EMPTY column 0 and was pushed to column 1, leaving column 0 blank — column-span:all segment items (group 5) landed in columns 1&2 instead of 0&1. (2) column-fill:auto wrongly applied the per-column count cap (a balance-only anti-starvation guard), forcing one item per column instead of height-based sequential fill (group 6). Fix in lay_out_multicol_children: never advance past an empty column (col_nonempty guard); count cap gated behind `balance`. 2 regression tests + CPU snapshot 33 regenerated. | crates/engine/layout/src/box_tree.rs:5021
@@ -196,18 +196,18 @@ TEST-48: FAIL 23.89%   line-clamp              ← BUG-090
 TEST-49: FAIL 30.62%   background-blend-mode   ← BUG-091
 TEST-50: FAIL 17.26%   css-variables           ← BUG-092
 TEST-51: FAIL  1.09%   scrollbar-rendering     ← BUG-123 FIXED (border restored; was 1.39%); residual ← BUG-124 (pixel snapping, PS-1)
-TEST-52: FAIL  6.82%   text-shadow-blur        ← BUG-094 (thr 4.0%)
+TEST-52: FAIL  6.82%   text-shadow-blur        ← BUG-094
 TEST-53: FAIL 11.55%   background-origin       ← BUG-095 + BUG-113 FIXED (origin/clip + row drift ok; residual ← BUG-114 font shorthand + AA)
 TEST-54: FAIL  9.50%   svg-path-stroke         ← BUG-096 FIXED (paths now tessellate + presentation-attr colours; CPU snapshot regenerated)
 TEST-55: FAIL 26.65%   video-placeholder       ← BUG-097
 TEST-56: FAIL 14.12%   mix-blend-mode          ← BUG-098
 TEST-57: FAIL 28.66%   canvas-2d               ← BUG-099 (Phase 2)
-TEST-58: FAIL  6.04%   first-letter-line       ← BUG-100 (thr 2.0%)
-TEST-59: FAIL 27.63%   image-set-cross-fade    ← BUG-101 (thr 2.0%)
-TEST-60: FAIL 11.51%   svg-stroke-advanced     ← BUG-102 (thr 1.0%, Phase 1)
-TEST-61: FAIL 99.53%   view-transitions        ← BUG-103 (thr 1.0%, Phase 2)
-TEST-62: FAIL 63.70%   scroll-snap             ← BUG-104 (thr 1.0%, Phase 1)
-TEST-63: FAIL 26.13%   masonry                 ← BUG-105 (thr 1.0%, Phase 2)
+TEST-58: FAIL  6.04%   first-letter-line       ← BUG-100
+TEST-59: FAIL 27.63%   image-set-cross-fade    ← BUG-101
+TEST-60: FAIL 11.51%   svg-stroke-advanced     ← BUG-102 (thr 0.5%, Phase 1)
+TEST-61: FAIL 99.53%   view-transitions        ← BUG-103 (thr 0.5%, Phase 2)
+TEST-62: FAIL 63.70%   scroll-snap             ← BUG-104 (thr 0.5%, Phase 1)
+TEST-63: FAIL 26.13%   masonry                 ← BUG-105 (thr 0.5%, Phase 2)
 TEST-64: ?             table                   ← BUG-116 fixed 2026-06-09; BUG-106 was 24.85%→14.90%→? (column widths now content-based)
 TEST-65: FAIL 23.52%   flex-align-content      ← BUG-107 (FIXED 2026-06-09)
 TEST-66: FAIL  6.18%   selection-pseudo        ← BUG-108
@@ -286,8 +286,8 @@ TEST-39: FAIL 31.30%   gradients              ← linear/radial gradient GPU
 TEST-40: FAIL 45.26%   conic-gradients        ← conic-gradient
 TEST-41: FAIL  3.52%   table                  ← display:table/row/cell (порог 3.0%)
 TEST-42: FAIL  3.79%   position-sticky        ← (порог 3.0%)
-TEST-43: FAIL  3.52%   intrinsic-sizing       ← max-content/min-content (порог 2.0%)
-TEST-44: FAIL  3.52%   media-queries          ← @media queries (порог 2.0%)
+TEST-43: FAIL  3.52%   intrinsic-sizing       ← max-content/min-content (порог 0.5%)
+TEST-44: FAIL  3.52%   media-queries          ← @media queries (порог 0.5%)
 ```
 
 ---
