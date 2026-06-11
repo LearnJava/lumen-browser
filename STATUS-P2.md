@@ -6,8 +6,7 @@
 
 ## In progress
 
-Canvas 2D Phase 3  branch: p2-canvas2d-phase3
-Next step: CanvasGradient + CanvasPattern (PaintSource enum) в lib.rs; shadow fields; clip(); drawImage; fillText/measureText; putImageData/createImageData; JS bindings в canvas2d.rs
+(нет)
 
 ---
 
@@ -69,6 +68,21 @@ gradient-масок и backdrop-filter — ~11 открытых багов за�
 ---
 
 ## Current / Recently Merged
+
+**Canvas 2D Phase 3** ✅ 2026-06-11 (merged p2-canvas2d-phase3)
+- `PaintSource` enum — заменяет `CanvasColor` в fill/stroke styles: Color / Gradient / Pattern
+- `CanvasGradient` — linear/radial/conic с `add_color_stop` и device-space `sample(x,y)`
+- `CanvasPattern` — repeat/repeat-x/repeat-y/no-repeat тайловый паттерн из RGBA8
+- `From<CanvasColor> for PaintSource` — обратная совместимость
+- Shadow: `shadow_color/blur/offset_x/offset_y`; `shadow_effective()` + `shift_path()` для смещённого прохода
+- `clip()` — растеризует путь в `Vec<bool>` clip_mask, пересекает с предыдущей маской
+- `draw_image(src_pixels, src_w, src_h, dx, dy, dw, dh)` — scaled blit через CTM + globalAlpha
+- `put_image_data` / `create_image_data` — прямая запись/создание RGBA8 буфера
+- `fill_text_glyphs` — рендер coverage-битмапов глифов (Phase 4 подключит lumen-font)
+- `rasterize::fill_path/stroke_path` — новые подписи `&PaintSource + alpha`; `build_clip_mask`
+- JS биндинги в `canvas2d.rs`: все новые операции Phase 3; `decode_hex` хелпер; GRADIENTS/PATTERNS thread-locals
+- `offscreen_canvas.rs` обновлён для `PaintSource::Color`
+- 35 тестов lumen-canvas ✅; 1897 тестов lumen-js ✅; Clippy чист
 
 **PA-5 | cpu_raster BorderStyle dashed/dotted** ✅ 2026-06-11 (merged)
 - `rasterize_draw_border` принимает `styles: &[BorderStyle; 4]`; `styles: _` → `styles` в call site
