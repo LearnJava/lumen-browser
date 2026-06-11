@@ -6,8 +6,7 @@
 
 ## In progress
 
-G-1: SVG `<use>` clone algorithm  branch: p2-svg-use-element
-Next step: implement collect_svg_shapes_impl with use_stack cycle detection  crates/engine/layout/src/box_tree.rs:985
+(нет)
 
 ---
 
@@ -727,7 +726,7 @@ Ordered by priority. Сгруппированы по домену.
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| **G-1** | **SVG `<use>` clone algorithm** — shadow tree clone with cycle detection, href/xlink:href, x/y offset | M | `lumen-layout` |
+| ~~G-1~~ | ~~**SVG `<use>` clone algorithm**~~ — **выполнено** (p2-svg-use-element, 2026-06-11) | M | `lumen-layout` |
 | G-2 | **`@counter-style` evaluation engine** — cyclic/numeric/alphabetic/symbolic/additive/fixed/extends | M | `lumen-layout`, `lumen-css-parser` |
 | G-3 | **`scroll-behavior: smooth` animation** — rAF-based smooth scrolling, easing curve | S | `lumen-shell` |
 | G-4 | **CSS `text-decoration-skip-ink`** — underline gaps over glyph descenders | S | `lumen-layout`, `lumen-paint` |
@@ -735,6 +734,8 @@ Ordered by priority. Сгруппированы по домену.
 ---
 
 ## Recent merges
+
+- **p2-svg-use-element** ✅ 2026-06-11 — G-1: SVG `<use>` clone algorithm (SVG 2 §5.6). `process_svg_node` helper извлечён из main loop; `collect_svg_shapes_impl` с `use_stack: &[NodeId]` для cycle detection. `"use"` arm: читает `href`/`xlink:href`, ищет через `doc.find_by_id()`, cycle guard, комбинирует `<use transform="">` + `translate(x, y)` через `SvgTransform::compose`, рекурсивно клонирует `<g>`/`<symbol>` (collect_svg_shapes_impl) или одиночные фигуры (process_svg_node), результат — `BoxKind::Block` с `svg_group_transform`. 7 unit-тестов + graphic test 82. 2662 layout-тестов ✅. Clippy чист.
 
 - **p2-canvas2d-phase2** ✅ 2026-06-11 — Canvas 2D Phase 2. `lumen-canvas`: DrawState + save()/restore() state stack; CTM `[a,b,c,d,e,f]` + translate/rotate/scale/transform/setTransform/resetTransform; bezier_curve_to (cubic), quadratic_curve_to; ellipse, arc_to, rect; CompositeOperation (16 Porter-Duff/CSS blend modes) + composite_pixel dispatch; LineCap/LineJoin/miterLimit; fill_rect + stroke_rect CTM-aware через build_rect_path; PathSegment::Cubic + Quadratic + tessellation 32-step; fill_quad исправлен для edge-straddling сканлайнов. `lumen-js`: 15+ новых native bindings в canvas2d.rs (save/restore, transforms, bezierCurveTo, quadraticCurveTo, arcTo, rect, setGlobalCompositeOperation, setLineCap, setLineJoin, setMiterLimit); DOM-шим расширен — все Phase 0 стабы заменены. ellipse в JS через save/translate/scale/arc/restore (rquickjs 7-param limit). 35 unit-тестов lumen-canvas ✅, 1849 lumen-js ✅. Clippy чист.
 
