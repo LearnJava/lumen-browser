@@ -26317,4 +26317,15 @@ mod anchor_positioning_tests {
         let s = compute_style(&doc, table, &sheet, &root, VP, false);
         assert_eq!(s.border_collapse, BorderCollapse::Separate, "initial resets to Separate");
     }
+
+    #[test]
+    fn page_break_before_alias_always() {
+        let doc = lumen_html_parser::parse("<p>text</p>");
+        let sheet = lumen_css_parser::parse("p { page-break-before: always; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let p = doc.get(body).children[0];
+        let s = compute_style(&doc, p, &sheet, &root, VP, false);
+        assert_eq!(s.break_before, BreakValue::Always);
+    }
 }
