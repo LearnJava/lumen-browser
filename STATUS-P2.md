@@ -31,7 +31,7 @@
 
 ## Current / Recently Merged
 
-**W-2 | Print PDF Phase 3b: PDF export via window.print()** ✅ 2026-06-12 (in progress: p2-w1-print-phase2)
+**W-2 | Print PDF Phase 3b: PDF export via window.print()** ✅ 2026-06-12 (merged: p2-w1-print-phase2)
 - PrintRequest структура расширена: paper_width_in/height_in, output_path fields
 - `handle_print_request()` в shell: экспорт документа в PDF через существующий pipeline
 - Использование `do_print_to_pdf_with_opts()` для вывода с custom margins
