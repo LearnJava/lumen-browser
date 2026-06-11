@@ -407,6 +407,148 @@ mod tests {
         assert!(reg.is_empty());
     }
 
+    #[test]
+    fn collect_anchors_single_child_with_anchor_name() {
+        use crate::box_tree::{BoxKind, LayoutBox};
+        use crate::style::ComputedStyle;
+
+        let mut child = LayoutBox {
+            node: node(1),
+            rect: rect(100.0, 150.0, 200.0, 100.0),
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+        child.style.anchor_name = Some("--tooltip".into());
+
+        let root = LayoutBox {
+            node: node(0),
+            rect: rect(0.0, 0.0, 800.0, 600.0),
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![child],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+
+        let reg = collect_anchors(&root);
+        let entry = reg.get("--tooltip").expect("anchor --tooltip not found");
+        assert_eq!(entry.node, node(1));
+        assert_eq!(entry.rect, rect(100.0, 150.0, 200.0, 100.0));
+    }
+
+    #[test]
+    fn collect_anchors_nested_hierarchy() {
+        use crate::box_tree::{BoxKind, LayoutBox};
+        use crate::style::ComputedStyle;
+
+        let mut anchor_deep = LayoutBox {
+            node: node(2),
+            rect: rect(50.0, 50.0, 100.0, 100.0),
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+        anchor_deep.style.anchor_name = Some("--deep".into());
+
+        let child = LayoutBox {
+            node: node(1),
+            rect: rect(0.0, 0.0, 200.0, 200.0),
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![anchor_deep],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+
+        let root = LayoutBox {
+            node: node(0),
+            rect: rect(0.0, 0.0, 800.0, 600.0),
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![child],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+
+        let reg = collect_anchors(&root);
+        let entry = reg.get("--deep").expect("anchor --deep not found");
+        assert_eq!(entry.node, node(2));
+        assert_eq!(entry.rect, rect(50.0, 50.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn collect_anchors_multiple_siblings() {
+        use crate::box_tree::{BoxKind, LayoutBox};
+        use crate::style::ComputedStyle;
+
+        let mut child1 = LayoutBox {
+            node: node(1),
+            rect: rect(0.0, 0.0, 100.0, 100.0),
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+        child1.style.anchor_name = Some("--left".into());
+
+        let mut child2 = LayoutBox {
+            node: node(2),
+            rect: rect(150.0, 0.0, 100.0, 100.0),
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+        child2.style.anchor_name = Some("--right".into());
+
+        let root = LayoutBox {
+            node: node(0),
+            rect: rect(0.0, 0.0, 800.0, 600.0),
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![child1, child2],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+
+        let reg = collect_anchors(&root);
+        let left = reg.get("--left").expect("anchor --left not found");
+        let right = reg.get("--right").expect("anchor --right not found");
+        assert_eq!(left.node, node(1));
+        assert_eq!(right.node, node(2));
+    }
+
     // ── register_anchor / get ────────────────────────────────────────────────
 
     #[test]
