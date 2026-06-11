@@ -73,6 +73,128 @@ fn hex_nibble(b: u8) -> u8 {
 /// Maximum canvas dimension in CSS pixels. Clamps hostile/oversized buffers.
 const MAX_CANVAS_DIM: u32 = 4096;
 
+// ── Canvas text rendering helpers (Phase 4) ───────────────────────────────────
+
+/// Bundled Inter font for canvas text operations.
+const BUNDLED_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
+/// Parse pixel size from a CSS font string, e.g. `"bold 16px sans-serif"` → 16.0.
+///
+/// Iterates space-separated tokens and takes the first one ending in `"px"`.
+/// Falls back to the Canvas 2D spec default (10 px) if no token matches.
+fn parse_canvas_font_size(font: &str) -> f32 {
+    for part in font.split_ascii_whitespace() {
+        if let Some(px) = part.strip_suffix("px")
+            && let Ok(v) = px.parse::<f32>()
+        {
+            return v.max(1.0);
+        }
+    }
+    10.0
+}
+
+/// Measure total advance width of `text` in pixels using the bundled Inter font at `pixel_size`.
+///
+/// Returns a fallback estimate (0.55 × pixel_size per char) when font parsing fails.
+fn measure_text_width(text: &str, pixel_size: f32) -> f64 {
+    let Ok(font) = lumen_font::Font::parse(BUNDLED_FONT) else {
+        return text.chars().count() as f64 * f64::from(pixel_size) * 0.55;
+    };
+    let Ok(head) = font.head() else {
+        return text.chars().count() as f64 * f64::from(pixel_size) * 0.55;
+    };
+    let Ok(cmap) = font.cmap() else {
+        return text.chars().count() as f64 * f64::from(pixel_size) * 0.55;
+    };
+    let Ok(hmtx) = font.hmtx() else {
+        return text.chars().count() as f64 * f64::from(pixel_size) * 0.55;
+    };
+    let advance_scale = f64::from(pixel_size) / f64::from(head.units_per_em);
+    text.chars()
+        .map(|ch| {
+            let gid = cmap.glyph_index(ch as u32).unwrap_or(0);
+            f64::from(hmtx.advance_width(gid).unwrap_or(0)) * advance_scale
+        })
+        .sum()
+}
+
+/// Render `text` at canvas position `(x, y)` with the given fill `color`.
+///
+/// `x` is the pen start; `y` is adjusted by `text_align` / `text_baseline` before use.
+/// The baseline model matches HTML Canvas 2D §4.12.4: for the default `"alphabetic"` baseline,
+/// `y` IS the baseline position (not the top of the glyph).
+fn render_text_to_canvas(nid: u32, text: &str, x: f32, y: f32, color: CanvasColor) {
+    if text.is_empty() {
+        return;
+    }
+    let Ok(font) = lumen_font::Font::parse(BUNDLED_FONT) else { return };
+    let (Ok(head), Ok(hhea), Ok(cmap), Ok(hmtx)) = (
+        font.head(), font.hhea(), font.cmap(), font.hmtx(),
+    ) else { return };
+
+    let (font_str, text_align, text_baseline) = CANVASES.with(|c| {
+        c.borrow()
+            .get(&nid)
+            .map(|ctx| (ctx.font.clone(), ctx.text_align.clone(), ctx.text_baseline.clone()))
+            .unwrap_or_default()
+    });
+
+    let pixel_size = parse_canvas_font_size(&font_str);
+    let units_per_em = head.units_per_em;
+    let advance_scale = pixel_size / f32::from(units_per_em);
+    let ascent_px = f32::from(hhea.ascent) / f32::from(units_per_em) * pixel_size;
+
+    // Compute start_x accounting for textAlign (HTML Canvas 2D §4.12.4).
+    let text_w = measure_text_width(text, pixel_size) as f32;
+    let start_x = match text_align.as_str() {
+        "center" => x - text_w * 0.5,
+        "right" | "end" => x - text_w,
+        _ => x,  // "left" | "start" (default)
+    };
+
+    // Compute baseline_y from textBaseline.
+    let baseline_y = match text_baseline.as_str() {
+        "top"      => y + ascent_px,
+        "hanging"  => y + ascent_px * 0.85,
+        "middle"   => y + ascent_px - pixel_size * 0.5,
+        "ideographic" | "bottom" => y + ascent_px - pixel_size,
+        _          => y,  // "alphabetic" (default) — y IS the baseline
+    };
+
+    let rasterizer = lumen_font::Rasterizer::new(pixel_size, units_per_em);
+    // Collect (x_offset, baseline_y, w, h, pixels, color) for every glyph.
+    let mut glyph_bufs: Vec<(f32, f32, u32, u32, Vec<u8>, CanvasColor)> = Vec::new();
+    let mut cursor_x = start_x;
+    for ch in text.chars() {
+        let gid = cmap.glyph_index(ch as u32).unwrap_or(0);
+        if let Ok(Some(glyph)) = font.glyph_resolved(gid)
+            && let Some(bm) = rasterizer.rasterize(&glyph)
+        {
+            glyph_bufs.push((
+                cursor_x + bm.left,
+                baseline_y - bm.top,
+                bm.width,
+                bm.height,
+                bm.pixels,
+                color,
+            ));
+        }
+        let adv = f32::from(hmtx.advance_width(gid).unwrap_or(0));
+        cursor_x += adv * advance_scale;
+    }
+
+    if glyph_bufs.is_empty() {
+        return;
+    }
+    // Build slice references and call into the canvas (separate borrow from above).
+    #[allow(clippy::type_complexity)]
+    let glyphs: Vec<(f32, f32, u32, u32, &[u8], CanvasColor)> = glyph_bufs
+        .iter()
+        .map(|(gx, gy, gw, gh, px, c)| (*gx, *gy, *gw, *gh, px.as_slice(), *c))
+        .collect();
+    with_canvas(nid, |ctx| ctx.fill_text_glyphs(&glyphs));
+}
+
 /// Run `f` against the context for `nid`, returning `R::default()` if absent.
 fn with_canvas<F, R>(nid: u32, f: F) -> R
 where
@@ -666,7 +788,7 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         }),
     )?;
 
-    // ── Phase 3: Text / Font ──────────────────────────────────────────────────
+    // ── Phase 3/4: Text / Font ────────────────────────────────────────────────
 
     // _lumen_canvas2d_set_font(nid, css_font) — stores font string for later use
     g.set(
@@ -676,22 +798,64 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         }),
     )?;
 
-    // _lumen_canvas2d_fill_text(nid, text, x, y) — Phase 3 stub: no glyph rendering yet.
-    // Full text layout + rasterization is deferred to Phase 4 (needs lumen-font integration).
+    // _lumen_canvas2d_set_text_align(nid, align) — stores textAlign state
     g.set(
-        "_lumen_canvas2d_fill_text",
-        rquickjs::Function::new(ctx.clone(), |_nid: u32, _text: String, _x: f64, _y: f64| {
-            // Stub: text rendering wired in Phase 4.
+        "_lumen_canvas2d_set_text_align",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, align: String| {
+            with_canvas(nid, |c| c.text_align = align);
         }),
     )?;
 
-    // _lumen_canvas2d_measure_text(nid, text) -> approximate width in pixels
-    // Phase 3 stub: estimates 0.6× pixel_size per character (rough sans-serif approximation).
+    // _lumen_canvas2d_set_text_baseline(nid, baseline) — stores textBaseline state
+    g.set(
+        "_lumen_canvas2d_set_text_baseline",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, baseline: String| {
+            with_canvas(nid, |c| c.text_baseline = baseline);
+        }),
+    )?;
+
+    // _lumen_canvas2d_fill_text(nid, text, x, y) — render text with current fill style.
+    // Uses bundled Inter font via lumen-font rasterizer; respects textAlign + textBaseline.
+    g.set(
+        "_lumen_canvas2d_fill_text",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, text: String, x: f64, y: f64| {
+            let color = CANVASES.with(|c| {
+                c.borrow().get(&nid).map(|ctx| match &ctx.fill_style {
+                    PaintSource::Color(col) => *col,
+                    other => other.sample(x as f32, y as f32),
+                })
+            }).unwrap_or(CanvasColor::rgba(0, 0, 0, 255));
+            render_text_to_canvas(nid, &text, x as f32, y as f32, color);
+            mark_dirty(nid);
+        }),
+    )?;
+
+    // _lumen_canvas2d_stroke_text(nid, text, x, y) — render text with current stroke style.
+    // Phase 4: uses fill-based glyph bitmaps with strokeStyle colour (outline stroke deferred).
+    g.set(
+        "_lumen_canvas2d_stroke_text",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, text: String, x: f64, y: f64| {
+            let color = CANVASES.with(|c| {
+                c.borrow().get(&nid).map(|ctx| match &ctx.stroke_style {
+                    PaintSource::Color(col) => *col,
+                    other => other.sample(x as f32, y as f32),
+                })
+            }).unwrap_or(CanvasColor::rgba(0, 0, 0, 255));
+            render_text_to_canvas(nid, &text, x as f32, y as f32, color);
+            mark_dirty(nid);
+        }),
+    )?;
+
+    // _lumen_canvas2d_measure_text(nid, text) -> advance width in pixels
+    // Uses bundled Inter font metrics (hmtx advance widths) for accurate measurement.
     g.set(
         "_lumen_canvas2d_measure_text",
-        rquickjs::Function::new(ctx.clone(), |_nid: u32, text: String| -> f64 {
-            // Very rough approximation until Phase 4 wires lumen-font.
-            text.len() as f64 * 6.0
+        rquickjs::Function::new(ctx.clone(), |nid: u32, text: String| -> f64 {
+            let font_str = CANVASES.with(|c| {
+                c.borrow().get(&nid).map(|ctx| ctx.font.clone()).unwrap_or_default()
+            });
+            let pixel_size = parse_canvas_font_size(&font_str);
+            measure_text_width(&text, pixel_size)
         }),
     )?;
 
@@ -1031,6 +1195,146 @@ mod tests {
             // Only canvas 20 was drawn; 21 stays clean.
             assert_eq!(updates.len(), 1);
             assert_eq!(updates[0].0, 20);
+        });
+    }
+
+    // ── Phase 4: text rendering tests ─────────────────────────────────────────
+
+    #[test]
+    fn parse_canvas_font_size_extracts_px() {
+        assert_eq!(parse_canvas_font_size("16px sans-serif"), 16.0);
+        assert_eq!(parse_canvas_font_size("bold 12px Arial"), 12.0);
+        assert_eq!(parse_canvas_font_size("italic 24px serif"), 24.0);
+        assert_eq!(parse_canvas_font_size("10px sans-serif"), 10.0);
+        // Default when no px found.
+        assert_eq!(parse_canvas_font_size("sans-serif"), 10.0);
+    }
+
+    #[test]
+    fn measure_text_width_returns_positive_for_ascii() {
+        // Measure "A" at 16 px with bundled Inter — must be > 0 and < 16 px.
+        let w = measure_text_width("A", 16.0);
+        assert!(w > 0.0, "width should be positive, got {w}");
+        assert!(w < 20.0, "single char at 16px should be < 20px, got {w}");
+    }
+
+    #[test]
+    fn measure_text_width_proportional_to_length() {
+        let w1 = measure_text_width("A", 16.0);
+        let w3 = measure_text_width("AAA", 16.0);
+        // 3× the same character should give 3× the width.
+        assert!((w3 - w1 * 3.0).abs() < 0.1, "AAA should be 3× A: {w3} vs {}", w1 * 3.0);
+    }
+
+    #[test]
+    fn measure_text_width_scales_with_font_size() {
+        let w16 = measure_text_width("Hello", 16.0);
+        let w32 = measure_text_width("Hello", 32.0);
+        // 2× font size → 2× width.
+        assert!((w32 - w16 * 2.0).abs() < 0.5, "32px should be 2× 16px: {w32} vs {}", w16 * 2.0);
+    }
+
+    #[test]
+    fn fill_text_marks_canvas_dirty() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            ctx.eval::<(), _>(
+                "_lumen_canvas2d_create(30, 200, 50);\
+                 _lumen_canvas2d_fill_text(30, 'Hi', 10.0, 30.0);",
+            ).unwrap();
+            let updates = flush_dirty();
+            assert_eq!(updates.len(), 1, "fillText should mark canvas dirty");
+            assert_eq!(updates[0].0, 30);
+        });
+    }
+
+    #[test]
+    fn fill_text_rasterizes_non_transparent_pixels() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            ctx.eval::<(), _>(
+                "_lumen_canvas2d_create(31, 200, 60);\
+                 _lumen_canvas2d_set_font(31, '20px sans-serif');\
+                 _lumen_canvas2d_set_fill_style(31, '#000000');\
+                 _lumen_canvas2d_fill_text(31, 'X', 10.0, 40.0);",
+            ).unwrap();
+            let updates = flush_dirty();
+            assert!(!updates.is_empty(), "should produce a dirty buffer");
+            // flush_dirty() → Vec<(nid, x, y, pixels)>; pixels are in element .3
+            let any_inked = updates[0].3.chunks(4).any(|px| px[3] > 0);
+            assert!(any_inked, "fillText('X') should produce non-transparent pixels");
+        });
+    }
+
+    #[test]
+    fn set_text_align_stored_in_canvas_state() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            ctx.eval::<(), _>(
+                "_lumen_canvas2d_create(32, 100, 50);\
+                 _lumen_canvas2d_set_text_align(32, 'center');",
+            ).unwrap();
+            CANVASES.with(|c| {
+                let map = c.borrow();
+                let ctx = map.get(&32).expect("canvas exists");
+                assert_eq!(ctx.text_align, "center");
+            });
+        });
+    }
+
+    #[test]
+    fn set_text_baseline_stored_in_canvas_state() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            ctx.eval::<(), _>(
+                "_lumen_canvas2d_create(33, 100, 50);\
+                 _lumen_canvas2d_set_text_baseline(33, 'top');",
+            ).unwrap();
+            CANVASES.with(|c| {
+                let map = c.borrow();
+                let ctx = map.get(&33).expect("canvas exists");
+                assert_eq!(ctx.text_baseline, "top");
+            });
+        });
+    }
+
+    #[test]
+    fn measure_text_via_binding_uses_font_size() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            ctx.eval::<(), _>("_lumen_canvas2d_create(34, 200, 50);").unwrap();
+            // 10px (default)
+            let w10: f64 = ctx.eval("_lumen_canvas2d_measure_text(34, 'A');").unwrap();
+            // 20px
+            ctx.eval::<(), _>("_lumen_canvas2d_set_font(34, '20px sans-serif');").unwrap();
+            let w20: f64 = ctx.eval("_lumen_canvas2d_measure_text(34, 'A');").unwrap();
+            assert!(w10 > 0.0, "10px width should be positive");
+            assert!(w20 > w10 * 1.5, "20px should be roughly 2× 10px: {w20} vs {w10}");
+        });
+    }
+
+    #[test]
+    fn stroke_text_marks_canvas_dirty() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            ctx.eval::<(), _>(
+                "_lumen_canvas2d_create(35, 200, 50);\
+                 _lumen_canvas2d_stroke_text(35, 'T', 10.0, 30.0);",
+            ).unwrap();
+            let updates = flush_dirty();
+            assert_eq!(updates.len(), 1, "strokeText should mark canvas dirty");
         });
     }
 }

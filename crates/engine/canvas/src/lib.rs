@@ -204,6 +204,10 @@ pub struct DrawState {
     pub clip_mask: Option<Vec<bool>>,
     /// CSS font string e.g. `"16px sans-serif"`.
     pub font: String,
+    /// Horizontal text alignment: `"start" | "end" | "left" | "right" | "center"`. Default `"start"`.
+    pub text_align: String,
+    /// Vertical text baseline: `"alphabetic" | "top" | "hanging" | "middle" | "ideographic" | "bottom"`. Default `"alphabetic"`.
+    pub text_baseline: String,
 }
 
 impl Default for DrawState {
@@ -224,6 +228,8 @@ impl Default for DrawState {
             shadow_offset_y: 0.0,
             clip_mask: None,
             font: String::from("10px sans-serif"),
+            text_align: String::from("start"),
+            text_baseline: String::from("alphabetic"),
         }
     }
 }
@@ -527,6 +533,10 @@ pub struct Context2D {
     pub shadow_offset_y: f32,
     /// CSS font string, e.g. `"16px sans-serif"`.
     pub font: String,
+    /// Horizontal text alignment: `"start" | "end" | "left" | "right" | "center"`. Default `"start"`.
+    pub text_align: String,
+    /// Vertical text baseline: `"alphabetic" | "top" | "hanging" | "middle" | "ideographic" | "bottom"`. Default `"alphabetic"`.
+    pub text_baseline: String,
 
     // ── Path accumulator ────────────────────────────────────────────────────
     /// Segments accumulated since the last `beginPath()`.
@@ -572,6 +582,8 @@ impl Context2D {
             shadow_offset_x: 0.0,
             shadow_offset_y: 0.0,
             font: String::from("10px sans-serif"),
+            text_align: String::from("start"),
+            text_baseline: String::from("alphabetic"),
             path: Vec::new(),
             path_start: None,
             pen: (0.0, 0.0),
@@ -651,6 +663,8 @@ impl Context2D {
             shadow_offset_y: self.shadow_offset_y,
             clip_mask: self.clip_mask.clone(),
             font: self.font.clone(),
+            text_align: self.text_align.clone(),
+            text_baseline: self.text_baseline.clone(),
         });
     }
 
@@ -674,6 +688,8 @@ impl Context2D {
             self.shadow_offset_y = state.shadow_offset_y;
             self.clip_mask = state.clip_mask;
             self.font = state.font;
+            self.text_align = state.text_align;
+            self.text_baseline = state.text_baseline;
         }
     }
 

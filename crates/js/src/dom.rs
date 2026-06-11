@@ -3377,8 +3377,18 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
         clip: function() {},
         putImageData: function() {},
         drawImage: function() {},
-        fillText: function() {}, strokeText: function() {},
-        measureText: function(t) { var s = String(t == null ? '' : t); return { width: s.length * 8, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }; },
+        fillText: function(t, x, y) {
+            _lumen_canvas2d_fill_text(nid, String(t == null ? '' : t), +x, +y);
+        },
+        strokeText: function(t, x, y) {
+            _lumen_canvas2d_stroke_text(nid, String(t == null ? '' : t), +x, +y);
+        },
+        measureText: function(t) {
+            var s = String(t == null ? '' : t);
+            var w = _lumen_canvas2d_measure_text(nid, s);
+            var fs = parse_canvas_font_size_js(_font);
+            return { width: w, actualBoundingBoxAscent: fs * 0.8, actualBoundingBoxDescent: fs * 0.2 };
+        },
         setLineDash: function() {}, getLineDash: function() { return []; },
         isPointInPath: function() { return false; }, isPointInStroke: function() { return false; },
         createLinearGradient: function() { return { addColorStop: function() {} }; },
@@ -3387,19 +3397,48 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
         createPattern: function() { return null; },
         createImageData: function(w, h) { return { width: w|0, height: h|0, data: new Uint8ClampedArray((w|0) * (h|0) * 4) }; },
     };
-    // Stub appearance/text properties accepted but not rendered yet.
-    var _stubProps = ['shadowColor','shadowBlur','shadowOffsetX','shadowOffsetY','font',
-        'textAlign','textBaseline','direction','lineDashOffset','imageSmoothingEnabled','filter'];
+    // Stub appearance properties accepted but not yet wired.
+    var _stubProps = ['shadowColor','shadowBlur','shadowOffsetX','shadowOffsetY',
+        'direction','lineDashOffset','imageSmoothingEnabled','filter'];
     for (var _pi = 0; _pi < _stubProps.length; _pi++) {
         (function(name) {
             var _val = (name === 'imageSmoothingEnabled') ? true
-                : (name === 'font') ? '10px sans-serif'
                 : (name === 'shadowColor') ? 'rgba(0, 0, 0, 0)'
                 : (name === 'filter') ? 'none' : 0;
             Object.defineProperty(ctx, name, {
                 get: function() { return _val; }, set: function(v) { _val = v; }, configurable: true,
             });
         })(_stubProps[_pi]);
+    }
+    // Wired text properties (Phase 4): font, textAlign, textBaseline.
+    var _font = '10px sans-serif';
+    Object.defineProperty(ctx, 'font', {
+        get: function() { return _font; },
+        set: function(v) { _font = String(v); _lumen_canvas2d_set_font(nid, _font); },
+        configurable: true,
+    });
+    var _textAlign = 'start';
+    Object.defineProperty(ctx, 'textAlign', {
+        get: function() { return _textAlign; },
+        set: function(v) { _textAlign = String(v); _lumen_canvas2d_set_text_align(nid, _textAlign); },
+        configurable: true,
+    });
+    var _textBaseline = 'alphabetic';
+    Object.defineProperty(ctx, 'textBaseline', {
+        get: function() { return _textBaseline; },
+        set: function(v) { _textBaseline = String(v); _lumen_canvas2d_set_text_baseline(nid, _textBaseline); },
+        configurable: true,
+    });
+    // Helper: parse px size from font string for TextMetrics ascent/descent approximation.
+    function parse_canvas_font_size_js(f) {
+        var parts = f.split(' ');
+        for (var i = 0; i < parts.length; i++) {
+            if (parts[i].indexOf('px') !== -1) {
+                var n = parseFloat(parts[i]);
+                if (n > 0) return n;
+            }
+        }
+        return 10;
     }
     return ctx;
 }
