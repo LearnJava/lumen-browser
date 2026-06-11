@@ -597,6 +597,24 @@
   </svg>
 </div>
 
+<!-- ─── SVG <use> element ────────────────────────────────────── -->
+<div style="margin-top:4px;">
+  <svg width="500" height="55" style="display:block;">
+    <defs>
+      <rect id="uf-r" x="0" y="0" width="40" height="35" fill="#e74c3c"/>
+      <circle id="uf-c" cx="0" cy="0" r="16" fill="#3498db"/>
+      <g id="uf-g"><rect x="0" y="0" width="35" height="25" fill="#2ecc71"/><circle cx="17" cy="12" r="7" fill="#f1c40f"/></g>
+    </defs>
+    <use href="#uf-r" x="10" y="10"/>
+    <use href="#uf-r" x="60" y="10"/>
+    <use href="#uf-c" x="130" y="27"/>
+    <use href="#uf-c" x="175" y="27"/>
+    <use href="#uf-g" x="210" y="15"/>
+    <use href="#uf-g" x="260" y="15"/>
+    <use xlink:href="#uf-r" x="320" y="10"/>
+  </svg>
+</div>
+
 <!-- ─── background-blend-mode ────────────────────────────────── -->
 <div style="margin-top:4px;display:flex;gap:6px;">
   <div style="width:80px;height:50px;background:linear-gradient(135deg,#e74c3c,#c0392b),linear-gradient(to bottom,#3498db,#1a5276);background-blend-mode:normal;"></div>

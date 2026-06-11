@@ -141,6 +141,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('79', '79-text-underline-offset.html', 0.5, 'CSS Text Decoration L4: text-underline-offset (px/auto/negative) + text-underline-position (under) wired to push_text_decoration'),
     ('80', '80-border-collapse.html', 0.5, 'CSS Tables L2 §17.6: border-collapse separate (4px spacing) vs collapse (no spacing) + mixed border widths + cell backgrounds'),
     ('81', '81-view-transition-name.html', 0.5, 'CSS View Transitions L1 §10: view-transition-name property — named elements render identically to un-named elements (property has no visual effect outside a transition)'),
+    ('82', '82-svg-use.html', 0.5, 'SVG <use> element: clone shapes/groups/symbols from <defs>, x/y offset, xlink:href, nested chains'),
     # --- Interaction-слой (серия 100–199): взаимодействие свойств, уже покрытых юнит-тестами 00–99.
     # Падение здесь при зелёных юнит-зависимостях (см. DEPS) = баг взаимодействия, не свойства.
     ('100', '100-transform-overflow.html',   0.5, 'INTERACTION: transform × overflow:hidden — клиппинг трансформированных слоёв, поворот самого клип-контейнера'),
