@@ -102,8 +102,7 @@ const TESTS: &[(&str, f32)] = &[
     ("48-line-clamp",             0.5),
     ("49-background-blend-mode",  0.5),
     ("50-css-variables",          0.5),
-    // 2.0: platform scrollbar skin never matches Edge pixel-for-pixel (BUG-093).
-    ("51-scrollbar-rendering",    2.0),
+    ("51-scrollbar-rendering",    0.5),
     ("52-text-shadow-blur",       4.0),
     ("53-background-origin",      0.5),
     ("54-svg-path-stroke",        0.5),

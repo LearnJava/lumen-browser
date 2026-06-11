@@ -2087,7 +2087,28 @@ fn emit_inline_run(
     }
 }
 
-/// Собирает layer-effect триггеры одного box-а в pair (pre, post).
+/// Layer-ops одного бокса, разделённые на эффекты и overflow-клип.
+///
+/// Per CSS Overflow L3 §3.2 overflow-клип обрезает только **детей** до
+/// padding-box; собственные background/border бокса не клиппятся (BUG-123 —
+/// рамка scroll-контейнера целиком срезалась scissor-ом своего же
+/// PushScrollLayer). Caller эмитит `pre` → bg/border → `overflow_pre` →
+/// дети → `overflow_post` → `post` — зеркало порядка не-композиторного
+/// `walk` (bg/border до PushScrollLayer).
+struct BoxLayerOps {
+    /// Эффекты, оборачивающие весь painted output бокса (включая его
+    /// собственные background/border): clip-path, blend, opacity,
+    /// transform, backdrop-filter, filter.
+    pre: Vec<DisplayCommand>,
+    /// Парные Pop к `pre`, уже в обратном (LIFO) порядке.
+    post: Vec<DisplayCommand>,
+    /// Overflow-клип / scroll-слой — оборачивает только детей.
+    overflow_pre: Vec<DisplayCommand>,
+    /// Парные Pop к `overflow_pre`.
+    overflow_post: Vec<DisplayCommand>,
+}
+
+/// Собирает layer-effect триггеры одного box-а в [`BoxLayerOps`].
 /// Push-команды складываются в `pre` в порядке, парные `Pop` в `post` —
 /// в обратном порядке (LIFO). Возвращает пустые векторы для боксов без
 /// триггеров **или для анонимных боксов** (InlineRun / Skip), у которых
@@ -2113,11 +2134,13 @@ fn emit_inline_run(
 /// Pop — в обратном (Transform → Opacity → Blend → Clip). Transform пушится
 /// последним, чтобы преобразовывать всё содержимое SC (включая собственные
 /// background/border бокса, эмитимые в `root_bg`).
-fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
+fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps {
     let mut pre = Vec::new();
     let mut post = Vec::new();
+    let mut overflow_pre = Vec::new();
+    let mut overflow_post = Vec::new();
     if !box_can_own_stacking_context(b) {
-        return (pre, post);
+        return BoxLayerOps { pre, post, overflow_pre, overflow_post };
     }
     let s = &b.style;
 
@@ -2154,15 +2177,15 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
         let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
         let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
         if (is_scroll_x || is_scroll_y) && !paint_contain {
-            pre.push(DisplayCommand::PushScrollLayer {
+            overflow_pre.push(DisplayCommand::PushScrollLayer {
                 clip_rect: cr,
                 scroll_x: b.scroll_x,
                 scroll_y: b.scroll_y,
             });
-            post.push(DisplayCommand::PopScrollLayer);
+            overflow_post.push(DisplayCommand::PopScrollLayer);
         } else {
-            pre.push(DisplayCommand::PushClipRect { rect: cr });
-            post.push(DisplayCommand::PopClip);
+            overflow_pre.push(DisplayCommand::PushClipRect { rect: cr });
+            overflow_post.push(DisplayCommand::PopClip);
         }
     }
     if s.mix_blend_mode != LayoutBlendMode::Normal {
@@ -2204,7 +2227,7 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
     }
     // post в LIFO порядке относительно pre.
     post.reverse();
-    (pre, post)
+    BoxLayerOps { pre, post, overflow_pre, overflow_post }
 }
 
 /// Walk-функция, идентичная по триггерам `StackingTree::build`: pre-order,
@@ -2227,15 +2250,19 @@ fn fill_buckets(
     dpr: f32,
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
-    let (pre_ops, post_ops) = box_layer_ops(b, ov);
+    let ops = box_layer_ops(b, ov);
 
     if is_sc_root {
         let bucket = &mut buckets[current_sc.0 as usize];
-        bucket.pre.extend(pre_ops);
+        bucket.pre.extend(ops.pre);
         emit_box_self(b, &mut bucket.root_bg, dpr, None);
+        // Overflow-клип — после собственных bg/border (они не клиппятся
+        // своим overflow, BUG-123), но до contents с детьми.
+        bucket.root_bg.extend(ops.overflow_pre);
         // `post` эмитится в фазе InlineContent после descendants — заполним
         // его сейчас, чтобы не повторно вычислять триггеры.
-        bucket.post.extend(post_ops);
+        bucket.post.extend(ops.overflow_post);
+        bucket.post.extend(ops.post);
 
         for child in &b.children {
             let child_creates_sc =
@@ -2251,10 +2278,12 @@ fn fill_buckets(
     } else {
         // Non-SC box: inline Push/Pop в contents текущего SC. Это нужно для
         // `overflow:hidden` на обычном in-flow box-е (opacity/blend
-        // триггерят SC сами, до сюда не дойдут с не-пустым pre_ops).
+        // триггерят SC сами, до сюда не дойдут с не-пустым pre).
         let bucket = &mut buckets[current_sc.0 as usize];
-        bucket.contents.extend(pre_ops);
+        bucket.contents.extend(ops.pre);
         emit_box_self(b, &mut bucket.contents, dpr, None);
+        // Overflow-клип после собственных bg/border (BUG-123).
+        bucket.contents.extend(ops.overflow_pre);
 
         for child in &b.children {
             let child_creates_sc =
@@ -2269,7 +2298,8 @@ fn fill_buckets(
         }
 
         let bucket = &mut buckets[current_sc.0 as usize];
-        bucket.contents.extend(post_ops);
+        bucket.contents.extend(ops.overflow_post);
+        bucket.contents.extend(ops.post);
     }
 }
 
@@ -7708,15 +7738,40 @@ mod tests {
                 )
             })
             .collect();
-        // Ожидаемый порядок (см. box_layer_ops): Clip → Blend → Opacity (Push),
-        // потом Opacity → Blend → Clip (Pop) для LIFO-парности.
+        // Ожидаемый порядок (см. box_layer_ops): Blend → Opacity (эффекты,
+        // оборачивают bg/border), затем overflow-Clip — внутренний, клипает
+        // только детей (BUG-123). Pop — LIFO: Clip → Opacity → Blend.
         assert_eq!(ops.len(), 6, "три триггера = 6 layer-ops");
-        assert!(matches!(ops[0], DisplayCommand::PushClipRect { .. }));
-        assert!(matches!(ops[1], DisplayCommand::PushBlendMode { .. }));
-        assert!(matches!(ops[2], DisplayCommand::PushOpacity { .. }));
-        assert!(matches!(ops[3], DisplayCommand::PopOpacity));
-        assert!(matches!(ops[4], DisplayCommand::PopBlendMode));
-        assert!(matches!(ops[5], DisplayCommand::PopClip));
+        assert!(matches!(ops[0], DisplayCommand::PushBlendMode { .. }));
+        assert!(matches!(ops[1], DisplayCommand::PushOpacity { .. }));
+        assert!(matches!(ops[2], DisplayCommand::PushClipRect { .. }));
+        assert!(matches!(ops[3], DisplayCommand::PopClip));
+        assert!(matches!(ops[4], DisplayCommand::PopOpacity));
+        assert!(matches!(ops[5], DisplayCommand::PopBlendMode));
+    }
+
+    #[test]
+    fn ordered_scroll_container_bg_border_outside_scroll_layer() {
+        // BUG-123: собственные background/border скролл-контейнера эмитятся
+        // ДО PushScrollLayer — overflow-клип (scissor по padding-box) не
+        // должен срезать рамку и подрезать фон самого контейнера.
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { overflow: scroll; width: 100px; height: 50px;
+                   background: #16213e; border: 2px solid #0f3460; }",
+        );
+        let scroll_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }))
+            .expect("scroll container emits PushScrollLayer");
+        let border_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .expect("scroll container emits DrawBorder");
+        assert!(
+            border_idx < scroll_idx,
+            "DrawBorder (idx {border_idx}) must precede PushScrollLayer (idx {scroll_idx})"
+        );
     }
 
     #[test]
