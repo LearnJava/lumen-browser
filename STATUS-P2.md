@@ -6,10 +6,9 @@
 
 ## In progress
 
-**V-2 | CSS Motion Path L1** (готово для старта)
-- `offset-path: path()/ray()/url()` парсинг + layout вычисления
-- `offset-distance` / `offset-rotate` для расположения по пути
-- Next step: Реализовать layout算ет для motion path items
+Нет активной задачи. Phase 2 завершена, Phase 3 готово. Следующее:
+- V-2 код уже выполнен P4 (2026-06-10)
+- V-3 (Anchor Positioning L1) следующий на очередь
 
 ---
 
@@ -29,6 +28,13 @@
 ---
 
 ## Current / Recently Merged
+
+**V-2 | CSS Motion Path L1** ✅ 2026-06-10 (завершено P4: p4-motion-path)
+- `offset-path: path("M...")` parsing + motion layout algorithm ✅
+- `offset-distance` / `offset-rotate` / `offset-anchor` wiring ✅
+- `resolve_motion_transform()` в property_trees.rs: translate + rotate along path ✅
+- 15 unit-тестов motion_path.rs, graphic test 76 (TEST-76: 3.18%, разбирается P3)
+- Deferred: `ray()`, `url()`, basic-shapes paths → Phase 3
 
 **V-1 | View Transitions API Phase 1** ✅ 2026-06-12 (merged p2-v1-view-transitions)
 - `ViewTransitionEvent::Cancel` — поддержка отмены вложенных transitions
