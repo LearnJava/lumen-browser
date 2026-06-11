@@ -6,8 +6,7 @@
 
 ## In progress
 
-G-4: CSS text-decoration-skip-ink  branch: p2-g4-text-decoration-skip-ink
-Next step: add unit tests + graphic test  display_list.rs:5231
+(нет)
 
 ---
 
@@ -69,6 +68,14 @@ gradient-масок и backdrop-filter — ~11 открытых багов за�
 ---
 
 ## Current / Recently Merged
+
+**G-4 | CSS text-decoration-skip-ink** ✅ 2026-06-11 (merged p2-g4-text-decoration-skip-ink)
+- `TextDecorationSkipInk` enum (Auto/All/None) в `style.rs`; inherited, initial Auto
+- `ComputedStyle.text_decoration_skip_ink`: все точки наследования + `apply_declaration("text-decoration-skip-ink")`
+- `char_has_ink_descender(ch)`: g/j/p/q/y/Q/J — фазовый набор Latin descenders
+- `SkipInkParams` struct + `emit_decoration_line_skip_ink`: делит underline на сегменты с gap margin=thickness+1px; overline под `all`; line-through без skip (spec §3.5)
+- Предсуществующий тест `style_dashed_emits_dashes` обновлён — добавлено явное `skip-ink: none`
+- 6 unit-тестов style.rs (2668 ✅) + 4 unit-тестов paint (683 ✅); graphic test 84; Clippy чист
 
 **Canvas 2D Phase 5 — Path2D** ✅ 2026-06-11 (merged p2-canvas2d-phase5)
 - `Path2dData` struct в `path2d.rs`: сегменты в user-space, `to_device_space(ctm)` применяет CTM при использовании (HTML LS §4.12.5.1.5)
@@ -730,7 +737,7 @@ Ordered by priority. Сгруппированы по домену.
 | ~~G-1~~ | ~~**SVG `<use>` clone algorithm**~~ — **выполнено** (p2-svg-use-element, 2026-06-11) | M | `lumen-layout` |
 | ~~G-2~~ | ~~**`@counter-style` evaluation engine**~~ — **выполнено** ранее (C7 + I-4 + P4 list-style-type; counters.rs 70+ тестов; полный pipeline) | M | `lumen-layout`, `lumen-css-parser` |
 | ~~G-3~~ | ~~**`scroll-behavior: smooth` animation**~~ — **выполнено** (p2-g3-scroll-behavior-smooth, 2026-06-11) | S | `lumen-shell`, `lumen-js` |
-| G-4 | **CSS `text-decoration-skip-ink`** — underline gaps over glyph descenders | S | `lumen-layout`, `lumen-paint` |
+| ~~G-4~~ | ~~**CSS `text-decoration-skip-ink`**~~ — **выполнено** (p2-g4-text-decoration-skip-ink, 2026-06-11) | S | `lumen-layout`, `lumen-paint` |
 
 ---
 
