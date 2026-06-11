@@ -999,8 +999,21 @@ mod tests {
         assert!(texts.contains(&"Бумага"), "must show 'Бумага'");
         assert!(texts.contains(&"Ориентация"), "must show 'Ориентация'");
         assert!(texts.contains(&"Поля"), "must show 'Поля'");
+        assert!(texts.contains(&"Масштаб"), "must show 'Масштаб' (W-2b)");
         assert!(texts.contains(&"Страницы"), "must show 'Страницы'");
         assert!(texts.contains(&"Цвет"), "must show 'Цвет'");
         assert!(texts.contains(&"Файл"), "must show 'Файл'");
+    }
+
+    #[test]
+    fn build_visible_displays_scale_percentage() {
+        let mut p = make_panel();
+        p.visible = true;
+        p.scale = 150;
+        let dl = build_panel(&p, 0.0, 0.0);
+        let texts: Vec<&str> = dl.iter().filter_map(|c| {
+            if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
+        }).collect();
+        assert!(texts.iter().any(|t| t.contains("150%")), "must display scale as '150%'");
     }
 }
