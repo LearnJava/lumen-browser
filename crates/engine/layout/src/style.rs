@@ -26317,4 +26317,5 @@ mod anchor_positioning_tests {
         let s = compute_style(&doc, table, &sheet, &root, VP, false);
         assert_eq!(s.border_collapse, BorderCollapse::Separate, "initial resets to Separate");
     }
+
 }
