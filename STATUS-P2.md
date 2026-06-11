@@ -6,7 +6,8 @@
 
 ## In progress
 
-None
+PA-2: femtovg реальный blur + color-matrix  branch: p2-pa2-femtovg-filter
+Next step: DONE — реализовано, тесты прошли, готово к merge
 
 ---
 
