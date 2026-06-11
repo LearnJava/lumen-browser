@@ -6,9 +6,9 @@
 
 ## In progress
 
-Нет активной задачи. Phase 2 завершена, Phase 3 готово. Следующее:
-- V-2 код уже выполнен P4 (2026-06-10)
-- V-3 (Anchor Positioning L1) следующий на очередь
+**V-3 | CSS Anchor Positioning L1** — `anchor-name`/`position-anchor` + `inset-area` resizing
+Branch: `p2-v3-anchor-positioning`
+Next step: Спроектировать структуру данных для anchor placement (layout/src/anchor.rs)
 
 ---
 
