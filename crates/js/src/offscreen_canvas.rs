@@ -268,10 +268,10 @@ pub fn install_offscreen_canvas_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     g.set(
         "_lumen_offscreen_canvas2d_set_fill_style",
         rquickjs::Function::new(ctx.clone(), |canvas_id: u32, css: String| {
-            use lumen_canvas::CanvasColor;
+            use lumen_canvas::{CanvasColor, PaintSource};
             with_offscreen_canvas(canvas_id, |c| {
                 if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.fill_style = color;
+                    c.fill_style = PaintSource::Color(color);
                 }
             });
         }),
@@ -281,10 +281,10 @@ pub fn install_offscreen_canvas_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     g.set(
         "_lumen_offscreen_canvas2d_set_stroke_style",
         rquickjs::Function::new(ctx.clone(), |canvas_id: u32, css: String| {
-            use lumen_canvas::CanvasColor;
+            use lumen_canvas::{CanvasColor, PaintSource};
             with_offscreen_canvas(canvas_id, |c| {
                 if let Some(color) = CanvasColor::from_css_str(&css) {
-                    c.stroke_style = color;
+                    c.stroke_style = PaintSource::Color(color);
                 }
             });
         }),
