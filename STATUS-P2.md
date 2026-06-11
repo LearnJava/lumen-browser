@@ -6,9 +6,10 @@
 
 ## In progress
 
-**V-1 | View Transitions API Phase 1** (p2-v1-view-transitions)
-- Реализация `document.startViewTransition(updateCallback)` + `ViewTransition` interface
-- Next step: JS интеграция + shell эффекты перехода
+**V-2 | CSS Motion Path L1** (готово для старта)
+- `offset-path: path()/ray()/url()` парсинг + layout вычисления
+- `offset-distance` / `offset-rotate` для расположения по пути
+- Next step: Реализовать layout算ет для motion path items
 
 ---
 
@@ -28,6 +29,13 @@
 ---
 
 ## Current / Recently Merged
+
+**V-1 | View Transitions API Phase 1** ✅ 2026-06-12 (merged p2-v1-view-transitions)
+- `ViewTransitionEvent::Cancel` — поддержка отмены вложенных transitions
+- Вложенные transitions: `document.startViewTransition()` отмечает предыдущий как cancelled
+- Исключения callback: `Promise.reject()` для updateCallbackDone/ready/finished
+- 4 новых unit-теста: exception_rejects / nested_cancels / promises_resolve / cancel_event
+- lumen-js: 1870 тестов ✅ (было 1859 +11), Clippy чист
 
 **Phase 2 завершена** ✅ 2026-06-12
 - Волна O (UI/BiDi/T2-persistence), волна L (HTML interactive elements), волна K (Web Platform APIs)
