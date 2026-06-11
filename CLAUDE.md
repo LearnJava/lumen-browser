@@ -371,6 +371,7 @@ Current coverage — `graphic_tests/COVERAGE.md`.
 2. **A bug is only a visually noticeable artifact.** Non-zero pixels in `<stem>-diff.png` alone are not a bug. Skip if only visible under pixel-by-pixel inspection.
 3. **Ignore text for now.** Glyph antialiasing will always diverge from Edge — not tracked until a dedicated task. Text-box geometry, padding/margin around text, line-height — that's layout, check as normal.
 4. **Never rewrite test pages to work around engine limitations.** Test pages are the ground truth — they represent correct CSS as Edge renders it. If a test fails, fix the engine, not the test. Simplifying HTML to make a test pass is a false positive: the engine didn't improve, the bar was lowered. The only valid reason to edit a test page is a bug in the test itself (wrong expected output).
+4a. **Never change test thresholds. The diff threshold is 0.5% for every test** — in `graphic_tests/run.py` and `crates/driver/tests/snapshot_vs_edge.rs`. Raising a threshold to make a test pass is forbidden (user rule, 2026-06-11): it masks real defects. Precedent: BUG-093 was "closed" by calibrating TEST-51 to 2.0% — the actual cause was BUG-123, a scroll-clip defect eating the container's border. If a test exceeds 0.5%, file a BUG-NNN and fix the engine.
 5. **Single tracker — `BUGS.md` in the repo root.** One line per bug, compact format:
    ```
    BUG-018 | OPEN  | inline padding wrong on nested divs | layout/src/flow.rs:312
