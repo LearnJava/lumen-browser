@@ -153,6 +153,29 @@ pub struct PopupRequest {
     pub height: u32,
 }
 
+/// A print request emitted by `window.print()` (W-2 Phase 1).
+///
+/// Shell intercepts and opens print dialog or directly renders to PDF.
+#[derive(Debug, Clone)]
+pub struct PrintRequest {
+    /// Requested margin (in CSS px). Defaults: 48 px.
+    pub margin_top: f32,
+    pub margin_bottom: f32,
+    pub margin_left: f32,
+    pub margin_right: f32,
+}
+
+impl Default for PrintRequest {
+    fn default() -> Self {
+        Self {
+            margin_top: 48.0,
+            margin_bottom: 48.0,
+            margin_left: 48.0,
+            margin_right: 48.0,
+        }
+    }
+}
+
 /// A fullscreen API request emitted by JS `element.requestFullscreen()` or
 /// `document.exitFullscreen()`.
 ///
@@ -228,8 +251,9 @@ pub fn install_dom_api(
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
+    print_requests: Arc<Mutex<Vec<PrintRequest>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests, print_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -337,6 +361,7 @@ fn install_primitives(
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
+    print_requests: Arc<Mutex<Vec<PrintRequest>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -361,6 +386,15 @@ fn install_primitives(
         reg!("_lumen_console_error", move |msg: String| {
             eprintln!("[JS error] {msg}");
             buf_err.lock().unwrap().push((2, msg));
+        });
+    }
+
+    // ── window.print() (W-2) ──────────────────────────────────────────────────
+    {
+        let pr = Arc::clone(&print_requests);
+        reg!("_lumen_print_dialog", move || {
+            eprintln!("[window.print()] Opening print preview dialog");
+            pr.lock().unwrap().push(PrintRequest::default());
         });
     }
 
@@ -4581,6 +4615,7 @@ var document = {
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
 var confirm  = function()  { return false; };
 var prompt   = function()  { return null; };
+var print    = function()  { _lumen_print_dialog(); };
 
 // ── Custom Elements registry ──────────────────────────────────────────────────
 // Maps lower-case tag name → { ctor, observedAttributes: string[] }
@@ -7329,6 +7364,7 @@ var window = {
     alert: alert,
     confirm: confirm,
     prompt: prompt,
+    print: print,
     setTimeout: setTimeout,
     setInterval: setInterval,
     clearTimeout: clearTimeout,
@@ -11168,6 +11204,18 @@ mod tests {
     fn alert_does_not_crash() {
         let rt = runtime_with_dom(make_doc());
         rt.eval("alert('test')").unwrap();
+    }
+
+    #[test]
+    fn window_print_emits_request() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("window.print()").unwrap();
+        let reqs = rt.take_print_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].margin_top, 48.0);
+        assert_eq!(reqs[0].margin_bottom, 48.0);
+        assert_eq!(reqs[0].margin_left, 48.0);
+        assert_eq!(reqs[0].margin_right, 48.0);
     }
 
     #[test]

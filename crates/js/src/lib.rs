@@ -249,6 +249,11 @@ pub struct QuickJsRuntime {
     /// `End` is pushed after the callback (shell relayouts and starts 300 ms cross-fade).
     /// Drained by the shell in `about_to_wait` via `take_view_transition_events()`.
     view_transition_events: Arc<Mutex<Vec<view_transitions::ViewTransitionEvent>>>,
+    /// Print requests emitted by `window.print()` (W-2 Phase 1).
+    ///
+    /// Drained by the shell in `about_to_wait` via `take_print_requests()`.
+    /// Each request triggers print-preview dialog or direct PDF export.
+    print_requests: Arc<Mutex<Vec<dom::PrintRequest>>>,
     /// ES module source registry for `<script type=module>` support (HTML LS §8.1.3).
     ///
     /// Maps resolved module specifier → source code. Populated by `register_module_source()`
@@ -318,6 +323,7 @@ impl QuickJsRuntime {
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
+            print_requests: Arc::new(Mutex::new(Vec::new())),
             module_registry,
             module_page_url,
             module_import_map,
@@ -476,6 +482,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.console_messages),
                 Arc::clone(&self.pending_history_url_updates),
                 Arc::clone(&self.fullscreen_requests),
+                Arc::clone(&self.print_requests),
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
@@ -1388,6 +1395,15 @@ impl QuickJsRuntime {
     /// `window.open()` calls have been made since the last drain.
     pub fn take_window_open_requests(&self) -> Vec<dom::PopupRequest> {
         std::mem::take(&mut self.window_open_requests.lock().unwrap())
+    }
+
+    /// Drain all print requests queued by JS `window.print()` (W-2).
+    ///
+    /// Called by the shell in `about_to_wait`. Each returned `PrintRequest` should
+    /// open a print-preview dialog or directly render to PDF. Returns an empty vec when no
+    /// `window.print()` calls have been made since the last drain.
+    pub fn take_print_requests(&self) -> Vec<dom::PrintRequest> {
+        std::mem::take(&mut self.print_requests.lock().unwrap())
     }
 
     /// Drain all `console.log/warn/error` messages queued since the last call.

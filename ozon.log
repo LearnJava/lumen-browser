@@ -1,0 +1,124 @@
+warning: function `emit_text_with_highlights` is never used
+    --> crates\engine\paint\src\display_list.rs:1820:4
+     |
+1820 | fn emit_text_with_highlights(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `lumen-paint` (lib) generated 1 warning
+warning: methods `deliver_lcp_entry` and `deliver_layout_shift` are never used
+   --> crates\driver\src\winit_session.rs:941:8
+    |
+905 | impl WinitSession {
+    | ----------------- methods in this implementation
+...
+941 |     fn deliver_lcp_entry(
+    |        ^^^^^^^^^^^^^^^^^
+...
+952 |     fn deliver_layout_shift(&mut self, _value: f64, _session_id: u32, _had_input: bool) -> crate::Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `lumen-driver` (lib) generated 1 warning
+warning: unexpected `cfg` condition value: `backend-vello`
+  --> crates\shell\src\backend_factory.rs:19:7
+   |
+19 | #[cfg(feature = "backend-vello")]
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `backend-femtovg`, `backend-wgpu`, `default`, and `quickjs`
+   = help: consider adding `backend-vello` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: unexpected `cfg` condition value: `backend-vello`
+   --> crates\shell\src\backend_factory.rs:113:7
+    |
+113 | #[cfg(feature = "backend-vello")]
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expected values for `feature` are: `backend-femtovg`, `backend-wgpu`, `default`, and `quickjs`
+    = help: consider adding `backend-vello` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `backend-vello`
+  --> crates\shell\src\backend_factory.rs:51:19
+   |
+51 |             #[cfg(feature = "backend-vello")]
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `backend-femtovg`, `backend-wgpu`, `default`, and `quickjs`
+   = help: consider adding `backend-vello` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition value: `backend-vello`
+  --> crates\shell\src\backend_factory.rs:56:23
+   |
+56 |             #[cfg(not(feature = "backend-vello"))]
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `backend-femtovg`, `backend-wgpu`, `default`, and `quickjs`
+   = help: consider adding `backend-vello` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unreachable pattern
+    --> crates\shell\src\main.rs:5932:13
+     |
+5190 | ...   WindowEvent::MouseInput { state, button, .. } => {
+     |       --------------------------------------------- matches all the relevant values
+...
+5932 | ...   WindowEvent::MouseInput { state: ref state2, button: ref button2, .. } if button2 == &MouseButton::Left && state2 == &ElementState::Released => {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+     |
+     = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `node_id`
+    --> crates\shell\src\main.rs:5138:30
+     |
+5138 |                 if let Some((node_id, start_x, start_y)) = self.resize_active {
+     |                              ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_node_id`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `delta_x`
+    --> crates\shell\src\main.rs:5146:25
+     |
+5146 |                     let delta_x = x_css - start_x;
+     |                         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delta_x`
+
+warning: unused variable: `delta_y`
+    --> crates\shell\src\main.rs:5147:25
+     |
+5147 |                     let delta_y = y_css - start_y;
+     |                         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delta_y`
+
+warning: methods `toggle` and `scroll_by` are never used
+   --> crates\shell\src\panels\settings_panel.rs:159:12
+    |
+138 | impl SettingsPanel {
+    | ------------------ methods in this implementation
+...
+159 |     pub fn toggle(&mut self, snap: BrowserSettingsSnapshot) {
+    |            ^^^^^^
+...
+191 |     pub fn scroll_by(&mut self, dy: f32) {
+    |            ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `lumen-shell` (bin "lumen") generated 9 warnings (run `cargo fix --bin "lumen" -p lumen-shell` to apply 3 suggestions)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.52s
+     Running `target\debug\lumen.exe https://www.ozon.ru/ --activity-log`
+тЖТ GET https://www.ozon.ru/
+тЖР 307 https://www.ozon.ru/
+тЖТ GET https://www.ozon.ru/?__rr=1
+тЖР 307 https://www.ozon.ru/?__rr=1
+тЖТ GET https://www.ozon.ru/?__rr=2
+тЖР 307 https://www.ozon.ru/?__rr=2
+тЖТ GET https://www.ozon.ru/?__rr=3
+тЖР 307 https://www.ozon.ru/?__rr=3
+тЖТ GET https://www.ozon.ru/?__rr=4
+тЖР 307 https://www.ozon.ru/?__rr=4
+╨Ю╤И╨╕╨▒╨║╨░ ╨╖╨░╨│╤А╤Г╨╖╨║╨╕ https://www.ozon.ru/: network error: too many redirects

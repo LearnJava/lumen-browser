@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-06-12T00:38:47",
+  "git": {
+    "commit": "d10bd43b",
+    "branch": "main",
+    "subject": "Merge p3-bug139-nested-transforms: BUG-139 РІР»РѕР¶РµРЅРЅС‹Рµ CSS transforms РЅРµ РєРѕРјРїРѕРЅСѓСЋС‚СЃСЏ"
+  },
+  "crop_offset": null,
+  "halted_at": "00",
+  "summary": {
+    "total": 95,
+    "passed": 0,
+    "failed": 0,
+    "errors": 1,
+    "debtors": 0,
+    "skipped": 94
+  },
+  "tests": [
+    {
+      "id": "00",
+      "stem": "00-calibration",
+      "label": "calibration",
+      "html": "00-calibration.html",
+      "threshold": 0.5,
+      "status": "ERROR",
+      "diff_pct": -1.0,
+      "diff_region": null
+    }
+  ]
+}

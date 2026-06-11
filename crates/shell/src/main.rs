@@ -1316,6 +1316,12 @@ pub(crate) trait PersistentJs {
     /// `End` triggers relayout and starts 300 ms cross-fade.
     #[allow(dead_code)]
     fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent>;
+    /// Drain print requests emitted by `window.print()` (W-2).
+    ///
+    /// Shell drains these in `about_to_wait`: each entry triggers print-preview
+    /// dialog or direct PDF export.
+    #[allow(dead_code)]
+    fn take_print_requests(&self) -> Vec<(f32, f32, f32, f32)>;
     /// Adjust the QuickJS GC based on the tab's lifecycle tier (10L).
     ///
     /// `level` encodes aggressiveness: 0 = Soft (active tab, reset threshold),
@@ -1537,6 +1543,13 @@ impl PersistentJs for QuickPersistentJs {
                 lumen_js::ViewTransitionEvent::Begin => ViewTransitionEvent::Begin,
                 lumen_js::ViewTransitionEvent::End => ViewTransitionEvent::End,
             })
+            .collect()
+    }
+    fn take_print_requests(&self) -> Vec<(f32, f32, f32, f32)> {
+        self.rt
+            .take_print_requests()
+            .into_iter()
+            .map(|req| (req.margin_top, req.margin_bottom, req.margin_left, req.margin_right))
             .collect()
     }
     fn run_gc_pass(&self, level: u8) {
@@ -5361,6 +5374,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         w.set_fullscreen(None);
                     }
                 }
+            }
+        }
+
+        // Print API: window.print() opens print preview dialog (W-2).
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let print_reqs = js.take_print_requests();
+            for (_margin_top, _margin_bottom, _margin_left, _margin_right) in print_reqs {
+                eprintln!("[shell] window.print() TODO: Print preview dialog not yet implemented");
+                // Phase 2 W-2b: open print-preview dialog with options
+                // Phase 2a stub: just log for now
             }
         }
 

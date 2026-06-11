@@ -1,0 +1,3 @@
+=== Lumen activity log — day 20608 of unix epoch  (1780596466 s) ===
+
+[18:07:47.787] LOAD_ERR   "https://www.ozon.ru/"  (0 ms)  — network error: HTTP 403

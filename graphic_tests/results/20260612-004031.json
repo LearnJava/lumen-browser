@@ -1,0 +1,208 @@
+{
+  "timestamp": "2026-06-12T00:40:31",
+  "git": {
+    "commit": "d10bd43b",
+    "branch": "main",
+    "subject": "Merge p3-bug139-nested-transforms: BUG-139 РІР»РѕР¶РµРЅРЅС‹Рµ CSS transforms РЅРµ РєРѕРјРїРѕРЅСѓСЋС‚СЃСЏ"
+  },
+  "crop_offset": [
+    8,
+    67
+  ],
+  "halted_at": "15",
+  "summary": {
+    "total": 95,
+    "passed": 15,
+    "failed": 1,
+    "errors": 0,
+    "debtors": 0,
+    "skipped": 79
+  },
+  "tests": [
+    {
+      "id": "00",
+      "stem": "00-calibration",
+      "label": "calibration",
+      "html": "00-calibration.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "01",
+      "stem": "01-sanity",
+      "label": "sanity",
+      "html": "01-sanity.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "02",
+      "stem": "02-color-named",
+      "label": "color-named",
+      "html": "02-color-named.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "03",
+      "stem": "03-color-formats",
+      "label": "color-formats",
+      "html": "03-color-formats.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "04",
+      "stem": "04-color-alpha",
+      "label": "color-alpha",
+      "html": "04-color-alpha.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "05",
+      "stem": "05-border-width",
+      "label": "border-width",
+      "html": "05-border-width.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "06",
+      "stem": "06-border-sides",
+      "label": "border-sides",
+      "html": "06-border-sides.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0176,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 240,
+        "right": 904
+      }
+    },
+    {
+      "id": "07",
+      "stem": "07-box-sizing",
+      "label": "box-sizing",
+      "html": "07-box-sizing.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "08",
+      "stem": "08-padding",
+      "label": "padding",
+      "html": "08-padding.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "09",
+      "stem": "09-margin",
+      "label": "margin",
+      "html": "09-margin.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "10",
+      "stem": "10-min-max-width",
+      "label": "min-max-width",
+      "html": "10-min-max-width.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "11",
+      "stem": "11-min-max-height",
+      "label": "min-max-height",
+      "html": "11-min-max-height.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.434,
+      "diff_region": {
+        "top": 25,
+        "left": 201,
+        "bottom": 144,
+        "right": 864
+      }
+    },
+    {
+      "id": "12",
+      "stem": "12-display",
+      "label": "display",
+      "html": "12-display.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.2376,
+      "diff_region": {
+        "top": 308,
+        "left": 25,
+        "bottom": 544,
+        "right": 564
+      }
+    },
+    {
+      "id": "13",
+      "stem": "13-visibility-opacity",
+      "label": "visibility-opacity",
+      "html": "13-visibility-opacity.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.1191,
+      "diff_region": {
+        "top": 148,
+        "left": 153,
+        "bottom": 402,
+        "right": 964
+      }
+    },
+    {
+      "id": "14",
+      "stem": "14-overflow",
+      "label": "overflow",
+      "html": "14-overflow.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "15",
+      "stem": "15-box-shadow",
+      "label": "box-shadow",
+      "html": "15-box-shadow.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 1.0578,
+      "diff_region": {
+        "top": 19,
+        "left": 199,
+        "bottom": 274,
+        "right": 514
+      }
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-06-12T00:36:11",
+  "git": {
+    "commit": "36ea5195",
+    "branch": "main",
+    "subject": "P2: РѕС‚РјРµС‚РёС‚СЊ G-4 text-decoration-skip-ink РєР°Рє Р·Р°РІРµСЂС€С‘РЅРЅСѓСЋ"
+  },
+  "crop_offset": [
+    8,
+    67
+  ],
+  "halted_at": "15",
+  "summary": {
+    "total": 95,
+    "passed": 0,
+    "failed": 1,
+    "errors": 0,
+    "debtors": 0,
+    "skipped": 94
+  },
+  "tests": [
+    {
+      "id": "15",
+      "stem": "15-box-shadow",
+      "label": "box-shadow",
+      "html": "15-box-shadow.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 1.0578,
+      "diff_region": {
+        "top": 19,
+        "left": 199,
+        "bottom": 274,
+        "right": 514
+      }
+    }
+  ]
+}
