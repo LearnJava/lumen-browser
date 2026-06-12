@@ -9,6 +9,7 @@
 pub mod atlas;
 pub mod backend;
 pub mod blend_modes;
+pub mod color_management;
 pub mod dash_math;
 pub mod gradient_math;
 pub mod matrix_util;
