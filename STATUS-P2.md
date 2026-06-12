@@ -6,9 +6,7 @@
 
 ## In progress
 
-**BUG-132 — border-radius + overflow clipping** branch: `p2-bug132-clip-rounded`
-
-Next step: Add PushClipRoundedRect to display_list.rs, implement in femtovg_backend.rs
+None — BUG-132 fix merged
 
 Recent investigation:
 - **BUG-088** (4.63%): Individual CSS transforms translate/rotate/scale fully implemented, gap is antialiasing
