@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**BB-2: `::first-letter` layout split**  branch: `p1-bb2-first-letter`
+Next step: изучить BB-1 (`split_first_line_boxes`, p1-bb1-first-line) и извлечь первый графем первой строки как отдельный `LayoutBox` со стилем `::first-letter`; float-вариант (drop cap); `// CSS: ::first-letter` handoff для P4; 6 unit-тестов
 
 ---
 
