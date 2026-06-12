@@ -19,12 +19,12 @@
 | W-2b | **Print preview UI dialog** — interactive dialog для выбора параметров, сохранение в диалоге | M | `lumen-shell` | ✅ |
 | W-2c | **Page break parsing** — полная реализация CSS `page-break-before/after` в layout | M | `lumen-layout` | ✅ |
 
-### Phase 3 — Graphics & Color (P2 будущее)
+### Phase 3 — Graphics & Color (P2 будущее) — ✅ ЗАВЕРШЕНА
 
-| # | Задача | Размер | Крейты | После |
-|---|--------|--------|--------|-------|
-| H-1 | **AVIF image decoder** — AV1 video codec bitstream + Annex B container parsing; `crates/engine/image/` phase 0 (lossy only) | M | `lumen-image` | WebP/AVIF feature selection in `<picture>` |
-| H-2 | **Display P3/Rec2020 canvas/image tone-mapping** — extended ICC profile support for canvas `getImageData()` and `<img>` rendering | M | `lumen-paint` | HDR canvas + WebCodecs Phase 0 |
+| # | Задача | Размер | Крейты | Статус |
+|---|--------|--------|--------|--------|
+| ~~H-1~~ | ~~**AVIF image decoder**~~ — **выполнено** | M | `lumen-image` | ✅ |
+| ~~H-2~~ | ~~**Display P3/Rec2020 canvas/image tone-mapping**~~ — **выполнено** | M | `lumen-paint` | ✅ |
 
 
 ---
