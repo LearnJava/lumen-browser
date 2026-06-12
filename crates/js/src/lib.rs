@@ -90,6 +90,7 @@ pub mod svg;
 pub mod file_input;
 pub mod tc39_proposals;
 pub mod es2026_proposals;
+pub mod decorators;
 pub mod speculation_rules;
 pub mod soft_navigation;
 pub mod content_index;
@@ -346,15 +347,21 @@ impl QuickJsRuntime {
     /// Assigns a virtual `lumen://inline-N` specifier for relative-import resolution.
     /// Drains pending microtasks after evaluation so Promise continuations run.
     pub fn eval_module(&self, source: &str) -> JsResult<()> {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // Pre-process TC39 decorator syntax (Phase 0 transformer) so the
+        // registry and the evaluated module agree on the source.
+        let source = guard.ctx.with(|ctx: Ctx<'_>| {
+            decorators::maybe_transform_decorators(&ctx, source)
+                .unwrap_or_else(|| source.to_owned())
+        });
         // Unique sequential inline specifier
         let specifier = {
             let mut reg = self.module_registry.lock().unwrap_or_else(|e| e.into_inner());
             let n = reg.len();
             let key = format!("lumen://inline-{n}");
-            reg.insert(key.clone(), source.to_owned());
+            reg.insert(key.clone(), source.clone());
             key
         };
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.ctx.with(|ctx: Ctx<'_>| -> JsResult<()> {
             rquickjs::Module::evaluate(ctx.clone(), specifier.as_str(), source.as_bytes())
                 .map_err(|e| JsError::Runtime(format!("module eval: {e}")))?;
@@ -772,6 +779,13 @@ impl QuickJsRuntime {
             // SuppressedError, DisposableStack, AsyncDisposableStack.
             if let Err(e) = es2026_proposals::install_es2026_proposals(&ctx) {
                 eprintln!("ES2026 proposals shim init failed: {}", e);
+            }
+
+            // Install TC39 Decorators (Stage 3) Phase 0 — `@decorator` source
+            // transformer (`__lumen_transform_decorators`, used by the eval entry
+            // points) + Symbol.ClassDecorator / Symbol.MethodDecorator symbols.
+            if let Err(e) = decorators::install_decorator_shim(&ctx) {
+                eprintln!("Decorator shim init failed: {}", e);
             }
 
             // Install Speculation Rules API Phase 0 — document.prerendering,
@@ -1646,7 +1660,11 @@ impl JsRuntime for QuickJsRuntime {
     fn eval(&self, script: &str) -> JsResult<JsValue> {
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
-            let val: Value = ctx.eval(script).map_err(|e| rq_err(&ctx, e))?;
+            // Pre-process TC39 decorator syntax (Phase 0 transformer); QuickJS
+            // itself rejects `@dec` with a SyntaxError.
+            let transformed = decorators::maybe_transform_decorators(&ctx, script);
+            let code = transformed.as_deref().unwrap_or(script);
+            let val: Value = ctx.eval(code).map_err(|e| rq_err(&ctx, e))?;
             from_rq(&ctx, val)
         })
     }
