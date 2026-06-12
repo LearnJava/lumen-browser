@@ -6,14 +6,7 @@
 
 ## In progress
 
-None — merged BUG-076 regression fix
-
-**Last merge:**
-- BUG-076 regression (box-shadow blur 6.58%) — bounds tracking in PushFilter
-  - branch: `p2-bug076-box-shadow-regression`
-  - Code complete: display_list.rs + femtovg_backend.rs + renderer.rs
-  - All tests pass; shell compiles
-  - Visual verification pending: run `python graphic_tests/run.py --only 15` to confirm TEST-15 improvement
+None — all tasks complete
 
 ---
 
