@@ -6,8 +6,8 @@
 
 ## In progress
 
-**Canvas 2D Phase 3 — Advanced rendering (text clipping, advanced patterns)** branch: `p2-canvas-text-phase3`
-Next step: Extend canvas context with clipping by text and advanced patterns (Phase 3 post-Path2D)
+**BUG-076 Regression — box-shadow blur, TEST-15 6.58% (was 1.06% FIXED 2026-06-11)** branch: `p2-canvas-text-phase3`
+Next step: Диагностика регрессии в femtovg_backend.rs: filter-layer, blur-parameter, или composite logic
 
 ---
 
