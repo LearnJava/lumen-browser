@@ -6,7 +6,9 @@
 
 ## In progress
 
-None — Phase 2/3 complete, BUG-132 merged
+**BUG-092 — CSS переменные var() в cascade**  
+Branch: `p2-bug092-css-vars`  
+Next step: Анализ TEST-50 и compute_style() для переменных в `crates/engine/layout/src/style.rs`
 
 ---
 
