@@ -6,7 +6,7 @@
 
 ## In progress
 
-None. Last task: W-2b (see Recent below).
+None. Last task: X-1 (see Recent below).
 
 ---
 
@@ -23,7 +23,7 @@ None. Last task: W-2b (see Recent below).
 
 | # | Задача | Размер | Крейты | После |
 |---|--------|--------|--------|-------|
-| X-1 | **Color management: ICC profiles** — sRGB/Display P3/Rec2020 colour space detection & tone mapping (🟡 в работе) | M | `lumen-paint` | Canvas/img color management |
+| X-1 | **Color management: ICC profiles** — sRGB/Display P3/Rec2020 colour space detection & tone mapping | M | `lumen-paint` | Canvas/img color management |
 | X-2 | **CSS Color L4 system colors** — Canvas/CanvasText/ButtonFace/… runtime resolution (p4-system-colors P4 CSS wiring awaits) | S | `lumen-layout` (system_color fn) | — |
 
 
@@ -31,7 +31,13 @@ None. Last task: W-2b (see Recent below).
 
 ## Current / Recently Merged
 
-⚠️ **X-1 revert (2026-06-12):** merge p2-x1-color-management от 2026-06-12 содержал компилятор-ошибки (lumen_js::PrintRequest не импортировался). Откачена до переделки. Engine-часть готова (color_management.rs, `detect_color_space_from_icc()`, тесты), нужна перепроверка shell integration.
+**X-1 | Color management: ICC profiles** ✅ 2026-06-12 (merged: p2-x1-color-management)
+- `color_management.rs` модуль в `lumen-paint`: `detect_color_space_from_icc()` для определения пространства (sRGB/P3/Rec2020)
+- `Image::to_rgba8()` теперь автоматически применяет ICC коррекцию при наличии профиля
+- `Image::to_rgba8_raw()` для получения пикселей без коррекции (для resize и т.д.)
+- Использует существующую инфраструктуру: `IccProfile::detect_gamut()`, `correct_rgba_pixels()`, матрицы конверсии цветовых пространств
+- Все 131 тест image crate ✅, 4 новых теста color_management ✅, Clippy чист (paint + image)
+- Phase 0 завершена; Phase 1 (8A.4): Lab/CMYK, device-specific tone curves — отложены
 
 **W-2b | Print preview UI dialog** ✅ 2026-06-12 (merged: p2-w2b-print-preview)
 - `PrintPanel::scale` (i32, 50–200%): поле для масштабирования документа при печати
