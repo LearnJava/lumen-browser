@@ -327,6 +327,18 @@ pub struct Image {
 }
 
 impl Image {
+    /// Детектирует цветовое пространство изображения из ICC профиля или сигнатуры изображения.
+    ///
+    /// Возвращает `lumen_layout::style::ColorSpace::Srgb` если профиль отсутствует или невалиден.
+    /// Для AVIF: в Phase 1 будет использовать `libavif` binding для извлечения ICC профиля.
+    pub fn detect_color_space(&self) -> lumen_layout::style::ColorSpace {
+        if let Some(ref profile) = self.icc_profile {
+            lumen_paint::detect_color_space_from_icc(&profile.data)
+        } else {
+            lumen_layout::style::ColorSpace::Srgb
+        }
+    }
+
     /// Возвращает пиксели в формате RGBA8 (4 байта на пиксель).
     #[must_use]
     pub fn to_rgba8(&self) -> Vec<u8> {
@@ -936,5 +948,74 @@ mod tests {
         let err = ImageError::Heic(HeicError);
         let s = format!("{err}");
         assert!(s.starts_with("HEIC/HEIF:"), "Display должен начинаться с HEIC/HEIF: — получено {s:?}");
+    }
+
+    #[test]
+    fn detect_color_space_without_icc_returns_srgb() {
+        let img = Image {
+            width: 100,
+            height: 100,
+            format: PixelFormat::Rgba8,
+            data: vec![255; 100 * 100 * 4],
+            icc_profile: None,
+        };
+        assert_eq!(
+            img.detect_color_space(),
+            lumen_layout::style::ColorSpace::Srgb,
+            "Image without ICC profile should default to sRGB"
+        );
+    }
+
+    #[test]
+    fn detect_color_space_with_srgb_icc() {
+        // Create a minimal valid sRGB ICC profile (128 bytes with RGB signature)
+        let mut profile_data = vec![0u8; 128];
+        profile_data[16] = 0x52; // 'R'
+        profile_data[17] = 0x47; // 'G'
+        profile_data[18] = 0x42; // 'B'
+        profile_data[19] = 0x20; // ' '
+
+        let img = Image {
+            width: 10,
+            height: 10,
+            format: PixelFormat::Rgba8,
+            data: vec![128; 10 * 10 * 4],
+            icc_profile: Some(IccProfile { data: profile_data }),
+        };
+        assert_eq!(
+            img.detect_color_space(),
+            lumen_layout::style::ColorSpace::Srgb,
+            "sRGB profile should be detected correctly"
+        );
+    }
+
+    #[test]
+    fn detect_color_space_with_display_p3_icc() {
+        // Create a Display P3 ICC profile (with "Display P3" text marker)
+        let mut profile_data = vec![0u8; 200];
+        profile_data[16] = 0x52;
+        profile_data[17] = 0x47;
+        profile_data[18] = 0x42;
+        profile_data[19] = 0x20;
+
+        let p3_text = b"Display P3";
+        for (i, &b) in p3_text.iter().enumerate() {
+            if 150 + i < profile_data.len() {
+                profile_data[150 + i] = b;
+            }
+        }
+
+        let img = Image {
+            width: 10,
+            height: 10,
+            format: PixelFormat::Rgba8,
+            data: vec![200; 10 * 10 * 4],
+            icc_profile: Some(IccProfile { data: profile_data }),
+        };
+        assert_eq!(
+            img.detect_color_space(),
+            lumen_layout::style::ColorSpace::DisplayP3,
+            "Display P3 profile should be detected correctly"
+        );
     }
 }

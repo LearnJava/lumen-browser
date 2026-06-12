@@ -9,6 +9,7 @@
 pub mod atlas;
 pub mod backend;
 pub mod blend_modes;
+pub mod color_management;
 pub mod dash_math;
 pub mod gradient_math;
 pub mod matrix_util;
@@ -43,6 +44,7 @@ pub mod cpu_raster;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use backend::{RenderBackend, RenderError};
+pub use color_management::detect_color_space_from_icc;
 #[cfg(feature = "backend-wgpu")]
 pub use backends::WgpuBackend;
 #[cfg(feature = "backend-femtovg")]
