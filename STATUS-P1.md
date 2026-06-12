@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**BB-1: `::first-line` layout split**  branch: `p1-bb1-first-line`
+Next step: two-pass wrap в `lay_out` (InlineRun) + `split_first_line_boxes` пост-проход — `crates/engine/layout/src/box_tree.rs:3849`
 
 ---
 
