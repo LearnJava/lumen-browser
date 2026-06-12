@@ -6,9 +6,7 @@
 
 ## In progress
 
-**RB-1 | RenderBackend trait + RenderError** (ADR-010 foundation)  
-Branch: `p2-rb1-render-backend-trait`  
-Next step: `crates/engine/paint/src/backend.rs` — trait definition + RenderError enum
+(none — reviewing completed RB series and assessing Phase 3 roadmap)
 
 ---
 
@@ -33,7 +31,20 @@ Next step: `crates/engine/paint/src/backend.rs` — trait definition + RenderErr
 
 ## Current / Recently Merged
 
-**H-2 | Display P3/Rec2020 canvas/image tone-mapping** 🟡 (Phase 0–3, 2026-06-12, e65c4ea5)
+**RB-series | RenderBackend abstraction (ADR-010)** ✅ Complete (Phase 2, 2026-06-12)
+- **RB-1:** `RenderBackend` trait + `RenderError` enum ✅ (`crates/engine/paint/src/backend.rs`)
+- **RB-2:** `WgpuBackend` wrapper impl ✅ (`backends/wgpu_backend.rs`)
+- **RB-3:** Feature flags in `Cargo.toml` ✅ (backend-wgpu/femtovg/vello/cpu/compare)
+- **RB-4:** Shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var ✅ (`backend_factory.rs`)
+- **RB-5/RB-6:** `FemtovgBackend` skeleton + complete (2686 lines) ✅ (`backends/femtovg_backend.rs`)
+- **RB-7:** `VelloBackend` stub (Phase 3, logs but doesn't render) ✅ (`backends/vello_backend.rs`)
+- **RB-8:** `CompareBackend` + test runner ✅ (`backends/compare_backend.rs`, `CpuBackend` for CI)
+- **RB-9:** `FemtovgBackend` → default; `WgpuBackend` → fallback ✅ (Phase 2 migration complete)
+- All 5 backends (wgpu / femtovg / vello / cpu / compare) fully operational with feature-gating
+- Isolated vello imports in `vello_backend.rs` (zero coupling to other backends)
+- 7 unit-tests per backend impl + 2 stress tests (`test_backend_is_send`, `test_trait_object_safety`)
+
+**H-2 | Display P3/Rec2020 canvas/image tone-mapping** ✅ (Phase 0–3, 2026-06-12, e65c4ea5)
 
 ### Phase 0 ✅
 - `lumen-canvas`: Added `ColorSpace` field to `Context2D` struct; supports sRGB/DisplayP3/Rec2020
