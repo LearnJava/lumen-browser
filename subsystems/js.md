@@ -204,6 +204,14 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - `window.MediaMetadata` exported as global.
   - 16 unit tests. **1101 lumen-js lib tests total.**
 
+- **TC39 Decorators (Stage 3) Phase 0** (`crates/js/src/decorators.rs`). 2026-06-12 (P1, AA-1).
+  - Pure-JS source-to-source transformer `__lumen_transform_decorators(src)`: minimal lexer (strings/comments/templates/regex opaque) + rewrite of `@dec` on named class declarations, instance/static methods and fields into ES2023 + runtime helper calls.
+  - Runtime helpers: `__lumen_apply_class_decorators` (bottom-up, return value replaces class), `__lumen_apply_method_decorators` (`(fn, context) -> fn?`), `__lumen_apply_field_decorators` (composed init transformer, called with `this` = instance).
+  - Well-known symbols `Symbol.ClassDecorator` / `Symbol.MethodDecorator` — `true` tags on decorator `context`.
+  - Hooked into `JsRuntime::eval` and `eval_module` (fast path: no `@` in source → no transform; fail-open on transformer errors).
+  - Phase 0 limits (documented in module): field decorator exprs evaluated per instantiation; class expressions / anonymous classes / accessors / `#private` / computed names unsupported.
+  - 10 unit tests. All pass.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
