@@ -33,7 +33,7 @@ Status: Canvas infrastructure + ICC detection complete; phase 2 (tone-mapping ma
 
 ## Current / Recently Merged
 
-**H-2 | Display P3/Rec2020 canvas/image tone-mapping** 🟡 (Phase 0–1, 2026-06-12, in progress: p2-h2-display-p3)
+**H-2 | Display P3/Rec2020 canvas/image tone-mapping** 🟡 (Phase 0–2, 2026-06-12, 5c01e83a)
 
 ### Phase 0 ✅
 - `lumen-canvas`: Added `ColorSpace` field to `Context2D` struct; supports sRGB/DisplayP3/Rec2020
@@ -48,10 +48,14 @@ Status: Canvas infrastructure + ICC detection complete; phase 2 (tone-mapping ma
 - 3 unit tests for color space detection (sRGB default, Display P3, no-ICC)
 - Dependencies: lumen-paint + lumen-layout added to lumen-image
 
-### Phase 2 (next)
-- Tone-mapping matrices: sRGB ↔ Display P3, sRGB ↔ Rec2020  
-- `apply_tone_mapping()` implementation with pixel-level conversion
-- AVIF ICC profile extraction (requires libavif binding extension)
+### Phase 2 🟡
+- `apply_tone_mapping()`: конвертирует RGBA8 пиксели из P3/Rec2020 в sRGB
+- MATRIX_P3_TO_SRGB, MATRIX_REC2020_TO_SRGB: стандартные матрицы преобразования (DCI-P3, ITU-R BT.2020 → BT.709)
+- `apply_matrix_transform()`: generic функция для умножения пикселей на 3×3 матрицу
+- `to_rgba8_tone_mapped()`: опциональный метод с tone-mapping (требует явного вызова)
+- 6 новых unit-тестов: srgb_no_change, p3_converts_pixels, rec2020_converts_pixels, preserves_alpha, black_stays_black, white_stays_white
+- **Blocked by Phase 1 architecture issue:** layout ↔ image cycle prevents automatic tone-mapping in to_rgba8()
+- Next phase (Phase 3): resolve cycle to enable automatic tone-mapping
 
 **X-2 | CSS Color L4 system colors** ✅ 2026-06-12 (merged: p2-x2-system-colors)
 - `system_color()` function в `lumen-layout`: полное покрытие CSS Color L4 §6.2 и §11
