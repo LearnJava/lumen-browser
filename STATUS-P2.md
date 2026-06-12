@@ -20,7 +20,6 @@ None currently assigned.
 - **BUG-085** (Linear/radial gradient 12%) — paint domain, gradient rendering
 - **BUG-088** (CSS Transforms individual properties 9.5%) — requires P4 cascade wiring
 - **BUG-090** (-webkit-line-clamp 23.8%) — layout domain
-- **BUG-101** (image-set / cross-fade 27.6%) — canvas/paint, closely related to Phase 2
 
 ### Опция 2: Canvas Phase extensions (Phase 2 continuation)
 
@@ -35,6 +34,15 @@ None currently assigned.
 ---
 
 ## Current / Recently Merged
+
+**BUG-101 — image-set() DPR selection / cross-fade() blend** ✅ (2026-06-12, resolved)
+- Root cause: shell hardcoded DPR=1.0 in display-list builder calls
+- Solution: wire `renderer.scale_factor()` → `paint_ordered()` → `build_display_list_ordered_dpr()`
+- Implementation: Added `dpr: Option<f32>` parameter to `paint_ordered()` and `relayout_page()`
+- All shell methods now pass `scale_factor()` when available (defaults to 1.0 for dump modes)
+- Animator frame rendering uses `build_display_list_ordered_with_anim_dpr()` with scale factor
+- Expected improvement: `image-set()` on high-DPR displays will now select 2x candidates correctly
+- Commits: `c5649b2c`, `dd364a8f`, `5a496bab`, `beb8bcbc`, `5f84b4f5`
 
 **BUG-085 — gradient rendering deviation investigation** (2026-06-12, deferred)
 - TEST-39 (linear/radial gradients): 5.22% deviation (улучшено с 12.05%)
