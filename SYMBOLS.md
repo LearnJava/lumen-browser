@@ -1228,7 +1228,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/tc39_proposals.rs:28` **fn** `install_tc39_proposals` — Install all TC39 Stage 4 proposal shims into the given QuickJS context
 `crates/js/src/temporal_api.rs:36` **fn** `install_temporal_api` — Install the Temporal API shim into the given QuickJS context
 `crates/js/src/topics_api.rs:24` **fn** `install_topics_api` — Install Topics API bindings into the JS context
-`crates/js/src/trusted_types.rs:9` **fn** `install_trusted_types_bindings`
+`crates/js/src/trusted_types.rs:18` **fn** `install_trusted_types_bindings` — Installs `window.trustedTypes`, the three trusted value classes and
 `crates/js/src/typed_om_api.rs:20` **fn** `install_typed_om_api` — Install CSS Typed OM API bindings
 `crates/js/src/ua_client_hints.rs:11` **fn** `install_ua_client_hints_bindings` — Install User-Agent Client Hints bindings into the JS context
 `crates/js/src/url_pattern.rs:14` **fn** `install_url_pattern_api` — Install URL Pattern API into the JS context
@@ -1385,15 +1385,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:1455` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
 `crates/engine/layout/src/box_tree.rs:1473` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
 `crates/engine/layout/src/box_tree.rs:1505` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:1795` **fn** `layout`
-`crates/engine/layout/src/box_tree.rs:1814` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
-`crates/engine/layout/src/box_tree.rs:1827` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:1859` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:6537` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:6720` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:6739` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:6769` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:7670` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:1991` **fn** `layout`
+`crates/engine/layout/src/box_tree.rs:2012` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
+`crates/engine/layout/src/box_tree.rs:2025` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:2059` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
+`crates/engine/layout/src/box_tree.rs:6802` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:6985` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:7004` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:7034` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:7935` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
