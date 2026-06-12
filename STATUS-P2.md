@@ -6,12 +6,7 @@
 
 ## In progress
 
-**BUG-085 — Linear/radial gradient rendering** branch: `p2-bug085-gradient-fix`
-- TEST-39: 12.05% → 5.2% deviation (improved after build fix)
-- Root cause: femtovg library lacks built-in repeating-gradient support
-- Analysis: `femtovg_backend.rs` uses `..` pattern to ignore `repeating: bool` flag
-- Repeating gradients render as non-repeating (clamp at bounds instead of tiling)
-- Solution deferred to Phase 4: requires custom shader or CPU rasterizer for tiling logic
+None — all tasks complete
 
 ---
 
@@ -39,6 +34,14 @@
 ---
 
 ## Current / Recently Merged
+
+**BUG-085 — Linear/radial gradient rendering investigation** ✅ (2026-06-12, Phase 4 deferred)
+- TEST-39: improved 12.05% → 5.2% after fixing build errors
+- Fixed femtovg clear_rect signature (i32→u32) + PushFilter bounds field
+- Root cause: femtovg lacks repeating-gradient support (no tiling)
+- Analysis: DrawLinearGradient/DrawRadialGradient patterns ignore repeating flag
+- Solution requires Phase 4: custom shader with tiling logic or CPU rasterizer
+- Commits: 704c557f (start), a009ccca (build fix), 14678a0c (investigation summary)
 
 **BUG-092 — CSS переменные var() в cascade** ✅ (2026-06-12, verified PASS)
 - TEST-50 (CSS Variables L1): 0.0001% diff, **PASS** (threshold 0.5%)
