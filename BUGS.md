@@ -157,6 +157,7 @@ BUG-141 | OPEN  | css-parser/layout | @starting-style (CSS Transitions L2 §3.4)
 BUG-142 | OPEN  | paint/shadow-dom | :host / ::slotted rendering diverges — TEST-72: 11.24% (thr 0.5%); CSS Scoping L1 §6.1-6.2; selectors parse and compute but shadow host background and ::slotted child colours do not match Edge; likely cascade specificity or slotted-element paint-order issue | crates/engine/layout/src/style.rs
 BUG-143 | OPEN  | layout | masonry-auto-flow (CSS Masonry Layout §9) — TEST-75: 16.97% (thr 0.5%); masonry-auto-flow: next/ordered/definite-first placement diverges; related to BUG-105 (masonry Phase 2); source-order and order-property placement both wrong | crates/engine/layout/src/box_tree.rs
 BUG-144 | OPEN  | paint | CSS filter visual rendering (TEST-30): rows 1-3 deviate 18.81% from Edge (down from 23.61% after PA-4); PA-2 grayscale/sepia/brightness/invert/contrast/saturate/hue-rotate/blur do not match Edge pixel-for-pixel; backdrop-filter (row 4) now implemented via PA-4 but rows 1-3 remain wrong | crates/engine/paint/src/backends/femtovg_backend.rs
+BUG-145 | OPEN  | shell | clippy -D warnings fails on main: redundant `use lumen_js;` (main.rs:73), dead code collect_import_map/collect_import_map_impl (main.rs:3358,3363), 4× unnecessary f32 cast (main.rs:604-605,4712); blocks workspace clippy gate | crates/shell/src/main.rs:73
 ```
 
 ---
