@@ -5527,11 +5527,12 @@ function _lumen_fire_page_lifecycle(type, persisted) {
 }
 
 // ── Fetch API (Fetch Standard §3) ─────────────────────────────────────────────
-// AbortController / AbortSignal (Phase 0 stubs — abort() records state but
-// does not actually cancel in-flight network requests).
+// AbortController / AbortSignal. abort() records state and fires listeners;
+// fetch() checks signal.aborted before issuing the (synchronous) request.
 function AbortSignal() {
     this.aborted = false;
     this.reason = undefined;
+    this.onabort = null;
     this._listeners = [];
 }
 AbortSignal.prototype.addEventListener = function(type, fn) {
@@ -5543,46 +5544,68 @@ AbortSignal.prototype.removeEventListener = function(type, fn) {
     if (i >= 0) this._listeners.splice(i, 1);
 };
 AbortSignal.prototype.throwIfAborted = function() {
-    if (this.aborted) throw this.reason || new DOMException('AbortError');
+    if (this.aborted) throw this.reason || new DOMException('signal is aborted without reason', 'AbortError');
 };
+// Shared signal-abort steps (DOM §3.2): set state, fire onabort + listeners.
+function _lumen_abort_signal_fire(sig, reason) {
+    if (sig.aborted) return;
+    sig.aborted = true;
+    sig.reason = reason !== undefined ? reason
+               : new DOMException('signal is aborted without reason', 'AbortError');
+    var evt = { type: 'abort', target: sig };
+    if (typeof sig.onabort === 'function') { try { sig.onabort(evt); } catch(e) {} }
+    var listeners = sig._listeners.slice();
+    for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i](evt); } catch(e) {}
+    }
+}
 
 function AbortController() {
     this.signal = new AbortSignal();
 }
 AbortController.prototype.abort = function(reason) {
-    if (this.signal.aborted) return;
-    this.signal.aborted = true;
-    this.signal.reason = reason !== undefined ? reason : new DOMException('AbortError');
-    var listeners = this.signal._listeners.slice();
-    for (var i = 0; i < listeners.length; i++) {
-        try { listeners[i]({ type: 'abort', target: this.signal }); } catch(e) {}
-    }
+    _lumen_abort_signal_fire(this.signal, reason);
 };
-// AbortSignal.timeout(ms) — WHATWG Fetch §3.1 static method
+// AbortSignal.abort(reason) — DOM §3.2.2: returns an already-aborted signal.
+AbortSignal.abort = function(reason) {
+    var sig = new AbortSignal();
+    sig.aborted = true;
+    sig.reason = reason !== undefined ? reason
+               : new DOMException('signal is aborted without reason', 'AbortError');
+    return sig;
+};
+// AbortSignal.timeout(ms) — DOM §3.2.2: aborts with TimeoutError after the
+// shell timer queue (setTimeout shim) fires.
 AbortSignal.timeout = function(ms) {
     var sig = new AbortSignal();
     setTimeout(function() {
-        sig.aborted = true;
-        sig.reason = new DOMException('TimeoutError', 'TimeoutError');
-        var ls = sig._listeners.slice();
-        for (var i = 0; i < ls.length; i++) { try { ls[i]({ type: 'abort', target: sig }); } catch(e) {} }
+        _lumen_abort_signal_fire(sig, new DOMException('signal timed out', 'TimeoutError'));
     }, ms);
     return sig;
 };
-// AbortSignal.any(signals) — WHATWG Fetch §3.1 static method
+// AbortSignal.any(signals) — DOM §3.2.2: races the sources; the result aborts
+// with the reason of the first source that aborts.
 AbortSignal.any = function(signals) {
     var sig = new AbortSignal();
-    function onAbort() {
+    var sources = [];
+    function onAbort(evt) {
         if (sig.aborted) return;
-        sig.aborted = true;
-        sig.reason = new DOMException('AbortError');
-        var ls = sig._listeners.slice();
-        for (var i = 0; i < ls.length; i++) { try { ls[i]({ type: 'abort', target: sig }); } catch(e) {} }
+        // Detach from remaining sources — the race is decided.
+        for (var j = 0; j < sources.length; j++) {
+            sources[j].removeEventListener('abort', onAbort);
+        }
+        _lumen_abort_signal_fire(sig, evt && evt.target ? evt.target.reason : undefined);
     }
     if (signals) {
         for (var i = 0; i < signals.length; i++) {
-            if (signals[i] && signals[i].aborted) { onAbort(); break; }
-            if (signals[i]) signals[i].addEventListener('abort', onAbort);
+            if (!signals[i]) continue;
+            if (signals[i].aborted) {
+                sig.aborted = true;
+                sig.reason = signals[i].reason;
+                return sig;
+            }
+            sources.push(signals[i]);
+            signals[i].addEventListener('abort', onAbort);
         }
     }
     return sig;
@@ -6466,6 +6489,16 @@ TextDecoder.prototype.decode = function(buf, options) {
 // FormData → multipart/form-data with a generated boundary (Fetch spec §5.4 «extract a body»).
 function fetch(input, init) {
     try {
+        // Fetch §4.1 step 13: an already-aborted signal rejects immediately with
+        // its reason. Lumen's fetch is synchronous, so this pre-flight check is
+        // the only cancellation point (no in-flight abort in Phase 0).
+        var fetchSignal = (init && init.signal) ? init.signal
+                        : (typeof input === 'object' && input && input.signal ? input.signal : null);
+        if (fetchSignal && fetchSignal.aborted) {
+            return Promise.reject(
+                fetchSignal.reason !== undefined ? fetchSignal.reason
+                    : new DOMException('signal is aborted without reason', 'AbortError'));
+        }
         var url = typeof input === 'string' ? input : (input && input.url ? input.url : String(input));
         var method = (init && init.method) ? String(init.method).toUpperCase() :
                      (typeof input === 'object' && input.method ? input.method.toUpperCase() : 'GET');
@@ -16863,6 +16896,64 @@ mod tests {
             "var ctrl = new AbortController(); ctrl.abort();
              var combined = AbortSignal.any([ctrl.signal]);
              combined.aborted === true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_signal_any_propagates_source_reason() {
+        let rt = runtime_with_dom(make_doc());
+        // Race decided after construction: combined signal must adopt the
+        // aborting source's reason, not a generic AbortError.
+        let r = rt.eval(
+            "var c1 = new AbortController(); var c2 = new AbortController();
+             var combined = AbortSignal.any([c1.signal, c2.signal]);
+             c2.abort('custom-reason');
+             combined.aborted === true && combined.reason === 'custom-reason'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+        // Already-aborted source at construction time: reason copied too.
+        let r2 = rt.eval(
+            "var pre = AbortSignal.abort('pre-reason');
+             var combined2 = AbortSignal.any([new AbortController().signal, pre]);
+             combined2.aborted === true && combined2.reason === 'pre-reason'"
+        ).unwrap();
+        assert_eq!(r2, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_signal_static_abort_and_onabort() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var s = AbortSignal.abort();
+             s.aborted === true && s.reason instanceof DOMException && s.reason.name === 'AbortError'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+        // onabort handler fires alongside addEventListener listeners.
+        let r2 = rt.eval(
+            "var hits = [];
+             var ctrl = new AbortController();
+             ctrl.signal.onabort = function(e) { hits.push('on:' + e.type); };
+             ctrl.signal.addEventListener('abort', function(e) { hits.push('ls:' + e.type); });
+             ctrl.abort();
+             hits.join(',') === 'on:abort,ls:abort'"
+        ).unwrap();
+        assert_eq!(r2, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_rejects_on_aborted_signal() {
+        let rt = runtime_with_dom(make_doc());
+        // Aborted signal short-circuits fetch before any network call;
+        // the rejection reason is the signal's reason.
+        let r = rt.eval(
+            "var got = '';
+             var ctrl = new AbortController();
+             ctrl.abort(new DOMException('user cancelled', 'AbortError'));
+             fetch('http://example.test/', { signal: ctrl.signal })
+                 .catch(function(e) { got = e.name + ':' + e.message; });
+             _lumen_drain_microtasks();
+             got === 'AbortError:user cancelled'"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
