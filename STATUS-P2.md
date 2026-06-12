@@ -6,13 +6,7 @@
 
 ## In progress
 
-**WebCodecs API Phase 0** (web-codecs-phase0, p2-webcodecs-phase0 branch)
-- VideoEncoder / VideoDecoder / AudioEncoder / AudioDecoder stub classes  
-- EncodedVideoChunk / EncodedAudioChunk buffer types
-- VideoDecoderInit / VideoEncoderInit / AudioDecoderInit / AudioEncoderInit config objects
-- Error handling: NotSupportedError, TypeError, DOMException subclasses
-- JS shim + basic bindings
-- Entry point: `crates/js/src/webcodecs.rs`
+(none — WebCodecs API Phase 0 завершена 2026-06-12, awaiting next Phase 4 task)
 
 ---
 
@@ -36,6 +30,19 @@
 ---
 
 ## Current / Recently Merged
+
+**WebCodecs API Phase 0** ✅ (Phase 4, 2026-06-12, a099cb9f)
+- `VideoEncoder` / `VideoDecoder` / `AudioEncoder` / `AudioDecoder` JS class stubs
+- `EncodedVideoChunk` / `EncodedAudioChunk` types (type, timestamp, duration, byteLength properties)
+- `VideoFrame` / `AudioData` types for raw media (format, codedWidth/Height, sampleRate, numberOfFrames/Channels)
+- `NotSupportedError` / `OperationError` exception constructors (extend DOMException)
+- `isConfigSupported(config)` static methods return `Promise.resolve(false)` (Phase 0)
+- `configure()` throws NotSupportedError "no codec support in Phase 0"
+- `encode()` / `decode()` methods check state and throw InvalidStateError if unconfigured
+- `flush()` / `reset()` / `close()` state-machine methods (no-op in Phase 0)
+- Full JS shim in `crates/js/src/web_codecs.rs` (380 lines, 7 unit-tests pass)
+- Phase 1 (future): FFmpeg / libav1 bindings for actual A/V codec operations
+- lumen-js: 1880 тестов (+7), Clippy чист
 
 **RB-series | RenderBackend abstraction (ADR-010)** ✅ Complete (Phase 2, 2026-06-12)
 - **RB-1:** `RenderBackend` trait + `RenderError` enum ✅ (`crates/engine/paint/src/backend.rs`)
