@@ -6,14 +6,7 @@
 
 ## In progress
 
-**BUG-085 — gradient rendering deviation**
-- branch: `p2-bug085-gradient-deviation`
-- TEST-39 (linear/radial gradients): 5.22% deviation (улучшено с 12.05%)
-- Problem: Possible edge case в linear/radial gradient rendering, antialiasing, или edge-specific interpolation
-- Location: `crates/engine/paint/src/backends/femtovg_backend.rs` (femtovg library limitation)
-- Status: Реbeased на main, исправлен repeating-gradient handling (не зажимать стопы для repeating)
-- Key finding: main улучшил выручку с 12% до 5%; repeating-gradient-specific code fixed but 5% remains
-- Next: Профилирование linear/radial алгоритмов; check edge-specific antialiasing, position precision
+None currently assigned.
 
 ---
 
@@ -42,6 +35,14 @@
 ---
 
 ## Current / Recently Merged
+
+**BUG-085 — gradient rendering deviation investigation** (2026-06-12, deferred)
+- TEST-39 (linear/radial gradients): 5.22% deviation (улучшено с 12.05%)
+- Investigation: femtovg library doesn't natively support repeating gradients
+- Root cause identified: repeating-linear-gradient и repeating-radial-gradient не отображаются в viewport (невидимы)
+- Proposed fix: custom rendering loop to tile pattern across [0,1], similar to draw_conic_gradient()
+- Resolution: deferred to Phase 4 (requires significant refactoring of femtovg backend)
+- Branch: `p2-bug085-gradient-deviation` (kept for future reference)
 
 **H-2 Phase 4 — Enable automatic tone-mapping** ✅ (2026-06-12, 5a84facb)
 - Auto-apply tone-mapping in `to_rgba8()` for Display P3/Rec2020 color spaces
