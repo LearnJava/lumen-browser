@@ -162,6 +162,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('87', '87-inset-area-none.html', 0.5, 'inset-area: none none — якорь не влияет на позицию при none keywords (стаб)'),
     ('88', '88-anchor-nested.html', 0.5, 'anchor-name в вложенных элементах — иерархия DOM, поиск якорей (стаб)'),
     ('89', '89-anchor-multiple-names.html', 0.5, 'несколько anchor-name элементов — регистрация множества якорей в дереве (стаб)'),
+    ('90', '90-avif-image.html', 0.5, 'AVIF image decoder — <picture> с AVIF source + PNG fallback, direct <img src="...avif">'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

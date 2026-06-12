@@ -250,3 +250,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 
 - **view-transition-name** — ✅ реализован (CSS View Transitions L1 §10): ComputedStyle.view_transition_name: Option<Box<str>>; non-inherited; None=«none»; collect_view_transition_names() обходит layout tree и возвращает [(NodeId, name)] для shell; 5 unit-тестов style.rs + 4 unit-теста lib.rs; тест 81
 - **text-decoration-skip-ink** — ✅ реализован (CSS Text Decoration L4 §3.5): TextDecorationSkipInk enum (Auto/All/None); ComputedStyle.text_decoration_skip_ink: inherited, initial Auto; apply_declaration("text-decoration-skip-ink"); char_has_ink_descender() для g/j/p/q/y/Q/J; emit_decoration_line_skip_ink() делит underline на сегменты с gap margin=thickness+1px; overline под `all`; line-through без skip; 6 unit-тестов style.rs + 4 unit-тестов paint; тест 84
+
+### Форматы изображений и мультимедиа
+
+- **AVIF (AV1 Image File Format)** — ✅ реализован (ISO/IEC 23008-12 Phase 0): lumen-image::avif модуль + AvifImageDecoder trait; is_avif() проверяет ISOBMFF ftyp-бокс major brand (avif/avis); decode_avif() использует libavif через `image` крейт feature `avif` (требует cmake+nasm); поддерживает статичные AVIF, анимированные распознаются но первый кадр; ICC-профили не извлекаются (Phase 1); 14 unit-тестов в avif/mod.rs; зарегистрирован в image-decoder dispatch + supported_mime_types(); тест 90
