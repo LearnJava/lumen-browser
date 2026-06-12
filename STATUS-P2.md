@@ -6,7 +6,9 @@
 
 ## In progress
 
-None. Previous session completed BUG-088 investigation (2026-06-12).
+**BUG-084 — border-radius antialiasing deviation investigation**  
+Branch: `p2-bug084-border-radius`  
+Next: Diagnose TEST-36 1.5% deviation; issue is antialiasing on %-based corner radius values
 
 ---
 
