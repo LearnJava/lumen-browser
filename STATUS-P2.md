@@ -6,11 +6,11 @@
 
 ## In progress
 
-**BUG-132 — INTERACTION TEST-101 (border-radius×overflow)**, branch: `p2-bug132-radius-overflow`
-- Current status: 4.04% diff, INTERACTION test combining TEST-36 (border-radius) and TEST-14 (overflow:hidden)
-- Issue: overflow:hidden on rounded boxes must clip children to rounded border-box, not rectangular
-- Code location: lumen-paint display_list.rs (PushClipRect generation), possible precision issue in radius curve clipping
-- Next: compare screenshot diff and verify rounded-clip masking accuracy
+None — investigation tasks completed.
+
+Recent investigation:
+- **BUG-088** (4.63%): Individual CSS transforms translate/rotate/scale fully implemented, gap is antialiasing
+- **BUG-132** (4.04%): Root cause found — PushClipRect uses scissor (rectangular) instead of rounded clip mask; needs PushClipRoundedRect DisplayCommand + femtovg_backend implementation
 
 ---
 
