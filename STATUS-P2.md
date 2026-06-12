@@ -6,7 +6,8 @@
 
 ## In progress
 
-None — BUG-092 investigation complete (TEST-50 already PASS)
+**Canvas 2D Phase 3 — Advanced rendering (text clipping, advanced patterns)** branch: `p2-canvas-text-phase3`
+Next step: Extend canvas context with clipping by text and advanced patterns (Phase 3 post-Path2D)
 
 ---
 
