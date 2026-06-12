@@ -6,7 +6,7 @@
 
 ## In progress
 
-(none — reviewing completed RB series and assessing Phase 3 roadmap)
+(none — Phase 3 major items (H-2, RB-series) complete; awaiting Phase 4 task assignment)
 
 ---
 
