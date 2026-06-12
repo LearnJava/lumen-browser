@@ -6,7 +6,7 @@
 
 ## In progress
 
-(none — WebCodecs API Phase 0 завершена 2026-06-12, awaiting next Phase 4 task)
+H-2 Phase 4 — Enable automatic tone-mapping in `Image::to_rgba8()`  branch: p2-h2-phase4
 
 ---
 
