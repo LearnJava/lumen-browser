@@ -6,7 +6,9 @@
 
 ## In progress
 
-None. Last task: W-2b (see Recent below).
+**X-1 | Color management: ICC profiles**  
+branch: `p2-x1-color-management`  
+Next step: Design ColorSpace enum, ICC profile parsing, tone mapping pipeline for sRGB/Display P3/Rec2020
 
 ---
 
