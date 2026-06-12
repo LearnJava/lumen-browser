@@ -6,7 +6,10 @@
 
 ## In progress
 
-_(пусто)_
+**BUG-145** — регрессия PushFilter bounds после мержа BUG-076 (TEST-30 18.81→30.68%, TEST-103 7.33→49.59%).
+Ветка: `p3-bug145-pushfilter-bounds`. Следующий шаг: вернуть полноразмерный offscreen-слой в
+`crates/engine/paint/src/backends/femtovg_backend.rs:1840` — bounds-сайзинг ломает композицию
+(контент рисуется в page-координатах, `composite_filter_layer` растягивает слой на весь viewport).
 
 ## Next
 
