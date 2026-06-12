@@ -6,7 +6,9 @@
 
 ## In progress
 
-(none — awaiting next task assignment)
+**RB-1 | RenderBackend trait + RenderError** (ADR-010 foundation)  
+Branch: `p2-rb1-render-backend-trait`  
+Next step: `crates/engine/paint/src/backend.rs` — trait definition + RenderError enum
 
 ---
 
