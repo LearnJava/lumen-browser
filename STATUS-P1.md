@@ -12,6 +12,98 @@ _(нет)_
 
 ## Next
 
+### AA — TC39 Stage 3+ proposals (новые)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| AA-1 | **JS Decorators Phase 0** — синтаксис `@decorator` для class/method/field; JS-трансформер-шим в WEB_API_SHIM; `ClassDecorator`/`MethodDecorator` well-known symbols; `// CSS: n/a`; 6 unit-тестов | S | `lumen-js` |
+| AA-2 | **AsyncContext Phase 0** (TC39 Stage 2.7) — `AsyncContext.Variable` + `AsyncContext.Snapshot`; propagation через микротаски; no-op за пределами async chains (Phase 0); 5 unit-тестов | S | `lumen-js` |
+| AA-3 | **Import Attributes** (`import ... with { type: 'json' }`, Stage 3) — обновить module loader: парсить `with {}`-блок, передавать type в `_lumen_module_load`; JSON-assert guard; 4 unit-теста | S | `lumen-js` |
+| AA-4 | **`AbortSignal.timeout(ms)` + `AbortSignal.any([sig1, sig2])`** — EC: `AbortSignal.timeout` создаёт таймерный сигнал через `_lumen_set_timeout`; `any()` races; интеграция с `fetch`-шимом; 6 unit-тестов | XS | `lumen-js` |
+| AA-5 | **Trusted Types API Phase 0** — W3C Trusted Types L2: `TrustedTypePolicy`, `TrustedHTML`/`TrustedScript`/`TrustedScriptURL`; `window.trustedTypes` singleton; `createPolicy()`; `DefaultPolicy` guard; no-op enforcement (Phase 0); 7 unit-тестов | S | `lumen-js` |
+
+### BB — Layout algorithms Phase 3
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| BB-1 | **`::first-line` layout split** — алгоритм: выделить первую логическую строку `InlineRun` в отдельный `LayoutBox`; `// CSS: ::first-line` для P4 (стиль + font-weight/style/size); 8 unit-тестов | M | `lumen-layout` |
+| BB-2 | **`::first-letter` layout split** — извлечь первый отображаемый графем как отдельный `LayoutBox` с отдельным стилем; плавающий float-вариант (drop cap); `// CSS: ::first-letter` для P4; 6 unit-тестов | M | `lumen-layout` |
+| BB-3 | **CSS Grid L2 subgrid algorithm** — `subgrid` keyword в `grid-template-columns/rows`; наследование треков от родителя (`SubgridContext`); размещение items вдоль родительских линий; `// CSS: subgrid` для P4; 10 unit-тестов | L | `lumen-layout` |
+| BB-4 | **`content-visibility: auto` skip rendering** — пересечение bounding box с viewport; пропускать `lay_out` для off-screen поддеревьев; emit `ContentVisibilityChange` shell event; `// CSS: content-visibility` для P4; 6 unit-тестов | M | `lumen-layout`, `lumen-shell` |
+| BB-5 | **`text-wrap: balance` balance algorithm** — бинарный поиск оптимальной ширины переноса, минимизирующей дисбаланс последней строки; `TextWrapMode::Balance` enum; `// CSS: text-wrap` для P4; 8 unit-тестов | M | `lumen-layout` |
+| BB-6 | **`overscroll-behavior` scroll chain stop** — блокировать распространение скролла на родителя при `overscroll-behavior: contain/none`; `// CSS: overscroll-behavior` для P4; wiring в `try_scroll_overflow_container`; 5 unit-тестов | S | `lumen-layout`, `lumen-shell` |
+| BB-7 | **`scroll-margin`/`scroll-padding` snap offset** — применять `scroll-margin` к snap-target позиции; `scroll-padding` корректировать snap-port; `// CSS: scroll-margin, scroll-padding` для P4; 6 unit-тестов | S | `lumen-layout` |
+| BB-8 | **CSS Anchor Positioning Phase 1** — `position-area` grid resolution (9×9 logic grid); `anchor-scope` ограничение поиска якоря; `anchor-size()` в `width`/`height` вычислениях; wiring из `lay_out_abs_children`; 8 unit-тестов | M | `lumen-layout` |
+| BB-9 | **`field-sizing: content` form control auto-sizing** — `textarea`/`input` с `field-sizing: content` получают intrinsic ширину по содержимому (TextMeasurer.measure_text); `// CSS: field-sizing` для P4; 5 unit-тестов | S | `lumen-layout` |
+| BB-10 | **`interpolate-size: allow-keywords` Phase 0** — разрешить CSS transition от `height: 0` к `height: auto`; `InterpolateSizeMode` enum; сохранить computed auto-height в `TransitionState`; `// CSS: interpolate-size` для P4; 4 unit-теста | S | `lumen-layout` |
+
+### CC — Shell features Phase 4
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| CC-1 | **Find-in-page** (Ctrl+F) — `FindBar` панель (320×48px снизу); `find_in_page(query)`: обход DOM, сбор TextRun матчей; подсветка через `FillRect` highlight поверх display list; Ctrl+G = следующий матч; Esc = закрыть; 15 unit-тестов | M | `lumen-shell` |
+| CC-2 | **Downloads panel** (Ctrl+J) — `DownloadPanel` оверлей 480×400px; `DownloadRegistry` трекер активных загрузок; progress bar (`DrawRect` fill ratio); кнопки Open/Show-in-folder; вызов через `_lumen_network_download`; 10 unit-тестов | M | `lumen-shell`, `lumen-network` |
+| CC-3 | **Bookmarks panel Phase 1** (Ctrl+B) — `BookmarkPanel` оверлей 480×500px; `BookmarkStore` SQLite (url/title/folder/ts); Add/Remove/Open; tree view папок; drag-to-reorder Phase 2; 12 unit-тестов | M | `lumen-shell`, `lumen-storage` |
+| CC-4 | **Tab context menu** — right-click на таб → контекстное меню (Duplicate / Pin / Move to new window / Close others / Close right); `TabContextMenu` hit-test; все операции проксируются через shell state; 8 unit-тестов | S | `lumen-shell` |
+| CC-5 | **`about:newtab` page** — статический HTML + speed dial топ-5 сайтов из History (favicon + title); render как `PageSource::Static`; `handle_omnibox_commit("about:newtab")`; 4 unit-теста | S | `lumen-shell` |
+| CC-6 | **Tab groups** — `TabGroup { id, label, color: GroupColor }` в shell state; collapse/expand группы; цветовая метка на strip; persist в SQLite; 8 unit-тестов | M | `lumen-shell`, `lumen-storage` |
+| CC-7 | **PiP window shell integration** (Win32) — при `_lumen_pip_enter(nid)`: создать второй `winit::Window` с `WS_EX_TOPMOST` / `WS_POPUP`; forward display list subtree для `<video>`; `_lumen_pip_exit` закрывает окно; 5 unit-тестов | M | `lumen-shell` |
+| CC-8 | **Print background graphics** — поле `print_backgrounds: bool` в `PrintPrefs`; тоггл в Print dialog; передать флаг в `Renderer::render_print_pages` → при `false` фильтровать `FillRect` с background цветами; 4 unit-теста | S | `lumen-shell`, `lumen-paint` |
+| CC-9 | **DevTools Network panel** — третья вкладка инспектора "Network"; `NetworkLog { method, url, status, duration_ms }`; `_lumen_log_network_request` биндинг; таблица 4 колонки; wheel scroll; 10 unit-тестов | M | `lumen-shell` |
+| CC-10 | **Omnibox autocomplete Phase 1** — history-based suggestions при вводе: `HistoryFts::search_prefix(q)`; dropdown до 5 результатов (URL + title); ↑/↓ навигация; Enter = открыть; 6 unit-тестов | S | `lumen-shell`, `lumen-storage` |
+
+### DD — HTML interactive elements Phase 2
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| DD-1 | **`<details>`/`<summary>` interactive toggle** — клик на `<summary>` → toggle `open` атрибут → relayout дочерних `<details>` children; `toggle` DOM event (HTML LS §4.11.1); `is_open_details(node)` в layout; 8 unit-тестов | S | `lumen-js`, `lumen-layout` |
+| DD-2 | **`<dialog>` element** — `show()`/`showModal()`/`close(returnValue)` методы; backdrop overlay (`::backdrop` pseudoelement Phase 0: fullscreen DimRect); modal = top-layer (поверх stacking context); `cancel`/`close` events; `dialog.open` attr; 10 unit-тестов | M | `lumen-js`, `lumen-shell` |
+| DD-3 | **`<selectlist>` (Customizable Select) Phase 0** — `<selectlist>` рендерится как `<select>`; popup `<listbox>` с `<option>`; CSS-стилизуется через `::picker(select)`; Phase 0: fallback на native select; `// CSS: appearance: base-select`; 5 unit-тестов | S | `lumen-js`, `lumen-layout` |
+| DD-4 | **`loading="lazy"` image lazy loading** — `img[loading=lazy]` не decode до нахождения в viewport±500px; `LazyImageSlot` в display list; IntersectionObserver trigger → `_lumen_load_lazy_image(nid, src)`; 6 unit-тестов | S | `lumen-layout`, `lumen-shell` |
+| DD-5 | **`<canvas>` resize event** — `ResizeObserver` на canvas → при смене dimensions через CSS: сохранить пиксели, масштабировать буфер; fire `resize` event на элемент; 4 unit-теста | XS | `lumen-js` |
+
+### EE — Performance Phase 2
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| EE-1 | **IntersectionObserver Phase 1** — shell-driven: каждый кадр `compute_intersections(root, containers)`; deliver через `_lumen_deliver_intersection_entries(json)`; threshold array; `rootMargin`; 10 unit-тестов | M | `lumen-js`, `lumen-shell`, `lumen-layout` |
+| EE-2 | **ResizeObserver Phase 1** — shell-driven: после layout сравнивать `border_box_size` с предыдущим; deliver через `_lumen_deliver_resize_entries(json)`; `contentBoxSize`/`borderBoxSize`/`devicePixelContentBoxSize`; 8 unit-тестов | M | `lumen-js`, `lumen-shell` |
+| EE-3 | **Layout invalidation subtree ratchet** — `DirtyBits` bitflag на `LayoutBox`; mark dirty только изменённые поддеревья; `lay_out_incremental(root, dirty_set)` пропускает clean subtrees; benchmark: 10× speedup на scroll-triggered class toggle; 12 unit-тестов | L | `lumen-layout` |
+| EE-4 | **Paint layer caching** — `LayerCache: HashMap<NodeId, CachedLayer>` (display list + transform); пропускать emit для unmodified subtrees без `will-change`/анимации; `CacheRegistry::evict` при memory pressure; 8 unit-тестов | M | `lumen-paint`, `lumen-shell` |
+| EE-5 | **`requestAnimationFrame` scheduling Phase 2** — `rAF`-callbacks группировать в batch не чаще vsync; coalesce multiple `requestAnimationFrame` за один кадр; deliver `DOMHighResTimeStamp` от shell clock; 5 unit-тестов | S | `lumen-js`, `lumen-shell` |
+
+### FF — Network & Fetch Phase 2
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| FF-1 | **Fetch streaming response** (`response.body` ReadableStream) — `ReadableStreamSource` из chunked HTTP; `getReader()` → `ReadableStreamDefaultReader`; `read()` → `{value: Uint8Array, done}`; backpressure Phase 2; 8 unit-тестов | M | `lumen-js`, `lumen-network` |
+| FF-2 | **EventSource (Server-Sent Events)** — `new EventSource(url)`, state machine (CONNECTING/OPEN/CLOSED); `message`/`open`/`error` events; `data:` / `event:` / `id:` / `retry:` parsing (W3C SSE §9.2); auto-reconnect с backoff; 10 unit-тестов | M | `lumen-js`, `lumen-network` |
+| FF-3 | **`navigator.sendBeacon(url, data)`** — WHATWG Fetch §3.6: fire-and-forget POST; данные: `string | Blob | FormData | URLSearchParams`; возвращает `bool`; использует background HttpClient task; 5 unit-тестов | XS | `lumen-js`, `lumen-network` |
+| FF-4 | **Cache API Phase 1** — `caches.open(name)` → `Cache`; `cache.put/match/matchAll/delete/keys`; persist в SQLite через `lumen-storage::CacheStore`; `caches.has/keys/delete` на `CacheStorage`; 12 unit-тестов | M | `lumen-js`, `lumen-storage` |
+| FF-5 | **Fetch `keepalive` + `priority`** — `fetch(url, { keepalive: true })` = sendBeacon semantics (выживает при unload); `priority: 'high'|'low'|'auto'` → network queue приоритет; `// network: priority queue` для lumen-network Phase 2; 4 unit-теста | XS | `lumen-js`, `lumen-network` |
+
+### GG — Unique features Phase 3 (§12 lumen-plan.md)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| GG-1 | **AI sidebar Phase 0** — `AiBackend` trait в `lumen-core::ext` (`query(prompt) -> impl Future<Output=String>`); `NullAiBackend` заглушка; sidebar панель Ctrl+Shift+A (200px), `TextInput` + response area; `// UNIQUE: §12.8 AI assistant`; 6 unit-тестов | M | `lumen-core`, `lumen-shell` |
+| GG-2 | **@notes omnibox Phase 1** — поиск `KnowledgeStore` при вводе с `@`-префиксом; `search_notes(q)` → `Vec<NoteResult>`; dropdown до 5 результатов в omnibox; Enter → открыть note viewer; 6 unit-тестов | S | `lumen-shell`, `lumen-knowledge` |
+| GG-3 | **Privacy shields Phase 1** — парсить EasyList формат (`||domain^`, `##.selector`, `/regex/`); `EasyListParser::load(text)`; `FilterListSource` impl (`DefaultFilterList`); интеграция в `fetch_with_redirect`: блокировать запрос если url matches; 10 unit-тестов | M | `lumen-network`, `lumen-core` |
+| GG-4 | **Vertical tabs layout mode** — `TabLayout::Vertical` (200px left sidebar); тоггл кнопка в title bar; `build_tab_bar_vertical()` — список табов по вертикали с scroll; persist `tab_layout` в `BrowserSettings`; 8 unit-тестов | M | `lumen-shell` |
+| GG-5 | **Tab hibernation Phase 2 (LZ4 compression)** — сжимать JS heap blob через `lz4_flex::compress_prepend_size` перед записью в `SleepingTabStore`; `decompress_size_prepended` при restore; сохранять `compressed: bool` в таблице; 5 unit-тестов | S | `lumen-storage`, `lumen-shell` |
+
+### HH — Worker & Module APIs
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| HH-1 | **SharedWorker Phase 0** — `new SharedWorker(url)`: реестр воркеров по URL; `worker.port.postMessage/onmessage`; `MessageChannel` inter-port; `connect` event в воркере; in-process (same-thread Phase 0); 8 unit-тестов | M | `lumen-js` |
+| HH-2 | **CSS Houdini Paint Worklet Phase 0** — `CSS.paintWorklet.addModule(url)` → Promise; `registerPaint(name, class)` хранит класс в registry; `paint()` callback stub (получает ctx, geom, props); `background: paint(myPainter)` → placeholder rect; `// CSS: paint()` для P4; 6 unit-тестов | M | `lumen-js` |
+| HH-3 | **Web Locks API** — `navigator.locks.request(name, opts, callback)`: exclusive/shared режимы; in-memory `LockManager` с очередью; `query()` → состояние; `abort` через AbortSignal; 8 unit-тестов | S | `lumen-js` |
+| HH-4 | **BroadcastChannel API** — `new BroadcastChannel(name)`, `postMessage(data)`/`onmessage`; multi-tab broadcast через shell `BroadcastHub`; `_lumen_broadcast_post(name, data_json)` + `_lumen_broadcast_subscribe(name)`; 6 unit-тестов | S | `lumen-js`, `lumen-shell` |
+| HH-5 | **Compression Streams API Phase 1** — `new DecompressionStream('gzip'|'deflate'|'deflate-raw')` через `miniz_oxide`; `CompressionStream` deflate/gzip; `TransformStream`-based API; pipe через `ReadableStream`; 8 unit-тестов | S | `lumen-js` |
+
+---
+
 ### PS — Pixel snapping (итог ревизии paint-пайплайна 2026-06-10)
 
 Отчёт: [docs/paint-pipeline-review-2026-06.md](docs/paint-pipeline-review-2026-06.md).
