@@ -6,7 +6,9 @@
 
 ## In progress
 
-None — all tasks complete
+**BUG-088 — CSS Transforms individual properties investigation**  
+Branch: `p2-bug088-transforms`  
+Next: Diagnose TEST-46 9.5% deviation; code already implemented in apply_declaration + property_trees, remaining gap likely antialiasing difference
 
 ---
 
