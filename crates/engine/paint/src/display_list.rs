@@ -374,8 +374,15 @@ pub enum DisplayCommand {
     /// P1 п.2A (stacking contexts impl) заполнит данные, эмиттер начнёт
     /// выпускать; до этого момента — interface-first stub.
     PushClipRect { rect: Rect },
-    /// Закрывает rect-клип, открытый ближайшим `PushClipRect`. Парность
-    /// гарантируется эмиттером.
+    /// P2 BUG-132 fix: Открывает скруглённый rect-клип с border-radius.
+    /// Все последующие команды до парного `PopClip` рисуются только в пределах
+    /// скруглённого прямоугольника. Используется для `overflow: hidden`
+    /// с `border-radius` (взамен scissor-теста PushClipRect). Каждый
+    /// corner определен через `radii[0..4]` (top-left, top-right, bottom-right,
+    /// bottom-left). Phase 0: реализация в backends/femtovg_backend.rs.
+    PushClipRoundedRect { rect: Rect, radii: [f32; 4] },
+    /// Закрывает клип (rect или rounded-rect), открытый ближайшим
+    /// `PushClipRect`/`PushClipRoundedRect`. Парность гарантируется эмиттером.
     PopClip,
     /// Sprint 0 P2 stub. Открывает opacity-группу: все последующие
     /// команды до парного `PopOpacity` композитятся как off-screen-layer
@@ -1240,6 +1247,13 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 out.push_str(&format!(
                     "PushClipRect ({:.2}, {:.2}, {:.2}, {:.2})\n",
                     rect.x, rect.y, rect.width, rect.height,
+                ));
+            }
+            DisplayCommand::PushClipRoundedRect { rect, radii } => {
+                out.push_str(&format!(
+                    "PushClipRoundedRect ({:.2}, {:.2}, {:.2}, {:.2}) radii=[{:.2}, {:.2}, {:.2}, {:.2}]\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                    radii[0], radii[1], radii[2], radii[3],
                 ));
             }
             DisplayCommand::PopClip => {
@@ -2184,6 +2198,8 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         );
         // scroll/auto → PushScrollLayer (applies clip + scroll translate).
         // hidden/clip/paint-contain → PushClipRect (clip only, no scroll).
+        // BUG-132 fix: если есть border-radius, использовать PushClipRoundedRect
+        // вместо PushClipRect (scissors) для скруглённого клипа.
         let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
         let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
         if (is_scroll_x || is_scroll_y) && !paint_contain {
@@ -2194,7 +2210,33 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
             });
             overflow_post.push(DisplayCommand::PopScrollLayer);
         } else {
-            overflow_pre.push(DisplayCommand::PushClipRect { rect: cr });
+            // BUG-132: скруглённый клип для border-radius + overflow:hidden
+            // Разрешаем border-radius значения используя padding-box width как basis
+            // (аналогично CornerRadii::from_style в display_list.rs:188).
+            let padding_w = b.rect.width - s.border_left_width - s.border_right_width;
+
+            let resolve_radius = |len: &Length, basis: f32| -> f32 {
+                match len {
+                    Length::Px(v) => *v,
+                    Length::Percent(p) => (p / 100.0) * basis,
+                    _ => 0.0,
+                }
+            };
+
+            let tl = resolve_radius(&s.border_top_left_radius, padding_w);
+            let tr = resolve_radius(&s.border_top_right_radius, padding_w);
+            let br = resolve_radius(&s.border_bottom_right_radius, padding_w);
+            let bl = resolve_radius(&s.border_bottom_left_radius, padding_w);
+            let has_border_radius = tl > 0.0 || tr > 0.0 || br > 0.0 || bl > 0.0;
+
+            if has_border_radius {
+                // PushClipRoundedRect: скруглённый клип с border-radius
+                let radii = [tl, tr, br, bl];
+                overflow_pre.push(DisplayCommand::PushClipRoundedRect { rect: cr, radii });
+            } else {
+                // Стандартный PushClipRect (rect-только)
+                overflow_pre.push(DisplayCommand::PushClipRect { rect: cr });
+            }
             overflow_post.push(DisplayCommand::PopClip);
         }
     }
@@ -6674,6 +6716,7 @@ mod tests {
                 DisplayCommand::DrawBackgroundImage { .. } => "DrawBackgroundImage",
                 DisplayCommand::DrawText { .. } => "DrawText",
                 DisplayCommand::PushClipRect { .. } => "PushClipRect",
+                DisplayCommand::PushClipRoundedRect { .. } => "PushClipRoundedRect",
                 DisplayCommand::PopClip => "PopClip",
                 DisplayCommand::PushOpacity { .. } => "PushOpacity",
                 DisplayCommand::PopOpacity => "PopOpacity",
