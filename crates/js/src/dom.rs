@@ -16958,6 +16958,126 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    // ─── Trusted Types tests (AA-5, W3C TT L2 Phase 0) ───────────────────────
+
+    #[test]
+    fn trusted_types_create_policy_invokes_rule() {
+        let rt = runtime_with_dom(make_doc());
+        // The policy's own createHTML callback transforms the input.
+        let r = rt.eval(
+            "var p = trustedTypes.createPolicy('escape', {
+                 createHTML: function(s) { return s.replace(/</g, '&lt;'); }
+             });
+             var h = p.createHTML('<b>x</b>');
+             p.name === 'escape' && h instanceof TrustedHTML && String(h) === '&lt;b>x&lt;/b>'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn trusted_types_missing_rule_throws_type_error() {
+        let rt = runtime_with_dom(make_doc());
+        // Policy without a createScript member: calling createScript throws TypeError.
+        let r = rt.eval(
+            "var p = trustedTypes.createPolicy('html-only', {
+                 createHTML: function(s) { return s; }
+             });
+             var got = '';
+             try { p.createScript('x'); } catch (e) { got = e.constructor.name; }
+             got === 'TypeError'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn trusted_types_default_policy_guard() {
+        let rt = runtime_with_dom(make_doc());
+        // defaultPolicy is null until "default" is registered; second registration throws.
+        let r = rt.eval(
+            "var before = trustedTypes.defaultPolicy === null;
+             var dp = trustedTypes.createPolicy('default', { createHTML: function(s) { return s; } });
+             var after = trustedTypes.defaultPolicy === dp;
+             var guarded = false;
+             try { trustedTypes.createPolicy('default', {}); } catch (e) { guarded = e instanceof TypeError; }
+             before && after && guarded"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn trusted_types_brand_checks() {
+        let rt = runtime_with_dom(make_doc());
+        // isHTML/isScript/isScriptURL: true only for the matching brand,
+        // false for plain strings and for forged prototype chains.
+        let r = rt.eval(
+            "var p = trustedTypes.createPolicy('p', {
+                 createHTML: function(s) { return s; },
+                 createScript: function(s) { return s; },
+                 createScriptURL: function(s) { return s; }
+             });
+             var h = p.createHTML('a'), s = p.createScript('b'), u = p.createScriptURL('c');
+             var forged = Object.create(TrustedHTML.prototype);
+             trustedTypes.isHTML(h) && !trustedTypes.isHTML(s) && !trustedTypes.isHTML('a') &&
+                 !trustedTypes.isHTML(forged) &&
+                 trustedTypes.isScript(s) && !trustedTypes.isScript(h) &&
+                 trustedTypes.isScriptURL(u) && !trustedTypes.isScriptURL(s)"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn trusted_types_empty_html_and_script() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "trustedTypes.isHTML(trustedTypes.emptyHTML) && String(trustedTypes.emptyHTML) === '' &&
+             trustedTypes.isScript(trustedTypes.emptyScript) && String(trustedTypes.emptyScript) === ''"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn trusted_types_illegal_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        // Trusted value classes and TrustedTypePolicy are not page-constructible.
+        let r = rt.eval(
+            "var hits = 0;
+             [TrustedHTML, TrustedScript, TrustedScriptURL, TrustedTypePolicy].forEach(function(C) {
+                 try { new C('x'); } catch (e) { if (e instanceof TypeError) hits++; }
+             });
+             hits === 4"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn trusted_types_sink_tables() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "trustedTypes.getAttributeType('iframe', 'srcdoc') === 'TrustedHTML' &&
+             trustedTypes.getAttributeType('script', 'src') === 'TrustedScriptURL' &&
+             trustedTypes.getAttributeType('div', 'onclick') === 'TrustedScript' &&
+             trustedTypes.getAttributeType('div', 'id') === null &&
+             trustedTypes.getPropertyType('div', 'innerHTML') === 'TrustedHTML' &&
+             trustedTypes.getPropertyType('script', 'src') === 'TrustedScriptURL' &&
+             trustedTypes.getPropertyType('script', 'textContent') === 'TrustedScript' &&
+             trustedTypes.getPropertyType('div', 'className') === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn trusted_types_rule_receives_extra_args() {
+        let rt = runtime_with_dom(make_doc());
+        // createHTML(input, ...args): extra arguments are forwarded to the rule.
+        let r = rt.eval(
+            "var p = trustedTypes.createPolicy('args', {
+                 createHTML: function(s, a, b) { return s + ':' + a + ':' + b; }
+             });
+             String(p.createHTML('x', 1, 2)) === 'x:1:2'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     // ─── structuredClone tests ────────────────────────────────────────────────
 
     #[test]
@@ -20399,7 +20519,7 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt
             .eval(
-                "const p = trustedTypes.createPolicy('test', {}); \
+                "const p = trustedTypes.createPolicy('test', { createHTML: s => s }); \
                  const th = p.createHTML('<div>test</div>'); \
                  th instanceof TrustedHTML && th.toString() === '<div>test</div>'",
             )
@@ -20412,7 +20532,7 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt
             .eval(
-                "const p = trustedTypes.createPolicy('test', {}); \
+                "const p = trustedTypes.createPolicy('test', { createScript: s => s }); \
                  const ts = p.createScript('var x = 1'); \
                  ts instanceof TrustedScript && ts.toString() === 'var x = 1'",
             )
@@ -20425,7 +20545,7 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt
             .eval(
-                "const p = trustedTypes.createPolicy('test', {}); \
+                "const p = trustedTypes.createPolicy('test', { createScriptURL: s => s }); \
                  const tsu = p.createScriptURL('https://example.com/script.js'); \
                  tsu instanceof TrustedScriptURL && tsu.toString() === 'https://example.com/script.js'",
             )
@@ -20436,9 +20556,11 @@ mod tests {
     #[test]
     fn default_policy_create_html_works() {
         let rt = runtime_with_dom(make_doc());
+        // TT L2: the default policy exists only after createPolicy('default', ...).
         let r = rt
             .eval(
-                "const th = trustedTypes.defaultPolicy.createHTML('<p>test</p>'); \
+                "trustedTypes.createPolicy('default', { createHTML: s => s }); \
+                 const th = trustedTypes.defaultPolicy.createHTML('<p>test</p>'); \
                  th instanceof TrustedHTML && th.toString() === '<p>test</p>'",
             )
             .unwrap();
@@ -20446,22 +20568,17 @@ mod tests {
     }
 
     #[test]
-    fn get_policy_returns_policy() {
+    fn duplicate_non_default_policy_names_allowed() {
         let rt = runtime_with_dom(make_doc());
+        // Without a CSP trusted-types directive, duplicate non-default names
+        // are allowed (TT L2 §4.3); only "default" is guarded.
         let r = rt
             .eval(
-                "trustedTypes.createPolicy('mypolicy', {}); \
-                 const p = trustedTypes.getPolicy('mypolicy'); \
-                 p !== null && p.name === 'mypolicy'",
+                "const a = trustedTypes.createPolicy('mypolicy', {}); \
+                 const b = trustedTypes.createPolicy('mypolicy', {}); \
+                 a !== b && a.name === 'mypolicy' && b.name === 'mypolicy'",
             )
             .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn get_policy_returns_null_for_unknown() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("trustedTypes.getPolicy('nonexistent') === null").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
@@ -20470,7 +20587,7 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt
             .eval(
-                "const p = trustedTypes.createPolicy('test', {}); \
+                "const p = trustedTypes.createPolicy('test', { createHTML: s => s }); \
                  const th = p.createHTML('<div></div>'); \
                  trustedTypes.isHTML(th)",
             )
@@ -20490,7 +20607,7 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt
             .eval(
-                "const p = trustedTypes.createPolicy('test', {}); \
+                "const p = trustedTypes.createPolicy('test', { createScript: s => s }); \
                  const ts = p.createScript('x=1'); \
                  trustedTypes.isScript(ts)",
             )
@@ -20503,7 +20620,7 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt
             .eval(
-                "const p = trustedTypes.createPolicy('test', {}); \
+                "const p = trustedTypes.createPolicy('test', { createScriptURL: s => s }); \
                  const tsu = p.createScriptURL('https://example.com/s.js'); \
                  trustedTypes.isScriptURL(tsu)",
             )
