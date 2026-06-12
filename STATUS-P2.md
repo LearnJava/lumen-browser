@@ -6,9 +6,7 @@
 
 ## In progress
 
-**H-2 | Display P3/Rec2020 canvas/image tone-mapping** (Phase 0–3)  
-Branch: `p2-h2-display-p3`  
-Status: Phase 0–2 complete; Phase 3 (architecture fix) just completed — cyclical dependency resolved
+(none — awaiting next task assignment)
 
 ---
 
