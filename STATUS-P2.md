@@ -6,7 +6,10 @@
 
 ## In progress
 
-None currently assigned.
+**BUG-088 — CSS Transforms individual properties**, branch: `p2-bug088-transforms`
+- Current status: 4.63% diff (down from 9.57%), code already mostly implemented in property_trees.rs
+- Investigation: transforms apply correctly, difference likely due to pixel-antialiasing between Edge and Lumen
+- Next: analyze screenshot diff and determine if remaining gap requires paint-layer fixes or can be deferred
 
 ---
 
@@ -34,6 +37,16 @@ None currently assigned.
 ---
 
 ## Current / Recently Merged
+
+**Canvas 2D Phase 6 — filter property + ImageBitmapRenderingContext stubs** ✅ (2026-06-12, Phase 0)
+- `DrawState.filter: Vec<FilterFn>` field added; saved/restored in save/restore (Phase 0 empty)
+- `Context2D.filter` property with getter/setter (stores CSS filter string as placeholder)
+- `_lumen_canvas2d_set_filter(nid, css_string)` and `_lumen_canvas2d_get_filter(nid)` bindings (Phase 0: no-op)
+- `getContext('bitmaprenderer')` returns stub context with `transferFromImageBitmap()` method
+- JS: canvas.filter = "blur(5px)" accepted; getter returns current value (Phase 0: empty)
+- 2 new unit tests: filter property storing and getter returning empty; lumen-js 1870 tests ✅
+- lumen-canvas 51 tests ✅; lumen-js 1870 tests ✅; Clippy clean
+- Next phase (Phase 1): parse CSS filter strings via lumen-layout, apply FilterFn during rasterization
 
 **BUG-090 — -webkit-line-clamp multi-line truncation** ✅ (2026-06-12, verified PASS)
 - TEST-48 (line-clamp): 0.26% diff, **PASS** (threshold 0.5%)
