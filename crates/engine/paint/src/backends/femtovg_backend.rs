@@ -1824,7 +1824,7 @@ impl FemtovgBackend {
             // PA-2: реальный Gaussian blur (GPU via filter_image) и colour-matrix
             // (CPU via flush+screenshot) через offscreen-слой.
             // Только Opacity — легкий путь через set_global_alpha без offscreen.
-            DisplayCommand::PushFilter { filters, bounds } => {
+            DisplayCommand::PushFilter { filters, bounds: _ } => {
                 let needs_offscreen = filters
                     .iter()
                     .any(|f| !matches!(f, lumen_layout::FilterFn::Opacity(_)));
@@ -1835,15 +1835,16 @@ impl FemtovgBackend {
                     // correctly handle nesting with blend layers (PA-3).
                     let prev_rt = self.current_rt();
 
-                    // Compute offscreen layer size: use bounds if provided (box-shadow, text-shadow),
-                    // otherwise fallback to full viewport. Bounds are in CSS px, convert to device px.
-                    let (img_w, img_h) = if let Some(b) = bounds {
-                        let w = ((b.width * self.scale as f32).ceil() as i32).max(1) as usize;
-                        let h = ((b.height * self.scale as f32).ceil() as i32).max(1) as usize;
-                        (w, h)
-                    } else {
-                        (self.width as usize, self.height as usize)
-                    };
+                    // BUG-145: the layer must stay full-RT-sized. `bounds` is the
+                    // element's untransformed border box, but content is drawn into
+                    // the layer in page coordinates (no translation to layer-local
+                    // space), transformed content extends beyond the border box, and
+                    // blur needs ~3σ of padding around it; `composite_filter_layer`
+                    // also composites the layer as a full-viewport quad. A
+                    // bounds-sized layer (BUG-076 attempt) captured the page's
+                    // top-left corner and stretched it across the viewport
+                    // (TEST-30 30.68%, TEST-103 49.59%).
+                    let (img_w, img_h) = (self.width as usize, self.height as usize);
 
                     match self.canvas.create_image_empty(
                         img_w,
