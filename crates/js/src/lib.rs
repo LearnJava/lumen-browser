@@ -272,7 +272,6 @@ pub struct QuickJsRuntime {
     ///
     /// Shared with the `LumenResolver`'s import_map field. Set via `set_import_map()`
     /// before evaluating modules. Maps bare specifiers like "react" to URLs like "/vendor/react.js".
-    #[allow(dead_code)]
     module_import_map: Arc<Mutex<esm::ImportMap>>,
 }
 
@@ -341,6 +340,16 @@ impl QuickJsRuntime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(specifier.to_owned(), source.to_owned());
+    }
+
+    /// Set the import map (HTML LS §8.1.6.2) used by the module resolver.
+    ///
+    /// Call before `eval_module` — bare specifiers like `"react"` then resolve
+    /// through the map (exact match or longest prefix, see `ImportMap::resolve`).
+    pub fn set_import_map(&self, map: esm::ImportMap) {
+        if let Ok(mut guard) = self.module_import_map.lock() {
+            *guard = map;
+        }
     }
 
     /// Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`).
