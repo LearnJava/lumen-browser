@@ -9,6 +9,7 @@ use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 use crate::{DisplayCommand, CornerRadii};
+use crate::display_list::ResolvedClipShape;
 use lumen_core::geom::Rect;
 
 /// Bundled Inter Regular — the only face the deterministic CPU path can
@@ -58,6 +59,24 @@ enum LayerComposite {
     /// and multiplied into the layer's alpha before it is composited down with
     /// plain `SourceOver`.
     Mask(MaskSpec),
+    /// BUG-140 — `clip-path` basic-shape (`PushClipPath`/`PopClip`). The
+    /// element's subtree renders into a transparent full-size layer (page
+    /// coordinates, pre-transform — the command is emitted inside the
+    /// element's `PushTransform`, so the enclosing transform layer carries
+    /// the clipped result); on close the shape's anti-aliased coverage is
+    /// rasterised (tiny-skia path fill — deterministic) and multiplied into
+    /// the layer's alpha before plain `SourceOver` compositing.
+    ClipShape(ResolvedClipShape),
+}
+
+/// Kind of clip opened by a `PushClip*` command, so the shared `PopClip`
+/// closes rect clips (pop `clip_stack`) and shape clips (close the layer)
+/// differently. Mirrors `ClipEntry` in the femtovg backend (BUG-140).
+enum CpuClipKind {
+    /// `PushClipRect` / `PushClipRoundedRect` — entry in `clip_stack`.
+    Rect,
+    /// `PushClipPath` — off-screen layer with `LayerComposite::ClipShape`.
+    Shape,
 }
 
 /// How a `LayerComposite::Mask` group computes its per-pixel mask alpha.
@@ -144,6 +163,9 @@ pub(crate) fn rasterize_cpu(
     let mut clip_stack: Vec<Rect> = Vec::new();
     let mut clip_mask: Option<tiny_skia::Mask> = None;
     let mut clip_rect: Option<Rect> = None;
+    // BUG-140: вид каждого открытого PushClip* — общий PopClip закрывает
+    // rect-клипы (pop clip_stack) и shape-клипы (закрытие слоя) по-разному.
+    let mut clip_kinds: Vec<CpuClipKind> = Vec::new();
 
     for cmd in commands {
         match cmd {
@@ -210,11 +232,42 @@ pub(crate) fn rasterize_cpu(
                 clip_stack.push(*rect);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
+                clip_kinds.push(CpuClipKind::Rect);
             }
-            DisplayCommand::PopClip => {
-                clip_stack.pop();
+            // BUG-140: радиусы на CPU-пути не моделируются (как и scissor-
+            // fallback femtovg, BUG-132) — rect-клип. Явный обработчик нужен
+            // для баланса пар: раньше команда падала в `_ => {}`, а её парный
+            // PopClip попал чужой rect из clip_stack.
+            DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
+                clip_stack.push(*rect);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
+                clip_kinds.push(CpuClipKind::Rect);
+            }
+            // BUG-140: shape-клип (clip-path circle/ellipse/polygon) — слой
+            // + альфа-покрытие формы на закрытии.
+            DisplayCommand::PushClipPath { shape } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create clip-path layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::ClipShape(shape.clone()));
+                clip_kinds.push(CpuClipKind::Shape);
+            }
+            DisplayCommand::PopClip => {
+                match clip_kinds.pop() {
+                    Some(CpuClipKind::Shape) => {
+                        if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
+                            && let Some(dst) = layers.last_mut()
+                        {
+                            close_layer(dst, &top, &op);
+                        }
+                    }
+                    Some(CpuClipKind::Rect) | None => {
+                        clip_stack.pop();
+                        clip_rect = clip_intersection(&clip_stack);
+                        clip_mask = build_clip_mask(width, height, clip_rect);
+                    }
+                }
             }
             // CSS Overflow L3 §3.2 — `overflow: scroll/auto` (and the `auto`
             // axis a mismatched `overflow` pair coerces to). Treated as a clip
@@ -434,7 +487,77 @@ fn close_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, op: &LayerC
         LayerComposite::Blend(mode) => composite_blend_layer(dst, src, *mode),
         LayerComposite::Filter(filters) => composite_filter_layer(dst, src, filters),
         LayerComposite::Mask(spec) => composite_mask_layer(dst, src, spec),
+        LayerComposite::ClipShape(shape) => composite_clip_shape_layer(dst, src, shape),
     }
+}
+
+/// BUG-140: применяет shape-клип (`clip-path` circle/ellipse/polygon) к
+/// off-screen слою `src` и композитит результат на `dst` (`SourceOver`).
+///
+/// Покрытие формы растеризуется заливкой tiny-skia пути (анти-алиасинг
+/// детерминирован — pure Rust), альфа покрытия умножается в слой как у
+/// `composite_mask_layer`. Координаты формы — page px (до transform
+/// элемента): команда эмитится внутри `PushTransform`, поэтому слой
+/// transform-группы выше переносит уже обрезанный результат.
+fn composite_clip_shape_layer(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    shape: &ResolvedClipShape,
+) {
+    let (w, h) = (src.width(), src.height());
+    let mut masked = src.clone();
+    if let Some(coverage) = rasterize_clip_shape_coverage(shape, w, h) {
+        multiply_alpha_by_mask(&mut masked, &coverage);
+    } else {
+        // Вырожденная форма (нулевой радиус / <3 вершин полигона) клиппит всё.
+        masked.data_mut().fill(0);
+    }
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(0, 0, masked.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Растеризует анти-алиасное покрытие формы клипа в transparent-pixmap
+/// (альфа = покрытие). `None`, если форма вырождена и путь не строится.
+fn rasterize_clip_shape_coverage(
+    shape: &ResolvedClipShape,
+    width: u32,
+    height: u32,
+) -> Option<tiny_skia::Pixmap> {
+    let mut pb = tiny_skia::PathBuilder::new();
+    match shape {
+        ResolvedClipShape::Circle { cx, cy, r } => {
+            pb.push_oval(tiny_skia::Rect::from_xywh(cx - r, cy - r, 2.0 * r, 2.0 * r)?);
+        }
+        ResolvedClipShape::Ellipse { cx, cy, rx, ry } => {
+            pb.push_oval(tiny_skia::Rect::from_xywh(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)?);
+        }
+        ResolvedClipShape::Polygon(verts) => {
+            let mut iter = verts.iter();
+            let (x0, y0) = iter.next()?;
+            pb.move_to(*x0, *y0);
+            for (x, y) in iter {
+                pb.line_to(*x, *y);
+            }
+            pb.close();
+        }
+    }
+    let path = pb.finish()?;
+    let mut coverage = tiny_skia::Pixmap::new(width, height)?;
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(255, 255, 255, 255);
+    paint.anti_alias = true;
+    coverage.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Some(coverage)
 }
 
 /// Apply a `mask-image` (`MaskSpec`) to the off-screen element layer `src`, then
@@ -1914,6 +2037,75 @@ mod tests {
         assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "inner-only region clipped");
     }
 
+    /// BUG-140 (TEST-109 c0): `PushClipPath` circle обрезает заливку по
+    /// окружности, а не по её bounding box — точка внутри bbox, но вне круга,
+    /// остаётся белой.
+    #[test]
+    fn clip_path_circle_clips_to_circle_not_bbox() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Circle { cx: 32.0, cy: 32.0, r: 10.0 },
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Центр круга — синий.
+        assert_eq!(px(&img, 32, 32), (0, 0, 255, 255), "centre inside circle");
+        // Угол bbox (24,24): расстояние до центра ≈ 11.3 > 10 — вне круга,
+        // но внутри bounding box. Старое bbox-приближение красило его синим.
+        assert_eq!(px(&img, 24, 24), (255, 255, 255, 255), "bbox corner outside circle");
+        // Далеко за пределами — белый.
+        assert_eq!(px(&img, 5, 5), (255, 255, 255, 255), "far exterior stays white");
+    }
+
+    /// BUG-140 (TEST-109 c2): `PushClipPath` polygon (треугольник) обрезает
+    /// заливку по форме; вне треугольника (но внутри его bbox) — фон.
+    #[test]
+    fn clip_path_polygon_clips_to_triangle() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // Треугольник (32,4) (60,60) (4,60) — как polygon(50% 0, 100% 100%, 0 100%).
+        let cmds = vec![
+            DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Polygon(vec![(32.0, 4.0), (60.0, 60.0), (4.0, 60.0)]),
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Центроид (32, 41) — внутри треугольника.
+        assert_eq!(px(&img, 32, 41), (255, 0, 0, 255), "triangle interior red");
+        // Верхние углы bbox — вне треугольника.
+        assert_eq!(px(&img, 8, 8), (255, 255, 255, 255), "top-left outside triangle");
+        assert_eq!(px(&img, 56, 8), (255, 255, 255, 255), "top-right outside triangle");
+    }
+
+    /// BUG-140 (TEST-109 c0/c1): clip-path эмитится внутри PushTransform —
+    /// transform-слой переносит уже обрезанный результат, т.е. клип едет
+    /// вместе с элементом.
+    #[test]
+    fn clip_path_carried_through_transform() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::translation_2d(20.0, 0.0) },
+            DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Circle { cx: 16.0, cy: 32.0, r: 8.0 },
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
+            DisplayCommand::PopClip,
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Круг задан вокруг (16,32); transform сдвигает результат на +20 по X
+        // → синий центр в (36,32), а исходная позиция (16,32) — белая.
+        assert_eq!(px(&img, 36, 32), (0, 0, 255, 255), "clipped circle translated to x=36");
+        assert_eq!(px(&img, 16, 32), (255, 255, 255, 255), "original position stays white");
+    }
+
     /// `DrawText` paints the bundled Inter glyphs: a large opaque-coloured run
     /// must darken/colour some pixels away from the white background. Exact
     /// glyph pixels are font-dependent, so we only assert "ink appeared" within
@@ -2173,7 +2365,7 @@ mod tests {
     fn filter_blur_spreads_ink() {
         let black = Color { r: 0, g: 0, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)] },
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)], bounds: None },
             DisplayCommand::FillRect { rect: rect(20.0, 20.0, 24.0, 24.0), color: black },
             DisplayCommand::PopFilter,
         ];
@@ -2192,7 +2384,7 @@ mod tests {
     fn filter_blur_zero_is_identity() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(0.0)] },
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(0.0)], bounds: None },
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
             DisplayCommand::PopFilter,
         ];
@@ -2207,7 +2399,7 @@ mod tests {
     fn filter_grayscale_full() {
         let red = Color { r: 255, g: 0, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushFilter { filters: vec![FilterFn::Grayscale(1.0)] },
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Grayscale(1.0)], bounds: None },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: red },
             DisplayCommand::PopFilter,
         ];
@@ -2224,7 +2416,7 @@ mod tests {
     fn filter_invert_full() {
         let black = Color { r: 0, g: 0, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushFilter { filters: vec![FilterFn::Invert(1.0)] },
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Invert(1.0)], bounds: None },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: black },
             DisplayCommand::PopFilter,
         ];

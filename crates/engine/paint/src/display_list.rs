@@ -19,7 +19,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
-    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight,
+    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
@@ -203,6 +203,68 @@ impl CornerRadii {
     }
 }
 
+/// BUG-140: `clip-path` basic-shape, разрешённая эмиттером в page-координаты
+/// (px) относительно border-box элемента. Координаты — в пространстве ДО
+/// transform элемента: команда `PushClipPath` эмитится внутри
+/// `PushTransform`, бэкенд переносит форму активной матрицей канвы.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedClipShape {
+    /// `circle(r at cx cy)`: центр и радиус в page px.
+    Circle {
+        /// Центр X (page px).
+        cx: f32,
+        /// Центр Y (page px).
+        cy: f32,
+        /// Радиус (px).
+        r: f32,
+    },
+    /// `ellipse(rx ry at cx cy)`: центр и полуоси в page px.
+    Ellipse {
+        /// Центр X (page px).
+        cx: f32,
+        /// Центр Y (page px).
+        cy: f32,
+        /// Горизонтальная полуось (px).
+        rx: f32,
+        /// Вертикальная полуось (px).
+        ry: f32,
+    },
+    /// `polygon(...)`: вершины в page px (nonzero fill rule).
+    Polygon(Vec<(f32, f32)>),
+}
+
+impl ResolvedClipShape {
+    /// Axis-aligned bounding box формы (page px, до transform). Используется
+    /// fallback-путями, не умеющими клиппить произвольную форму (wgpu
+    /// scissor, hit-test).
+    pub fn bounding_rect(&self) -> Rect {
+        match self {
+            Self::Circle { cx, cy, r } => {
+                Rect::new(cx - r, cy - r, 2.0 * r, 2.0 * r)
+            }
+            Self::Ellipse { cx, cy, rx, ry } => {
+                Rect::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
+            }
+            Self::Polygon(verts) => {
+                if verts.is_empty() {
+                    return Rect::new(0.0, 0.0, 0.0, 0.0);
+                }
+                let mut mn_x = f32::MAX;
+                let mut mn_y = f32::MAX;
+                let mut mx_x = f32::MIN;
+                let mut mx_y = f32::MIN;
+                for (x, y) in verts {
+                    mn_x = mn_x.min(*x);
+                    mn_y = mn_y.min(*y);
+                    mx_x = mx_x.max(*x);
+                    mx_y = mx_y.max(*y);
+                }
+                Rect::new(mn_x, mn_y, (mx_x - mn_x).max(0.0), (mx_y - mn_y).max(0.0))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayCommand {
     FillRect {
@@ -381,8 +443,17 @@ pub enum DisplayCommand {
     /// corner определен через `radii[0..4]` (top-left, top-right, bottom-right,
     /// bottom-left). Phase 0: реализация в backends/femtovg_backend.rs.
     PushClipRoundedRect { rect: Rect, radii: [f32; 4] },
-    /// Закрывает клип (rect или rounded-rect), открытый ближайшим
-    /// `PushClipRect`/`PushClipRoundedRect`. Парность гарантируется эмиттером.
+    /// BUG-140: открывает клип произвольной basic-shape (`clip-path:
+    /// circle/ellipse/polygon`), разрешённой в page-координаты (px,
+    /// пространство ДО transform элемента). Эмитится ВНУТРИ
+    /// `PushTransform` элемента, чтобы форма переносилась его трансформом
+    /// (CSS Masking L1 §9: clip-path задан в локальной системе элемента).
+    /// Парный Pop — общий `PopClip`. `inset(...)` без скруглений эмитится
+    /// как `PushClipRect` (точно представим прямоугольником).
+    PushClipPath { shape: ResolvedClipShape },
+    /// Закрывает клип (rect, rounded-rect или shape), открытый ближайшим
+    /// `PushClipRect`/`PushClipRoundedRect`/`PushClipPath`. Парность
+    /// гарантируется эмиттером.
     PopClip,
     /// Sprint 0 P2 stub. Открывает opacity-группу: все последующие
     /// команды до парного `PopOpacity` композитятся как off-screen-layer
@@ -1261,6 +1332,30 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     radii[0], radii[1], radii[2], radii[3],
                 ));
             }
+            DisplayCommand::PushClipPath { shape } => {
+                match shape {
+                    ResolvedClipShape::Circle { cx, cy, r } => {
+                        out.push_str(&format!(
+                            "PushClipPath circle({cx:.2}, {cy:.2}, r={r:.2})\n"
+                        ));
+                    }
+                    ResolvedClipShape::Ellipse { cx, cy, rx, ry } => {
+                        out.push_str(&format!(
+                            "PushClipPath ellipse({cx:.2}, {cy:.2}, rx={rx:.2}, ry={ry:.2})\n"
+                        ));
+                    }
+                    ResolvedClipShape::Polygon(verts) => {
+                        out.push_str("PushClipPath polygon(");
+                        for (i, (x, y)) in verts.iter().enumerate() {
+                            if i > 0 {
+                                out.push_str(", ");
+                            }
+                            out.push_str(&format!("{x:.2} {y:.2}"));
+                        }
+                        out.push_str(")\n");
+                    }
+                }
+            }
             DisplayCommand::PopClip => {
                 out.push_str("PopClip\n");
             }
@@ -1784,18 +1879,30 @@ fn overflow_clips(o: Overflow) -> bool {
 /// prevents pixel bleed if the renderer's actual advance differs slightly.
 const ELLIPSIS_EM: f32 = 0.65;
 
+/// Центр basic-shape в page-координатах: `at cx cy` (cx — % от ширины,
+/// cy — % от высоты border-box) либо дефолт 50% 50% (CSS Shapes L1 §5.1).
+fn resolve_shape_center(center: Option<(ShapeValue, ShapeValue)>, r: Rect) -> (f32, f32) {
+    center
+        .map(|(x, y)| (r.x + x.resolve(r.width), r.y + y.resolve(r.height)))
+        .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5))
+}
+
 /// CSS Masking L1 §9 — bounding-box rect for a `clip-path` shape relative to
-/// the element's border-box `r`. Phase 0: non-rect shapes use their bounding
-/// box as an approximation; full polygon masking is deferred.
+/// the element's border-box `r`. Для `inset(...)` это точное представление;
+/// для circle/ellipse/polygon — bounding box (используется fallback-путями;
+/// точная форма идёт через `clip_path_to_shape` → `PushClipPath`, BUG-140).
 fn clip_path_to_rect(clip: &ClipPath, r: Rect) -> Rect {
-    match clip {
-        ClipPath::Inset(sides) => {
+    match clip_path_to_shape(clip, r) {
+        Some(shape) => shape.bounding_rect(),
+        None => {
+            let ClipPath::Inset(sides) = clip else { return r };
+            let rs = |v: &ShapeValue, basis: f32| v.resolve(basis);
             let (top, right, bottom, left) = match sides.as_slice() {
-                [a]          => (*a, *a, *a, *a),
-                [tb, rl]     => (*tb, *rl, *tb, *rl),
-                [t, rl, b]   => (*t, *rl, *b, *rl),
-                [t, ri, b, l] => (*t, *ri, *b, *l),
-                _            => (0.0, 0.0, 0.0, 0.0),
+                [a] => (rs(a, r.height), rs(a, r.width), rs(a, r.height), rs(a, r.width)),
+                [tb, rl] => (rs(tb, r.height), rs(rl, r.width), rs(tb, r.height), rs(rl, r.width)),
+                [t, rl, b] => (rs(t, r.height), rs(rl, r.width), rs(b, r.height), rs(rl, r.width)),
+                [t, ri, b, l] => (rs(t, r.height), rs(ri, r.width), rs(b, r.height), rs(l, r.width)),
+                _ => (0.0, 0.0, 0.0, 0.0),
             };
             Rect::new(
                 r.x + left,
@@ -1804,33 +1911,41 @@ fn clip_path_to_rect(clip: &ClipPath, r: Rect) -> Rect {
                 (r.height - top - bottom).max(0.0),
             )
         }
+    }
+}
+
+/// BUG-140: резолвит `clip-path` в точную форму в page-координатах
+/// (пространство до transform элемента) относительно border-box `r`.
+/// `None` для `inset(...)` — он точно представим прямоугольником и эмитится
+/// как `PushClipRect` (см. `clip_path_to_rect`). Базисы процентов —
+/// CSS Shapes L1 §5: x/width, y/height, радиус circle — `sqrt(w²+h²)/√2`.
+fn clip_path_to_shape(clip: &ClipPath, r: Rect) -> Option<ResolvedClipShape> {
+    match clip {
+        ClipPath::Inset(_) => None,
         ClipPath::Circle { radius, center } => {
-            let (cx, cy) = center
-                .map(|(x, y)| (r.x + x, r.y + y))
-                .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5));
-            Rect::new(cx - radius, cy - radius, 2.0 * radius, 2.0 * radius)
+            let (cx, cy) = resolve_shape_center(*center, r);
+            let diag = ((r.width * r.width + r.height * r.height) * 0.5).sqrt();
+            Some(ResolvedClipShape::Circle { cx, cy, r: radius.resolve(diag) })
         }
         ClipPath::Ellipse { rx, ry, center } => {
-            let (cx, cy) = center
-                .map(|(x, y)| (r.x + x, r.y + y))
-                .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5));
-            Rect::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
+            let (cx, cy) = resolve_shape_center(*center, r);
+            Some(ResolvedClipShape::Ellipse {
+                cx,
+                cy,
+                rx: rx.resolve(r.width),
+                ry: ry.resolve(r.height),
+            })
         }
         ClipPath::Polygon(vertices) => {
             if vertices.is_empty() {
-                return r;
+                return None;
             }
-            let mut mn_x = f32::MAX;
-            let mut mn_y = f32::MAX;
-            let mut mx_x = f32::MIN;
-            let mut mx_y = f32::MIN;
-            for (vx, vy) in vertices {
-                mn_x = mn_x.min(r.x + vx);
-                mn_y = mn_y.min(r.y + vy);
-                mx_x = mx_x.max(r.x + vx);
-                mx_y = mx_y.max(r.y + vy);
-            }
-            Rect::new(mn_x, mn_y, (mx_x - mn_x).max(0.0), (mx_y - mn_y).max(0.0))
+            Some(ResolvedClipShape::Polygon(
+                vertices
+                    .iter()
+                    .map(|(x, y)| (r.x + x.resolve(r.width), r.y + y.resolve(r.height)))
+                    .collect(),
+            ))
         }
     }
 }
@@ -2162,9 +2277,11 @@ struct BoxLayerOps {
 ///   в viewport-координатах, pivot = b.rect.origin + transform_origin.
 ///
 /// Порядок Push-команд (для child compositor-а смысла не несёт, но
-/// детерминирован для тестируемости): Clip → Blend → Opacity → Transform.
-/// Pop — в обратном (Transform → Opacity → Blend → Clip). Transform пушится
-/// последним, чтобы преобразовывать всё содержимое SC (включая собственные
+/// детерминирован для тестируемости): Blend → Opacity → Transform →
+/// ClipPath → BackdropFilter → Filter. Pop — в обратном порядке. Transform
+/// пушится до clip-path: клип задан в локальной системе элемента и
+/// переносится его transform-ом (CSS Masking L1 §9, BUG-140), при этом
+/// transform преобразует всё содержимое SC (включая собственные
 /// background/border бокса, эмитимые в `root_bg`).
 fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps {
     let mut pre = Vec::new();
@@ -2175,14 +2292,6 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         return BoxLayerOps { pre, post, overflow_pre, overflow_post };
     }
     let s = &b.style;
-
-    // CSS Masking L1 §9: clip-path is the outermost clip — applied before all
-    // other layer effects so it masks the final painted output of the element.
-    if let Some(clip) = &s.clip_path {
-        let cr = clip_path_to_rect(clip, b.rect);
-        pre.push(DisplayCommand::PushClipRect { rect: cr });
-        post.push(DisplayCommand::PopClip);
-    }
 
     // CSS Overflow L3 §3.2: overflow clip to padding-box edge; unconstrained
     // axis uses a BIG sentinel so the GPU scissor doesn't cut off content in
@@ -2270,6 +2379,19 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     if let Some(matrix) = transform {
         pre.push(DisplayCommand::PushTransform { matrix });
         post.push(DisplayCommand::PopTransform);
+    }
+    // CSS Masking L1 §9 + BUG-140: clip-path задан в локальной системе
+    // элемента и переносится его transform-ом — эмитится ВНУТРИ
+    // PushTransform, но снаружи filter/backdrop-filter (клип применяется к
+    // отфильтрованному выводу, CSS Filter Effects L1 §4).
+    if let Some(clip) = &s.clip_path {
+        match clip_path_to_shape(clip, b.rect) {
+            Some(shape) => pre.push(DisplayCommand::PushClipPath { shape }),
+            None => pre.push(DisplayCommand::PushClipRect {
+                rect: clip_path_to_rect(clip, b.rect),
+            }),
+        }
+        post.push(DisplayCommand::PopClip);
     }
     // backdrop-filter: outermost SC — captures parent content, filters it, then
     // composites element on top. Must wrap PushFilter so the element's own `filter`
@@ -4433,14 +4555,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
             // Emitted outermost so the mask applies to the fully composited element.
             let has_mask = emit_push_mask(out, b);
-            // CSS Masking L1 §9: clip-path clips the fully composited element.
-            let has_clip_path = if let Some(clip) = &b.style.clip_path {
-                let cr = clip_path_to_rect(clip, b.rect);
-                out.push(DisplayCommand::PushClipRect { rect: cr });
-                true
-            } else {
-                false
-            };
+            // CSS Masking L1 §9: clip-path clips the fully composited element;
+            // эмитится ниже — ВНУТРИ PushTransform (BUG-140).
+            let has_clip_path = b.style.clip_path.is_some();
             // CSS Compositing & Blending L1 §5: mix-blend-mode wraps opacity so
             // the element (faded by its own opacity) blends against the backdrop
             // (order Clip → Blend → Opacity, mirroring `box_layer_ops`).
@@ -4461,6 +4578,17 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             let transform = forward_box_transform(b);
             if let Some(matrix) = transform {
                 out.push(DisplayCommand::PushTransform { matrix });
+            }
+            // CSS Masking L1 §9 + BUG-140: clip-path задан в локальной системе
+            // элемента и переносится его transform-ом — эмитится внутри
+            // PushTransform, снаружи filter/backdrop-filter.
+            if let Some(clip) = &b.style.clip_path {
+                match clip_path_to_shape(clip, b.rect) {
+                    Some(shape) => out.push(DisplayCommand::PushClipPath { shape }),
+                    None => out.push(DisplayCommand::PushClipRect {
+                        rect: clip_path_to_rect(clip, b.rect),
+                    }),
+                }
             }
             // CSS Filter Effects L1 §6.2 — `backdrop-filter` filters the content
             // already painted *behind* the element, clipped to its border box,
@@ -4698,6 +4826,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             if has_backdrop {
                 out.push(DisplayCommand::PopBackdropFilter);
             }
+            if has_clip_path {
+                out.push(DisplayCommand::PopClip);
+            }
             if transform.is_some() {
                 out.push(DisplayCommand::PopTransform);
             }
@@ -4706,9 +4837,6 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             }
             if has_blend {
                 out.push(DisplayCommand::PopBlendMode);
-            }
-            if has_clip_path {
-                out.push(DisplayCommand::PopClip);
             }
             if has_mask {
                 out.push(DisplayCommand::PopMask);
@@ -6735,6 +6863,7 @@ mod tests {
                 DisplayCommand::DrawText { .. } => "DrawText",
                 DisplayCommand::PushClipRect { .. } => "PushClipRect",
                 DisplayCommand::PushClipRoundedRect { .. } => "PushClipRoundedRect",
+                DisplayCommand::PushClipPath { .. } => "PushClipPath",
                 DisplayCommand::PopClip => "PopClip",
                 DisplayCommand::PushOpacity { .. } => "PushOpacity",
                 DisplayCommand::PopOpacity => "PopOpacity",
@@ -9533,9 +9662,9 @@ mod tests {
     #[test]
     fn clip_path_inset_1() {
         use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(10.0, 20.0, 100.0, 80.0);
-        let clip = ClipPath::Inset(vec![5.0]);
+        let clip = ClipPath::Inset(vec![ShapeValue::Px(5.0)]);
         let cr = clip_path_to_rect(&clip, r);
         assert_eq!(cr, Rect::new(15.0, 25.0, 90.0, 70.0));
     }
@@ -9543,31 +9672,76 @@ mod tests {
     #[test]
     fn clip_path_inset_4() {
         use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(0.0, 0.0, 200.0, 100.0);
         // top=10 right=20 bottom=30 left=40
-        let clip = ClipPath::Inset(vec![10.0, 20.0, 30.0, 40.0]);
+        let clip = ClipPath::Inset(vec![
+            ShapeValue::Px(10.0),
+            ShapeValue::Px(20.0),
+            ShapeValue::Px(30.0),
+            ShapeValue::Px(40.0),
+        ]);
         let cr = clip_path_to_rect(&clip, r);
         assert_eq!(cr, Rect::new(40.0, 10.0, 140.0, 60.0));
     }
 
+    /// BUG-140: проценты inset — top/bottom от height, left/right от width.
+    #[test]
+    fn clip_path_inset_percent() {
+        use super::clip_path_to_rect;
+        use lumen_layout::{ClipPath, ShapeValue};
+        let r = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let clip = ClipPath::Inset(vec![ShapeValue::Pct(10.0)]);
+        let cr = clip_path_to_rect(&clip, r);
+        // top/bottom = 10% от 100 = 10; left/right = 10% от 200 = 20
+        assert_eq!(cr, Rect::new(20.0, 10.0, 160.0, 80.0));
+    }
+
     #[test]
     fn clip_path_circle_default_center() {
-        use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use super::{clip_path_to_rect, clip_path_to_shape, ResolvedClipShape};
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(0.0, 0.0, 100.0, 60.0);
-        let clip = ClipPath::Circle { radius: 25.0, center: None };
+        let clip = ClipPath::Circle { radius: ShapeValue::Px(25.0), center: None };
         let cr = clip_path_to_rect(&clip, r);
         // center = (50, 30); bounding box = (25, 5, 50, 50)
         assert_eq!(cr, Rect::new(25.0, 5.0, 50.0, 50.0));
+        let shape = clip_path_to_shape(&clip, r);
+        assert_eq!(shape, Some(ResolvedClipShape::Circle { cx: 50.0, cy: 30.0, r: 25.0 }));
+    }
+
+    /// BUG-140 (TEST-109 c0): `circle(40% at 50% 50%)` — радиус от
+    /// sqrt(w²+h²)/√2, центр от width/height.
+    #[test]
+    fn clip_path_circle_percent_radius() {
+        use super::{clip_path_to_shape, ResolvedClipShape};
+        use lumen_layout::{ClipPath, ShapeValue};
+        let r = Rect::new(100.0, 200.0, 220.0, 220.0);
+        let clip = ClipPath::Circle {
+            radius: ShapeValue::Pct(40.0),
+            center: Some((ShapeValue::Pct(50.0), ShapeValue::Pct(50.0))),
+        };
+        match clip_path_to_shape(&clip, r) {
+            Some(ResolvedClipShape::Circle { cx, cy, r: rad }) => {
+                assert!((cx - 210.0).abs() < 0.01);
+                assert!((cy - 310.0).abs() < 0.01);
+                // sqrt((220² + 220²)/2) = 220 → 40% = 88
+                assert!((rad - 88.0).abs() < 0.01, "radius {rad}");
+            }
+            other => panic!("expected Circle, got {other:?}"),
+        }
     }
 
     #[test]
     fn clip_path_ellipse_explicit_center() {
         use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(10.0, 10.0, 200.0, 100.0);
-        let clip = ClipPath::Ellipse { rx: 40.0, ry: 20.0, center: Some((100.0, 50.0)) };
+        let clip = ClipPath::Ellipse {
+            rx: ShapeValue::Px(40.0),
+            ry: ShapeValue::Px(20.0),
+            center: Some((ShapeValue::Px(100.0), ShapeValue::Px(50.0))),
+        };
         let cr = clip_path_to_rect(&clip, r);
         // cx = 10+100=110, cy = 10+50=60
         assert_eq!(cr, Rect::new(70.0, 40.0, 80.0, 40.0));
@@ -9575,13 +9749,27 @@ mod tests {
 
     #[test]
     fn clip_path_polygon_bounding_box() {
-        use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use super::{clip_path_to_rect, clip_path_to_shape, ResolvedClipShape};
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(0.0, 0.0, 200.0, 200.0);
         // triangle: (100,0) (200,200) (0,200)
-        let clip = ClipPath::Polygon(vec![(100.0, 0.0), (200.0, 200.0), (0.0, 200.0)]);
+        let clip = ClipPath::Polygon(vec![
+            (ShapeValue::Px(100.0), ShapeValue::Px(0.0)),
+            (ShapeValue::Px(200.0), ShapeValue::Px(200.0)),
+            (ShapeValue::Px(0.0), ShapeValue::Px(200.0)),
+        ]);
         let cr = clip_path_to_rect(&clip, r);
         assert_eq!(cr, Rect::new(0.0, 0.0, 200.0, 200.0));
+        // BUG-140 (TEST-109 c2): точная форма — полигон, не bbox.
+        let shape = clip_path_to_shape(&clip, r);
+        assert_eq!(
+            shape,
+            Some(ResolvedClipShape::Polygon(vec![
+                (100.0, 0.0),
+                (200.0, 200.0),
+                (0.0, 200.0)
+            ]))
+        );
     }
 
     #[test]
@@ -9601,6 +9789,38 @@ mod tests {
             .filter(|c| matches!(c, DisplayCommand::PopClip))
             .count();
         assert_eq!(push_count, pop_count, "Push/Pop должны быть сбалансированы");
+    }
+
+    /// BUG-140 (TEST-109 c0/c1): clip-path эмитится ВНУТРИ PushTransform —
+    /// клип задан в локальной системе элемента и переносится его transform-ом.
+    #[test]
+    fn clip_path_emitted_inside_transform() {
+        let dl = build(
+            "<div></div>",
+            "div { width:100px; height:50px; transform:rotate(25deg); \
+             clip-path:circle(40% at 50% 50%); background:red; }",
+        );
+        let t_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushTransform { .. }))
+            .expect("PushTransform must be emitted");
+        let c_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushClipPath { .. }))
+            .expect("PushClipPath must be emitted (percent circle parsed)");
+        assert!(
+            t_idx < c_idx,
+            "PushTransform ({t_idx}) должен предшествовать PushClipPath ({c_idx})"
+        );
+        let pop_t = dl
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::PopTransform))
+            .expect("PopTransform");
+        let pop_c = dl
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::PopClip))
+            .expect("PopClip");
+        assert!(pop_c < pop_t, "PopClip ({pop_c}) должен закрыться до PopTransform ({pop_t})");
     }
 
     // ── emit_column_rules ──────────────────────────────────────────────────

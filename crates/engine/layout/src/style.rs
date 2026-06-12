@@ -4287,26 +4287,60 @@ impl AlignValue {
     }
 }
 
+/// CSS Masking L1 §3.5 — `<length-percentage>` значение координаты/размера
+/// basic-shape для `clip-path`. Проценты резолвятся на этапе paint
+/// относительно reference box (border-box элемента): горизонтальные — по
+/// width, вертикальные — по height, радиус `circle()` — по
+/// `sqrt(w²+h²)/√2` (CSS Shapes L1 §5.1, BUG-140).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeValue {
+    /// Абсолютное значение в px (em/rem уже приведены к px при парсинге).
+    Px(f32),
+    /// Процент соответствующего базиса reference box (0–100).
+    Pct(f32),
+}
+
+impl ShapeValue {
+    /// Резолвит значение в px. `basis` — размер reference box по
+    /// соответствующей оси (px); для `Px` игнорируется.
+    pub fn resolve(self, basis: f32) -> f32 {
+        match self {
+            Self::Px(v) => v,
+            Self::Pct(p) => p / 100.0 * basis,
+        }
+    }
+}
+
 /// CSS Masking L1 §3.5 — basic-shapes для `clip-path`. Phase 0
 /// поддерживает: `inset(...)`, `circle(...)`, `ellipse(...)`,
 /// `polygon(...)`. URL / `path()` / `none` отложены.
+/// Координаты — `ShapeValue` (px или %), проценты резолвятся по
+/// border-box на этапе paint (BUG-140: `circle(40% at 50% 50%)` раньше
+/// молча отбрасывался целиком).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipPath {
-    /// `inset(top right bottom left)` — 1..=4 length-значения.
-    Inset(Vec<f32>),
+    /// `inset(top right bottom left)` — 1..=4 length-percentage значения
+    /// (top/bottom — % от height, left/right — % от width).
+    Inset(Vec<ShapeValue>),
     /// `circle(radius at cx cy)` — radius и center (опц.).
     Circle {
-        radius: f32,
-        center: Option<(f32, f32)>,
+        /// Радиус: % резолвится по `sqrt(w²+h²)/√2`.
+        radius: ShapeValue,
+        /// Центр (cx — % от width, cy — % от height); `None` = 50% 50%.
+        center: Option<(ShapeValue, ShapeValue)>,
     },
-    /// `ellipse(rx ry at cx cy)`.
+    /// `ellipse(rx ry at cx cy)` — rx — % от width, ry — % от height.
     Ellipse {
-        rx: f32,
-        ry: f32,
-        center: Option<(f32, f32)>,
+        /// Горизонтальный радиус.
+        rx: ShapeValue,
+        /// Вертикальный радиус.
+        ry: ShapeValue,
+        /// Центр; `None` = 50% 50%.
+        center: Option<(ShapeValue, ShapeValue)>,
     },
-    /// `polygon(x1 y1, x2 y2, ...)` — список вершин.
-    Polygon(Vec<(f32, f32)>),
+    /// `polygon(x1 y1, x2 y2, ...)` — список вершин (x — % от width,
+    /// y — % от height).
+    Polygon(Vec<(ShapeValue, ShapeValue)>),
 }
 
 /// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
@@ -14409,6 +14443,16 @@ fn parse_length_px(s: &str) -> Option<f32> {
     s.parse::<f32>().ok()
 }
 
+/// Распарсить `<length-percentage>` координату basic-shape: `%` →
+/// `ShapeValue::Pct`, остальное через `parse_length_px` → `ShapeValue::Px`.
+fn parse_shape_value(s: &str) -> Option<ShapeValue> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix('%') {
+        return num.trim().parse::<f32>().ok().map(ShapeValue::Pct);
+    }
+    parse_length_px(s).map(ShapeValue::Px)
+}
+
 /// Парсит `<basic-shape>` для `clip-path` (CSS Masking L1 §3.5).
 /// Поддерживает: `inset(t r b l)`, `circle(r at cx cy)`,
 /// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`.
@@ -14423,9 +14467,9 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
     let inner = s[open + 1..close].trim();
     match func.as_str() {
         "inset" => {
-            let parts: Vec<f32> = inner
+            let parts: Vec<ShapeValue> = inner
                 .split_whitespace()
-                .filter_map(parse_length_px)
+                .filter_map(parse_shape_value)
                 .collect();
             if parts.is_empty() {
                 None
@@ -14440,7 +14484,7 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             } else {
                 (inner, None)
             };
-            let radius = parse_length_px(radius_part.trim())?;
+            let radius = parse_shape_value(radius_part.trim())?;
             let center = at_part.and_then(parse_at_pair);
             Some(ClipPath::Circle { radius, center })
         }
@@ -14450,9 +14494,9 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             } else {
                 (inner, None)
             };
-            let radii: Vec<f32> = radii_part
+            let radii: Vec<ShapeValue> = radii_part
                 .split_whitespace()
-                .filter_map(parse_length_px)
+                .filter_map(parse_shape_value)
                 .collect();
             if radii.len() < 2 {
                 return None;
@@ -14467,9 +14511,9 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
         "polygon" => {
             let mut vertices = Vec::new();
             for pair in inner.split(',') {
-                let coords: Vec<f32> = pair
+                let coords: Vec<ShapeValue> = pair
                     .split_whitespace()
-                    .filter_map(parse_length_px)
+                    .filter_map(parse_shape_value)
                     .collect();
                 if coords.len() >= 2 {
                     vertices.push((coords[0], coords[1]));
@@ -14485,8 +14529,8 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
     }
 }
 
-fn parse_at_pair(s: &str) -> Option<(f32, f32)> {
-    let parts: Vec<f32> = s.split_whitespace().filter_map(parse_length_px).collect();
+fn parse_at_pair(s: &str) -> Option<(ShapeValue, ShapeValue)> {
+    let parts: Vec<ShapeValue> = s.split_whitespace().filter_map(parse_shape_value).collect();
     if parts.len() >= 2 {
         Some((parts[0], parts[1]))
     } else {
