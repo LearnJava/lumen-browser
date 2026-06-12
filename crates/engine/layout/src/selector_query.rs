@@ -10,10 +10,11 @@ use std::collections::HashMap;
 
 use lumen_css_parser::{parse_selector_list, ComplexSelector};
 use lumen_dom::{Document, NodeId};
+use lumen_core::ColorSpace;
 
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{
-    matches_complex, AlignValue, BorderStyle, BoxSizing, ClearSide, Color, ColorSpace, CssColor,
+    matches_complex, AlignValue, BorderStyle, BoxSizing, ClearSide, Color, CssColor,
     Cursor, Direction, Display, FilterFn, FloatSide, FontStretch, FontStyle, FontWeight,
     FontVariant, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow, OutlineColor,
     OutlineStyle, PointerEvents, Position, TextAlign, TextDecorationLine, TextDecorationStyle,

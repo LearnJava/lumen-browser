@@ -21,6 +21,7 @@ use crate::rule_index::RuleIndex;
 use crate::scroll_timeline::ScrollAxis;
 
 use lumen_core::geom::Size;
+use lumen_core::ColorSpace;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
     Declaration, DirArg, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, SimpleSelector, Specificity,
@@ -731,14 +732,6 @@ impl Color {
 }
 
 /// CSS Color L4 §10 — цветовое пространство для wide-gamut значений.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ColorSpace {
-    #[default]
-    Srgb,
-    DisplayP3,
-    Rec2020,
-}
-
 /// Wide-gamut цвет с float-каналами [0..1 для in-gamut, за пределами — out-of-gamut].
 /// Используется для `color(display-p3 …)`, `color(rec2020 …)`, `color(srgb …)`.
 #[derive(Debug, Clone, Copy, PartialEq)]

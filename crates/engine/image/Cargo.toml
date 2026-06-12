@@ -14,7 +14,6 @@ avif = ["dep:image"]
 
 [dependencies]
 lumen-core.workspace = true
-lumen-layout.workspace = true
 zune-jpeg = "0.5"
 zune-png = "0.5"
 zune-core = "0.5"

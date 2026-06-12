@@ -1748,6 +1748,7 @@ name = "lumen-canvas"
 version = "0.0.1"
 dependencies = [
  "lumen-core",
+ "lumen-layout",
 ]
 
 [[package]]

@@ -24,7 +24,7 @@ pub use color::CanvasColor;
 pub use path::{PathCommand, PathSegment};
 pub use path2d::Path2dData;
 pub use fp_noise::CanvasNoiseGenerator;
-use lumen_layout::style::ColorSpace;
+use lumen_core::ColorSpace;
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 

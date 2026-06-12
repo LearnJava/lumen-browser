@@ -12,6 +12,8 @@
 //! Не поддерживается (Phase 2+): flex, grid, float, absolute positioning,
 //! font-weight/style на уровне inline.
 
+pub use lumen_core::ColorSpace;
+
 pub mod anchor;
 pub mod animation;
 pub mod box_tree;
@@ -111,7 +113,7 @@ pub use style::{
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderCollapse, BorderStyle,
-    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat, ColorSpace,
+    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     ClearSide, ContainFlags, ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,

@@ -329,13 +329,13 @@ pub struct Image {
 impl Image {
     /// Детектирует цветовое пространство изображения из ICC профиля или сигнатуры изображения.
     ///
-    /// Возвращает `lumen_layout::style::ColorSpace::Srgb` если профиль отсутствует или невалиден.
+    /// Возвращает `ColorSpace::Srgb` если профиль отсутствует или невалиден.
     /// Для AVIF: в Phase 1 будет использовать `libavif` binding для извлечения ICC профиля.
-    pub fn detect_color_space(&self) -> lumen_layout::style::ColorSpace {
+    pub fn detect_color_space(&self) -> lumen_core::ColorSpace {
         if let Some(ref profile) = self.icc_profile {
-            lumen_paint::detect_color_space_from_icc(&profile.data)
+            lumen_core::detect_color_space_from_icc(&profile.data)
         } else {
-            lumen_layout::style::ColorSpace::Srgb
+            lumen_core::ColorSpace::Srgb
         }
     }
 
@@ -379,15 +379,15 @@ impl Image {
 /// Converts RGBA8 pixels from Display P3 / Rec2020 to sRGB for standard display.
 /// Pixels are expected in RGBA8 format (4 bytes per pixel).
 /// Phase 2: Implements pixel-level conversion using color space transformation matrices.
-pub fn apply_tone_mapping(color_space: lumen_layout::style::ColorSpace, pixel_data: &mut [u8]) {
+pub fn apply_tone_mapping(color_space: lumen_core::ColorSpace, pixel_data: &mut [u8]) {
     match color_space {
-        lumen_layout::style::ColorSpace::Srgb => {
+        lumen_core::ColorSpace::Srgb => {
             // No conversion needed for sRGB
         }
-        lumen_layout::style::ColorSpace::DisplayP3 => {
+        lumen_core::ColorSpace::DisplayP3 => {
             apply_p3_to_srgb(pixel_data);
         }
-        lumen_layout::style::ColorSpace::Rec2020 => {
+        lumen_core::ColorSpace::Rec2020 => {
             apply_rec2020_to_srgb(pixel_data);
         }
     }
@@ -1028,7 +1028,7 @@ mod tests {
         };
         assert_eq!(
             img.detect_color_space(),
-            lumen_layout::style::ColorSpace::Srgb,
+            lumen_core::ColorSpace::Srgb,
             "Image without ICC profile should default to sRGB"
         );
     }
@@ -1051,7 +1051,7 @@ mod tests {
         };
         assert_eq!(
             img.detect_color_space(),
-            lumen_layout::style::ColorSpace::Srgb,
+            lumen_core::ColorSpace::Srgb,
             "sRGB profile should be detected correctly"
         );
     }
@@ -1081,7 +1081,7 @@ mod tests {
         };
         assert_eq!(
             img.detect_color_space(),
-            lumen_layout::style::ColorSpace::DisplayP3,
+            lumen_core::ColorSpace::DisplayP3,
             "Display P3 profile should be detected correctly"
         );
     }
@@ -1090,14 +1090,14 @@ mod tests {
     fn tone_mapping_srgb_no_change() {
         let mut pixels = vec![255, 128, 64, 255, 0, 0, 0, 255, 255, 255, 255, 255];
         let original = pixels.clone();
-        apply_tone_mapping(lumen_layout::style::ColorSpace::Srgb, &mut pixels);
+        apply_tone_mapping(lumen_core::ColorSpace::Srgb, &mut pixels);
         assert_eq!(pixels, original);
     }
 
     #[test]
     fn tone_mapping_p3_converts_pixels() {
         let mut pixels = vec![255, 0, 0, 255];
-        apply_tone_mapping(lumen_layout::style::ColorSpace::DisplayP3, &mut pixels);
+        apply_tone_mapping(lumen_core::ColorSpace::DisplayP3, &mut pixels);
         assert!(pixels[0] > 0, "P3 red should map to non-zero sRGB red");
         assert_eq!(pixels[3], 255, "Alpha unchanged");
     }
@@ -1105,7 +1105,7 @@ mod tests {
     #[test]
     fn tone_mapping_rec2020_converts_pixels() {
         let mut pixels = vec![255, 0, 0, 255];
-        apply_tone_mapping(lumen_layout::style::ColorSpace::Rec2020, &mut pixels);
+        apply_tone_mapping(lumen_core::ColorSpace::Rec2020, &mut pixels);
         assert!(pixels[0] > 0, "Rec2020 red should map to non-zero sRGB red");
         assert_eq!(pixels[3], 255, "Alpha unchanged");
     }
@@ -1113,7 +1113,7 @@ mod tests {
     #[test]
     fn tone_mapping_preserves_alpha() {
         let mut pixels = vec![255, 128, 64, 100, 200, 150, 50, 0];
-        apply_tone_mapping(lumen_layout::style::ColorSpace::DisplayP3, &mut pixels);
+        apply_tone_mapping(lumen_core::ColorSpace::DisplayP3, &mut pixels);
         assert_eq!(pixels[3], 100, "First alpha preserved");
         assert_eq!(pixels[7], 0, "Second alpha preserved");
     }
@@ -1121,7 +1121,7 @@ mod tests {
     #[test]
     fn tone_mapping_black_stays_black() {
         let mut pixels = vec![0, 0, 0, 255];
-        apply_tone_mapping(lumen_layout::style::ColorSpace::DisplayP3, &mut pixels);
+        apply_tone_mapping(lumen_core::ColorSpace::DisplayP3, &mut pixels);
         assert_eq!(pixels[0], 0, "Black R");
         assert_eq!(pixels[1], 0, "Black G");
         assert_eq!(pixels[2], 0, "Black B");
@@ -1130,7 +1130,7 @@ mod tests {
     #[test]
     fn tone_mapping_white_stays_white() {
         let mut pixels = vec![255, 255, 255, 255];
-        apply_tone_mapping(lumen_layout::style::ColorSpace::DisplayP3, &mut pixels);
+        apply_tone_mapping(lumen_core::ColorSpace::DisplayP3, &mut pixels);
         assert_eq!(pixels[0], 255, "White R");
         assert_eq!(pixels[1], 255, "White G");
         assert_eq!(pixels[2], 255, "White B");
@@ -1139,7 +1139,7 @@ mod tests {
     #[test]
     fn tone_mapping_multiple_pixels() {
         let mut pixels = vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255];
-        apply_tone_mapping(lumen_layout::style::ColorSpace::Rec2020, &mut pixels);
+        apply_tone_mapping(lumen_core::ColorSpace::Rec2020, &mut pixels);
         assert_eq!(pixels[3], 255);
         assert_eq!(pixels[7], 255);
         assert_eq!(pixels[11], 255);
