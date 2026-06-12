@@ -6,7 +6,7 @@
 
 ## In progress
 
-None. Last task: X-2 (see Recent below).
+H-1: AVIF image decoder — branch: p2-h1-avif-decoder
 
 ---
 
@@ -23,8 +23,8 @@ None. Last task: X-2 (see Recent below).
 
 | # | Задача | Размер | Крейты | После |
 |---|--------|--------|--------|-------|
-| X-1 | **Color management: ICC profiles** — sRGB/Display P3/Rec2020 colour space detection & tone mapping | M | `lumen-paint` | Canvas/img color management |
-| X-2 | **CSS Color L4 system colors** — Canvas/CanvasText/ButtonFace/… runtime resolution (p4-system-colors P4 CSS wiring awaits) | S | `lumen-layout` (system_color fn) | — |
+| H-1 | **AVIF image decoder** — AV1 video codec bitstream + Annex B container parsing; `crates/engine/image/` phase 0 (lossy only) | M | `lumen-image` | WebP/AVIF feature selection in `<picture>` |
+| H-2 | **Display P3/Rec2020 canvas/image tone-mapping** — extended ICC profile support for canvas `getImageData()` and `<img>` rendering | M | `lumen-paint` | HDR canvas + WebCodecs Phase 0 |
 
 
 ---
