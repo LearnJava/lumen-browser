@@ -1715,7 +1715,7 @@ impl FemtovgBackend {
             // PA-2: реальный Gaussian blur (GPU via filter_image) и colour-matrix
             // (CPU via flush+screenshot) через offscreen-слой.
             // Только Opacity — легкий путь через set_global_alpha без offscreen.
-            DisplayCommand::PushFilter { filters } => {
+            DisplayCommand::PushFilter { filters, bounds } => {
                 let needs_offscreen = filters
                     .iter()
                     .any(|f| !matches!(f, lumen_layout::FilterFn::Opacity(_)));
@@ -1725,9 +1725,20 @@ impl FemtovgBackend {
                     // Uses active_rt_image (maintained by switch_render_target) to
                     // correctly handle nesting with blend layers (PA-3).
                     let prev_rt = self.current_rt();
+
+                    // Compute offscreen layer size: use bounds if provided (box-shadow, text-shadow),
+                    // otherwise fallback to full viewport. Bounds are in CSS px, convert to device px.
+                    let (img_w, img_h) = if let Some(b) = bounds {
+                        let w = ((b.width * self.scale as f32).ceil() as i32).max(1) as usize;
+                        let h = ((b.height * self.scale as f32).ceil() as i32).max(1) as usize;
+                        (w, h)
+                    } else {
+                        (self.width as usize, self.height as usize)
+                    };
+
                     match self.canvas.create_image_empty(
-                        self.width as usize,
-                        self.height as usize,
+                        img_w,
+                        img_h,
                         femtovg::PixelFormat::Rgba8,
                         femtovg::ImageFlags::PREMULTIPLIED,
                     ) {
@@ -1736,7 +1747,7 @@ impl FemtovgBackend {
                             self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                             // Clear to transparent so content composites correctly.
                             self.canvas.clear_rect(
-                                0, 0, self.width, self.height,
+                                0, 0, img_w as i32, img_h as i32,
                                 femtovg::Color::rgba(0, 0, 0, 0),
                             );
                             self.filter_layer_stack.push(FilterLayerEntry {
