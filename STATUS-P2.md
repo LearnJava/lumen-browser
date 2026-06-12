@@ -6,11 +6,14 @@
 
 ## In progress
 
-**BUG-076 regression** — box-shadow blur regression (6.58% on TEST-15)  
-branch: `p2-bug076-box-shadow-regression`
+None — awaiting TEST-15 regression verification
 
-**Next step:** Track PushFilter bounds correctly (offscreen layer size == shadow bounds, not full viewport)  
-File: `crates/engine/paint/src/display_list.rs` + `femtovg_backend.rs`
+**Recently fixed:**
+- BUG-076 regression: bounds tracking in PushFilter
+  - Root cause: PA-2 offscreen layer created full-viewport-sized images for small shadows
+  - Solution: Added Option<Rect> bounds field to PushFilter, use to size offscreen layer
+  - Implementation: display_list.rs + femtovg_backend.rs
+  - Status: Code complete, 689 tests pass, clippy clean; pending visual verification on TEST-15
 
 ---
 
