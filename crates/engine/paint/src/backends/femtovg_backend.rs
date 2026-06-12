@@ -276,17 +276,24 @@ struct FilterLayerEntry {
     prev_render_target: femtovg::RenderTarget,
 }
 
-// ─── Opacity group layer support (BUG-133) ───────────────────────────────────
+// ─── Offscreen layer support (BUG-133 opacity, BUG-146 filter) ───────────────
 
-/// Image flags for the offscreen opacity group layer (BUG-133).
+/// Image flags for offscreen layers that are composited directly from their
+/// FBO on the GPU (opacity groups — BUG-133; filter layers and their blur
+/// destinations — BUG-146).
 ///
 /// `PREMULTIPLIED` — femtovg renders premultiplied RGBA into image render
 /// targets. `FLIP_Y` — the layer is an FBO (GL bottom-up rows); sampling it as
 /// `Paint::image` at composite time must flip Y back or the whole group
 /// renders upside-down. The CPU compositing paths (PA-2 colour-matrix, PA-3
-/// blend) get the flip for free from their screenshot→re-upload round-trip;
-/// this GPU-only composite does not.
-fn opacity_layer_image_flags() -> femtovg::ImageFlags {
+/// blend) get the flip for free from their screenshot→re-upload round-trip
+/// (`screenshot()` reverses rows); GPU-only composites do not. `filter_image`
+/// (Gaussian blur) ignores sampler flags entirely — its shader samples raw
+/// `fpos/extent` coords — so blur preserves memory orientation and the flag
+/// stays meaningful on the blur destination. Do NOT use these flags for images
+/// created from CPU pixel uploads (e.g. the backdrop-filter screenshot path):
+/// their memory is already top-down and FLIP_Y would flip them.
+fn offscreen_layer_image_flags() -> femtovg::ImageFlags {
     femtovg::ImageFlags::PREMULTIPLIED | femtovg::ImageFlags::FLIP_Y
 }
 
@@ -857,13 +864,22 @@ impl FemtovgBackend {
         // ── Step 1: GPU Gaussian blur (no CPU round-trip needed) ─────────────
         if has_blur {
             for f in &filters {
+                // BUG-146: the destination must carry FLIP_Y. `filter_image`
+                // preserves memory orientation (its shader ignores sampler
+                // flags), so the blurred FBO is still bottom-up like the source
+                // layer; the blur-only chain composites it directly on the GPU
+                // with no screenshot round-trip to flip it. Without the flag
+                // blurred box-shadows rendered vertically mirrored (TEST-15
+                // 1.06% → 6.58%). The colour-matrix path after a blur is
+                // unaffected: `screenshot()` reads raw pixels and reverses
+                // rows regardless of flags.
                 if let lumen_layout::FilterFn::Blur(sigma) = f
                     && *sigma > 0.0
                     && let Ok(dst) = self.canvas.create_image_empty(
                         self.width as usize,
                         self.height as usize,
                         femtovg::PixelFormat::Rgba8,
-                        femtovg::ImageFlags::PREMULTIPLIED,
+                        offscreen_layer_image_flags(),
                     )
                 {
                     self.canvas.filter_image(
@@ -1070,6 +1086,10 @@ impl FemtovgBackend {
         for f in filters {
             if let lumen_layout::FilterFn::Blur(sigma) = f
                 && *sigma > 0.0 {
+                    // Deliberately NO FLIP_Y here (unlike BUG-146 in the
+                    // PushFilter path): the source is a CPU screenshot upload,
+                    // already top-down, and `filter_image` preserves memory
+                    // orientation — adding the flag would mirror the backdrop.
                     let Ok(blur_dst) = self.canvas.create_image_empty(
                         self.width as usize,
                         self.height as usize,
@@ -1691,7 +1711,7 @@ impl FemtovgBackend {
                     self.width as usize,
                     self.height as usize,
                     femtovg::PixelFormat::Rgba8,
-                    opacity_layer_image_flags(),
+                    offscreen_layer_image_flags(),
                 ) {
                     Ok(img_id) => {
                         // Redirect subtree draws into the transparent offscreen layer.
@@ -1846,11 +1866,16 @@ impl FemtovgBackend {
                     // (TEST-30 30.68%, TEST-103 49.59%).
                     let (img_w, img_h) = (self.width as usize, self.height as usize);
 
+                    // BUG-146: FLIP_Y so the rare direct GPU composite of this
+                    // layer (no blur, no colour-matrix — e.g. `blur(0px)`, or
+                    // blur-destination allocation failure) samples it upright.
+                    // The blur pass ignores the flag; the colour-matrix
+                    // screenshot round-trip flips rows regardless of it.
                     match self.canvas.create_image_empty(
                         img_w,
                         img_h,
                         femtovg::PixelFormat::Rgba8,
-                        femtovg::ImageFlags::PREMULTIPLIED,
+                        offscreen_layer_image_flags(),
                     ) {
                         Ok(img_id) => {
                             // Redirect draws into the offscreen image.
@@ -2273,14 +2298,16 @@ mod tests {
     use super::*;
     use lumen_layout::Length;
 
-    /// BUG-133: the opacity group layer is composited directly from its FBO on
-    /// the GPU (no screenshot→re-upload round-trip), so the image MUST carry
-    /// FLIP_Y — without it the whole group renders upside-down (TEST-102 went
-    /// 17% → 65% when this flag was missing). PREMULTIPLIED matches femtovg's
-    /// render-target pixel format; dropping it double-multiplies alpha.
+    /// BUG-133 / BUG-146: offscreen layers composited directly from their FBO
+    /// on the GPU (opacity groups, filter layers, blur destinations — no
+    /// screenshot→re-upload round-trip) MUST carry FLIP_Y — without it the
+    /// content renders upside-down (TEST-102 17% → 65% for opacity groups;
+    /// TEST-15 1.06% → 6.58% for blurred box-shadows). PREMULTIPLIED matches
+    /// femtovg's render-target pixel format; dropping it double-multiplies
+    /// alpha.
     #[test]
-    fn opacity_layer_flags_flip_y_and_premultiplied() {
-        let flags = opacity_layer_image_flags();
+    fn offscreen_layer_flags_flip_y_and_premultiplied() {
+        let flags = offscreen_layer_image_flags();
         assert!(flags.contains(femtovg::ImageFlags::FLIP_Y));
         assert!(flags.contains(femtovg::ImageFlags::PREMULTIPLIED));
     }

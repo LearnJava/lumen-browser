@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(пусто)_
+In progress: BUG-146 — регрессия TEST-15 box-shadow 1.06%→6.58%  branch: p3-bug146-test15-shadow
+Next step: окно регрессии сужено по results/*.json — b348b9f3 (00:59, 1.0578%) → cbe87ae4 (08:58, 6.5763%); кандидаты: H-2 Phase 4 tone-mapping в to_rgba8() (970adf32), X-1 color management, BUG-132 PushClipRoundedRect (5d644e15)
 
 ## Next
 
