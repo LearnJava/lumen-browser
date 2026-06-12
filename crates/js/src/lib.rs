@@ -590,10 +590,12 @@ impl QuickJsRuntime {
                 eprintln!("Permissions Policy bindings init failed: {}", e);
             }
 
-            // Install Web Codecs API stubs (W3C Web Codecs) — Phase 0: VideoDecoder/VideoEncoder/
-            // AudioDecoder/AudioEncoder constructors + state machine. isConfigSupported() → false.
-            if let Err(e) = web_codecs::install_web_codecs(&ctx) {
-                eprintln!("Web Codecs API init failed: {}", e);
+            // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
+            // Phase 0: VideoEncoder/Decoder + AudioEncoder/Decoder + EncodedVideoChunk/AudioChunk stubs.
+            // configure() rejects with NotSupportedError; no codec support in Phase 0.
+            // Phase 1 (future): FFmpeg or libav1 bindings for actual encoding/decoding.
+            if let Err(e) = web_codecs::install_webcodecs_bindings(&ctx) {
+                eprintln!("WebCodecs API init failed: {}", e);
             }
 
             // Install User-Agent Client Hints (W3C UA-CH §4–6) — after navigator shim.
@@ -958,6 +960,14 @@ impl QuickJsRuntime {
             // Phase 0: no GPU; all create* ops in-memory only; submit/draw/dispatch are no-ops.
             if let Err(e) = webgpu::install_webgpu_bindings(&ctx) {
                 eprintln!("WebGPU API init failed: {}", e);
+            }
+
+            // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
+            // Phase 0: VideoEncoder/Decoder + AudioEncoder/Decoder + EncodedVideoChunk/AudioChunk stubs.
+            // configure() rejects with NotSupportedError; no codec support in Phase 0.
+            // Phase 1 (future): FFmpeg or libav1 bindings for actual encoding/decoding.
+            if let Err(e) = web_codecs::install_webcodecs_bindings(&ctx) {
+                eprintln!("WebCodecs API init failed: {}", e);
             }
 
             // Install WebXR Device API (W3C WebXR Device API §5) — after DOM/navigator.

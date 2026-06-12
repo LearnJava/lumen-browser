@@ -6,7 +6,13 @@
 
 ## In progress
 
-(none — Phase 3 major items (H-2, RB-series) complete; awaiting Phase 4 task assignment)
+**WebCodecs API Phase 0** (web-codecs-phase0, p2-webcodecs-phase0 branch)
+- VideoEncoder / VideoDecoder / AudioEncoder / AudioDecoder stub classes  
+- EncodedVideoChunk / EncodedAudioChunk buffer types
+- VideoDecoderInit / VideoEncoderInit / AudioDecoderInit / AudioEncoderInit config objects
+- Error handling: NotSupportedError, TypeError, DOMException subclasses
+- JS shim + basic bindings
+- Entry point: `crates/js/src/webcodecs.rs`
 
 ---
 
