@@ -24,6 +24,7 @@ pub use color::CanvasColor;
 pub use path::{PathCommand, PathSegment};
 pub use path2d::Path2dData;
 pub use fp_noise::CanvasNoiseGenerator;
+use lumen_layout::style::ColorSpace;
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -560,6 +561,10 @@ pub struct Context2D {
     /// Optional per-session noise generator for canvas fingerprint randomization.
     /// Set by BrowserSession when creating a context; if set, getImageData() applies noise.
     noise_generator: Option<CanvasNoiseGenerator>,
+
+    /// Canvas color space: sRGB (default), Display P3, or Rec2020.
+    /// Used for getImageData() to identify the color space of pixel data.
+    color_space: ColorSpace,
 }
 
 impl Context2D {
@@ -592,6 +597,7 @@ impl Context2D {
             clip_mask: None,
             state_stack: Vec::new(),
             noise_generator: None,
+            color_space: ColorSpace::Srgb,
         }
     }
 
@@ -618,6 +624,7 @@ impl Context2D {
     ///
     /// `pixels` must be exactly `width * height * 4` bytes (RGBA8, row-major).
     /// If the length mismatches, the buffer is zero-filled instead.
+    /// Color space defaults to sRGB; use set_color_space() for wide-gamut.
     pub fn from_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Self {
         let expected = (width * height * 4) as usize;
         let mut ctx = Self::new(width, height);
@@ -631,6 +638,12 @@ impl Context2D {
     pub fn width(&self) -> u32 { self.width }
     /// Canvas height in device pixels.
     pub fn height(&self) -> u32 { self.height }
+
+    /// Canvas color space (sRGB, Display P3, or Rec2020).
+    pub fn color_space(&self) -> ColorSpace { self.color_space }
+
+    /// Set the canvas color space for wide-gamut image handling.
+    pub fn set_color_space(&mut self, space: ColorSpace) { self.color_space = space; }
 
     /// Raw RGBA8 pixel data (no noise applied).
     pub fn pixels(&self) -> &[u8] { &self.pixels }
@@ -1754,5 +1767,29 @@ mod tests {
         assert!(!ctx.path.is_empty());
         ctx.fill_style = CanvasColor::rgba(0, 128, 255, 255).into();
         ctx.fill(); // should not panic
+    }
+
+    #[test]
+    fn color_space_defaults_to_srgb() {
+        let ctx = Context2D::new(100, 100);
+        assert_eq!(ctx.color_space(), ColorSpace::Srgb);
+    }
+
+    #[test]
+    fn color_space_can_be_set() {
+        let mut ctx = Context2D::new(100, 100);
+        ctx.set_color_space(ColorSpace::DisplayP3);
+        assert_eq!(ctx.color_space(), ColorSpace::DisplayP3);
+        ctx.set_color_space(ColorSpace::Rec2020);
+        assert_eq!(ctx.color_space(), ColorSpace::Rec2020);
+    }
+
+    #[test]
+    fn color_space_preserved_in_from_pixels() {
+        let pixels = vec![255, 0, 0, 255];
+        let mut ctx = Context2D::from_pixels(1, 1, pixels);
+        assert_eq!(ctx.color_space(), ColorSpace::Srgb);
+        ctx.set_color_space(ColorSpace::DisplayP3);
+        assert_eq!(ctx.color_space(), ColorSpace::DisplayP3);
     }
 }

@@ -6,7 +6,9 @@
 
 ## In progress
 
-None. Last task: H-1 (see Recent below).
+**H-2 | Display P3/Rec2020 canvas/image tone-mapping**  
+Branch: `p2-h2-display-p3`  
+Next step: Research ICC profile extraction from AVIF/PNG images; design canvas `getImageData()` wide-gamut path
 
 ---
 
