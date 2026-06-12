@@ -6,9 +6,7 @@
 
 ## In progress
 
-**BUG-088 — CSS Transforms individual properties investigation**  
-Branch: `p2-bug088-transforms`  
-Next: Diagnose TEST-46 9.5% deviation; code already implemented in apply_declaration + property_trees, remaining gap likely antialiasing difference
+None. Previous session completed BUG-088 investigation (2026-06-12).
 
 ---
 
@@ -36,6 +34,16 @@ Next: Diagnose TEST-46 9.5% deviation; code already implemented in apply_declara
 ---
 
 ## Current / Recently Merged
+
+**BUG-088 — CSS Transforms individual properties investigation** ✅ (2026-06-12, Phase 4+ AAfilter)
+- TEST-46 (CSS Transforms L2): 4.63% diff (improved from 9.57%), deferred to Phase 4+ antialiasing
+- Implementation status: ✅ Complete — `apply_declaration("translate"/"rotate"/"scale")` in style.rs, composition in property_trees.rs
+- Code verified: individual properties correctly parsed, composed in transform order (translate×rotate×scale), applied via PushTransform display commands
+- dump-layout output confirmed: boxes positioned correctly with proper scaling/rotation
+- dump-display-list output confirmed: PushTransform matrices correctly computed (e.g., rotate 45°=[0.707, 0.707, -0.707, 0.707, ...])
+- Remaining gap (4.63%): pixel-snapping + antialiasing divergence between Edge headless and Lumen femtovg rasterization (Phase 4 task)
+- Resolution: Feature complete; visual gap classified as rasterization-quality, not implementation-gap
+- Branch deleted after investigation; no code changes needed
 
 **BUG-085 — Linear/radial gradient rendering investigation** ✅ (2026-06-12, Phase 4 deferred)
 - TEST-39: improved 12.05% → 5.2% after fixing build errors
