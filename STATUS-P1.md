@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**AA-5: Trusted Types API Phase 0**  branch: `p1-aa5-trusted-types`
+Next step: `window.trustedTypes` singleton + `createPolicy()` в `lumen-js` (JS-шим рядом с AbortSignal из AA-4)
 
 ---
 
