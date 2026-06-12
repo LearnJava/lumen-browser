@@ -16636,6 +16636,22 @@ pub fn system_color(name_lc: &str, dark: bool) -> Option<Color> {
         ("accentcolor", false) => rgb(0, 95, 204),
         ("accentcolor", true) => rgb(76, 156, 255),
         ("accentcolortext", false) | ("accentcolortext", true) => rgb(255, 255, 255),
+        // Legacy 3D effects (CSS Color 4 §11).
+        ("threedhighlight", false) => rgb(239, 239, 239),
+        ("threedhighlight", true) => rgb(97, 97, 97),
+        ("threedshadow", false) => rgb(112, 112, 112),
+        ("threedshadow", true) => rgb(58, 58, 60),
+        ("threedlightshadow", false) => rgb(220, 220, 220),
+        ("threedlightshadow", true) => rgb(124, 124, 124),
+        ("threeddarkshadow", false) => rgb(49, 49, 49),
+        ("threeddarkshadow", true) => rgb(30, 30, 30),
+        // Scrollbar (CSS Color 4 §11, deprecated).
+        ("scrollbar", false) => rgb(192, 192, 192),
+        ("scrollbar", true) => rgb(64, 64, 64),
+        ("scrollbartrack", false) => rgb(255, 255, 255),
+        ("scrollbartrack", true) => rgb(30, 30, 30),
+        ("scrollbarthumb", false) => rgb(192, 192, 192),
+        ("scrollbarthumb", true) => rgb(97, 97, 97),
         _ => return None,
     })
 }
@@ -23151,6 +23167,55 @@ mod tests {
     fn system_color_unknown_returns_none() {
         assert_eq!(system_color("notasystemcolor", false), None);
         assert_eq!(system_color("rebeccapurple", true), None);
+    }
+
+    #[test]
+    fn system_color_threedhighlight_differs_per_scheme() {
+        let light = system_color("threedhighlight", false).unwrap();
+        let dark = system_color("threedhighlight", true).unwrap();
+        assert_ne!(light, dark, "ThreeDHighlight must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_threedshadow_differs_per_scheme() {
+        let light = system_color("threedshadow", false).unwrap();
+        let dark = system_color("threedshadow", true).unwrap();
+        assert_ne!(light, dark, "ThreeDShadow must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_threedlightshadow_differs_per_scheme() {
+        let light = system_color("threedlightshadow", false).unwrap();
+        let dark = system_color("threedlightshadow", true).unwrap();
+        assert_ne!(light, dark, "ThreeDLightShadow must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_threeddarkshadow_differs_per_scheme() {
+        let light = system_color("threeddarkshadow", false).unwrap();
+        let dark = system_color("threeddarkshadow", true).unwrap();
+        assert_ne!(light, dark, "ThreeDDarkShadow must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_scrollbar_differs_per_scheme() {
+        let light = system_color("scrollbar", false).unwrap();
+        let dark = system_color("scrollbar", true).unwrap();
+        assert_ne!(light, dark, "Scrollbar must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_scrollbarthumb_differs_per_scheme() {
+        let light = system_color("scrollbarthumb", false).unwrap();
+        let dark = system_color("scrollbarthumb", true).unwrap();
+        assert_ne!(light, dark, "ScrollbarThumb must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_scrollbartrack_differs_per_scheme() {
+        let light = system_color("scrollbartrack", false).unwrap();
+        let dark = system_color("scrollbartrack", true).unwrap();
+        assert_ne!(light, dark, "ScrollbarTrack must differ between light and dark");
     }
 
     // ──────────── CSS Units ────────────
