@@ -6,10 +6,7 @@
 
 ## In progress
 
-**BUG-090 — -webkit-line-clamp text truncation**
-- Branch: `p2-bug090-webkit-line-clamp`
-- Next step: investigate TEST-48 diff, identify root cause in line wrapping logic
-- Status: starting investigation
+None currently assigned.
 
 ---
 
@@ -37,6 +34,13 @@
 ---
 
 ## Current / Recently Merged
+
+**BUG-090 — -webkit-line-clamp multi-line truncation** ✅ (2026-06-12, verified PASS)
+- TEST-48 (line-clamp): 0.26% diff, **PASS** (threshold 0.5%)
+- Root cause: `apply_line_clamp()` already functional since p1-line-clamp-layout merge (336a023d, 2026-05-27)
+- Investigation: dump-layout shows correct 1/2/3/4 line truncation per `-webkit-line-clamp` values
+- CSS Overflow L4 §3.2 compliance verified: line count limiting + ellipsis truncation working
+- No code changes required; was mislabeled as OPEN due to stale TEST reference (23.89% from older run)
 
 **BUG-101 — image-set() DPR selection / cross-fade() blend** ✅ (2026-06-12, resolved)
 - Root cause: shell hardcoded DPR=1.0 in display-list builder calls
