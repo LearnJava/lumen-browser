@@ -7,9 +7,11 @@
 ## In progress
 
 **BUG-085 — Linear/radial gradient rendering** branch: `p2-bug085-gradient-fix`
-- TEST-39: 12.05% deviation vs Edge (threshold 0.5%)
-- Root cause: stop interpolation or AA mismatch
-- Next step: analyze gradient rendering code in paint/display_list.rs; compare with Edge output
+- TEST-39: 12.05% → 5.2% deviation (improved after build fix)
+- Root cause: femtovg library lacks built-in repeating-gradient support
+- Analysis: `femtovg_backend.rs` uses `..` pattern to ignore `repeating: bool` flag
+- Repeating gradients render as non-repeating (clamp at bounds instead of tiling)
+- Solution deferred to Phase 4: requires custom shader or CPU rasterizer for tiling logic
 
 ---
 
