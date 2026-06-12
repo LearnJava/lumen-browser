@@ -55,7 +55,7 @@ use lumen_core::geom::Rect;
 use crate::backend::{RenderBackend, RenderError};
 use crate::blend_modes::mix_blend_rgba;
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
-use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, fit_image_rect};
+use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, ResolvedClipShape, fit_image_rect};
 use crate::gradient_math::{conic_sample_t, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 
@@ -247,6 +247,10 @@ pub struct FemtovgBackend {
     backdrop_filter_layer_stack: Vec<BackdropFilterLayerEntry>,
     /// Images from backdrop-filter layers queued for deletion after the next flush.
     backdrop_filter_pending_delete: Vec<femtovg::ImageId>,
+    /// Стек видов клипа (BUG-140): общий `PopClip` закрывает scissor-клипы
+    /// (`canvas.restore()`) и shape-клипы (композит offscreen-слоя через
+    /// путь формы) по-разному; вид определяется парным Push.
+    clip_stack: Vec<ClipEntry>,
     /// Currently active render target image. `None` means Screen.
     /// Updated by [`Self::switch_render_target`] whenever the RT changes.
     active_rt_image: Option<femtovg::ImageId>,
@@ -313,6 +317,100 @@ struct OpacityLayerEntry {
     alpha: f32,
     /// Render target active before PushOpacity — restored on PopOpacity.
     prev_render_target: femtovg::RenderTarget,
+}
+
+// ─── Clip-path shape clip support (BUG-140) ──────────────────────────────────
+
+/// Запись стека клипов: чем открыт ближайший незакрытый клип, чтобы общий
+/// `PopClip` знал, как его закрывать.
+enum ClipEntry {
+    /// Scissor-клип (`PushClipRect`/`PushClipRoundedRect`, либо fallback
+    /// `PushClipPath` при сбое аллокации слоя) — `PopClip` делает
+    /// `canvas.restore()`.
+    Scissor,
+    /// Shape-клип (`PushClipPath`): subtree рендерится в offscreen `image_id`;
+    /// `PopClip` композитит слой на `prev_render_target` одним
+    /// `fill_path`-вызовом по форме (антиалиасинг пути — бесплатно).
+    PathLayer {
+        /// Offscreen-слой с содержимым клип-группы (full-RT, FLIP_Y FBO).
+        image_id: femtovg::ImageId,
+        /// Форма клипа в page-координатах (до transform элемента).
+        shape: ResolvedClipShape,
+        /// Матрица канвы на момент Push (включая transform элемента):
+        /// применяется к точкам пути вручную при композите с identity-канвой,
+        /// чтобы не транслировать повторно сам слой (контент в слое уже
+        /// нарисован под этой матрицей).
+        transform: femtovg::Transform2D,
+        /// Render target, активный до PushClipPath.
+        prev_render_target: femtovg::RenderTarget,
+    },
+}
+
+/// Строит femtovg-путь формы клипа, применяя `t` к каждой точке вручную.
+/// Кубические Безье аффинно-инвариантны, поэтому circle/ellipse строятся
+/// 4 сегментами с каппой и трансформируются по контрольным точкам — под
+/// rotate/scale форма остаётся точной (круг под uniform-rotate — круг).
+fn clip_shape_path(shape: &ResolvedClipShape, t: &femtovg::Transform2D) -> femtovg::Path {
+    /// Коэффициент аппроксимации четверти окружности кубической Безье.
+    const KAPPA: f32 = 0.552_285;
+    let mut path = femtovg::Path::new();
+    match shape {
+        ResolvedClipShape::Circle { cx, cy, r } => {
+            ellipse_path(&mut path, *cx, *cy, *r, *r, t, KAPPA);
+        }
+        ResolvedClipShape::Ellipse { cx, cy, rx, ry } => {
+            ellipse_path(&mut path, *cx, *cy, *rx, *ry, t, KAPPA);
+        }
+        ResolvedClipShape::Polygon(verts) => {
+            let mut iter = verts.iter();
+            if let Some((x, y)) = iter.next() {
+                let (px, py) = t.transform_point(*x, *y);
+                path.move_to(px, py);
+                for (x, y) in iter {
+                    let (px, py) = t.transform_point(*x, *y);
+                    path.line_to(px, py);
+                }
+                path.close();
+            }
+        }
+    }
+    path
+}
+
+/// Добавляет в `path` эллипс (cx, cy, rx, ry) из 4 кубических Безье,
+/// трансформируя каждую опорную и контрольную точку через `t`.
+fn ellipse_path(
+    path: &mut femtovg::Path,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    t: &femtovg::Transform2D,
+    kappa: f32,
+) {
+    let kx = rx * kappa;
+    let ky = ry * kappa;
+    let p = |x: f32, y: f32| t.transform_point(x, y);
+    let (sx, sy) = p(cx + rx, cy);
+    path.move_to(sx, sy);
+    // Квадранты по часовой: (cx+rx,cy) → (cx,cy+ry) → (cx-rx,cy) → (cx,cy-ry).
+    let (c1x, c1y) = p(cx + rx, cy + ky);
+    let (c2x, c2y) = p(cx + kx, cy + ry);
+    let (ex, ey) = p(cx, cy + ry);
+    path.bezier_to(c1x, c1y, c2x, c2y, ex, ey);
+    let (c1x, c1y) = p(cx - kx, cy + ry);
+    let (c2x, c2y) = p(cx - rx, cy + ky);
+    let (ex, ey) = p(cx - rx, cy);
+    path.bezier_to(c1x, c1y, c2x, c2y, ex, ey);
+    let (c1x, c1y) = p(cx - rx, cy - ky);
+    let (c2x, c2y) = p(cx - kx, cy - ry);
+    let (ex, ey) = p(cx, cy - ry);
+    path.bezier_to(c1x, c1y, c2x, c2y, ex, ey);
+    let (c1x, c1y) = p(cx + kx, cy - ry);
+    let (c2x, c2y) = p(cx + rx, cy - ky);
+    let (ex, ey) = p(cx + rx, cy);
+    path.bezier_to(c1x, c1y, c2x, c2y, ex, ey);
+    path.close();
 }
 
 // ─── Blend layer support (PA-3) ──────────────────────────────────────────────
@@ -643,6 +741,7 @@ impl FemtovgBackend {
             blend_layer_pending_delete: Vec::new(),
             backdrop_filter_layer_stack: Vec::new(),
             backdrop_filter_pending_delete: Vec::new(),
+            clip_stack: Vec::new(),
             active_rt_image: None,
         })
     }
@@ -960,6 +1059,32 @@ impl FemtovgBackend {
     /// image draw with `alpha` then blends the whole group against the backdrop
     /// exactly once. Drawn under `reset_transform` because the layer is in page
     /// space — any active transform was already applied while drawing INTO it.
+    /// BUG-140: композитит shape-клип-слой на `prev_render_target` одним
+    /// `fill_path`-вызовом: путь — форма клипа, трансформированная матрицей
+    /// `t` (канва на момент Push, включая transform элемента); заливка —
+    /// image-paint слоя 1:1 (identity-канва, слой уже в screen-space).
+    /// AA кромки формы — штатный femtovg path-AA.
+    fn composite_clip_path_layer(
+        &mut self,
+        src_id: femtovg::ImageId,
+        shape: &ResolvedClipShape,
+        t: &femtovg::Transform2D,
+        prev_render_target: femtovg::RenderTarget,
+    ) {
+        self.switch_render_target(prev_render_target);
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let css_w = (self.width as f64 / self.scale) as f32;
+        let css_h = (self.height as f64 / self.scale) as f32;
+        let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0)
+            .with_anti_alias(true);
+        let path = clip_shape_path(shape, t);
+        self.canvas.fill_path(&path, &paint);
+        self.canvas.restore();
+        // Delete after flush — pending GPU commands still reference the id.
+        self.filter_layer_pending_delete.push(src_id);
+    }
+
     fn composite_opacity_layer(
         &mut self,
         src_id: femtovg::ImageId,
@@ -1502,6 +1627,7 @@ impl FemtovgBackend {
             DisplayCommand::PushClipRect { rect } => {
                 self.canvas.save();
                 self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                self.clip_stack.push(ClipEntry::Scissor);
                 self.layer_stack_depth += 1;
             }
             DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
@@ -1511,12 +1637,60 @@ impl FemtovgBackend {
                 // + blend_mode с alpha-маской.
                 self.canvas.save();
                 self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                self.clip_stack.push(ClipEntry::Scissor);
+                self.layer_stack_depth += 1;
+            }
+            // BUG-140: shape-клип (clip-path circle/ellipse/polygon). Subtree
+            // рендерится в offscreen-слой; PopClip композитит его одним
+            // fill_path по форме, трансформированной матрицей канвы на момент
+            // Push — клип переносится transform-ом элемента (команда эмитится
+            // внутри PushTransform).
+            DisplayCommand::PushClipPath { shape } => {
+                let prev_rt = self.current_rt();
+                let entry = match self.canvas.create_image_empty(
+                    self.width as usize,
+                    self.height as usize,
+                    femtovg::PixelFormat::Rgba8,
+                    offscreen_layer_image_flags(),
+                ) {
+                    Ok(img_id) => {
+                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                        self.canvas.clear_rect(
+                            0, 0, self.width, self.height,
+                            femtovg::Color::rgba(0, 0, 0, 0),
+                        );
+                        ClipEntry::PathLayer {
+                            image_id: img_id,
+                            shape: shape.clone(),
+                            transform: self.canvas.transform(),
+                            prev_render_target: prev_rt,
+                        }
+                    }
+                    Err(_) => {
+                        // Fallback: scissor по bounding box формы (поведение
+                        // до BUG-140). Scissor задан в текущем transform-
+                        // пространстве — переносится transform-ом сам.
+                        let bb = shape.bounding_rect();
+                        self.canvas.save();
+                        self.canvas.scissor(bb.x, bb.y, bb.width, bb.height);
+                        ClipEntry::Scissor
+                    }
+                };
+                self.clip_stack.push(entry);
                 self.layer_stack_depth += 1;
             }
             DisplayCommand::PopClip => {
                 if self.layer_stack_depth > 0 {
-                    self.canvas.restore();
                     self.layer_stack_depth -= 1;
+                }
+                match self.clip_stack.pop() {
+                    Some(ClipEntry::PathLayer { image_id, shape, transform, prev_render_target }) => {
+                        self.composite_clip_path_layer(image_id, &shape, &transform, prev_render_target);
+                    }
+                    Some(ClipEntry::Scissor) => self.canvas.restore(),
+                    // Защита от рассинхрона пар (эмиттер гарантирует парность):
+                    // повторяем историческое поведение.
+                    None => self.canvas.restore(),
                 }
             }
 

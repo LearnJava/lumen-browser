@@ -4529,6 +4529,18 @@ impl Renderer {
                     };
                     clip_stack.push(new);
                 }
+                // BUG-140: wgpu-fallback клиппит shape-клип bounding box-ом
+                // (scissor не умеет произвольные формы; точная форма — в
+                // femtovg/cpu_raster путях). Push обязателен для баланса
+                // пар с общим PopClip.
+                DisplayCommand::PushClipPath { shape } => {
+                    let scrolled = translate_rect(shape.bounding_rect(), dx, dy);
+                    let new = match clip_stack.last() {
+                        Some(prev) => intersect_rects(*prev, scrolled),
+                        None => scrolled,
+                    };
+                    clip_stack.push(new);
+                }
                 DisplayCommand::PopClip => {
                     clip_stack.pop();
                 }

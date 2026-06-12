@@ -125,7 +125,7 @@ pub use style::{
     PointerEvents,
     Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
-    FillRule, ScrollbarWidth, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
+    FillRule, ScrollbarWidth, ShapeValue, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextDecorationSkipInk, TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     TextOverflow, TextShadow, TextTransform, TextUnderlinePosition,
     TimingFunction, TransformFn, TransformStyle,
@@ -8655,7 +8655,15 @@ mod tests {
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
             Some(ClipPath::Inset(parts)) => {
-                assert_eq!(parts, vec![10.0, 20.0, 30.0, 40.0]);
+                assert_eq!(
+                    parts,
+                    vec![
+                        ShapeValue::Px(10.0),
+                        ShapeValue::Px(20.0),
+                        ShapeValue::Px(30.0),
+                        ShapeValue::Px(40.0)
+                    ]
+                );
             }
             _ => panic!("expected Inset, got {cp:?}"),
         }
@@ -8667,8 +8675,23 @@ mod tests {
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
             Some(ClipPath::Circle { radius, center }) => {
-                assert!((radius - 50.0).abs() < 0.01);
-                assert_eq!(center, Some((100.0, 200.0)));
+                assert_eq!(radius, ShapeValue::Px(50.0));
+                assert_eq!(center, Some((ShapeValue::Px(100.0), ShapeValue::Px(200.0))));
+            }
+            _ => panic!("expected Circle, got {cp:?}"),
+        }
+    }
+
+    /// BUG-140: `circle(40% at 50% 50%)` (TEST-109 c0) раньше молча
+    /// отбрасывался целиком — проценты не парсились.
+    #[test]
+    fn clip_path_circle_percent() {
+        let root = lay("<p>x</p>", "p { clip-path: circle(40% at 50% 50%); }");
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Circle { radius, center }) => {
+                assert_eq!(radius, ShapeValue::Pct(40.0));
+                assert_eq!(center, Some((ShapeValue::Pct(50.0), ShapeValue::Pct(50.0))));
             }
             _ => panic!("expected Circle, got {cp:?}"),
         }
@@ -8680,8 +8703,8 @@ mod tests {
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
             Some(ClipPath::Ellipse { rx, ry, center: None }) => {
-                assert!((rx - 30.0).abs() < 0.01);
-                assert!((ry - 60.0).abs() < 0.01);
+                assert_eq!(rx, ShapeValue::Px(30.0));
+                assert_eq!(ry, ShapeValue::Px(60.0));
             }
             _ => panic!("expected Ellipse, got {cp:?}"),
         }
@@ -8697,9 +8720,29 @@ mod tests {
         match cp {
             Some(ClipPath::Polygon(verts)) => {
                 assert_eq!(verts.len(), 3);
-                assert_eq!(verts[0], (0.0, 0.0));
-                assert_eq!(verts[1], (100.0, 0.0));
-                assert_eq!(verts[2], (50.0, 100.0));
+                assert_eq!(verts[0], (ShapeValue::Px(0.0), ShapeValue::Px(0.0)));
+                assert_eq!(verts[1], (ShapeValue::Px(100.0), ShapeValue::Px(0.0)));
+                assert_eq!(verts[2], (ShapeValue::Px(50.0), ShapeValue::Px(100.0)));
+            }
+            _ => panic!("expected Polygon, got {cp:?}"),
+        }
+    }
+
+    /// BUG-140: `polygon(50% 0%, 100% 100%, 0% 100%)` (TEST-109 c2) раньше
+    /// молча отбрасывался целиком — проценты не парсились.
+    #[test]
+    fn clip_path_polygon_percent() {
+        let root = lay(
+            "<p>x</p>",
+            "p { clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }",
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Polygon(verts)) => {
+                assert_eq!(verts.len(), 3);
+                assert_eq!(verts[0], (ShapeValue::Pct(50.0), ShapeValue::Pct(0.0)));
+                assert_eq!(verts[1], (ShapeValue::Pct(100.0), ShapeValue::Pct(100.0)));
+                assert_eq!(verts[2], (ShapeValue::Pct(0.0), ShapeValue::Pct(100.0)));
             }
             _ => panic!("expected Polygon, got {cp:?}"),
         }
