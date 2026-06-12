@@ -90,6 +90,7 @@ pub mod svg;
 pub mod file_input;
 pub mod tc39_proposals;
 pub mod es2026_proposals;
+pub mod async_context;
 pub mod decorators;
 pub mod speculation_rules;
 pub mod soft_navigation;
@@ -779,6 +780,13 @@ impl QuickJsRuntime {
             // SuppressedError, DisposableStack, AsyncDisposableStack.
             if let Err(e) = es2026_proposals::install_es2026_proposals(&ctx) {
                 eprintln!("ES2026 proposals shim init failed: {}", e);
+            }
+
+            // Install AsyncContext (TC39 Stage 2.7) Phase 0 — AsyncContext.Variable +
+            // AsyncContext.Snapshot; patches Promise.prototype.then for microtask
+            // propagation, so it must run after the DOM shim (queueMicrotask).
+            if let Err(e) = async_context::install_async_context(&ctx) {
+                eprintln!("AsyncContext shim init failed: {}", e);
             }
 
             // Install TC39 Decorators (Stage 3) Phase 0 — `@decorator` source
