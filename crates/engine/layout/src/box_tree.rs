@@ -1792,6 +1792,202 @@ pub(crate) fn apply_first_line_pseudo_styles(
     let _ = applied;
 }
 
+/// Byte offsets of each whitespace-separated word start in `text`
+/// (same word boundaries as `str::split_whitespace`).
+fn word_start_offsets(text: &str) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut in_word = false;
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() {
+            in_word = false;
+        } else if !in_word {
+            starts.push(i);
+            in_word = true;
+        }
+    }
+    starts
+}
+
+/// CSS Pseudo-elements L4 §3.1 — partition `segments` into
+/// `(consumed by the first formatted line, remainder)`.
+///
+/// `line0` is the first line produced by the ::first-line wrap pass; its frags
+/// appear in segment order and never span segments, so consumption is counted
+/// word-by-word with the same boundaries as `str::split_whitespace` (matching
+/// `wrap_inline_run`). A partially consumed segment is split at the word
+/// boundary: the head keeps the segment's `pre_space` (its inline box opened on
+/// line 0, `post_space` → 0), the tail keeps `post_space` (`pre_space` → 0,
+/// `source_char_offset` advanced by the cut byte offset).
+///
+/// `preserves_ws` (white-space: pre / pre-wrap): each non-empty segment before
+/// the first forced break produced exactly one frag — whole segments up to and
+/// including that break are consumed.
+fn split_segments_at_first_line(
+    segments: &[InlineSegment],
+    line0: &[InlineFrag],
+    preserves_ws: bool,
+) -> (Vec<InlineSegment>, Vec<InlineSegment>) {
+    let mut consumed: Vec<InlineSegment> = Vec::new();
+    let mut idx = 0usize;
+
+    if preserves_ws {
+        for _ in line0 {
+            // Empty non-break text segments produce no frag — consume silently.
+            while idx < segments.len()
+                && segments[idx].text.is_empty()
+                && !segments[idx].forced_break
+                && segments[idx].img_src.is_none()
+            {
+                consumed.push(segments[idx].clone());
+                idx += 1;
+            }
+            if idx < segments.len() {
+                consumed.push(segments[idx].clone());
+                idx += 1;
+            }
+        }
+        // The forced break that terminated line 0 belongs to it.
+        if idx < segments.len() && segments[idx].forced_break {
+            consumed.push(segments[idx].clone());
+            idx += 1;
+        }
+        return (consumed, segments[idx..].to_vec());
+    }
+
+    // Word-level consumption for collapsing white-space modes.
+    let mut words_taken = 0usize; // words already consumed from segments[idx]
+    for frag in line0 {
+        if frag.img_src.is_some() {
+            // Advance to the img segment, consuming exhausted text segments.
+            while idx < segments.len() && segments[idx].img_src.is_none() {
+                consumed.push(segments[idx].clone());
+                idx += 1;
+                words_taken = 0;
+            }
+            if idx < segments.len() {
+                consumed.push(segments[idx].clone());
+                idx += 1;
+            }
+            continue;
+        }
+        let mut need = frag.text.split_whitespace().count();
+        while need > 0 && idx < segments.len() {
+            let seg = &segments[idx];
+            if seg.img_src.is_some() || seg.forced_break {
+                consumed.push(seg.clone());
+                idx += 1;
+                words_taken = 0;
+                continue;
+            }
+            let total = seg.text.split_whitespace().count();
+            let avail = total.saturating_sub(words_taken);
+            if avail <= need {
+                need -= avail;
+                consumed.push(seg.clone());
+                idx += 1;
+                words_taken = 0;
+            } else {
+                words_taken += need;
+                need = 0;
+            }
+        }
+    }
+
+    let mut rest: Vec<InlineSegment> = Vec::new();
+    if words_taken > 0 && idx < segments.len() {
+        // Partially consumed segment: split at the word boundary.
+        let seg = &segments[idx];
+        let starts = word_start_offsets(&seg.text);
+        if words_taken < starts.len() {
+            let cut = starts[words_taken];
+            let mut head = seg.clone();
+            head.text = seg.text[..cut].trim_end().to_string();
+            head.post_space = 0.0;
+            consumed.push(head);
+            let mut tail = seg.clone();
+            tail.text = seg.text[cut..].to_string();
+            tail.pre_space = 0.0;
+            tail.source_char_offset = seg.source_char_offset + cut as u32;
+            rest.push(tail);
+        } else {
+            consumed.push(seg.clone());
+        }
+        idx += 1;
+    }
+    rest.extend(segments[idx..].iter().cloned());
+    (consumed, rest)
+}
+
+/// CSS Pseudo-elements L4 §3.1 — ::first-line layout split (BB-1).
+///
+/// Post-layout pass: walks the box tree and, for every `InlineRun` carrying a
+/// `first_line_style`, splits the first formatted line into its own `InlineRun`
+/// box styled with the ::first-line style; the remainder keeps the base style.
+/// Paint computes line height as `style.font_size * style.line_height` per box,
+/// so the split gives the first line its correct (possibly larger) line box
+/// height with no paint-side changes. Single-line runs are restyled in place.
+/// Idempotent: `first_line_style` is cleared on every produced box.
+// CSS: ::first-line — P4 wires additional ::first-line properties (background,
+// text-decoration, …) via compute_pseudo_element_style; geometry is handled here.
+pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
+    for child in &mut b.children {
+        split_first_line_boxes(child);
+    }
+    let mut i = 0;
+    while i < b.children.len() {
+        let child = &mut b.children[i];
+        let BoxKind::InlineRun { segments, lines, first_line_style } = &mut child.kind else {
+            i += 1;
+            continue;
+        };
+        let Some(fls) = first_line_style.take() else {
+            i += 1;
+            continue;
+        };
+        if lines.len() < 2 {
+            // The whole run is the first formatted line: restyle the box in place
+            // so paint uses the ::first-line font metrics for its single line box.
+            child.style = *fls;
+            i += 1;
+            continue;
+        }
+        let preserves = child.style.white_space.preserves_whitespace();
+        let (consumed_segs, rest_segs) =
+            split_segments_at_first_line(segments, &lines[0], preserves);
+        let line0 = lines[0].clone();
+        let rest_lines: Vec<Vec<InlineFrag>> = lines[1..].to_vec();
+        let fl_h = fls.font_size * fls.line_height;
+        let base_h = child.style.font_size * child.style.line_height;
+        let rect = child.rect;
+        let box2 = LayoutBox {
+            node: child.node,
+            rect: Rect::new(rect.x, rect.y + fl_h, rect.width, rest_lines.len() as f32 * base_h),
+            style: child.style.clone(),
+            kind: BoxKind::InlineRun {
+                segments: rest_segs,
+                lines: rest_lines,
+                first_line_style: None,
+            },
+            children: Vec::new(),
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+        // Reuse the original box as the first-line box.
+        child.style = *fls;
+        child.rect.height = fl_h;
+        child.kind = BoxKind::InlineRun {
+            segments: consumed_segs,
+            lines: vec![line0],
+            first_line_style: None,
+        };
+        b.children.insert(i + 1, box2);
+        i += 2;
+    }
+}
+
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
@@ -1807,6 +2003,8 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false);
     // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
     apply_anchor_positions(&mut root, viewport);
+    // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
+    split_first_line_boxes(&mut root);
     root
 }
 
@@ -1847,6 +2045,8 @@ pub fn layout_measured_hyp(
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
     // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
     apply_anchor_positions(&mut root, viewport);
+    // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
+    split_first_line_boxes(&mut root);
     root
 }
 
@@ -3856,25 +4056,82 @@ fn lay_out(
                 content_width
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
-            let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap);
-            // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
-            // wrapping is active (wrap_width is finite) and text actually wraps.
-            *lines = if wrap_width.is_finite() {
-                match s.text_wrap_style {
-                    TextWrapStyle::Balance => balance_wrap(
-                        segments, wrap_width, raw_lines, s.font_size, text_indent_px,
-                        viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
-                    ),
-                    TextWrapStyle::Pretty => pretty_wrap(
-                        segments, wrap_width, raw_lines, s.font_size, text_indent_px,
-                        viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
-                    ),
-                    // Auto / Stable: greedy result unchanged.
-                    // Stable stability is about incremental editing; for static layout it's identical to auto.
-                    TextWrapStyle::Auto | TextWrapStyle::Stable => raw_lines,
+            *lines = if let Some(fls) = first_line_style.as_deref() {
+                // CSS Pseudo-elements L4 §3.1 — ::first-line layout split (BB-1).
+                // Pass A: wrap ALL segments under the ::first-line style to find the
+                // true extent of the first formatted line (a larger ::first-line font
+                // fits fewer words). Hyphenation is off for this pass: a first line
+                // ending mid-word would make the word-level remainder split ambiguous,
+                // so the first formatted line never auto-hyphenates (UA freedom).
+                let fl_segments: Vec<InlineSegment> = segments
+                    .iter()
+                    .map(|seg| {
+                        let mut fl_seg = seg.clone();
+                        if fl_seg.img_src.is_none() {
+                            fl_seg.style = fls.clone();
+                        }
+                        fl_seg
+                    })
+                    .collect();
+                let mut lines_a = wrap_inline_run(
+                    &fl_segments, wrap_width, fls.font_size, text_indent_px, viewport,
+                    m, Hyphens::None, hp, s.white_space, s.word_break, s.overflow_wrap,
+                );
+                if lines_a.len() <= 1 {
+                    // Everything fits the first formatted line; ::first-line covers it all.
+                    lines_a
+                } else {
+                    // Pass B: re-wrap the content NOT consumed by line 0 under the base
+                    // style (its own font metrics, no text-indent — indent is first-line only).
+                    let line0 = lines_a.remove(0);
+                    let (_, rest_segs) = split_segments_at_first_line(
+                        segments, &line0, s.white_space.preserves_whitespace(),
+                    );
+                    let raw_rest = wrap_inline_run(
+                        &rest_segs, wrap_width, s.font_size, 0.0, viewport,
+                        m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                    );
+                    let rest = if wrap_width.is_finite() {
+                        match s.text_wrap_style {
+                            TextWrapStyle::Balance => balance_wrap(
+                                &rest_segs, wrap_width, raw_rest, s.font_size, 0.0,
+                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                            ),
+                            TextWrapStyle::Pretty => pretty_wrap(
+                                &rest_segs, wrap_width, raw_rest, s.font_size, 0.0,
+                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                            ),
+                            TextWrapStyle::Auto | TextWrapStyle::Stable => raw_rest,
+                        }
+                    } else {
+                        raw_rest
+                    };
+                    let mut all = Vec::with_capacity(1 + rest.len());
+                    all.push(line0);
+                    all.extend(rest);
+                    all
                 }
             } else {
-                raw_lines
+                let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap);
+                // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
+                // wrapping is active (wrap_width is finite) and text actually wraps.
+                if wrap_width.is_finite() {
+                    match s.text_wrap_style {
+                        TextWrapStyle::Balance => balance_wrap(
+                            segments, wrap_width, raw_lines, s.font_size, text_indent_px,
+                            viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                        ),
+                        TextWrapStyle::Pretty => pretty_wrap(
+                            segments, wrap_width, raw_lines, s.font_size, text_indent_px,
+                            viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                        ),
+                        // Auto / Stable: greedy result unchanged.
+                        // Stable stability is about incremental editing; for static layout it's identical to auto.
+                        TextWrapStyle::Auto | TextWrapStyle::Stable => raw_lines,
+                    }
+                } else {
+                    raw_lines
+                }
             };
             align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
             let line_h = s.font_size * s.line_height;
@@ -3905,7 +4162,15 @@ fn lay_out(
             }
         }
         let line_count = lines.len().max(1);
-        b.rect.height = line_count as f32 * (s.font_size * s.line_height);
+        // CSS Pseudo-elements L4 §3.1: the first formatted line uses the ::first-line
+        // style's own font metrics for its line box height (BB-1).
+        b.rect.height = match first_line_style.as_deref() {
+            Some(fls) if !lines.is_empty() => {
+                fls.font_size * fls.line_height
+                    + (line_count - 1) as f32 * (s.font_size * s.line_height)
+            }
+            _ => line_count as f32 * (s.font_size * s.line_height),
+        };
         return;
     }
 
@@ -8943,21 +9208,29 @@ mod tests {
             lumen_core::geom::Size::new(60.0, 600.0),
             &Fixed8,
         );
-        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
-            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
-            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
-            None
+        // After the ::first-line layout split (BB-1) the paragraph holds two
+        // InlineRun boxes: the first formatted line and the remainder.
+        fn collect_runs<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { collect_runs(c, out); }
         }
-        let run = find_run(&root).expect("InlineRun not found");
+        let mut runs = Vec::new();
+        collect_runs(&root, &mut runs);
+        assert!(runs.len() >= 2, "expected split into 2 runs, got {}", runs.len());
         let green = crate::style::Color { r: 0, g: 128, b: 0, a: 255 };
-        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
-            assert!(lines.len() >= 2, "expected at least 2 lines");
+        if let super::BoxKind::InlineRun { lines, .. } = &runs[0].kind {
+            assert_eq!(lines.len(), 1, "first-line run must hold exactly one line");
             for frag in &lines[0] {
                 assert_eq!(frag.style.color, green, "line 0 frag must have green color");
             }
-            for line in lines.iter().skip(1) {
+        } else {
+            panic!("expected InlineRun");
+        }
+        if let super::BoxKind::InlineRun { lines, .. } = &runs[1].kind {
+            assert!(!lines.is_empty(), "remainder run must hold the wrapped lines");
+            for line in lines {
                 for frag in line {
-                    assert_ne!(frag.style.color, green, "lines 1+ frags must keep original color");
+                    assert_ne!(frag.style.color, green, "remainder frags keep original color");
                 }
             }
         } else {
@@ -8997,6 +9270,212 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    // ── BB-1: ::first-line layout split ──────────────────────────────────
+
+    /// 8px per char regardless of font size.
+    struct FixedW8;
+    impl super::super::TextMeasurer for FixedW8 {
+        fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    }
+    /// Char width scales with font size (half the font size per char):
+    /// 16px font → 8px/char, 32px font → 16px/char.
+    struct HalfEm;
+    impl super::super::TextMeasurer for HalfEm {
+        fn char_width(&self, _: char, size: f32) -> f32 { size / 2.0 }
+    }
+
+    /// All InlineRun boxes in tree order.
+    fn runs_of(root: &super::LayoutBox) -> Vec<&super::LayoutBox> {
+        fn rec<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { rec(c, out); }
+        }
+        let mut v = Vec::new();
+        rec(root, &mut v);
+        v
+    }
+
+    /// All words of a run's positioned lines, in order.
+    fn run_words(run: &super::LayoutBox) -> Vec<String> {
+        let super::BoxKind::InlineRun { lines, .. } = &run.kind else { return vec![] };
+        lines
+            .iter()
+            .flatten()
+            .flat_map(|f| f.text.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+            .collect()
+    }
+
+    /// All words of a run's source segments, in order.
+    fn segment_words(run: &super::LayoutBox) -> Vec<String> {
+        let super::BoxKind::InlineRun { segments, .. } = &run.kind else { return vec![] };
+        segments
+            .iter()
+            .flat_map(|s| s.text.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+            .collect()
+    }
+
+    #[test]
+    fn first_line_split_creates_two_runs() {
+        // Wrapping paragraph with a ::first-line rule → two InlineRun boxes:
+        // first formatted line + remainder; first_line_style cleared on both.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { color: green; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2, "expected exactly 2 runs after split");
+        let super::BoxKind::InlineRun { lines, first_line_style, .. } = &runs[0].kind else {
+            panic!("expected InlineRun");
+        };
+        assert_eq!(lines.len(), 1, "first-line run holds exactly one line");
+        assert!(first_line_style.is_none(), "first_line_style must be cleared");
+        let super::BoxKind::InlineRun { lines, first_line_style, .. } = &runs[1].kind else {
+            panic!("expected InlineRun");
+        };
+        assert!(!lines.is_empty(), "remainder run holds the wrapped rest");
+        assert!(first_line_style.is_none(), "first_line_style must be cleared");
+    }
+
+    #[test]
+    fn first_line_split_no_word_loss() {
+        // Words across both runs must equal the source text exactly (no loss, no dupes).
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { color: green; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        let mut words = run_words(runs[0]);
+        words.extend(run_words(runs[1]));
+        assert_eq!(words, ["one", "two", "three", "four"]);
+    }
+
+    #[test]
+    fn first_line_split_heights_and_positions() {
+        // ::first-line { font-size: 32px } → first-line box is 32px-based tall,
+        // remainder box starts right below it and uses the base 16px metrics.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { font-size: 32px; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &HalfEm,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        assert!((runs[0].style.font_size - 32.0).abs() < 0.01, "first-line box gets fls font");
+        let fl_h = 32.0 * runs[0].style.line_height;
+        assert!(
+            (runs[0].rect.height - fl_h).abs() < 0.01,
+            "first-line box height {} != {}", runs[0].rect.height, fl_h,
+        );
+        assert!(
+            (runs[1].rect.y - (runs[0].rect.y + fl_h)).abs() < 0.01,
+            "remainder box must start right below the first-line box",
+        );
+        let base_h = runs[1].style.font_size * runs[1].style.line_height;
+        let super::BoxKind::InlineRun { lines, .. } = &runs[1].kind else { panic!() };
+        assert!(
+            (runs[1].rect.height - lines.len() as f32 * base_h).abs() < 0.01,
+            "remainder box height = lines × base line height",
+        );
+    }
+
+    #[test]
+    fn first_line_bigger_font_wraps_earlier() {
+        // Base 16px (8px/char): "one two" = 56px fits in 60px.
+        // ::first-line 32px (16px/char): "one two" = 112px > 60px → only "one" fits.
+        // The first line must be measured with the ::first-line font, not the base one.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { font-size: 32px; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &HalfEm,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(run_words(runs[0]), ["one"], "32px first line fits only one word");
+        assert_eq!(run_words(runs[1]), ["two", "three", "four"]);
+    }
+
+    #[test]
+    fn first_line_single_line_restyled_in_place() {
+        // Everything fits the first formatted line → no split; the run box itself
+        // takes the ::first-line style so paint uses its font metrics.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two</p>"),
+            &lumen_css_parser::parse("p::first-line { color: green; font-size: 32px; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 1, "single-line run must not be split");
+        let green = crate::style::Color { r: 0, g: 128, b: 0, a: 255 };
+        assert_eq!(runs[0].style.color, green, "run box restyled with ::first-line style");
+        assert!((runs[0].style.font_size - 32.0).abs() < 0.01);
+        let fl_h = 32.0 * runs[0].style.line_height;
+        assert!((runs[0].rect.height - fl_h).abs() < 0.01, "height uses ::first-line metrics");
+        let super::BoxKind::InlineRun { first_line_style, .. } = &runs[0].kind else { panic!() };
+        assert!(first_line_style.is_none(), "first_line_style must be cleared");
+    }
+
+    #[test]
+    fn first_line_no_rule_no_split() {
+        // Without a ::first-line rule the wrapping run stays a single box.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 1, "no rule → no split");
+        let super::BoxKind::InlineRun { lines, .. } = &runs[0].kind else { panic!() };
+        assert!(lines.len() >= 2, "text still wraps into multiple lines");
+    }
+
+    #[test]
+    fn first_line_split_segments_partitioned() {
+        // Source segments are partitioned between the two boxes at the word
+        // boundary; the remainder's first segment must not re-apply pre_space.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { color: green; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        let mut words = segment_words(runs[0]);
+        words.extend(segment_words(runs[1]));
+        assert_eq!(words, ["one", "two", "three", "four"], "segments partitioned losslessly");
+        let super::BoxKind::InlineRun { segments, .. } = &runs[1].kind else { panic!() };
+        assert!(!segments.is_empty());
+        assert_eq!(segments[0].pre_space, 0.0, "tail segment must not repeat pre_space");
+    }
+
+    #[test]
+    fn first_line_remainder_no_indent() {
+        // text-indent applies to the first formatted line only: the first-line box
+        // keeps the indent, the re-wrapped remainder starts at x = 0.
+        let css = "p { text-indent: 16px; } p::first-line { color: green; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        let super::BoxKind::InlineRun { lines, .. } = &runs[0].kind else { panic!() };
+        assert!((lines[0][0].x - 16.0).abs() < 0.01, "first line keeps text-indent");
+        let super::BoxKind::InlineRun { lines, .. } = &runs[1].kind else { panic!() };
+        assert!((lines[0][0].x).abs() < 0.01, "remainder lines start without indent");
     }
 
     // Phase 3: Nested SVG layout tests
@@ -9168,16 +9647,28 @@ mod tests {
             lumen_core::geom::Size::new(60.0, 600.0),
             &Fixed8,
         );
-        let run = find_run(&root).expect("InlineRun not found");
-        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
-            assert!(lines.len() >= 2, "expected wrapping");
+        // After the ::first-line layout split (BB-1): runs[0] = first line (red),
+        // runs[1] = remainder (original color).
+        fn collect_runs<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { collect_runs(c, out); }
+        }
+        let mut runs = Vec::new();
+        collect_runs(&root, &mut runs);
+        assert!(runs.len() >= 2, "expected split into 2 runs, got {}", runs.len());
+        if let super::BoxKind::InlineRun { lines, .. } = &runs[0].kind {
+            assert_eq!(lines.len(), 1, "first-line run must hold exactly one line");
             for frag in &lines[0] {
                 assert!(
                     frag.style.color.r > 200,
                     "first-line frags must have red color (r={})", frag.style.color.r,
                 );
             }
-            for line in lines.iter().skip(1) {
+        } else {
+            panic!("expected InlineRun");
+        }
+        if let super::BoxKind::InlineRun { lines, .. } = &runs[1].kind {
+            for line in lines {
                 for frag in line {
                     assert!(
                         frag.style.color.r < 50,
