@@ -505,7 +505,12 @@ pub enum DisplayCommand {
     /// Phase 0: color-matrix фильтры (grayscale/sepia/brightness/contrast/
     /// saturate/invert/opacity/hue-rotate) реализованы через GPU-шейдер;
     /// blur реализован через двухпроходный Gaussian GPU-шейдер.
-    PushFilter { filters: Vec<FilterFn> },
+    ///
+    /// `bounds` — примерная область, которую займёт отфильтрованное содержимое
+    /// (CSS px). Используется для оптимизации размера offscreen-слоя; если None —
+    /// fallback на full viewport. Для box-shadow это rect тени; для text-shadow —
+    /// bounds текста плюс смещение и blur-spread.
+    PushFilter { filters: Vec<FilterFn>, bounds: Option<Rect> },
     /// Закрывает filter-группу.
     PopFilter,
     /// CSS Filter Effects L1 §2 / Compositing L1 §13 — backdrop-filter.
@@ -1289,9 +1294,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PopTransform => {
                 out.push_str("PopTransform\n");
             }
-            DisplayCommand::PushFilter { filters } => {
+            DisplayCommand::PushFilter { filters, bounds } => {
                 let names: Vec<&str> = filters.iter().map(filter_fn_name).collect();
-                out.push_str(&format!("PushFilter [{}]\n", names.join(", ")));
+                let bounds_str = bounds
+                    .map(|b| format!(" bounds=({:.0},{:.0},{:.0},{:.0})", b.x, b.y, b.width, b.height))
+                    .unwrap_or_default();
+                out.push_str(&format!("PushFilter [{}]{}\n", names.join(", "), bounds_str));
             }
             DisplayCommand::PopFilter => {
                 out.push_str("PopFilter\n");
@@ -2274,7 +2282,10 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         post.push(DisplayCommand::PopBackdropFilter);
     }
     if !s.filter.is_empty() {
-        pre.push(DisplayCommand::PushFilter { filters: s.filter.clone() });
+        pre.push(DisplayCommand::PushFilter {
+            filters: s.filter.clone(),
+            bounds: Some(b.rect),
+        });
         post.push(DisplayCommand::PopFilter);
     }
     // post в LIFO порядке относительно pre.
@@ -2464,18 +2475,20 @@ fn emit_text_shadows(
     for shadow in frag.style.text_shadow.iter().rev() {
         let color = shadow.color.unwrap_or(frag.style.color);
         let sigma = shadow.blur / 2.0;
+        let text_shadow_rect = Rect::new(
+            base_rect.x + shadow.offset_x,
+            base_rect.y + shadow.offset_y,
+            base_rect.width,
+            line_h,
+        );
         if sigma > 0.0 {
             out.push(DisplayCommand::PushFilter {
                 filters: vec![FilterFn::Blur(sigma)],
+                bounds: Some(text_shadow_rect),
             });
         }
         out.push(DisplayCommand::DrawText {
-            rect: Rect::new(
-                base_rect.x + shadow.offset_x,
-                base_rect.y + shadow.offset_y,
-                base_rect.width,
-                line_h,
-            ),
+            rect: text_shadow_rect,
             text: frag.text.clone(),
             font_size: frag.style.font_size,
             color,
@@ -3110,13 +3123,15 @@ fn emit_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             continue;
         }
         let sigma = shadow.blur / 2.0;
+        let shadow_rect = Rect::new(x, y, w, h);
         if sigma > 0.0 {
             out.push(DisplayCommand::PushFilter {
                 filters: vec![FilterFn::Blur(sigma)],
+                bounds: Some(shadow_rect),
             });
         }
         out.push(DisplayCommand::FillRect {
-            rect: Rect::new(x, y, w, h),
+            rect: shadow_rect,
             color,
         });
         if sigma > 0.0 {
@@ -4466,7 +4481,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // `PopFilter` applies the chain and composites the result down.
             let has_filter = !b.style.filter.is_empty();
             if has_filter {
-                out.push(DisplayCommand::PushFilter { filters: b.style.filter.clone() });
+                out.push(DisplayCommand::PushFilter {
+                    filters: b.style.filter.clone(),
+                    bounds: Some(b.rect),
+                });
             }
             // CSS Display L3 §4 — `visibility: hidden`: self не рисуется
             // (фон/border/outline/shadow), но children обходятся (inherited
@@ -8353,7 +8371,7 @@ mod tests {
             "p { text-shadow: 2px 3px 8px red; }",
         );
         let push_idx = dl.iter().position(|c| {
-            matches!(c, DisplayCommand::PushFilter { filters }
+            matches!(c, DisplayCommand::PushFilter { filters, .. }
                 if matches!(filters.as_slice(), [FilterFn::Blur(s)] if (*s - 4.0).abs() < 0.01))
         });
         assert!(push_idx.is_some(), "PushFilter{{Blur(4.0)}} должен быть в DL, got {dl:?}");
@@ -8378,7 +8396,7 @@ mod tests {
             "p { text-shadow: 2px 3px red; }",
         );
         let has_filter = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::PushFilter { filters }
+            matches!(c, DisplayCommand::PushFilter { filters, .. }
                 if filters.iter().any(|f| matches!(f, FilterFn::Blur(_))))
         });
         assert!(!has_filter, "без blur не должно быть PushFilter, got {dl:?}");
@@ -8395,7 +8413,7 @@ mod tests {
             "p { text-shadow: 1px 1px 6px red, 2px 2px 4px blue; }",
         );
         let push_count = dl.iter().filter(|c| {
-            matches!(c, DisplayCommand::PushFilter { filters }
+            matches!(c, DisplayCommand::PushFilter { filters, .. }
                 if filters.iter().any(|f| matches!(f, FilterFn::Blur(_))))
         }).count();
         assert_eq!(push_count, 2, "два PushFilter для двух shadow с blur, got {dl:?}");
@@ -8752,7 +8770,7 @@ mod tests {
         // Структура: PushFilter, FillRect(shadow), PopFilter, FillRect(bg), ...
         let first = dl.first().unwrap();
         assert!(
-            matches!(first, DisplayCommand::PushFilter { filters }
+            matches!(first, DisplayCommand::PushFilter { filters, .. }
                 if matches!(filters.as_slice(), [FilterFn::Blur(s)] if (*s - 10.0).abs() < 0.01)),
             "PushFilter с Blur(10.0) перед shadow FillRect, got {first:?}"
         );

@@ -6,16 +6,14 @@
 
 ## In progress
 
-None — 2026-06-12 diagnostics complete
+None — awaiting TEST-15 regression verification
 
-**Последний прогон:**
-- TEST-106 (BUG-137 transform×z-index) — FIXED (0.02%, was 4.02%)
-- TEST-108 (nested-transforms) — PASS (0.00%)
-- TEST-66 (BUG-108 ::selection) — FAIL (5.24%, was 6.18%) — improved but still open
-- TEST-15 (BUG-076 box-shadow) — FAIL (6.58%, was 1.06%) — **REGRESSION IDENTIFIED**
-  - Root cause: PA-2 offscreen filter layer uses full viewport for small shadows
-  - Решение: requires bounds tracking in DisplayCommand::PushFilter
-  - Effort: medium (3-4 hours refactoring)
+**Recently fixed:**
+- BUG-076 regression: bounds tracking in PushFilter
+  - Root cause: PA-2 offscreen layer created full-viewport-sized images for small shadows
+  - Solution: Added Option<Rect> bounds field to PushFilter, use to size offscreen layer
+  - Implementation: display_list.rs + femtovg_backend.rs
+  - Status: Code complete, 689 tests pass, clippy clean; pending visual verification on TEST-15
 
 ---
 

@@ -5019,7 +5019,7 @@ impl Renderer {
                 }
                 // CSS Filter Effects L1 — PushFilter opens an offscreen level;
                 // PopFilter composites it onto the parent with filter applied.
-                DisplayCommand::PushFilter { filters } => {
+                DisplayCommand::PushFilter { filters, .. } => {
                     flush_batch!();
                     filter_stack.push(filters.clone());
                     current_level += 1;
