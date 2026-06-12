@@ -8,12 +8,12 @@
 
 **BUG-085 — gradient rendering deviation**
 - branch: `p2-bug085-gradient-deviation`
-- TEST-39 (linear/radial gradients): 12.05% deviation
-- Problem: gradient stop interpolation or antialiasing mismatch with Edge
-- Location: `crates/engine/paint/src/backends/femtovg_backend.rs` + `gradient_math.rs`
-- Status: Investigated code; branch needs rebase on origin/main for API sync
-- Key finding: `resolve_stop_positions()` intentionally doesn't clamp to [0,1] (for repeating gradients), but `femtovg_backend.rs` line 80 clamps them. Possible mismatch.
-- Next: Rebase, sync API, run TEST-39 to measure deviation
+- TEST-39 (linear/radial gradients): 5.22% deviation (улучшено с 12.05%)
+- Problem: Possible edge case в linear/radial gradient rendering, antialiasing, или edge-specific interpolation
+- Location: `crates/engine/paint/src/backends/femtovg_backend.rs` (femtovg library limitation)
+- Status: Реbeased на main, исправлен repeating-gradient handling (не зажимать стопы для repeating)
+- Key finding: main улучшил выручку с 12% до 5%; repeating-gradient-specific code fixed but 5% remains
+- Next: Профилирование linear/radial алгоритмов; check edge-specific antialiasing, position precision
 
 ---
 
