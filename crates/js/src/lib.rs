@@ -7,6 +7,7 @@ pub mod periodic_sync;
 pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
+pub mod import_attributes;
 pub mod paint_worklet;
 pub mod gamepad;
 pub mod highlight_api;
@@ -272,8 +273,12 @@ pub struct QuickJsRuntime {
     ///
     /// Shared with the `LumenResolver`'s import_map field. Set via `set_import_map()`
     /// before evaluating modules. Maps bare specifiers like "react" to URLs like "/vendor/react.js".
-    #[allow(dead_code)]
     module_import_map: Arc<Mutex<esm::ImportMap>>,
+    /// Declared import-attribute module types (`import … with { type: 'json' }`,
+    /// TC39 Stage 3). Written by the Phase 0 preprocessor in `eval_module` /
+    /// `register_module_source` (specifiers resolved the same way the ESM
+    /// resolver will); read by the `LumenLoader` at module load time.
+    module_types: import_attributes::ModuleTypeRegistry,
 }
 
 struct Inner {
@@ -294,7 +299,9 @@ impl QuickJsRuntime {
         let (resolver, module_page_url) = esm::LumenResolver::new("");
         // Capture the import_map reference from the resolver before it's moved into QuickJS.
         let module_import_map = Arc::clone(&resolver.import_map);
-        let loader = esm::LumenLoader::new(Arc::clone(&module_registry));
+        let module_types = import_attributes::new_type_registry();
+        let loader =
+            esm::LumenLoader::with_types(Arc::clone(&module_registry), Arc::clone(&module_types));
         let rt = Runtime::new().map_err(|e| JsError::Runtime(e.to_string()))?;
         rt.set_loader(resolver, loader);
         let ctx = Context::full(&rt).map_err(|e| JsError::Runtime(e.to_string()))?;
@@ -329,7 +336,32 @@ impl QuickJsRuntime {
             module_registry,
             module_page_url,
             module_import_map,
+            module_types,
         })
+    }
+
+    /// Phase 0 import-attributes preprocessing (TC39 Stage 3): strip
+    /// `with { … }` / `assert { … }` clauses from `source` and record the
+    /// declared types in `module_types`, resolving each raw specifier against
+    /// `base` exactly like the ESM resolver will at load time.
+    ///
+    /// Returns `Some(rewritten)` when a clause was stripped, `None` otherwise.
+    fn preprocess_import_attributes(&self, base: &str, source: &str) -> Option<String> {
+        let (rewritten, attrs) = import_attributes::strip_import_attributes(source)?;
+        if !attrs.is_empty() {
+            let resolver = esm::LumenResolver {
+                page_url: Arc::clone(&self.module_page_url),
+                import_map: Arc::clone(&self.module_import_map),
+            };
+            let mut types = self.module_types.lock().unwrap_or_else(|e| e.into_inner());
+            for (spec, ty) in attrs {
+                types.insert(
+                    resolver.resolve_specifier(base, &spec),
+                    import_attributes::ModuleType::from_attr(&ty),
+                );
+            }
+        }
+        Some(rewritten)
     }
 
     /// Register an ES module by specifier so it can be `import`-ed by other modules.
@@ -337,10 +369,15 @@ impl QuickJsRuntime {
     /// `specifier` is the resolved absolute key used in `import` statements.
     /// Pre-populate before calling `eval_module` so that intra-page imports resolve.
     pub fn register_module_source(&self, specifier: &str, source: &str) {
+        // Strip import-attribute clauses (`with { type: '…' }`) the module's own
+        // imports may carry; nested specifiers resolve against this module.
+        let source = self
+            .preprocess_import_attributes(specifier, source)
+            .unwrap_or_else(|| source.to_owned());
         self.module_registry
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(specifier.to_owned(), source.to_owned());
+            .insert(specifier.to_owned(), source);
     }
 
     /// Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`).
@@ -355,6 +392,11 @@ impl QuickJsRuntime {
             decorators::maybe_transform_decorators(&ctx, source)
                 .unwrap_or_else(|| source.to_owned())
         });
+        // Strip import-attribute clauses (TC39 Stage 3) and record declared
+        // module types; inline scripts resolve specifiers against the page URL.
+        let source = self
+            .preprocess_import_attributes("", &source)
+            .unwrap_or(source);
         // Unique sequential inline specifier
         let specifier = {
             let mut reg = self.module_registry.lock().unwrap_or_else(|e| e.into_inner());

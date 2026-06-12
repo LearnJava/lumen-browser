@@ -219,6 +219,13 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Phase 0 limits (documented in module): `await` continuations (engine-internal `PerformPromiseThen`) and tasks (`setTimeout`, event handlers) do not propagate — use `Snapshot.wrap` manually.
   - 8 unit tests. All pass.
 
+- **Import Attributes (TC39 Stage 3) Phase 0** (`crates/js/src/import_attributes.rs`). 2026-06-12 (P1, AA-3).
+  - QuickJS can't parse `with { … }` and `Loader::load` gets no attributes → Rust source preprocessor `strip_import_attributes`: strips `with { … }` / legacy `assert { … }` clauses from static `import` / `export … from` statements, records declared types in a shared `ModuleTypeRegistry` (specifier resolved exactly like the ESM resolver will).
+  - `LumenLoader::with_types`: `type: 'json'` modules are validated as JSON (JSON-assert guard — invalid JSON fails the load) and compiled as synthetic `export default JSON.parse(...)`; any other declared type fails the load with `Error::new_loading_message`.
+  - Hooked into `eval_module` (base = page URL) and `register_module_source` (base = the module's own specifier). Minimal lexer keeps strings / comments / templates / regex opaque, so `with` inside them is never a clause.
+  - Phase 0 limits (documented in module): dynamic `import(spec, { with: { … } })` options left untouched; attribute keys other than `type` stripped and ignored.
+  - 11 unit tests (7 transformer + 4 end-to-end). All pass.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
