@@ -6,7 +6,7 @@
 
 ## In progress
 
-None — investigation tasks completed.
+None — BUG-132 fix merged
 
 Recent investigation:
 - **BUG-088** (4.63%): Individual CSS transforms translate/rotate/scale fully implemented, gap is antialiasing

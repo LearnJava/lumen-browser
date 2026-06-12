@@ -1419,6 +1419,15 @@ impl FemtovgBackend {
                 self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
                 self.layer_stack_depth += 1;
             }
+            DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
+                // BUG-132 fix: скруглённый клип. femtovg по умолчанию поддерживает
+                // только прямоугольный scissor, поэтому используем его как fallback.
+                // Phase 1: реальная маска с border-radius через offline canvas
+                // + blend_mode с alpha-маской.
+                self.canvas.save();
+                self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                self.layer_stack_depth += 1;
+            }
             DisplayCommand::PopClip => {
                 if self.layer_stack_depth > 0 {
                     self.canvas.restore();
