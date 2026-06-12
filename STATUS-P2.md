@@ -6,9 +6,9 @@
 
 ## In progress
 
-**H-2 | Display P3/Rec2020 canvas/image tone-mapping** (Phase 0)  
+**H-2 | Display P3/Rec2020 canvas/image tone-mapping** (Phase 0–1)  
 Branch: `p2-h2-display-p3`  
-Status: Canvas infrastructure complete; phase 1 (ICC extraction + tone-mapping) next
+Status: Canvas infrastructure + ICC detection complete; phase 2 (tone-mapping matrices) next
 
 ---
 
@@ -33,14 +33,25 @@ Status: Canvas infrastructure complete; phase 1 (ICC extraction + tone-mapping) 
 
 ## Current / Recently Merged
 
-**H-2 | Display P3/Rec2020 canvas/image tone-mapping** 🟡 (Phase 0, 2026-06-12, in progress: p2-h2-display-p3)
+**H-2 | Display P3/Rec2020 canvas/image tone-mapping** 🟡 (Phase 0–1, 2026-06-12, in progress: p2-h2-display-p3)
+
+### Phase 0 ✅
 - `lumen-canvas`: Added `ColorSpace` field to `Context2D` struct; supports sRGB/DisplayP3/Rec2020
 - `color_space()` getter and `set_color_space()` API for wide-gamut color space management
 - 3 unit tests for color space defaults, setting, and preservation in `from_pixels()`
 - Integrated `lumen-layout::style::ColorSpace` into canvas infrastructure
-- Phase 0 complete: Canvas infrastructure ready for tone-mapping
-- Phase 1 (future): ICC profile extraction from PNG (already implemented), AVIF (pending libavif binding)
-- Phase 2 (future): Tone-mapping matrices and `Image::apply_tone_mapping()` pixel-level conversion
+
+### Phase 1 ✅
+- Exported `color_management` module from `lumen-paint` as public API  
+- `Image::detect_color_space()` method to detect ColorSpace from ICC profile
+- PNG ICC profile extraction (already implemented in `parse_png_icc_profile()`)
+- 3 unit tests for color space detection (sRGB default, Display P3, no-ICC)
+- Dependencies: lumen-paint + lumen-layout added to lumen-image
+
+### Phase 2 (next)
+- Tone-mapping matrices: sRGB ↔ Display P3, sRGB ↔ Rec2020  
+- `apply_tone_mapping()` implementation with pixel-level conversion
+- AVIF ICC profile extraction (requires libavif binding extension)
 
 **X-2 | CSS Color L4 system colors** ✅ 2026-06-12 (merged: p2-x2-system-colors)
 - `system_color()` function в `lumen-layout`: полное покрытие CSS Color L4 §6.2 и §11
