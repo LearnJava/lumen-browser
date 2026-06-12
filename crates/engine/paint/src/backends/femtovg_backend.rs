@@ -237,6 +237,11 @@ pub struct FemtovgBackend {
     blend_layer_stack: Vec<BlendLayerEntry>,
     /// Images from blend layers queued for deletion after the next flush.
     blend_layer_pending_delete: Vec<femtovg::ImageId>,
+    /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
+    /// offscreen ImageId that subtree draws render into; PopOpacity composites
+    /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
+    /// overlapping children must not double-blend against the backdrop).
+    opacity_layer_stack: Vec<OpacityLayerEntry>,
     /// Offscreen backdrop-filter layer stack (PA-4). Each entry holds the filtered
     /// backdrop image and element content image for compositing on PopBackdropFilter.
     backdrop_filter_layer_stack: Vec<BackdropFilterLayerEntry>,
@@ -268,6 +273,38 @@ struct FilterLayerEntry {
     /// Filter chain to apply on PopFilter (CSS Filter Effects L1 §4.1).
     filters: Vec<lumen_layout::FilterFn>,
     /// Render target active before PushFilter — restored on PopFilter.
+    prev_render_target: femtovg::RenderTarget,
+}
+
+// ─── Opacity group layer support (BUG-133) ───────────────────────────────────
+
+/// Image flags for the offscreen opacity group layer (BUG-133).
+///
+/// `PREMULTIPLIED` — femtovg renders premultiplied RGBA into image render
+/// targets. `FLIP_Y` — the layer is an FBO (GL bottom-up rows); sampling it as
+/// `Paint::image` at composite time must flip Y back or the whole group
+/// renders upside-down. The CPU compositing paths (PA-2 colour-matrix, PA-3
+/// blend) get the flip for free from their screenshot→re-upload round-trip;
+/// this GPU-only composite does not.
+fn opacity_layer_image_flags() -> femtovg::ImageFlags {
+    femtovg::ImageFlags::PREMULTIPLIED | femtovg::ImageFlags::FLIP_Y
+}
+
+/// Entry pushed onto `FemtovgBackend::opacity_layer_stack` by `PushOpacity`.
+///
+/// The group's subtree renders into the offscreen `image_id`; `PopOpacity`
+/// composites that image onto `prev_render_target` exactly once with the
+/// group `alpha`. Per-draw `set_global_alpha` is wrong for groups: overlapping
+/// children double-blend, negative-z children show through siblings, and a
+/// nested PushOpacity replaces (not multiplies) the outer alpha.
+struct OpacityLayerEntry {
+    /// Offscreen image the group's content renders into. `None` means the
+    /// offscreen image could not be created — fallback `save()` +
+    /// `set_global_alpha` was used and `PopOpacity` must `restore()` instead.
+    image_id: Option<femtovg::ImageId>,
+    /// Group opacity in `[0, 1]`, applied once at composite time.
+    alpha: f32,
+    /// Render target active before PushOpacity — restored on PopOpacity.
     prev_render_target: femtovg::RenderTarget,
 }
 
@@ -594,6 +631,7 @@ impl FemtovgBackend {
             viewport_css_h: size.height as f32 / scale as f32,
             filter_layer_stack: Vec::new(),
             filter_layer_pending_delete: Vec::new(),
+            opacity_layer_stack: Vec::new(),
             blend_layer_stack: Vec::new(),
             blend_layer_pending_delete: Vec::new(),
             backdrop_filter_layer_stack: Vec::new(),
@@ -897,6 +935,33 @@ impl FemtovgBackend {
 
         // Delete after flush (pending, not immediate — fill_path still holds the id).
         self.filter_layer_pending_delete.push(current_id);
+    }
+
+    /// Composites an opacity group layer (BUG-133) onto the previous render target.
+    ///
+    /// The offscreen image already contains the group's subtree rendered with
+    /// full opacity (children correctly occlude each other). One full-canvas
+    /// image draw with `alpha` then blends the whole group against the backdrop
+    /// exactly once. Drawn under `reset_transform` because the layer is in page
+    /// space — any active transform was already applied while drawing INTO it.
+    fn composite_opacity_layer(
+        &mut self,
+        src_id: femtovg::ImageId,
+        alpha: f32,
+        prev_render_target: femtovg::RenderTarget,
+    ) {
+        self.switch_render_target(prev_render_target);
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let css_w = (self.width as f64 / self.scale) as f32;
+        let css_h = (self.height as f64 / self.scale) as f32;
+        let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, alpha);
+        let mut path = femtovg::Path::new();
+        path.rect(0.0, 0.0, css_w, css_h);
+        self.canvas.fill_path(&path, &paint);
+        self.canvas.restore();
+        // Delete after flush — pending GPU commands still reference the id.
+        self.filter_layer_pending_delete.push(src_id);
     }
 
     /// Composites a blend-mode layer (PA-3) onto the previous render target.
@@ -1615,15 +1680,59 @@ impl FemtovgBackend {
             }
 
             // ── Opacity ──────────────────────────────────────────────────────
+            // BUG-133: group opacity is atomic (CSS Color L3 §3.2) — the subtree
+            // renders into an offscreen layer, composited ONCE with the group
+            // alpha. Per-draw set_global_alpha double-blends overlaps, lets
+            // negative-z children show through siblings, and a nested group
+            // replaces (not multiplies) the outer alpha.
             DisplayCommand::PushOpacity { alpha } => {
-                self.canvas.save();
-                self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
+                let prev_rt = self.current_rt();
+                let entry = match self.canvas.create_image_empty(
+                    self.width as usize,
+                    self.height as usize,
+                    femtovg::PixelFormat::Rgba8,
+                    opacity_layer_image_flags(),
+                ) {
+                    Ok(img_id) => {
+                        // Redirect subtree draws into the transparent offscreen layer.
+                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                        self.canvas.clear_rect(
+                            0, 0, self.width, self.height,
+                            femtovg::Color::rgba(0, 0, 0, 0),
+                        );
+                        OpacityLayerEntry {
+                            image_id: Some(img_id),
+                            alpha: alpha.clamp(0.0, 1.0),
+                            prev_render_target: prev_rt,
+                        }
+                    }
+                    Err(_) => {
+                        // Fallback: per-draw alpha (pre-BUG-133 behaviour).
+                        self.canvas.save();
+                        self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
+                        OpacityLayerEntry {
+                            image_id: None,
+                            alpha: alpha.clamp(0.0, 1.0),
+                            prev_render_target: prev_rt,
+                        }
+                    }
+                };
+                self.opacity_layer_stack.push(entry);
                 self.layer_stack_depth += 1;
             }
             DisplayCommand::PopOpacity => {
                 if self.layer_stack_depth > 0 {
-                    self.canvas.restore();
                     self.layer_stack_depth -= 1;
+                }
+                if let Some(entry) = self.opacity_layer_stack.pop() {
+                    match entry.image_id {
+                        Some(img_id) => self.composite_opacity_layer(
+                            img_id,
+                            entry.alpha,
+                            entry.prev_render_target,
+                        ),
+                        None => self.canvas.restore(),
+                    }
                 }
             }
 
@@ -1715,7 +1824,7 @@ impl FemtovgBackend {
             // PA-2: реальный Gaussian blur (GPU via filter_image) и colour-matrix
             // (CPU via flush+screenshot) через offscreen-слой.
             // Только Opacity — легкий путь через set_global_alpha без offscreen.
-            DisplayCommand::PushFilter { filters, bounds } => {
+            DisplayCommand::PushFilter { filters, bounds: _ } => {
                 let needs_offscreen = filters
                     .iter()
                     .any(|f| !matches!(f, lumen_layout::FilterFn::Opacity(_)));
@@ -1726,15 +1835,16 @@ impl FemtovgBackend {
                     // correctly handle nesting with blend layers (PA-3).
                     let prev_rt = self.current_rt();
 
-                    // Compute offscreen layer size: use bounds if provided (box-shadow, text-shadow),
-                    // otherwise fallback to full viewport. Bounds are in CSS px, convert to device px.
-                    let (img_w, img_h) = if let Some(b) = bounds {
-                        let w = ((b.width * self.scale as f32).ceil() as i32).max(1) as usize;
-                        let h = ((b.height * self.scale as f32).ceil() as i32).max(1) as usize;
-                        (w, h)
-                    } else {
-                        (self.width as usize, self.height as usize)
-                    };
+                    // BUG-145: the layer must stay full-RT-sized. `bounds` is the
+                    // element's untransformed border box, but content is drawn into
+                    // the layer in page coordinates (no translation to layer-local
+                    // space), transformed content extends beyond the border box, and
+                    // blur needs ~3σ of padding around it; `composite_filter_layer`
+                    // also composites the layer as a full-viewport quad. A
+                    // bounds-sized layer (BUG-076 attempt) captured the page's
+                    // top-left corner and stretched it across the viewport
+                    // (TEST-30 30.68%, TEST-103 49.59%).
+                    let (img_w, img_h) = (self.width as usize, self.height as usize);
 
                     match self.canvas.create_image_empty(
                         img_w,
@@ -2162,6 +2272,18 @@ fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
 mod tests {
     use super::*;
     use lumen_layout::Length;
+
+    /// BUG-133: the opacity group layer is composited directly from its FBO on
+    /// the GPU (no screenshot→re-upload round-trip), so the image MUST carry
+    /// FLIP_Y — without it the whole group renders upside-down (TEST-102 went
+    /// 17% → 65% when this flag was missing). PREMULTIPLIED matches femtovg's
+    /// render-target pixel format; dropping it double-multiplies alpha.
+    #[test]
+    fn opacity_layer_flags_flip_y_and_premultiplied() {
+        let flags = opacity_layer_image_flags();
+        assert!(flags.contains(femtovg::ImageFlags::FLIP_Y));
+        assert!(flags.contains(femtovg::ImageFlags::PREMULTIPLIED));
+    }
 
     #[test]
     fn downscale_target_triggers_on_large_downscale() {
