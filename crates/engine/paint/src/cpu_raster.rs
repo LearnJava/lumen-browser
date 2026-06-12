@@ -294,7 +294,7 @@ pub(crate) fn rasterize_cpu(
             // effects, the wrapped draws accumulate into a transparent full-size
             // layer; the matching `PopFilter` applies the chain to that layer and
             // composites it down.
-            DisplayCommand::PushFilter { filters } => {
+            DisplayCommand::PushFilter { filters, bounds: _ } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create filter layer")?;
                 layers.push(layer);
