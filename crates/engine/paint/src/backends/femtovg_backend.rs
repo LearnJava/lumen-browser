@@ -1747,7 +1747,7 @@ impl FemtovgBackend {
                             self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                             // Clear to transparent so content composites correctly.
                             self.canvas.clear_rect(
-                                0, 0, img_w as i32, img_h as i32,
+                                0, 0, img_w as u32, img_h as u32,
                                 femtovg::Color::rgba(0, 0, 0, 0),
                             );
                             self.filter_layer_stack.push(FilterLayerEntry {
