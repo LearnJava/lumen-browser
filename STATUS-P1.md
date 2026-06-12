@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет)_
+**AA-3 — Import Attributes** (`import ... with { type: 'json' }`, TC39 Stage 3)
+branch: `p1-aa3-import-attributes`
+Next step: препроцессор `with {}`-блока + side-реестр типов модулей; JSON-модули через `LumenLoader` — `crates/js/src/esm.rs:231`
 
 ---
 
