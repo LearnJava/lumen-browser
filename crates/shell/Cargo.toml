@@ -45,7 +45,7 @@ lumen-layout.workspace = true
 lumen-paint = { workspace = true }
 lumen-font.workspace = true
 lumen-encoding.workspace = true
-lumen-image.workspace = true
+lumen-image = { workspace = true, features = ["avif"] }
 lumen-driver.workspace = true
 lumen-mcp.workspace = true
 
