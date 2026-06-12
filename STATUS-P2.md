@@ -6,8 +6,7 @@
 
 ## In progress
 
-**X-2 | CSS Color L4 system colors** (branch: p2-x2-system-colors)
-Next step: implement system_color() function for Canvas/CanvasText/ButtonFace/… (lumen-layout, system_color fn)
+None. Last task: X-2 (see Recent below).
 
 ---
 
@@ -31,6 +30,16 @@ Next step: implement system_color() function for Canvas/CanvasText/ButtonFace/�
 ---
 
 ## Current / Recently Merged
+
+**X-2 | CSS Color L4 system colors** ✅ 2026-06-12 (merged: p2-x2-system-colors)
+- `system_color()` function в `lumen-layout`: полное покрытие CSS Color L4 §6.2 и §11
+- Canvas/CanvasText/ButtonFace/ButtonText/ButtonBorder/Field/FieldText/LinkText/VisitedText/ActiveText/Highlight/HighlightText/SelectedItem/SelectedItemText/GrayText/Mark/MarkText/AccentColor/AccentColorText
+- Legacy 3D colors: ThreeDHighlight/ThreeDShadow/ThreeDLightShadow/ThreeDDarkShadow
+- Scrollbar legacy colors: Scrollbar/ScrollbarTrack/ScrollbarThumb
+- Синонимы: Window→Canvas, WindowText→CanvasText, ThreeDFace→ButtonBorder
+- 7 новых unit-тестов для scheme switching (light/dark) на новых системных цветах
+- All 2678 lumen-layout tests ✅, Clippy чист
+- Phase 0 завершена; P4 ждёт для подключения в CSS cascade
 
 **X-1 | Color management: ICC profiles** ✅ 2026-06-12 (merged: p2-x1-color-management)
 - `color_management.rs` модуль в `lumen-paint`: `detect_color_space_from_icc()` для определения пространства (sRGB/P3/Rec2020)
