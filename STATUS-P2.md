@@ -6,7 +6,10 @@
 
 ## In progress
 
-None — all tasks complete
+**BUG-085 — Linear/radial gradient rendering** branch: `p2-bug085-gradient-fix`
+- TEST-39: 12.05% deviation vs Edge (threshold 0.5%)
+- Root cause: stop interpolation or AA mismatch
+- Next step: analyze gradient rendering code in paint/display_list.rs; compare with Edge output
 
 ---
 
