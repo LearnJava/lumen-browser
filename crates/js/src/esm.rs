@@ -9,6 +9,7 @@
 //! - Relative specifiers (`./foo.js`, `../bar.js`) resolved against `base_url`.
 //! - Bare specifiers (`lodash`) kept as-is (caller must pre-register them by canonical name).
 
+use crate::import_attributes::{new_type_registry, ModuleType, ModuleTypeRegistry};
 use rquickjs::{loader::{Loader, Resolver}, Ctx, Error, Module, Result as QjsResult};
 use std::{
     collections::HashMap,
@@ -215,15 +216,29 @@ impl Resolver for LumenResolver {
 /// When QuickJS requests a module by specifier (after resolution), this loader
 /// looks it up in the shared registry and compiles it as a JS module.
 /// Missing modules produce `Error::new_loading`.
+///
+/// Import attributes (TC39 Stage 3, `with { type: 'json' }`): when the shared
+/// [`ModuleTypeRegistry`] declares a type for the specifier, the loader applies
+/// it — `json` modules are validated as JSON and compiled as a synthetic
+/// `export default JSON.parse(...)` module; any other type fails the load.
 #[derive(Clone)]
 pub struct LumenLoader {
     registry: ModuleRegistry,
+    /// Declared import-attribute types per resolved specifier (written by the
+    /// `import_attributes` preprocessor in `QuickJsRuntime`).
+    types: ModuleTypeRegistry,
 }
 
 impl LumenLoader {
-    /// Create a loader backed by `registry`.
+    /// Create a loader backed by `registry` with no declared module types.
     pub fn new(registry: ModuleRegistry) -> Self {
-        Self { registry }
+        Self { registry, types: new_type_registry() }
+    }
+
+    /// Create a loader that also consults `types` for import-attribute
+    /// (`with { type: '…' }`) module types.
+    pub fn with_types(registry: ModuleRegistry, types: ModuleTypeRegistry) -> Self {
+        Self { registry, types }
     }
 }
 
@@ -233,9 +248,32 @@ impl Loader for LumenLoader {
             let guard = self.registry.lock().unwrap_or_else(|e| e.into_inner());
             guard.get(specifier).cloned()
         };
-        match source {
-            Some(src) => Module::declare(ctx.clone(), specifier, src.as_bytes()),
-            None => Err(Error::new_loading(specifier)),
+        let declared_type = {
+            let guard = self.types.lock().unwrap_or_else(|e| e.into_inner());
+            guard.get(specifier).cloned()
+        };
+        match (source, declared_type) {
+            (Some(src), Some(ModuleType::Json)) => {
+                // JSON-assert guard: a module imported `with { type: 'json' }`
+                // must be valid JSON, otherwise the import fails to load.
+                if serde_json::from_str::<serde_json::Value>(&src).is_err() {
+                    return Err(Error::new_loading_message(
+                        specifier,
+                        "module is not valid JSON (imported with { type: 'json' })",
+                    ));
+                }
+                // Embed the JSON text as a JS string literal (serde escaping is
+                // a valid JS string) and default-export the parsed value.
+                let literal = serde_json::to_string(&src).map_err(|_| Error::new_loading(specifier))?;
+                let synth = format!("export default JSON.parse({literal});");
+                Module::declare(ctx.clone(), specifier, synth.as_bytes())
+            }
+            (Some(_), Some(ModuleType::Unsupported(ty))) => Err(Error::new_loading_message(
+                specifier,
+                format!("unsupported import attribute type '{ty}'"),
+            )),
+            (Some(src), None) => Module::declare(ctx.clone(), specifier, src.as_bytes()),
+            (None, _) => Err(Error::new_loading(specifier)),
         }
     }
 }
