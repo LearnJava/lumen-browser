@@ -6,8 +6,16 @@
 
 ## In progress
 
-**BUG-076 Regression — box-shadow blur, TEST-15 6.58% (was 1.06% FIXED 2026-06-11)** branch: `p2-canvas-text-phase3`
-Next step: Диагностика регрессии в femtovg_backend.rs: filter-layer, blur-parameter, или composite logic
+None — 2026-06-12 diagnostics complete
+
+**Последний прогон:**
+- TEST-106 (BUG-137 transform×z-index) — FIXED (0.02%, was 4.02%)
+- TEST-108 (nested-transforms) — PASS (0.00%)
+- TEST-66 (BUG-108 ::selection) — FAIL (5.24%, was 6.18%) — improved but still open
+- TEST-15 (BUG-076 box-shadow) — FAIL (6.58%, was 1.06%) — **REGRESSION IDENTIFIED**
+  - Root cause: PA-2 offscreen filter layer uses full viewport for small shadows
+  - Решение: requires bounds tracking in DisplayCommand::PushFilter
+  - Effort: medium (3-4 hours refactoring)
 
 ---
 
