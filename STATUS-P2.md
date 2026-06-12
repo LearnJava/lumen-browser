@@ -6,10 +6,11 @@
 
 ## In progress
 
-**BUG-088 — CSS Transforms individual properties**, branch: `p2-bug088-transforms`
-- Current status: 4.63% diff (down from 9.57%), code already mostly implemented in property_trees.rs
-- Investigation: transforms apply correctly, difference likely due to pixel-antialiasing between Edge and Lumen
-- Next: analyze screenshot diff and determine if remaining gap requires paint-layer fixes or can be deferred
+**BUG-132 — INTERACTION TEST-101 (border-radius×overflow)**, branch: `p2-bug132-radius-overflow`
+- Current status: 4.04% diff, INTERACTION test combining TEST-36 (border-radius) and TEST-14 (overflow:hidden)
+- Issue: overflow:hidden on rounded boxes must clip children to rounded border-box, not rectangular
+- Code location: lumen-paint display_list.rs (PushClipRect generation), possible precision issue in radius curve clipping
+- Next: compare screenshot diff and verify rounded-clip masking accuracy
 
 ---
 
