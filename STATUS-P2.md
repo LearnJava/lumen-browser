@@ -6,7 +6,8 @@
 
 ## In progress
 
-None. Last task: X-1 (see Recent below).
+**X-2 | CSS Color L4 system colors** (branch: p2-x2-system-colors)
+Next step: implement system_color() function for Canvas/CanvasText/ButtonFace/… (lumen-layout, system_color fn)
 
 ---
 
