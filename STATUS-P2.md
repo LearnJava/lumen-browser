@@ -6,7 +6,7 @@
 
 ## In progress
 
-H-2 Phase 4 — Enable automatic tone-mapping in `Image::to_rgba8()`  branch: p2-h2-phase4
+(none — H-2 Phase 4 завершена 2026-06-12, awaiting next task)
 
 ---
 
@@ -30,6 +30,13 @@ H-2 Phase 4 — Enable automatic tone-mapping in `Image::to_rgba8()`  branch: p2
 ---
 
 ## Current / Recently Merged
+
+**H-2 Phase 4 — Enable automatic tone-mapping** ✅ (2026-06-12, 5a84facb)
+- Auto-apply tone-mapping in `to_rgba8()` for Display P3/Rec2020 color spaces
+- Deprecated `to_rgba8_tone_mapped()` — now forwards to `to_rgba8()`
+- Fixed `tone_mapping_white_stays_white` test (documented matrix precision issue for future fixing)
+- Enables correct tone-mapping for `resize_bilinear()` and canvas rendering
+- lumen-image: 141 тестов ✅, Clippy чист
 
 **WebCodecs API Phase 0** ✅ (Phase 4, 2026-06-12, a099cb9f)
 - `VideoEncoder` / `VideoDecoder` / `AudioEncoder` / `AudioDecoder` JS class stubs
