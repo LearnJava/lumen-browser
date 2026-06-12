@@ -920,7 +920,8 @@ mod tests {
         p.visible = true;
         let (px, py) = panel_origin(800.0, 600.0);
         let field_x = px + PAD_H + LABEL_W + 10.0;
-        let row_abs_y = py + row_y(3) + ROW_H / 2.0;
+        // Page range moved to row 4 when W-2b inserted the Scale row at row 3.
+        let row_abs_y = py + row_y(4) + ROW_H / 2.0;
         assert_eq!(hit_test(&p, field_x, row_abs_y, 800.0, 600.0), PrintHit::PageRangeField);
     }
 
