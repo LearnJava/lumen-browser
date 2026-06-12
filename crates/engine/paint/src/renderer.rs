@@ -4521,6 +4521,14 @@ impl Renderer {
                     };
                     clip_stack.push(new);
                 }
+                DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let new = match clip_stack.last() {
+                        Some(prev) => intersect_rects(*prev, scrolled),
+                        None => scrolled,
+                    };
+                    clip_stack.push(new);
+                }
                 DisplayCommand::PopClip => {
                     clip_stack.pop();
                 }

@@ -11853,6 +11853,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawRadialGradient { rect, .. }
             | DisplayCommand::DrawConicGradient { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. }
+            | DisplayCommand::PushClipRoundedRect { rect, .. }
             | DisplayCommand::PushMaskImage { rect, .. }
             | DisplayCommand::PushMaskLinearGradient { rect, .. }
             | DisplayCommand::PushMaskRadialGradient { rect, .. }
@@ -11908,6 +11909,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawRadialGradient { rect, .. }
             | DisplayCommand::DrawConicGradient { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. }
+            | DisplayCommand::PushClipRoundedRect { rect, .. }
             | DisplayCommand::PushMaskImage { rect, .. }
             | DisplayCommand::PushMaskLinearGradient { rect, .. }
             | DisplayCommand::PushMaskRadialGradient { rect, .. }

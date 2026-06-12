@@ -6,9 +6,7 @@
 
 ## In progress
 
-**BUG-092 — CSS переменные var() в cascade**  
-Branch: `p2-bug092-css-vars`  
-Next step: Анализ TEST-50 и compute_style() для переменных в `crates/engine/layout/src/style.rs`
+None — BUG-092 investigation complete (TEST-50 already PASS)
 
 ---
 
@@ -36,6 +34,12 @@ Next step: Анализ TEST-50 и compute_style() для переменных �
 ---
 
 ## Current / Recently Merged
+
+**BUG-092 — CSS переменные var() в cascade** ✅ (2026-06-12, verified PASS)
+- TEST-50 (CSS Variables L1): 0.0001% diff, **PASS** (threshold 0.5%)
+- Root cause: No root cause found — var() substitution already working correctly (basic, nested, fallback, calc(), inheritance)
+- Investigation: dump-layout confirms correct color values applied via variable substitution
+- Resolution: Marked as FIXED; likely fixed as collateral benefit from prior cascade/inheritance work
 
 **BUG-132 — border-radius + overflow clipping (PushClipRoundedRect)** ✅ (2026-06-12, Phase 0)
 - `DisplayCommand::PushClipRoundedRect { rect: Rect, radii: [f32; 4] }` added to display_list.rs
