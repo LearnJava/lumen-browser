@@ -6,8 +6,7 @@
 
 ## In progress
 
-**AA-5: Trusted Types API Phase 0**  branch: `p1-aa5-trusted-types`
-Next step: `window.trustedTypes` singleton + `createPolicy()` в `lumen-js` (JS-шим рядом с AbortSignal из AA-4)
+_(нет)_
 
 ---
 
@@ -20,7 +19,7 @@ Next step: `window.trustedTypes` singleton + `createPolicy()` в `lumen-js` (JS-
 | ~~AA-1~~ | ~~**JS Decorators Phase 0**~~ — **выполнено** (p1-aa1-js-decorators, 2026-06-12) | S | `lumen-js` |
 | ~~AA-3~~ | ~~**Import Attributes**~~ — **выполнено** (p1-aa3-import-attributes, 2026-06-12) | S | `lumen-js` |
 | ~~AA-4~~ | ~~**`AbortSignal.timeout(ms)` + `AbortSignal.any([sig1, sig2])`**~~ — **выполнено** (p1-aa4-abortsignal, 2026-06-12) | XS | `lumen-js` |
-| AA-5 | **Trusted Types API Phase 0** — W3C Trusted Types L2: `TrustedTypePolicy`, `TrustedHTML`/`TrustedScript`/`TrustedScriptURL`; `window.trustedTypes` singleton; `createPolicy()`; `DefaultPolicy` guard; no-op enforcement (Phase 0); 7 unit-тестов | S | `lumen-js` |
+| ~~AA-5~~ | ~~**Trusted Types API Phase 0**~~ — **выполнено** (p1-aa5-trusted-types, 2026-06-12): rule-колбэки + DefaultPolicy guard + brand checks + emptyHTML/emptyScript + sink tables; без enforcement | S | `lumen-js` |
 
 ### BB — Layout algorithms Phase 3
 
