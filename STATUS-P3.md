@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(пусто)_
+**BUG-140** — INTERACTION TEST-109 (clip-path×transform×radius, 14.10%): clip-path не переносится сквозь transform элемента, клип родителя не режет transformed-ребёнка, clip-path∩border-radius. branch: `p3-bug140-clip-transform`
+Next step: `python graphic_tests/run.py --bisect 109` на свежей сборке → локализовать в `crates/engine/paint/src/display_list.rs` / `femtovg_backend.rs`
 
 ## Next
 
