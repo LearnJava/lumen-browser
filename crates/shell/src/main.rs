@@ -69,8 +69,6 @@ use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
-#[cfg(feature = "quickjs")]
-use lumen_js;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_storage::{BfCache, BfCacheEntry, History, SearchHistory};
 use lumen_dom::{
@@ -601,8 +599,8 @@ fn do_print_to_pdf_with_opts(
     let raw = source.load_bytes(event_sink.clone(), None)?;
     // Apply scale to viewport (W-2b): 50–200% zoom
     let scale_factor = scale as f32 / 100.0;
-    let scaled_w = (PDF_PAGE_W as f32 * scale_factor).ceil() as f32;
-    let scaled_h = (PDF_PAGE_H as f32 * scale_factor).ceil() as f32;
+    let scaled_w = (PDF_PAGE_W as f32 * scale_factor).ceil();
+    let scaled_h = (PDF_PAGE_H as f32 * scale_factor).ceil();
     let vp = Size::new(scaled_w, scaled_h);
     let parsed = parse_and_layout(
         &raw.bytes,
@@ -3491,6 +3489,10 @@ fn run_scripts_with_dom(
     let mut scripts: Vec<String> = Vec::new();
     let mut module_scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut module_scripts);
+    // Import map must be captured before `doc` moves into the Arc and applied
+    // to the runtime before any module evaluation (HTML LS §8.1.6.2).
+    #[cfg(feature = "quickjs")]
+    let import_map = collect_import_map(&doc);
 
     let doc_arc = Arc::new(Mutex::new(doc));
 
@@ -3516,6 +3518,9 @@ fn run_scripts_with_dom(
                 }
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend) {
                     eprintln!("JS DOM init failed: {e}");
+                }
+                if let Some(map) = import_map {
+                    rt.set_import_map(map);
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for src in &scripts {
@@ -4709,7 +4714,7 @@ impl Lumen {
                         || Size::new(1024.0, 720.0),
                         |r| {
                             let s = r.viewport_size();
-                            Size::new(s.width as f32, s.height as f32)
+                            Size::new(s.width, s.height)
                         },
                     );
                     js.update_layout_rects(collect_layout_rects(lb_ref));

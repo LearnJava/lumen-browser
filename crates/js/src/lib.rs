@@ -380,6 +380,16 @@ impl QuickJsRuntime {
             .insert(specifier.to_owned(), source);
     }
 
+    /// Set the import map (HTML LS §8.1.6.2) used by the module resolver.
+    ///
+    /// Call before `eval_module` — bare specifiers like `"react"` then resolve
+    /// through the map (exact match or longest prefix, see `ImportMap::resolve`).
+    pub fn set_import_map(&self, map: esm::ImportMap) {
+        if let Ok(mut guard) = self.module_import_map.lock() {
+            *guard = map;
+        }
+    }
+
     /// Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`).
     ///
     /// Assigns a virtual `lumen://inline-N` specifier for relative-import resolution.

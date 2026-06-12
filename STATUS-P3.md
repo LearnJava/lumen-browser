@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(пусто)_
+**BUG-147 + BUG-148 — зелёный main в lumen-shell**  branch: `p3-bug147-148-shell`
+Next step: BUG-147 — clippy `-D warnings` падает на main (redundant `use lumen_js;` main.rs:73, dead code collect_import_map main.rs:3358, 4× лишний f32-каст main.rs:604-605,4712); BUG-148 — тест `panels::print_panel::tests::hit_page_range_field` (кнопки масштаба перекрывают rect page-range) `crates/shell/src/panels/print_panel.rs:924`
 
 ## Next
 
