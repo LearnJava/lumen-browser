@@ -15,7 +15,7 @@ path = "src/main.rs"
 # Phase 2 defaults: femtovg primary + wgpu fallback (ADR-010 RB-9).
 # Both must be in default so that #[cfg(feature = "backend-*")] guards in
 # backend_factory.rs compile the real backends, not the stub error paths.
-default = ["backend-femtovg", "backend-wgpu"]
+default = ["backend-femtovg", "backend-wgpu", "quickjs"]
 
 # Enable QuickJS JavaScript engine (rquickjs). Without this feature the shell
 # falls back to NullJsRuntime which silently ignores all inline scripts.
