@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**AA-2: AsyncContext Phase 0** (TC39 Stage 2.7)  branch: `p1-aa2-asynccontext`
+Next step: новый модуль `crates/js/src/async_context.rs` — `AsyncContext.Variable` + `AsyncContext.Snapshot`, propagation через микротаски (патч `Promise.prototype.then` + `queueMicrotask`); install в lib.rs рядом с tc39_proposals (crates/js/src/lib.rs:780)
 
 ---
 
@@ -16,8 +17,7 @@ _(нет)_
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| AA-1 | **JS Decorators Phase 0** — синтаксис `@decorator` для class/method/field; JS-трансформер-шим в WEB_API_SHIM; `ClassDecorator`/`MethodDecorator` well-known symbols; `// CSS: n/a`; 6 unit-тестов | S | `lumen-js` |
-| AA-2 | **AsyncContext Phase 0** (TC39 Stage 2.7) — `AsyncContext.Variable` + `AsyncContext.Snapshot`; propagation через микротаски; no-op за пределами async chains (Phase 0); 5 unit-тестов | S | `lumen-js` |
+| ~~AA-1~~ | ~~**JS Decorators Phase 0**~~ — **выполнено** (p1-aa1-js-decorators, 2026-06-12) | S | `lumen-js` |
 | AA-3 | **Import Attributes** (`import ... with { type: 'json' }`, Stage 3) — обновить module loader: парсить `with {}`-блок, передавать type в `_lumen_module_load`; JSON-assert guard; 4 unit-теста | S | `lumen-js` |
 | AA-4 | **`AbortSignal.timeout(ms)` + `AbortSignal.any([sig1, sig2])`** — EC: `AbortSignal.timeout` создаёт таймерный сигнал через `_lumen_set_timeout`; `any()` races; интеграция с `fetch`-шимом; 6 unit-тестов | XS | `lumen-js` |
 | AA-5 | **Trusted Types API Phase 0** — W3C Trusted Types L2: `TrustedTypePolicy`, `TrustedHTML`/`TrustedScript`/`TrustedScriptURL`; `window.trustedTypes` singleton; `createPolicy()`; `DefaultPolicy` guard; no-op enforcement (Phase 0); 7 unit-тестов | S | `lumen-js` |
