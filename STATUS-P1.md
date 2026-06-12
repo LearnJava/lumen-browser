@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**AA-1 — JS Decorators Phase 0**  branch: `p1-aa1-js-decorators`
+Next step: модуль `crates/js/src/decorators.rs` — JS-трансформер `__lumen_transform_decorators` + well-known символы; хук в `JsRuntime::eval` (crates/js/src/lib.rs:1646)
 
 ---
 
