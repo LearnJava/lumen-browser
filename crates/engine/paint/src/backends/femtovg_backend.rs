@@ -72,12 +72,15 @@ fn lumen_to_fvg(c: Color) -> femtovg::Color {
 /// Разрешает `GradientStop.position` в [0,1], равномерно распределяя `None` позиции.
 ///
 /// Thin wrapper над общим [`crate::gradient_math::resolve_stop_positions`]
-/// (единый алгоритм для всех бэкендов, PA-1): позиции дополнительно зажимаются
-/// в [0,1] — femtovg-библиотечные градиенты не принимают значения вне диапазона.
-fn resolve_stops(stops: &[GradientStop], width: f32) -> Vec<(f32, femtovg::Color)> {
+/// (единый алгоритм для всех бэкендов, PA-1): позиции зажимаются в [0,1] только для
+/// обычных градиентов; repeating-градиенты позволяют значения вне [0,1] для создания паттерна.
+fn resolve_stops(stops: &[GradientStop], width: f32, repeating: bool) -> Vec<(f32, femtovg::Color)> {
     crate::gradient_math::resolve_stop_positions(stops, width)
         .into_iter()
-        .map(|(pos, c)| (pos.clamp(0.0, 1.0), lumen_to_fvg(c)))
+        .map(|(pos, c)| {
+            let clamped_pos = if repeating { pos } else { pos.clamp(0.0, 1.0) };
+            (clamped_pos, lumen_to_fvg(c))
+        })
         .collect()
 }
 
@@ -1468,14 +1471,14 @@ impl FemtovgBackend {
             }
 
             // ── Gradients ───────────────────────────────────────────────────
-            DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, .. } => {
+            DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
                 if rect.width <= 0.0 || rect.height <= 0.0 || stops.is_empty() {
                     return;
                 }
                 let ([sx, sy], [ex, ey]) = linear_gradient_endpoints(
                     rect.x, rect.y, rect.width, rect.height, *angle_deg,
                 );
-                let resolved = resolve_stops(stops, rect.width);
+                let resolved = resolve_stops(stops, rect.width, *repeating);
                 if resolved.len() < 2 {
                     return;
                 }
@@ -1488,7 +1491,7 @@ impl FemtovgBackend {
                 self.canvas.fill_path(&path, &paint);
             }
 
-            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, .. } => {
+            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
                 if rect.width <= 0.0 || rect.height <= 0.0 || stops.is_empty() {
                     return;
                 }
@@ -1497,7 +1500,7 @@ impl FemtovgBackend {
                 let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
                 let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
                 let outer_r = dx.hypot(dy).max(1.0);
-                let resolved = resolve_stops(stops, outer_r);
+                let resolved = resolve_stops(stops, outer_r, *repeating);
                 if resolved.len() < 2 {
                     return;
                 }
@@ -2393,7 +2396,7 @@ mod tests {
             GradientStop { color: Color::WHITE, position: None },
             GradientStop { color: Color::BLACK, position: None },
         ];
-        let resolved = resolve_stops(&stops, 100.0);
+        let resolved = resolve_stops(&stops, 100.0, false);
         assert_eq!(resolved.len(), 2);
         assert!((resolved[0].0).abs() < 1e-5);
         assert!((resolved[1].0 - 1.0).abs() < 1e-5);
@@ -2406,7 +2409,7 @@ mod tests {
             GradientStop { color: Color::BLACK, position: Some(Length::Percent(50.0)) },
             GradientStop { color: Color::WHITE, position: Some(Length::Percent(100.0)) },
         ];
-        let resolved = resolve_stops(&stops, 100.0);
+        let resolved = resolve_stops(&stops, 100.0, false);
         assert_eq!(resolved.len(), 3);
         assert!((resolved[1].0 - 0.5).abs() < 1e-5);
     }
