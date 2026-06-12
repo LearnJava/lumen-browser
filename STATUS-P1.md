@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**AA-4: `AbortSignal.timeout(ms)` + `AbortSignal.any([signals])`**  branch: `p1-aa4-abortsignal`
+Next step: довести Phase 0 заглушки до спеки — проброс `reason` в `any()`, `onabort`, статический `AbortSignal.abort()`, интеграция с fetch-шимом  [crates/js/src/dom.rs:5561](crates/js/src/dom.rs)
 
 ---
 
