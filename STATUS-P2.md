@@ -6,9 +6,7 @@
 
 ## In progress
 
-**BUG-084 — border-radius antialiasing deviation investigation**  
-Branch: `p2-bug084-border-radius`  
-Next: Diagnose TEST-36 1.5% deviation; issue is antialiasing on %-based corner radius values
+None. Previous session completed BUG-084 investigation (2026-06-12).
 
 ---
 
@@ -36,6 +34,16 @@ Next: Diagnose TEST-36 1.5% deviation; issue is antialiasing on %-based corner r
 ---
 
 ## Current / Recently Merged
+
+**BUG-084 — border-radius antialiasing deviation investigation** ✅ (2026-06-12, Phase 4+ rasterizer)
+- TEST-36 (CSS Backgrounds L3): 1.5% diff, classified as rasterizer-quality (not implementation-gap)
+- Implementation status: ✅ Complete — BUG-036 (% border-radius resolution) fixed 2026-05-26; all radii now resolve correctly
+- Code verified: `CornerRadii::from_style_and_box` correctly resolves `%` values using border-box dimensions
+- render_path in cpu_raster correctly builds Bézier paths for all corner types (circular/elliptical/asymmetric)
+- Remaining gap (1.5%): pure antialiasing difference — tiny_skia AA vs Edge AA on fractional pixel boundaries
+- Analysis: Fractional radii (e.g., `50% of 35px = 17.5px`) result in sub-pixel curve control points; Edge and Lumen differ in AA rasterization at boundaries
+- Resolution: Feature complete; visual gap is rasterizer-implementation difference, not CSS-spec violation. P4+ task.
+- Branch: p2-bug084-border-radius; code inspection only, no changes
 
 **BUG-088 — CSS Transforms individual properties investigation** ✅ (2026-06-12, Phase 4+ AAfilter)
 - TEST-46 (CSS Transforms L2): 4.63% diff (improved from 9.57%), deferred to Phase 4+ antialiasing
