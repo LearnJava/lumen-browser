@@ -6,11 +6,7 @@
 
 ## In progress
 
-None — BUG-132 fix merged
-
-Recent investigation:
-- **BUG-088** (4.63%): Individual CSS transforms translate/rotate/scale fully implemented, gap is antialiasing
-- **BUG-132** (4.04%): Root cause found — PushClipRect uses scissor (rectangular) instead of rounded clip mask; needs PushClipRoundedRect DisplayCommand + femtovg_backend implementation
+None — Phase 2/3 complete, BUG-132 merged
 
 ---
 
@@ -38,6 +34,14 @@ Recent investigation:
 ---
 
 ## Current / Recently Merged
+
+**BUG-132 — border-radius + overflow clipping (PushClipRoundedRect)** ✅ (2026-06-12, Phase 0)
+- `DisplayCommand::PushClipRoundedRect { rect: Rect, radii: [f32; 4] }` added to display_list.rs
+- `box_layer_ops()` emits PushClipRoundedRect instead of PushClipRect for `overflow:hidden|clip|paint-contain` with `border-radius`
+- Border-radius values resolved by padding-width basis (matching CornerRadii::from_style)
+- femtovg_backend: PushClipRoundedRect → scissor fallback (Phase 1: real mask via offline canvas + alpha)
+- 689 lumen-paint tests ✅, Clippy clean
+- Next: Phase 1 — rounded path clipping with offline render + blend_mode
 
 **Canvas 2D Phase 6 — filter property + ImageBitmapRenderingContext stubs** ✅ (2026-06-12, Phase 0)
 - `DrawState.filter: Vec<FilterFn>` field added; saved/restored in save/restore (Phase 0 empty)
