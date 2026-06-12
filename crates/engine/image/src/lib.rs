@@ -328,23 +328,8 @@ pub struct Image {
 
 impl Image {
     /// Возвращает пиксели в формате RGBA8 (4 байта на пиксель).
-    ///
-    /// Автоматически применяет ICC color correction если профиль присутствует.
     #[must_use]
-    #[allow(clippy::collapsible_if)]
     pub fn to_rgba8(&self) -> Vec<u8> {
-        let mut out = self.to_rgba8_raw();
-        if let Some(profile) = &self.icc_profile {
-            if profile.is_valid() {
-                correct_rgba_pixels(&mut out, profile);
-            }
-        }
-        out
-    }
-
-    /// Возвращает пиксели в формате RGBA8 без применения ICC коррекции.
-    #[must_use]
-    pub fn to_rgba8_raw(&self) -> Vec<u8> {
         let pixel_count = self.width as usize * self.height as usize;
         let mut out = Vec::with_capacity(pixel_count * 4);
         match self.format {
