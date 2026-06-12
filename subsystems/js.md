@@ -212,6 +212,13 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Phase 0 limits (documented in module): field decorator exprs evaluated per instantiation; class expressions / anonymous classes / accessors / `#private` / computed names unsupported.
   - 10 unit tests. All pass.
 
+- **AsyncContext (TC39 Stage 2.7) Phase 0** (`crates/js/src/async_context.rs`). 2026-06-12 (P1, AA-2).
+  - `AsyncContext.Variable` (`{name, defaultValue}` options; `get()` / `run(value, fn, ...args)`) and `AsyncContext.Snapshot` (`run(fn, ...args)`, static `wrap(fn)`). Pure-JS shim, installed after the DOM shim.
+  - Context mapping = copy-on-write `Map` keyed by Variable identity; internals in WeakMaps (untamperable). `run` restores the previous mapping on exit, including on throw.
+  - Microtask propagation: `Promise.prototype.then` patched to capture the mapping at registration and restore it around reactions. `catch`/`finally` delegate to the public `then`, `queueMicrotask` is `Promise.resolve().then(fn)` in the DOM shim — all covered by the single patch.
+  - Phase 0 limits (documented in module): `await` continuations (engine-internal `PerformPromiseThen`) and tasks (`setTimeout`, event handlers) do not propagate — use `Snapshot.wrap` manually.
+  - 8 unit tests. All pass.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
