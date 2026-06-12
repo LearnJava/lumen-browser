@@ -1329,6 +1329,17 @@ pub(crate) trait PersistentJs {
     /// dialog or direct PDF export.
     #[allow(dead_code)]
     fn take_print_requests(&self) -> Vec<lumen_js::PrintRequest>;
+    /// Drain page-level scroll requests from JS `window.scrollTo` / `window.scrollBy`.
+    ///
+    /// Returns `(target_y, smooth)` pairs where `smooth` indicates whether the scroll
+    /// should be animated (CSS Scroll Behavior L1).
+    #[allow(dead_code)]
+    fn take_page_scroll_requests(&self) -> Vec<(f32, bool)>;
+    /// Synchronize the current page scroll position (`window.scrollY`) into the JS runtime.
+    ///
+    /// Called after scroll updates to keep JS reads of `window.scrollY` accurate.
+    #[allow(dead_code)]
+    fn set_page_scroll_y(&self, y: f32);
     /// Adjust the QuickJS GC based on the tab's lifecycle tier (10L).
     ///
     /// `level` encodes aggressiveness: 0 = Soft (active tab, reset threshold),
@@ -1549,11 +1560,18 @@ impl PersistentJs for QuickPersistentJs {
             .map(|ev| match ev {
                 lumen_js::ViewTransitionEvent::Begin => ViewTransitionEvent::Begin,
                 lumen_js::ViewTransitionEvent::End => ViewTransitionEvent::End,
+                lumen_js::ViewTransitionEvent::Cancel => ViewTransitionEvent::Cancel,
             })
             .collect()
     }
     fn take_print_requests(&self) -> Vec<lumen_js::PrintRequest> {
         self.rt.take_print_requests()
+    }
+    fn take_page_scroll_requests(&self) -> Vec<(f32, bool)> {
+        self.rt.take_page_scroll_requests()
+    }
+    fn set_page_scroll_y(&self, y: f32) {
+        self.rt.set_page_scroll_y(y)
     }
     fn run_gc_pass(&self, level: u8) {
         use lumen_js::gc_policy::GcLevel;
@@ -4287,6 +4305,8 @@ enum ViewTransitionEvent {
     Begin,
     /// Callback finished — shell should relayout and start the cross-fade animation.
     End,
+    /// Transition was cancelled (nested startViewTransition or explicit abort).
+    Cancel,
 }
 
 impl Lumen {
@@ -4337,7 +4357,7 @@ impl Lumen {
         #[cfg(feature = "quickjs")]
         if let Some(js) = self.js_ctx.as_ref() {
             let json = platform::file_dialog::entries_to_json(&entries);
-            js.eval_js(&format!("_lumen_deliver_file_list({}, {})", id.0, json));
+            js.eval_js(&format!("_lumen_deliver_file_list({}, {})", id.index(), json));
         }
         #[cfg(not(feature = "quickjs"))]
         let _ = entries;
@@ -4479,7 +4499,7 @@ impl Lumen {
             PageSource::File(p) => ResourceBase::File(p.clone()),
             PageSource::Url(u) => ResourceBase::Url(u.clone()),
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-            PageSource::Empty => return,
+            PageSource::Empty | PageSource::AboutBlank => return,
         };
         for (nid, url) in requests {
             let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
@@ -5415,6 +5435,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             w.request_redraw();
                         }
                     }
+                    ViewTransitionEvent::Cancel => {
+                        // Transition was cancelled — abort the animation.
+                        self.view_transition = None;
+                    }
                 }
             }
         }
@@ -5784,10 +5808,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let delta_x = x_css - start_x;
                     let delta_y = y_css - start_y;
                     let nid_u32 = node_id.index() as u32;
-                    self.eval_js(&format!(
-                        "_lumen_apply_resize({}, {}, {});",
-                        nid_u32, delta_x, delta_y
-                    ));
+                    #[cfg(feature = "quickjs")]
+                    if let Some(js) = self.js_ctx.as_ref() {
+                        js.eval_js(&format!(
+                            "_lumen_apply_resize({}, {}, {});",
+                            nid_u32, delta_x, delta_y
+                        ));
+                    }
                     self.request_redraw();
                 }
             }
