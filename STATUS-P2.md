@@ -6,7 +6,10 @@
 
 ## In progress
 
-None currently assigned.
+**BUG-090 — -webkit-line-clamp text truncation**
+- Branch: `p2-bug090-webkit-line-clamp`
+- Next step: investigate TEST-48 diff, identify root cause in line wrapping logic
+- Status: starting investigation
 
 ---
 
