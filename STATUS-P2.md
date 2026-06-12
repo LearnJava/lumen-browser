@@ -6,26 +6,38 @@
 
 ## In progress
 
-(none — H-2 Phase 4 завершена 2026-06-12, awaiting next task)
+**BUG-085 — gradient rendering deviation**
+- branch: `p2-bug085-gradient-deviation`
+- TEST-39 (linear/radial gradients): 12.05% deviation
+- Problem: gradient stop interpolation or antialiasing mismatch with Edge
+- Location: `crates/engine/paint/src/backends/femtovg_backend.rs` + `gradient_math.rs`
+- Status: Investigated code; branch needs rebase on origin/main for API sync
+- Key finding: `resolve_stop_positions()` intentionally doesn't clamp to [0,1] (for repeating gradients), but `femtovg_backend.rs` line 80 clamps them. Possible mismatch.
+- Next: Rebase, sync API, run TEST-39 to measure deviation
 
 ---
 
 ## Next
 
-### Phase 3 — Printing & Advanced Rendering (P2 приоритет)
+**Phase 2 и Phase 3 завершены.** Доступные направления:
 
-| # | Задача | Размер | Крейты | Статус |
-|---|--------|--------|--------|--------|
-| W-2b | **Print preview UI dialog** — interactive dialog для выбора параметров, сохранение в диалоге | M | `lumen-shell` | ✅ |
-| W-2c | **Page break parsing** — полная реализация CSS `page-break-before/after` в layout | M | `lumen-layout` | ✅ |
+### Опция 1: Bug fixes (P3 вспомога)
 
-### Phase 3 — Graphics & Color (P2 будущее) — ✅ ЗАВЕРШЕНА
+Открытые баги с высоким отклонением (TEST-39, TEST-46, TEST-48):
+- **BUG-085** (Linear/radial gradient 12%) — paint domain, gradient rendering
+- **BUG-088** (CSS Transforms individual properties 9.5%) — requires P4 cascade wiring
+- **BUG-090** (-webkit-line-clamp 23.8%) — layout domain
+- **BUG-101** (image-set / cross-fade 27.6%) — canvas/paint, closely related to Phase 2
 
-| # | Задача | Размер | Крейты | Статус |
-|---|--------|--------|--------|--------|
-| ~~H-1~~ | ~~**AVIF image decoder**~~ — **выполнено** | M | `lumen-image` | ✅ |
-| ~~H-2~~ | ~~**Display P3/Rec2020 canvas/image tone-mapping**~~ — **выполнено** | M | `lumen-paint` | ✅ |
+### Опция 2: Canvas Phase extensions (Phase 2 continuation)
 
+- Canvas 2D Text rendering completeness (BUG-099 continuation)
+- Advanced canvas patterns / shadows refinement
+
+### Опция 3: Color management Phase 1 extension
+
+- Lab/CMYK color space support (H-2 Phase 1+)
+- Device-specific tone curves + advanced ICC features
 
 ---
 
