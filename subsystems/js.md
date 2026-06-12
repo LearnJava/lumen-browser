@@ -31,6 +31,7 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - `Response.ok` (200–299), `Response.text()` / `Response.json()` returning Promises, `Headers` case-insensitive get/set/has/delete.
   - `AbortController.abort()` sets `signal.aborted = true`.
   - 109 JS tests (was 35 before). All pass.
+  - **AA-4 (2026-06-12):** `AbortSignal.abort(reason)` / `AbortSignal.timeout(ms)` (TimeoutError via setTimeout shim) / `AbortSignal.any(signals)` statics per DOM §3.2.2. `any()` adopts the first aborting source's reason and detaches listeners once the race is decided. `onabort` handler fires alongside `addEventListener` listeners (shared `_lumen_abort_signal_fire` helper). `fetch()` pre-flight check: already-aborted `init.signal`/`Request.signal` rejects with `signal.reason` before any network call (Fetch §4.1 step 13; no in-flight abort — fetch is synchronous).
 - **Web Storage API** (`install_dom_api`, `crates/js/src/dom.rs`). 2026-05-25.
   - 12 native `_lumen_ls_*` / `_lumen_ss_*` bindings (length, key, get, set, remove, clear for localStorage + sessionStorage).
   - `install_dom` now accepts `ls_store: Option<Arc<Mutex<WebStorage>>>` — `None` → fresh in-memory store.
