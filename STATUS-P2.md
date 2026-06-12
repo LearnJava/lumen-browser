@@ -6,7 +6,7 @@
 
 ## In progress
 
-H-1: AVIF image decoder — branch: p2-h1-avif-decoder
+None. Last task: H-1 (see Recent below).
 
 ---
 
@@ -30,6 +30,16 @@ H-1: AVIF image decoder — branch: p2-h1-avif-decoder
 ---
 
 ## Current / Recently Merged
+
+**H-1 | AVIF image decoder** ✅ 2026-06-12 (merged: p2-h1-avif-decoder)
+- `crates/engine/image/src/avif/mod.rs` Phase 0 implementation: `is_avif()` ISOBMFF ftyp-box detection, `decode_avif()` via libavif
+- Feature `avif` in lumen-image Cargo.toml: conditional compilation, requires cmake+nasm at build time
+- Shell Cargo.toml: enabled feature `avif` to include AVIF support in default build
+- AvifImageDecoder trait implementation: registered in image-decoder dispatch, MIME type `image/avif` in supported types
+- Static AVIF support only (Phase 0); animated AVIF recognized but only first frame decoded (Phase 3)
+- No ICC profile extraction (Phase 1); 14 unit-tests in avif module ✅
+- Graphic test 90 (90-avif-image.html): tests direct `<img src="...avif">` and `<picture>` with AVIF source + PNG fallback
+- Phase 0 complete; Phase 1 (ICC profiles, animated AVIF) deferred to Phase 3
 
 **X-2 | CSS Color L4 system colors** ✅ 2026-06-12 (merged: p2-x2-system-colors)
 - `system_color()` function в `lumen-layout`: полное покрытие CSS Color L4 §6.2 и §11
