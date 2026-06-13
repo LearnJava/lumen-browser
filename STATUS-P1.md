@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BB-7: `scroll-margin`/`scroll-padding` snap offset  branch: p1-bb7-scroll-margin
+Next step: реализация завершена, коммит  crates/engine/layout/src/lib.rs:674
 
 ---
 

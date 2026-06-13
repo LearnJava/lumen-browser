@@ -679,6 +679,14 @@ pub struct SnapContainer {
     pub snap_type: style::ScrollSnapType,
     /// Border-box of the scroll container in CSS px (document-relative).
     pub rect: lumen_core::geom::Rect,
+    /// CSS `scroll-padding-top` in CSS px — shrinks the snap port from the block-start edge.
+    pub scroll_padding_top: f32,
+    /// CSS `scroll-padding-right` in CSS px — shrinks the snap port from the inline-end edge.
+    pub scroll_padding_right: f32,
+    /// CSS `scroll-padding-bottom` in CSS px — shrinks the snap port from the block-end edge.
+    pub scroll_padding_bottom: f32,
+    /// CSS `scroll-padding-left` in CSS px — shrinks the snap port from the inline-start edge.
+    pub scroll_padding_left: f32,
     /// All snap areas found inside this container, in document order.
     pub points: Vec<SnapPoint>,
 }
@@ -727,6 +735,10 @@ fn collect_snap_rec(
             node: b.node,
             snap_type: b.style.scroll_snap_type,
             rect: b.rect,
+            scroll_padding_top: b.style.scroll_padding_top,
+            scroll_padding_right: b.style.scroll_padding_right,
+            scroll_padding_bottom: b.style.scroll_padding_bottom,
+            scroll_padding_left: b.style.scroll_padding_left,
             points: Vec::new(),
         });
         container_stack.push(idx);
@@ -741,8 +753,25 @@ fn collect_snap_rec(
     if let Some(&cidx) = container_stack.last() {
         let align = b.style.scroll_snap_align;
         let cr = out[cidx].rect;
-        let snap_x = snap_offset_x(align.inline, b.rect, cr);
-        let snap_y = snap_offset_y(align.block, b.rect, cr);
+        // scroll-margin expands the snap area; scroll-padding shrinks the snap port.
+        let snap_x = snap_offset_x(
+            align.inline,
+            b.rect,
+            cr,
+            b.style.scroll_margin_left,
+            b.style.scroll_margin_right,
+            out[cidx].scroll_padding_left,
+            out[cidx].scroll_padding_right,
+        );
+        let snap_y = snap_offset_y(
+            align.block,
+            b.rect,
+            cr,
+            b.style.scroll_margin_top,
+            b.style.scroll_margin_bottom,
+            out[cidx].scroll_padding_top,
+            out[cidx].scroll_padding_bottom,
+        );
         if (snap_x.is_some() || snap_y.is_some()) && seen_areas.insert(b.node) {
             let stop_always =
                 b.style.scroll_snap_stop == style::ScrollSnapStop::Always;
@@ -762,45 +791,71 @@ fn collect_snap_rec(
 
 /// Compute the x-axis snap offset for `align` keyword relative to `container`.
 ///
-/// Returns the container scroll-x value at which the snap area's inline edge
-/// aligns with the scroll port per the spec (CSS Scroll Snap §6.1).
+/// `margin_left`/`margin_right` expand the snap area (CSS `scroll-margin`).
+/// `padding_left`/`padding_right` shrink the snap port (CSS `scroll-padding`).
+///
+/// Returns the container scroll-x value at which the (margin-expanded) snap
+/// area edge aligns with the (padding-shrunk) snap port edge per CSS Scroll
+/// Snap L1 §6.1 and §6.3.
 fn snap_offset_x(
     align: style::ScrollSnapAlignKeyword,
     area: lumen_core::geom::Rect,
     container: lumen_core::geom::Rect,
+    margin_left: f32,
+    margin_right: f32,
+    padding_left: f32,
+    padding_right: f32,
 ) -> Option<f32> {
     use style::ScrollSnapAlignKeyword;
-    // scroll-x = area_content_offset that aligns area edge with port edge
-    // area_content_x = area.x - container.x  (offset within container content)
+    // Content offset of the area's origin within the container's content space.
     let ax = area.x - container.x;
     match align {
         ScrollSnapAlignKeyword::None => None,
-        ScrollSnapAlignKeyword::Start => Some(ax),
-        ScrollSnapAlignKeyword::End => Some(ax + area.width - container.width),
-        ScrollSnapAlignKeyword::Center => {
-            Some(ax + area.width * 0.5 - container.width * 0.5)
+        // Align expanded-area start with port start: scroll_x = area_left − port_left
+        ScrollSnapAlignKeyword::Start => Some(ax - margin_left - padding_left),
+        // Align expanded-area end with port end: scroll_x = area_right − port_right
+        ScrollSnapAlignKeyword::End => {
+            Some(ax + area.width + margin_right - container.width + padding_right)
         }
+        // Align expanded-area center with port center.
+        ScrollSnapAlignKeyword::Center => Some(
+            ax + area.width * 0.5 - container.width * 0.5
+                + (margin_right - margin_left) * 0.5
+                + (padding_right - padding_left) * 0.5,
+        ),
     }
 }
 
 /// Compute the y-axis snap offset for `align` keyword relative to `container`.
 ///
-/// Returns the container scroll-y value at which the snap area's block edge
-/// aligns with the scroll port per the spec (CSS Scroll Snap §6.1).
+/// `margin_top`/`margin_bottom` expand the snap area (CSS `scroll-margin`).
+/// `padding_top`/`padding_bottom` shrink the snap port (CSS `scroll-padding`).
+///
+/// Returns the container scroll-y value at which the (margin-expanded) snap
+/// area edge aligns with the (padding-shrunk) snap port edge per CSS Scroll
+/// Snap L1 §6.1 and §6.3.
 fn snap_offset_y(
     align: style::ScrollSnapAlignKeyword,
     area: lumen_core::geom::Rect,
     container: lumen_core::geom::Rect,
+    margin_top: f32,
+    margin_bottom: f32,
+    padding_top: f32,
+    padding_bottom: f32,
 ) -> Option<f32> {
     use style::ScrollSnapAlignKeyword;
     let ay = area.y - container.y;
     match align {
         ScrollSnapAlignKeyword::None => None,
-        ScrollSnapAlignKeyword::Start => Some(ay),
-        ScrollSnapAlignKeyword::End => Some(ay + area.height - container.height),
-        ScrollSnapAlignKeyword::Center => {
-            Some(ay + area.height * 0.5 - container.height * 0.5)
+        ScrollSnapAlignKeyword::Start => Some(ay - margin_top - padding_top),
+        ScrollSnapAlignKeyword::End => {
+            Some(ay + area.height + margin_bottom - container.height + padding_bottom)
         }
+        ScrollSnapAlignKeyword::Center => Some(
+            ay + area.height * 0.5 - container.height * 0.5
+                + (margin_bottom - margin_top) * 0.5
+                + (padding_bottom - padding_top) * 0.5,
+        ),
     }
 }
 
@@ -843,9 +898,17 @@ pub fn find_snap_target(
     let axis = container.snap_type.axis;
     let strictness = container.snap_type.strictness;
 
-    // Proximity threshold: 50% of the scroll port on each axis.
-    let prox_x = container.rect.width * 0.5;
-    let prox_y = container.rect.height * 0.5;
+    // Proximity threshold: 50% of the effective snap port (after scroll-padding).
+    let port_w = (container.rect.width
+        - container.scroll_padding_left
+        - container.scroll_padding_right)
+        .max(0.0);
+    let port_h = (container.rect.height
+        - container.scroll_padding_top
+        - container.scroll_padding_bottom)
+        .max(0.0);
+    let prox_x = port_w * 0.5;
+    let prox_y = port_h * 0.5;
 
     let snaps_x = matches!(axis, ScrollSnapAxis::X | ScrollSnapAxis::Inline | ScrollSnapAxis::Both);
     let snaps_y = matches!(axis, ScrollSnapAxis::Y | ScrollSnapAxis::Block | ScrollSnapAxis::Both);
@@ -9428,6 +9491,10 @@ mod tests {
             node: lumen_dom::NodeId::from_index(0),
             snap_type: ScrollSnapType { axis, strictness },
             rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: w, height: h },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: Vec::new(),
         }
     }
@@ -15592,6 +15659,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![
                 SnapPoint {
                     node: lumen_dom::NodeId::from_index(1),
@@ -15635,6 +15706,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![SnapPoint {
                 node: lumen_dom::NodeId::from_index(1),
                 snap_x: None,
@@ -15664,6 +15739,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![SnapPoint {
                 node: lumen_dom::NodeId::from_index(1),
                 snap_x: None,
@@ -15693,6 +15772,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![
                 SnapPoint {
                     node: lumen_dom::NodeId::from_index(1),
@@ -15730,6 +15813,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![SnapPoint {
                 node: lumen_dom::NodeId::from_index(1),
                 snap_x: Some(800.0),
@@ -15760,12 +15847,177 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![],
         };
         assert!(
             find_snap_target(&container, (0.0, 0.0), (0.0, 300.0)).is_none(),
             "no points → no snap"
         );
+    }
+
+    // ── scroll-margin / scroll-padding snap offset tests (BB-7) ──────────────
+
+    #[test]
+    fn snap_margin_start_shifts_x_offset() {
+        // scroll-margin-left: 20px on the snap area pulls the snap-x position
+        // 20 px earlier (spec CSS Scroll Snap §6.3: margin expands the snap area).
+        // Container 0..800, area at x=100 w=400, align=start, margin_left=20.
+        // Expected: ax - margin_left = (100-0) - 20 = 80.
+        let container_rect = lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let area_rect = lumen_core::geom::Rect { x: 100.0, y: 50.0, width: 400.0, height: 300.0 };
+        let result = snap_offset_x(
+            style::ScrollSnapAlignKeyword::Start,
+            area_rect,
+            container_rect,
+            20.0, // margin_left
+            0.0,  // margin_right
+            0.0,  // padding_left
+            0.0,  // padding_right
+        );
+        assert_eq!(result, Some(80.0), "scroll-margin-left shifts snap-x left");
+    }
+
+    #[test]
+    fn snap_padding_start_shifts_x_offset() {
+        // scroll-padding-left: 15px on the container shifts the snap port inward,
+        // which reduces the required scroll-x (the port's left edge is further right).
+        // Container 0..800, area at x=100 w=400, align=start, padding_left=15.
+        // Expected: ax - 0 - padding_left = 100 - 15 = 85.
+        let container_rect = lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let area_rect = lumen_core::geom::Rect { x: 100.0, y: 50.0, width: 400.0, height: 300.0 };
+        let result = snap_offset_x(
+            style::ScrollSnapAlignKeyword::Start,
+            area_rect,
+            container_rect,
+            0.0,  // margin_left
+            0.0,  // margin_right
+            15.0, // padding_left
+            0.0,  // padding_right
+        );
+        assert_eq!(result, Some(85.0), "scroll-padding-left shifts snap-x left");
+    }
+
+    #[test]
+    fn snap_margin_end_shifts_y_offset() {
+        // scroll-margin-bottom: 10px on the snap area.
+        // Container 0..600h, area at y=500 h=200, align=end, margin_bottom=10.
+        // Expected: ay + area.h + margin_bottom - container.h + padding_bottom
+        //         = 500 + 200 + 10 - 600 + 0 = 110.
+        let container_rect = lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let area_rect = lumen_core::geom::Rect { x: 0.0, y: 500.0, width: 200.0, height: 200.0 };
+        let result = snap_offset_y(
+            style::ScrollSnapAlignKeyword::End,
+            area_rect,
+            container_rect,
+            0.0,  // margin_top
+            10.0, // margin_bottom
+            0.0,  // padding_top
+            0.0,  // padding_bottom
+        );
+        assert_eq!(result, Some(110.0), "scroll-margin-bottom shifts snap-y end");
+    }
+
+    #[test]
+    fn snap_margin_center_splits_evenly() {
+        // Center alignment: margins shift center by (margin_right - margin_left)/2.
+        // Container 0..800w, area at x=200 w=200, align=center, margin_left=20, margin_right=20.
+        // Without margins: ax + w/2 - W/2 = 200 + 100 - 400 = -100.
+        // Margin contribution: (20-20)/2 = 0 → same result -100.
+        let container_rect = lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let area_rect = lumen_core::geom::Rect { x: 200.0, y: 0.0, width: 200.0, height: 100.0 };
+        let result = snap_offset_x(
+            style::ScrollSnapAlignKeyword::Center,
+            area_rect,
+            container_rect,
+            20.0, // margin_left
+            20.0, // margin_right
+            0.0,
+            0.0,
+        );
+        // Symmetric margins cancel: same as no margins.
+        assert!((result.unwrap() - (-100.0_f32)).abs() < 0.01,
+            "symmetric margins don't shift center, got {:?}", result);
+
+        // Asymmetric: margin_right=30 > margin_left=10 → shifted right by (30-10)/2 = 10.
+        let result2 = snap_offset_x(
+            style::ScrollSnapAlignKeyword::Center,
+            area_rect,
+            container_rect,
+            10.0, // margin_left
+            30.0, // margin_right
+            0.0,
+            0.0,
+        );
+        assert!((result2.unwrap() - (-90.0_f32)).abs() < 0.01,
+            "asymmetric margins shift center by (right-left)/2, got {:?}", result2);
+    }
+
+    #[test]
+    fn snap_collect_containers_applies_scroll_margin() {
+        // Verify that collect_snap_containers wires scroll-margin into the snap
+        // point offset: element with scroll-margin-top: 20px + align=start
+        // should produce snap_y = (area.y - container.y) - 20.
+        let root = lay_full(
+            "<div id=c><p id=a>item</p></div>",
+            "#c { scroll-snap-type: y mandatory; height: 600px; } \
+             #a { scroll-snap-align: start; scroll-margin-top: 20px; }",
+        );
+        let containers = collect_snap_containers(&root);
+        assert_eq!(containers.len(), 1);
+        let pts = &containers[0].points;
+        assert_eq!(pts.len(), 1, "one snap area");
+        let snap_y = pts[0].snap_y.expect("snap_y must be Some");
+        // Without margin snap_y would be area.y - container.y (≈ 0 for first child).
+        // With margin_top=20, snap_y = area.y - container.y - 20 ≈ -20.
+        assert!(snap_y < 0.0,
+            "scroll-margin-top shifts snap_y negative for first child, got {snap_y}");
+        // The offset should be roughly -20px (margin_top).
+        assert!((snap_y - (-20.0_f32)).abs() < 5.0,
+            "snap_y should be ≈ −20 (scroll-margin-top), got {snap_y}");
+    }
+
+    #[test]
+    fn snap_padding_reduces_proximity_threshold() {
+        // scroll-padding reduces the effective snap port, which shrinks the
+        // proximity threshold from 50%×viewport to 50%×(viewport−padding).
+        // Container height=600, padding_top=100, padding_bottom=100 → port height=400
+        // → proximity threshold = 200.
+        // snap_y=600, target=380 → dy=220 > 200 → no snap.
+        // Without padding (threshold=300): dy=220 < 300 → would snap.
+        let snap_type = style::ScrollSnapType {
+            axis: style::ScrollSnapAxis::Y,
+            strictness: style::ScrollSnapStrictness::Proximity,
+        };
+        let mut container = SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type,
+            rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 },
+            scroll_padding_top: 100.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 100.0,
+            scroll_padding_left: 0.0,
+            points: vec![SnapPoint {
+                node: lumen_dom::NodeId::from_index(1),
+                snap_x: None,
+                snap_y: Some(600.0),
+                stop_always: false,
+            }],
+        };
+        // With padding: threshold = (600-200)*0.5 = 200. dy=220 > 200 → no snap.
+        let result = find_snap_target(&container, (0.0, 0.0), (0.0, 380.0));
+        assert!(result.is_none(),
+            "scroll-padding shrinks proximity threshold — should not snap at 380");
+
+        // Verify that removing padding (threshold=300) would snap the same target.
+        container.scroll_padding_top = 0.0;
+        container.scroll_padding_bottom = 0.0;
+        let result_no_pad = find_snap_target(&container, (0.0, 0.0), (0.0, 380.0));
+        assert!(result_no_pad.is_some(),
+            "without padding threshold=300 > dy=220 → should snap");
     }
 
     // ─── Scroll container tests ───────────────────────────────────────────────
