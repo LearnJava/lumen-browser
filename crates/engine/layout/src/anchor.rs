@@ -12,11 +12,15 @@
 //!      See [`resolve_anchor_function`].
 //!    * Grid-cell position from the `inset-area` shorthand.
 //!      See [`resolve_inset_area`].
+//!    * Dimension from `anchor-size()` function calls in `width`/`height`.
+//!      See [`resolve_anchor_size`].
 //!
 //! P4 wires the CSS properties:
 //! - `anchor-name: --foo` → `ComputedStyle.anchor_name: Option<String>`
 //! - `position-anchor: --foo` → `ComputedStyle.position_anchor: Option<String>`
 //! - `inset-area: <row> <col>` → `ComputedStyle.inset_area_row` / `ComputedStyle.inset_area_col`
+//! - `anchor-scope: all | none | --name` → `ComputedStyle.anchor_scope`
+//! - `width: anchor-size(...)` / `height: anchor-size(...)` → `ComputedStyle.anchor_size_w/h`
 //! - `anchor(<anchor-element> <side>)` in inset values → call [`resolve_anchor_function`]
 //! - Wire `collect_anchors(root)` before the positioned-layout pass in `box_tree.rs`.
 //!
@@ -88,6 +92,63 @@ pub enum InsetAreaKeyword {
     SelfEnd,
 }
 
+// ─── AnchorScope ─────────────────────────────────────────────────────────────
+
+// CSS: anchor-scope
+/// Value of the CSS `anchor-scope` property (CSS Anchor Positioning L1 §2.1).
+///
+/// When set on an element, limits which named anchors from its descendants are
+/// visible to positioned elements outside the element's subtree.  Prevents
+/// anchor names leaking across shadow DOM or component boundaries.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum AnchorScope {
+    /// `anchor-scope: none` — default, no scoping restriction.
+    #[default]
+    None,
+    /// `anchor-scope: all` — all anchor names in this subtree are scoped.
+    All,
+    /// `anchor-scope: --name` — only this specific anchor name is scoped.
+    Named(Box<str>),
+}
+
+// ─── AnchorSizeDimension ─────────────────────────────────────────────────────
+
+// CSS: anchor-size()
+/// Which dimension the `anchor-size()` function references.
+///
+/// Corresponds to `<anchor-size>` in CSS Anchor Positioning L1 §4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorSizeDimension {
+    /// `anchor-size(width)` — the anchor's border-box width.
+    Width,
+    /// `anchor-size(height)` — the anchor's border-box height.
+    Height,
+    /// `anchor-size(block)` — block-axis size (height in horizontal writing mode).
+    Block,
+    /// `anchor-size(inline)` — inline-axis size (width in horizontal writing mode).
+    Inline,
+    /// `anchor-size(self-block)` — block-axis size of the positioned element itself.
+    SelfBlock,
+    /// `anchor-size(self-inline)` — inline-axis size of the positioned element itself.
+    SelfInline,
+}
+
+// ─── AnchorSizeFunc ──────────────────────────────────────────────────────────
+
+/// Parsed `anchor-size(<anchor-el>? <anchor-size>)` value stored in ComputedStyle.
+///
+/// Used when `width` or `height` contains an `anchor-size()` function call.
+/// Resolved in `lay_out_abs_children` via [`resolve_anchor_size`] once the
+/// anchor registry is available.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnchorSizeFunc {
+    /// Optional anchor element name (e.g. `"--my-anchor"`).
+    /// `None` = use the element's `position-anchor` default.
+    pub anchor_name: Option<Box<str>>,
+    /// Which dimension of the anchor to use.
+    pub dimension: AnchorSizeDimension,
+}
+
 // ─── AnchorRegistry ──────────────────────────────────────────────────────────
 
 /// Map from CSS `anchor-name` value (e.g. `"--foo"`) to the border-box [`Rect`]
@@ -113,6 +174,10 @@ pub struct AnchorEntry {
     /// Matches `LayoutBox::rect` semantics: (x, y) is top-left after margin,
     /// includes padding + border, excludes margin.
     pub rect: Rect,
+    /// If `Some(node)`: this anchor is scoped — only visible to positioned elements
+    /// that are descendants of the given scope root.
+    /// `None` = globally visible (no scope restriction).
+    pub scope_root: Option<NodeId>,
 }
 
 impl AnchorRegistry {
@@ -122,6 +187,25 @@ impl AnchorRegistry {
     /// `anchor-name`.
     pub fn get(&self, name: &str) -> Option<&AnchorEntry> {
         self.entries.get(name)
+    }
+
+    /// Scope-aware lookup: returns the anchor entry only if it is visible to a
+    /// positioned element whose ancestors include the given slice of node IDs.
+    ///
+    /// An anchor is visible when:
+    /// - It has no `scope_root` (globally visible), OR
+    /// - Its `scope_root` is in `ancestor_ids` (positioned element is a descendant
+    ///   of the scope root).
+    pub fn get_scoped<'a>(
+        &'a self,
+        name: &str,
+        ancestor_ids: &[NodeId],
+    ) -> Option<&'a AnchorEntry> {
+        let entry = self.entries.get(name)?;
+        match entry.scope_root {
+            None => Some(entry),
+            Some(scope) => ancestor_ids.contains(&scope).then_some(entry),
+        }
     }
 
     /// True when the registry has no anchors.
@@ -138,41 +222,50 @@ impl AnchorRegistry {
 /// of anchored elements.  The returned [`AnchorRegistry`] is passed to
 /// [`resolve_anchor_function`] and [`resolve_inset_area`].
 ///
-/// # P4 wiring
-/// ```text
-/// // In box_tree.rs lay_out_positioned_children() or equivalent:
-/// let anchors = collect_anchors(root);
-/// for child in positioned_children {
-///     if let Some(name) = &child.style.position_anchor {   // CSS: position-anchor
-///         let pos = resolve_inset_area(&anchors, name, child.style.inset_area_row,
-///                                      child.style.inset_area_col, containing_rect);
-///         // apply pos.top / pos.left to child
-///     }
-/// }
-/// ```
-// CSS: anchor-name
+/// Respects `anchor-scope`: anchors inside a scoped subtree carry `scope_root`
+/// set to the scoping ancestor's node ID so callers can filter by ancestry.
+// CSS: anchor-name, anchor-scope
 pub fn collect_anchors(root: &LayoutBox) -> AnchorRegistry {
     let mut registry = AnchorRegistry::default();
-    collect_anchors_rec(root, &mut registry);
+    collect_anchors_rec(root, &mut registry, None);
     registry
 }
 
-fn collect_anchors_rec(lb: &LayoutBox, registry: &mut AnchorRegistry) {
+fn collect_anchors_rec(lb: &LayoutBox, registry: &mut AnchorRegistry, scope_root: Option<NodeId>) {
+    // Determine the scope root for this element's descendants.
+    let next_scope = match &lb.style.anchor_scope {
+        AnchorScope::All | AnchorScope::Named(_) => Some(lb.node),
+        AnchorScope::None => scope_root,
+    };
+
     if let Some(name) = &lb.style.anchor_name {
-        register_anchor(registry, name.to_string(), lb.node, lb.rect);
+        register_anchor_scoped(registry, name.to_string(), lb.node, lb.rect, next_scope);
     }
     for child in &lb.children {
-        collect_anchors_rec(child, registry);
+        collect_anchors_rec(child, registry, next_scope);
     }
 }
 
-/// Register an element as a named anchor.  Called by P4's CSS wiring when it
-/// encounters `anchor-name: --foo` in the ComputedStyle.
+/// Register an element as a named anchor (globally visible, no scope restriction).
 ///
-/// Using last-in-tree-order semantics: later registrations overwrite earlier
-/// ones for the same name.
+/// Called by P4's CSS wiring when it encounters `anchor-name: --foo` in ComputedStyle.
+/// Uses last-in-tree-order semantics: later registrations overwrite earlier ones.
 pub fn register_anchor(registry: &mut AnchorRegistry, name: String, node: NodeId, rect: Rect) {
-    registry.entries.insert(name, AnchorEntry { node, rect });
+    registry.entries.insert(name, AnchorEntry { node, rect, scope_root: None });
+}
+
+/// Register an element as a named anchor with optional scope restriction.
+///
+/// `scope_root` — the node ID of the ancestor with `anchor-scope` that restricts
+/// this anchor's visibility.  `None` = globally visible.
+pub fn register_anchor_scoped(
+    registry: &mut AnchorRegistry,
+    name: String,
+    node: NodeId,
+    rect: Rect,
+    scope_root: Option<NodeId>,
+) {
+    registry.entries.insert(name, AnchorEntry { node, rect, scope_root });
 }
 
 // ─── resolve_anchor_function ─────────────────────────────────────────────────
@@ -191,12 +284,6 @@ pub fn register_anchor(registry: &mut AnchorRegistry, name: String, node: NodeId
 ///
 /// Returns `None` when the anchor is not in the registry (the `anchor()`
 /// function makes the property behave as `auto`).
-///
-/// # Example
-/// ```text
-/// // Evaluate: top: anchor(--my-anchor bottom);
-/// let top = resolve_anchor_function(&registry, "--my-anchor", AnchorSide::Bottom, false);
-/// ```
 // CSS: anchor(), position-anchor
 pub fn resolve_anchor_function(
     registry: &AnchorRegistry,
@@ -207,32 +294,55 @@ pub fn resolve_anchor_function(
     let entry = registry.get(anchor_name)?;
     let r = entry.rect;
 
-    // For horizontal axis (left/right insets): reference the anchor's x-extent.
-    // For vertical axis (top/bottom insets): reference the anchor's y-extent.
     let value = if is_horizontal {
         match side {
             AnchorSide::Left | AnchorSide::Start => r.x,
             AnchorSide::Right | AnchorSide::End => r.x + r.width,
             AnchorSide::Center => r.x + r.width * 0.5,
-            AnchorSide::Top | AnchorSide::Bottom => {
-                // Cross-axis side in horizontal resolution — invalid in CSS,
-                // treated as None (property becomes `auto`).
-                return None;
-            }
+            AnchorSide::Top | AnchorSide::Bottom => return None,
             AnchorSide::Percentage(pct) => r.x + r.width * pct / 100.0,
-            // SelfStart / SelfEnd map the same as Start/End in LTR writing mode.
         }
     } else {
         match side {
             AnchorSide::Top | AnchorSide::Start => r.y,
             AnchorSide::Bottom | AnchorSide::End => r.y + r.height,
             AnchorSide::Center => r.y + r.height * 0.5,
-            AnchorSide::Left | AnchorSide::Right => {
-                // Cross-axis side in vertical resolution — invalid, treat as None.
-                return None;
-            }
+            AnchorSide::Left | AnchorSide::Right => return None,
             AnchorSide::Percentage(pct) => r.y + r.height * pct / 100.0,
         }
+    };
+    Some(value)
+}
+
+// ─── resolve_anchor_size ─────────────────────────────────────────────────────
+
+/// Resolve an `anchor-size(<anchor-el>? <dimension>)` function to a CSS pixel value.
+///
+/// Used when `width` or `height` contains an `anchor-size()` call.
+///
+/// - `registry` — the anchor registry built by [`collect_anchors`].
+/// - `func` — the parsed `anchor-size()` value from [`AnchorSizeFunc`].
+/// - `default_anchor` — the element's `position-anchor` value, used when
+///   `func.anchor_name` is `None`.
+///
+/// Returns `None` when no resolvable anchor exists in the registry.
+// CSS: anchor-size()
+pub fn resolve_anchor_size(
+    registry: &AnchorRegistry,
+    func: &AnchorSizeFunc,
+    default_anchor: Option<&str>,
+) -> Option<f32> {
+    let name = func.anchor_name.as_deref().or(default_anchor)?;
+    let entry = registry.get(name)?;
+    let r = entry.rect;
+    // Horizontal writing mode: inline ↔ width, block ↔ height.
+    let value = match func.dimension {
+        AnchorSizeDimension::Width
+        | AnchorSizeDimension::Inline
+        | AnchorSizeDimension::SelfInline => r.width,
+        AnchorSizeDimension::Height
+        | AnchorSizeDimension::Block
+        | AnchorSizeDimension::SelfBlock => r.height,
     };
     Some(value)
 }
@@ -266,18 +376,10 @@ pub struct AnchoredPosition {
 /// Resolve the `inset-area` shorthand for a positioned element using an anchor.
 ///
 /// `inset-area` maps a 3×3 grid (rows: start/center/end, cols: start/center/end)
-/// relative to the default anchor element.  This function translates that
-/// grid-cell selection to a concrete `(top, left, width, height)` tuple.
+/// relative to the default anchor element.  Translates the grid-cell selection
+/// to a concrete `(top, left, width, height)` tuple.
 ///
-/// - `registry` — anchor registry from [`collect_anchors`].
-/// - `anchor_name` — resolved `position-anchor` value (e.g. `"--my-anchor"`).
-/// - `row` — vertical `inset-area` keyword (which row(s) the element occupies).
-/// - `col` — horizontal `inset-area` keyword (which column(s) the element occupies).
-/// - `containing_rect` — the positioned element's containing block rect
-///   (CSS px, same coordinate space as anchor rects).
-///
-/// Returns `None` when either the anchor isn't in the registry or both `row`
-/// and `col` are [`InsetAreaKeyword::None`].
+/// Returns `None` when the anchor isn't in the registry or both keywords are `None`.
 // CSS: inset-area, position-anchor
 pub fn resolve_inset_area(
     registry: &AnchorRegistry,
@@ -290,8 +392,36 @@ pub fn resolve_inset_area(
         return None;
     }
     let entry = registry.get(anchor_name)?;
-    let anchor = entry.rect;
+    resolve_inset_area_from_entry(entry, row, col, containing_rect)
+}
 
+/// Scope-aware variant of [`resolve_inset_area`].
+///
+/// `ancestor_ids` — NodeIds of all ancestors of the positioned element.
+/// Anchors outside the positioned element's scope are not resolved.
+// CSS: inset-area, position-anchor, anchor-scope
+pub fn resolve_inset_area_scoped(
+    registry: &AnchorRegistry,
+    anchor_name: &str,
+    row: InsetAreaKeyword,
+    col: InsetAreaKeyword,
+    containing_rect: Rect,
+    ancestor_ids: &[NodeId],
+) -> Option<AnchoredPosition> {
+    if row == InsetAreaKeyword::None && col == InsetAreaKeyword::None {
+        return None;
+    }
+    let entry = registry.get_scoped(anchor_name, ancestor_ids)?;
+    resolve_inset_area_from_entry(entry, row, col, containing_rect)
+}
+
+fn resolve_inset_area_from_entry(
+    entry: &AnchorEntry,
+    row: InsetAreaKeyword,
+    col: InsetAreaKeyword,
+    containing_rect: Rect,
+) -> Option<AnchoredPosition> {
+    let anchor = entry.rect;
     let (top, height) = resolve_axis_band(
         row,
         anchor.y,
@@ -306,7 +436,6 @@ pub fn resolve_inset_area(
         containing_rect.x,
         containing_rect.x + containing_rect.width,
     );
-
     Some(AnchoredPosition {
         top: top - containing_rect.y,
         left: left - containing_rect.x,
@@ -317,15 +446,14 @@ pub fn resolve_inset_area(
 
 /// Map one axis's `InsetAreaKeyword` to `(start_px, optional_size)`.
 ///
-/// - `kw`              — the inset-area keyword for this axis.
-/// - `anchor_start`    — anchor's leading edge on this axis (CSS px, doc space).
-/// - `anchor_end`      — anchor's trailing edge on this axis (CSS px, doc space).
-/// - `cb_start`        — containing block's leading edge (CSS px, doc space).
-/// - `cb_end`          — containing block's trailing edge (CSS px, doc space).
+/// - `kw`           — the inset-area keyword for this axis.
+/// - `anchor_start` — anchor's leading edge (CSS px, doc space).
+/// - `anchor_end`   — anchor's trailing edge (CSS px, doc space).
+/// - `cb_start`     — containing block's leading edge (CSS px, doc space).
+/// - `cb_end`       — containing block's trailing edge (CSS px, doc space).
 ///
-/// Returns `(element_start, element_size)` where `element_size` is `None` for
-/// keywords that don't constrain the element's size (e.g. `Start` when the
-/// element fits anywhere in the start region).
+/// Returns `(element_start, element_size)`.  `element_size` is `None` when the
+/// keyword does not constrain the element's size on this axis.
 fn resolve_axis_band(
     kw: InsetAreaKeyword,
     anchor_start: f32,
@@ -335,29 +463,21 @@ fn resolve_axis_band(
 ) -> (f32, Option<f32>) {
     match kw {
         InsetAreaKeyword::None => (cb_start, None),
-        // Start region: from containing-block start to anchor start.
         InsetAreaKeyword::Start | InsetAreaKeyword::SelfStart => {
-            let band_size = (anchor_start - cb_start).max(0.0);
-            (cb_start, Some(band_size))
+            (cb_start, Some((anchor_start - cb_start).max(0.0)))
         }
-        // Center region: from anchor start to anchor end (overlapping the anchor).
-        InsetAreaKeyword::Center => (anchor_start, Some((anchor_end - anchor_start).max(0.0))),
-        // End region: from anchor end to containing-block end.
+        InsetAreaKeyword::Center => {
+            (anchor_start, Some((anchor_end - anchor_start).max(0.0)))
+        }
         InsetAreaKeyword::End | InsetAreaKeyword::SelfEnd => {
-            let band_size = (cb_end - anchor_end).max(0.0);
-            (anchor_end, Some(band_size))
+            (anchor_end, Some((cb_end - anchor_end).max(0.0)))
         }
-        // Start + Center: from cb_start to anchor_end.
         InsetAreaKeyword::SpanStart => {
-            let band_size = (anchor_end - cb_start).max(0.0);
-            (cb_start, Some(band_size))
+            (cb_start, Some((anchor_end - cb_start).max(0.0)))
         }
-        // Center + End: from anchor_start to cb_end.
         InsetAreaKeyword::SpanEnd => {
-            let band_size = (cb_end - anchor_start).max(0.0);
-            (anchor_start, Some(band_size))
+            (anchor_start, Some((cb_end - anchor_start).max(0.0)))
         }
-        // All three cells: full containing block.
         InsetAreaKeyword::SpanAll => (cb_start, Some((cb_end - cb_start).max(0.0))),
     }
 }
@@ -577,60 +697,53 @@ mod tests {
 
     // ── resolve_anchor_function ──────────────────────────────────────────────
 
-    // anchor rect: x=100, y=200, w=80, h=40  →  right=180, bottom=240
-
     #[test]
     fn anchor_function_top_edge() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        let v = resolve_anchor_function(&reg, "--a", AnchorSide::Top, false);
-        assert_eq!(v, Some(200.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Top, false), Some(200.0));
     }
 
     #[test]
     fn anchor_function_bottom_edge() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        let v = resolve_anchor_function(&reg, "--a", AnchorSide::Bottom, false);
-        assert_eq!(v, Some(240.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Bottom, false), Some(240.0));
     }
 
     #[test]
     fn anchor_function_left_edge() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        let v = resolve_anchor_function(&reg, "--a", AnchorSide::Left, true);
-        assert_eq!(v, Some(100.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Left, true), Some(100.0));
     }
 
     #[test]
     fn anchor_function_right_edge() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        let v = resolve_anchor_function(&reg, "--a", AnchorSide::Right, true);
-        assert_eq!(v, Some(180.0));
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Right, true), Some(180.0));
     }
 
     #[test]
     fn anchor_function_center_vertical() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        let v = resolve_anchor_function(&reg, "--a", AnchorSide::Center, false);
-        assert_eq!(v, Some(220.0)); // 200 + 40/2
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Center, false), Some(220.0));
     }
 
     #[test]
     fn anchor_function_center_horizontal() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        let v = resolve_anchor_function(&reg, "--a", AnchorSide::Center, true);
-        assert_eq!(v, Some(140.0)); // 100 + 80/2
+        assert_eq!(resolve_anchor_function(&reg, "--a", AnchorSide::Center, true), Some(140.0));
     }
 
     #[test]
     fn anchor_function_percentage() {
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
-        let v = resolve_anchor_function(&reg, "--a", AnchorSide::Percentage(25.0), true);
-        assert_eq!(v, Some(120.0)); // 100 + 80 * 0.25
+        assert_eq!(
+            resolve_anchor_function(&reg, "--a", AnchorSide::Percentage(25.0), true),
+            Some(120.0)
+        );
     }
 
     #[test]
     fn anchor_function_cross_axis_returns_none() {
-        // top/bottom are invalid on the horizontal axis and vice-versa.
         let reg = make_registry("--a", rect(100.0, 200.0, 80.0, 40.0));
         assert!(resolve_anchor_function(&reg, "--a", AnchorSide::Top, true).is_none());
         assert!(resolve_anchor_function(&reg, "--a", AnchorSide::Left, false).is_none());
@@ -642,23 +755,117 @@ mod tests {
         assert!(resolve_anchor_function(&reg, "--missing", AnchorSide::Top, false).is_none());
     }
 
+    // ── resolve_anchor_size (BB-8: 8 new unit tests) ─────────────────────────
+
+    #[test]
+    fn anchor_size_width_from_default_anchor() {
+        let reg = make_registry("--btn", rect(100.0, 200.0, 80.0, 40.0));
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width };
+        assert_eq!(resolve_anchor_size(&reg, &func, Some("--btn")), Some(80.0));
+    }
+
+    #[test]
+    fn anchor_size_height_from_default_anchor() {
+        let reg = make_registry("--btn", rect(100.0, 200.0, 80.0, 40.0));
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Height };
+        assert_eq!(resolve_anchor_size(&reg, &func, Some("--btn")), Some(40.0));
+    }
+
+    #[test]
+    fn anchor_size_with_explicit_anchor_name() {
+        // anchor-size(--other, width) uses --other, not the default anchor.
+        let mut reg = AnchorRegistry::default();
+        register_anchor(&mut reg, "--btn".to_string(), node(1), rect(0.0, 0.0, 80.0, 40.0));
+        register_anchor(&mut reg, "--other".to_string(), node(2), rect(0.0, 0.0, 120.0, 60.0));
+        let func = AnchorSizeFunc {
+            anchor_name: Some("--other".into()),
+            dimension: AnchorSizeDimension::Width,
+        };
+        assert_eq!(resolve_anchor_size(&reg, &func, Some("--btn")), Some(120.0));
+    }
+
+    #[test]
+    fn anchor_size_inline_maps_to_width() {
+        let reg = make_registry("--a", rect(0.0, 0.0, 90.0, 45.0));
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Inline };
+        assert_eq!(resolve_anchor_size(&reg, &func, Some("--a")), Some(90.0));
+    }
+
+    #[test]
+    fn anchor_size_block_maps_to_height() {
+        let reg = make_registry("--a", rect(0.0, 0.0, 90.0, 45.0));
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Block };
+        assert_eq!(resolve_anchor_size(&reg, &func, Some("--a")), Some(45.0));
+    }
+
+    #[test]
+    fn anchor_size_missing_anchor_returns_none() {
+        let reg = AnchorRegistry::default();
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width };
+        assert!(resolve_anchor_size(&reg, &func, Some("--missing")).is_none());
+    }
+
+    #[test]
+    fn anchor_size_no_default_and_no_explicit_returns_none() {
+        let reg = make_registry("--a", rect(0.0, 0.0, 100.0, 50.0));
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::Width };
+        assert!(resolve_anchor_size(&reg, &func, None).is_none());
+    }
+
+    #[test]
+    fn anchor_size_self_inline_maps_to_width() {
+        let reg = make_registry("--a", rect(0.0, 0.0, 75.0, 25.0));
+        let func = AnchorSizeFunc { anchor_name: None, dimension: AnchorSizeDimension::SelfInline };
+        assert_eq!(resolve_anchor_size(&reg, &func, Some("--a")), Some(75.0));
+    }
+
+    // ── anchor-scope / get_scoped ────────────────────────────────────────────
+
+    #[test]
+    fn anchor_scope_none_visible_everywhere() {
+        let reg = make_registry("--global", rect(0.0, 0.0, 100.0, 50.0));
+        // Globally visible even with an empty ancestor list.
+        assert!(reg.get_scoped("--global", &[]).is_some());
+    }
+
+    #[test]
+    fn anchor_scope_all_blocks_outside_descendants() {
+        let mut reg = AnchorRegistry::default();
+        register_anchor_scoped(
+            &mut reg,
+            "--scoped".to_string(),
+            node(10),
+            rect(0.0, 0.0, 100.0, 50.0),
+            Some(node(5)), // scoped: only visible under node(5)
+        );
+
+        // Positioned element whose ancestors do NOT include node(5) → invisible.
+        assert!(reg.get_scoped("--scoped", &[node(1), node(2), node(3)]).is_none());
+        // Positioned element whose ancestors DO include node(5) → visible.
+        assert!(reg.get_scoped("--scoped", &[node(1), node(5), node(8)]).is_some());
+    }
+
+    #[test]
+    fn anchor_scope_named_restricts_specific_name() {
+        let mut reg = AnchorRegistry::default();
+        register_anchor_scoped(
+            &mut reg,
+            "--foo".to_string(),
+            node(10),
+            rect(0.0, 0.0, 60.0, 30.0),
+            Some(node(3)), // scoped to node(3)'s subtree
+        );
+        register_anchor(&mut reg, "--bar".to_string(), node(11), rect(0.0, 0.0, 80.0, 40.0));
+
+        let outside = [node(1), node(2)]; // node(3) not in ancestors
+        assert!(reg.get_scoped("--foo", &outside).is_none()); // scoped → invisible
+        assert!(reg.get_scoped("--bar", &outside).is_some()); // global → visible
+    }
+
     // ── resolve_inset_area ───────────────────────────────────────────────────
 
-    // Setup:
-    //   anchor rect : x=300, y=200, w=100, h=50
-    //   containing block: x=0, y=0, w=800, h=600
-    //
-    // Start-col band : x=[0, 300),  w=300
-    // Center-col band: x=[300, 400), w=100
-    // End-col band   : x=[400, 800), w=400
-    //
-    // Start-row band : y=[0, 200),  h=200
-    // Center-row band: y=[200, 250), h=50
-    // End-row band   : y=[250, 600), h=350
-
     fn setup_inset_area() -> (AnchorRegistry, Rect) {
-        let anchor_rect = rect(300.0, 200.0, 100.0, 50.0);
-        let reg = make_registry("--anchor", anchor_rect);
+        let reg = make_registry("--anchor", rect(300.0, 200.0, 100.0, 50.0));
         let cb = rect(0.0, 0.0, 800.0, 600.0);
         (reg, cb)
     }
@@ -667,13 +874,8 @@ mod tests {
     fn inset_area_start_start() {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
-            &reg, "--anchor",
-            InsetAreaKeyword::Start, InsetAreaKeyword::Start, cb,
-        )
-        .unwrap();
-        // top: distance from cb.top (0) to anchor.top (200) relative to cb → 0
-        // height: 200 (0..200)
-        // left: 0, width: 300
+            &reg, "--anchor", InsetAreaKeyword::Start, InsetAreaKeyword::Start, cb,
+        ).unwrap();
         assert_eq!(pos.top, 0.0);
         assert_eq!(pos.height, Some(200.0));
         assert_eq!(pos.left, 0.0);
@@ -684,14 +886,11 @@ mod tests {
     fn inset_area_center_center() {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
-            &reg, "--anchor",
-            InsetAreaKeyword::Center, InsetAreaKeyword::Center, cb,
-        )
-        .unwrap();
-        // Overlaps the anchor exactly.
-        assert_eq!(pos.top, 200.0); // anchor.y - cb.y
+            &reg, "--anchor", InsetAreaKeyword::Center, InsetAreaKeyword::Center, cb,
+        ).unwrap();
+        assert_eq!(pos.top, 200.0);
         assert_eq!(pos.height, Some(50.0));
-        assert_eq!(pos.left, 300.0); // anchor.x - cb.x
+        assert_eq!(pos.left, 300.0);
         assert_eq!(pos.width, Some(100.0));
     }
 
@@ -699,25 +898,20 @@ mod tests {
     fn inset_area_end_end() {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
-            &reg, "--anchor",
-            InsetAreaKeyword::End, InsetAreaKeyword::End, cb,
-        )
-        .unwrap();
-        assert_eq!(pos.top, 250.0); // anchor.bottom - cb.y
-        assert_eq!(pos.height, Some(350.0)); // 600 - 250
-        assert_eq!(pos.left, 400.0); // anchor.right - cb.x
-        assert_eq!(pos.width, Some(400.0)); // 800 - 400
+            &reg, "--anchor", InsetAreaKeyword::End, InsetAreaKeyword::End, cb,
+        ).unwrap();
+        assert_eq!(pos.top, 250.0);
+        assert_eq!(pos.height, Some(350.0));
+        assert_eq!(pos.left, 400.0);
+        assert_eq!(pos.width, Some(400.0));
     }
 
     #[test]
     fn inset_area_span_all_span_all() {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
-            &reg, "--anchor",
-            InsetAreaKeyword::SpanAll, InsetAreaKeyword::SpanAll, cb,
-        )
-        .unwrap();
-        // Full containing block.
+            &reg, "--anchor", InsetAreaKeyword::SpanAll, InsetAreaKeyword::SpanAll, cb,
+        ).unwrap();
         assert_eq!(pos.top, 0.0);
         assert_eq!(pos.height, Some(600.0));
         assert_eq!(pos.left, 0.0);
@@ -728,11 +922,8 @@ mod tests {
     fn inset_area_span_start_col() {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
-            &reg, "--anchor",
-            InsetAreaKeyword::Center, InsetAreaKeyword::SpanStart, cb,
-        )
-        .unwrap();
-        // col: SpanStart → cb_start to anchor_end → [0, 400), w=400
+            &reg, "--anchor", InsetAreaKeyword::Center, InsetAreaKeyword::SpanStart, cb,
+        ).unwrap();
         assert_eq!(pos.left, 0.0);
         assert_eq!(pos.width, Some(400.0));
     }
@@ -741,11 +932,8 @@ mod tests {
     fn inset_area_span_end_row() {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
-            &reg, "--anchor",
-            InsetAreaKeyword::SpanEnd, InsetAreaKeyword::Center, cb,
-        )
-        .unwrap();
-        // row: SpanEnd → anchor_start to cb_end → [200, 600), h=400
+            &reg, "--anchor", InsetAreaKeyword::SpanEnd, InsetAreaKeyword::Center, cb,
+        ).unwrap();
         assert_eq!(pos.top, 200.0);
         assert_eq!(pos.height, Some(400.0));
     }
@@ -754,10 +942,8 @@ mod tests {
     fn inset_area_none_keywords_returns_none() {
         let (reg, cb) = setup_inset_area();
         assert!(resolve_inset_area(
-            &reg, "--anchor",
-            InsetAreaKeyword::None, InsetAreaKeyword::None, cb,
-        )
-        .is_none());
+            &reg, "--anchor", InsetAreaKeyword::None, InsetAreaKeyword::None, cb,
+        ).is_none());
     }
 
     #[test]
@@ -765,9 +951,7 @@ mod tests {
         let reg = AnchorRegistry::default();
         let cb = rect(0.0, 0.0, 800.0, 600.0);
         assert!(resolve_inset_area(
-            &reg, "--ghost",
-            InsetAreaKeyword::Center, InsetAreaKeyword::End, cb,
-        )
-        .is_none());
+            &reg, "--ghost", InsetAreaKeyword::Center, InsetAreaKeyword::End, cb,
+        ).is_none());
     }
 }

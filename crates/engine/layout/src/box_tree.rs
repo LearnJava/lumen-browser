@@ -31,7 +31,7 @@ use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
                       build_counter_style_registry, format_counter_with_registry,
                       build_list_marker_text};
 use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
-use crate::anchor::{collect_anchors, resolve_inset_area, InsetAreaKeyword};
+use crate::anchor::{collect_anchors, InsetAreaKeyword};
 use crate::TextMeasurer;
 
 /// Layout-side gutter width for `scrollbar-width: auto` in CSS px.
@@ -5884,31 +5884,52 @@ fn lay_out_abs_children(
 
         let child = &mut parent.children[idx];
 
-        // CSS Anchor Positioning L1: check if this element is anchored via position-anchor.
-        // P4 will wire ComputedStyle.position_anchor and inset_area_{row,col} fields.
-        // For now, treat them as None (P2 stub — no-op).
-        // CSS: position-anchor, inset-area
-        let _anchored_pos = cs.position_anchor.as_ref().and_then(|anchor_name| {
+        // CSS Anchor Positioning L1 §5 — resolve `position-area` / `inset-area`.
+        // CSS: position-anchor, inset-area, position-area
+        let anchored_pos = cs.position_anchor.as_deref().and_then(|anchor_name| {
             crate::anchor::resolve_inset_area(
                 &anchors,
                 anchor_name,
-                crate::anchor::InsetAreaKeyword::None,  // P4 will provide from cs.inset_area_row
-                crate::anchor::InsetAreaKeyword::None,  // P4 will provide from cs.inset_area_col
+                cs.inset_area_row,
+                cs.inset_area_col,
                 cb,
             )
         });
 
-        // Desired border-left edge.
-        let new_x = match (left, right) {
-            (Some(l), _)    => cb.x + l + c_ml,
-            (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
-            (None, None)    => static_x + c_ml,
-        };
-        // Desired border-top edge.
-        let new_y = match (top, bottom) {
-            (Some(t), _)    => cb.y + t + c_mt,
-            (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
-            (None, None)    => static_y + c_mt,
+        // CSS Anchor Positioning L1 §4 — apply `anchor-size()` overrides for width/height.
+        if let Some(w) = cs.anchor_size_w.as_ref().and_then(|f| {
+            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
+        }) {
+            child.rect.width = w;
+        }
+        if let Some(h) = cs.anchor_size_h.as_ref().and_then(|f| {
+            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
+        }) {
+            child.rect.height = h;
+        }
+
+        let (new_x, new_y) = if let Some(ref pos) = anchored_pos {
+            // Anchor-positioned: override width/height from inset-area if provided.
+            if let Some(w) = pos.width {
+                child.rect.width = w;
+            }
+            if let Some(h) = pos.height {
+                child.rect.height = h;
+            }
+            (cb.x + pos.left, cb.y + pos.top)
+        } else {
+            // Normal abs-pos: resolve from left/right/top/bottom insets.
+            let nx = match (left, right) {
+                (Some(l), _)    => cb.x + l + c_ml,
+                (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
+                (None, None)    => static_x + c_ml,
+            };
+            let ny = match (top, bottom) {
+                (Some(t), _)     => cb.y + t + c_mt,
+                (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
+                (None, None)     => static_y + c_mt,
+            };
+            (nx, ny)
         };
 
         let dx = new_x - child.rect.x;
@@ -8201,13 +8222,16 @@ fn apply_container_inner(
 /// tree to reposition every absolutely/fixed-positioned element that has both
 /// `position-anchor` and a non-`none` `inset-area` set.  Called once after all
 /// layout and container-query passes complete.
+///
+/// Respects `anchor-scope`: anchors in a scoped subtree are invisible to
+/// positioned elements that are not descendants of the scope root.
 pub(crate) fn apply_anchor_positions(root: &mut LayoutBox, viewport: Size) {
     let registry = collect_anchors(root);
     if registry.is_empty() {
         return;
     }
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    apply_anchor_positions_rec(root, &registry, viewport, init_pcb);
+    apply_anchor_positions_rec(root, &registry, viewport, init_pcb, &mut Vec::new());
 }
 
 fn apply_anchor_positions_rec(
@@ -8215,6 +8239,7 @@ fn apply_anchor_positions_rec(
     registry: &crate::anchor::AnchorRegistry,
     viewport: Size,
     pcb: Rect,
+    ancestors: &mut Vec<lumen_dom::NodeId>,
 ) {
     // Resolve inset-area for this element if it is abs/fixed-positioned with a named anchor.
     let anchor_name = matches!(lb.style.position, Position::Absolute | Position::Fixed)
@@ -8229,7 +8254,11 @@ fn apply_anchor_positions_rec(
             } else {
                 pcb
             };
-            if let Some(pos) = resolve_inset_area(registry, anchor_name, row, col, cb) {
+            // Use scope-aware lookup so anchors behind anchor-scope barriers are
+            // invisible to positioned elements outside their subtree.
+            if let Some(pos) = crate::anchor::resolve_inset_area_scoped(
+                registry, anchor_name, row, col, cb, ancestors,
+            ) {
                 let new_x = cb.x + pos.left;
                 let new_y = cb.y + pos.top;
                 let dx = new_x - lb.rect.x;
@@ -8258,9 +8287,11 @@ fn apply_anchor_positions_rec(
         pcb
     };
 
+    ancestors.push(lb.node);
     for child in &mut lb.children {
-        apply_anchor_positions_rec(child, registry, viewport, my_pcb);
+        apply_anchor_positions_rec(child, registry, viewport, my_pcb, ancestors);
     }
+    ancestors.pop();
 }
 
 /// Recursively re-applies container rules to a subtree.
