@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<!-- CSS Color 4 §6.2 system color keywords: Canvas, ButtonFace, Highlight, etc.
+     Each cell uses a different system color as background to prove they resolve
+     to a real RGBA value (non-transparent) in both light/dark scheme. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; padding: 4px; box-sizing: border-box; }
+
+  /* Each cell is 100×100, uses a system color as background and its text-pair as border */
+  .cell {
+    width: 156px;
+    height: 80px;
+    border: 4px solid;
+  }
+
+  .c-canvas       { background: Canvas;       border-color: CanvasText; }
+  .c-buttonface   { background: ButtonFace;   border-color: ButtonBorder; }
+  .c-field        { background: Field;        border-color: ButtonBorder; }
+  .c-highlight    { background: Highlight;    border-color: HighlightText; }
+  .c-linktext     { background: LinkText;     border-color: Canvas; }
+  .c-visitedtext  { background: VisitedText;  border-color: Canvas; }
+  .c-activetext   { background: ActiveText;   border-color: Canvas; }
+  .c-graytext     { background: GrayText;     border-color: Canvas; }
+  .c-mark         { background: Mark;         border-color: MarkText; }
+  .c-accentcolor  { background: AccentColor;  border-color: AccentColorText; }
+  .c-threedhi     { background: ThreeDHighlight; border-color: ThreeDShadow; }
+  .c-scrollbar    { background: Scrollbar;    border-color: ButtonBorder; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell c-canvas"></div>
+  <div class="cell c-buttonface"></div>
+  <div class="cell c-field"></div>
+  <div class="cell c-highlight"></div>
+  <div class="cell c-linktext"></div>
+  <div class="cell c-visitedtext"></div>
+  <div class="cell c-activetext"></div>
+  <div class="cell c-graytext"></div>
+  <div class="cell c-mark"></div>
+  <div class="cell c-accentcolor"></div>
+  <div class="cell c-threedhi"></div>
+  <div class="cell c-scrollbar"></div>
+</div>
+</body>
+</html>

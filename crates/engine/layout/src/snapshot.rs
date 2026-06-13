@@ -278,6 +278,7 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
                 CssColor::Rgba(col) => color_hex(col),
                 CssColor::CurrentColor => "currentColor".into(),
                 CssColor::Wide(f) => color_hex(f.to_srgb_color()),
+                CssColor::System(sc) => color_hex(sc.resolve_color(false)),
             };
             let _ = write!(
                 out,

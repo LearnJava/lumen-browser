@@ -40,7 +40,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Text Decoration L3 | [css-text-decor-3](https://www.w3.org/TR/css-text-decor-3/) | ✅ | underline/overline/line-through; style/color/thickness |
 | Selectors L3 | [css3-selectors](https://www.w3.org/TR/css3-selectors/) | ✅ | type/class/id/attr; combinators; :nth-*; :not() |
 | CSS Logical Properties L1 | [css-logical-1](https://www.w3.org/TR/css-logical-1/) | ✅ | margin/padding/border/inset logical → physical (LTR) |
-| CSS Color L4 | [css-color-4](https://www.w3.org/TR/css-color-4/) | 🟡 | oklch ✅; color-mix() ✅ (p4-color-mix-parsing 2026-06-08); wide-gamut display ⬜ |
+| CSS Color L4 | [css-color-4](https://www.w3.org/TR/css-color-4/) | 🟡 | oklch ✅; color-mix() ✅ (p4-color-mix-parsing 2026-06-08); system color keywords ✅ (p4-system-colors 2026-06-13); wide-gamut display ⬜ |
 
 ### Tier 1 — Critical gaps (break most web pages when missing)
 
