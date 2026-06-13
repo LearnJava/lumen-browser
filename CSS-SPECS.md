@@ -159,7 +159,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `initial` | ✅ | |
 | `unset` | ✅ | inherit if inheritable, else initial |
 | `revert` | 🟡 | parsed; UA stylesheet revert ⬜ |
-| `revert-layer` | ⬜ | CSS Cascading L5 |
+| `revert-layer` | ✅ | CSS Cascade L5 §6.4.6; pre-pass in compute_style drops winning layer; 5 tests; test 98 (P4 2026-06-13) |
 
 ### [T0] Box Model
 
@@ -385,7 +385,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |---------|--------|-------|
 | `@layer` declaration | ✅ | parsed; cascade ordering wired: layer_priority sort key in compute_style |
 | `@import layer()` | 🟡 | URL parsed; layer() modifier ⬜ |
-| `revert-layer` | ⬜ | |
+| `revert-layer` | ✅ | CSS Cascade L5 §6.4.6; reverts current cascade layer (P4 2026-06-13) |
 
 ### [T1] Selectors L4
 
