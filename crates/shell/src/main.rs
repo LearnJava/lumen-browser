@@ -2053,6 +2053,7 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Space if shift_only => Some(KeyCommand::ScrollPageUp),
         KeyCode::Home if no_mods => Some(KeyCommand::ScrollHome),
         KeyCode::End if no_mods => Some(KeyCommand::ScrollEnd),
+        KeyCode::KeyJ if ctrl_only => Some(KeyCommand::DownloadsPanel),
         KeyCode::KeyJ if ctrl_and_shift => Some(KeyCommand::DownloadsPanel),
         // Ctrl+\ — toggle split view (show active + next tab side-by-side)
         KeyCode::Backslash if ctrl_only => Some(KeyCommand::SplitView),
@@ -5460,6 +5461,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
 
+        // _lumen_network_download(url, filename): start downloads requested by
+        // page scripts / <a download>. Relative URLs are resolved against the
+        // active document URL.
+        {
+            let reqs = lumen_js::download_bindings::take_download_requests();
+            if !reqs.is_empty() {
+                let base = self.current_display_url().to_owned();
+                for req in reqs {
+                    let abs = lumen_core::url::Url::parse(&base)
+                        .and_then(|b| b.resolve(&req.url))
+                        .map(|u| u.to_string())
+                        .unwrap_or(req.url);
+                    self.downloads.start_url_download(abs, req.filename);
+                }
+                self.request_redraw();
+            }
+        }
+
         // §12.3 Read-later: drain completed background page fetches and persist.
         while let Ok((url, title, html)) = self.read_later_rx.try_recv() {
             let now = std::time::SystemTime::now()
@@ -6053,6 +6072,35 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                         self.request_redraw();
                         return;
+                    }
+                    // CC-2: the download panel is a top-most bottom overlay — it
+                    // captures clicks on its buttons / close / body before they
+                    // reach the page. A click outside the panel closes it.
+                    if self.downloads.visible {
+                        let win = (
+                            self.viewport_width_css() as u32,
+                            self.window_height_css() as u32,
+                        );
+                        if let Some(action) = download::hit_test(&self.downloads, x_css, y_css, win) {
+                            use download::DownloadAction;
+                            match action {
+                                DownloadAction::Open(id) => {
+                                    self.downloads.open_download(id);
+                                }
+                                DownloadAction::Reveal(id) => {
+                                    self.downloads.show_in_folder(id);
+                                }
+                                DownloadAction::Cancel(id) => {
+                                    self.downloads.cancel(id);
+                                }
+                                DownloadAction::Close | DownloadAction::Outside => {
+                                    self.downloads.close();
+                                }
+                                DownloadAction::Inside => {}
+                            }
+                            self.request_redraw();
+                            return;
+                        }
                     }
                     // Fire mousedown + pointerdown on the hovered DOM element.
                     // Per W3C UI Events §17.6 + Pointer Events L2 §10 — fires before
@@ -7587,10 +7635,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Download panel: viewport-locked bottom-right panel.
                 // Rendered before the tab bar so it appears below the tab strip.
                 if self.downloads.visible {
-                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                        let s = w.inner_size();
-                        (s.width, s.height)
-                    });
+                    let win_size = (
+                        self.viewport_width_css() as u32,
+                        self.window_height_css() as u32,
+                    );
                     let mut dl_cmds = download::build_download_bar(&self.downloads, win_size);
                     overlay_buf.append(&mut dl_cmds);
                 }
