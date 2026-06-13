@@ -202,6 +202,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **backdrop-filter** — ✅ реализован (blur/grayscale/brightness/invert/combo; Phase 0: требует parent stacking context), тест 30
 - **clip-path** — ✅ реализован (inset/circle/ellipse/polygon/path() clip), тест 31
 - **clip-path fill-rule** — ✅ реализован (CSS Shapes L1 §3/§4): опциональный `<fill-rule>` в `path([nonzero|evenodd,]? "…")` и `polygon([nonzero|evenodd,]? …)` сохраняется в `ClipPath::Path/Polygon` (2-е поле `FillRule`, default `NonZero`) и пробрасывается в `ResolvedClipShape::Polygon { even_odd }`; cpu_raster (tiny_skia `FillRule::EvenOdd`) и femtovg (`Paint::with_fill_rule`) уважают правило — self-intersecting пентаграмма/пересечение квадратов с `evenodd` получают полую середину; 2 unit-теста style/lib + 1 cpu_raster (`clip_path_polygon_even_odd_hole`); тест 112
+- **shape-outside: path()** — ✅ реализован (CSS Shapes L1 §4): `parse_shape_path_px()` в box_tree.rs флэттит SVG-путь `path([<fill-rule>,]? "<d>")` через `motion_path::flatten_path_to_polygon` в полигон float-local px-точек; подключён в обеих ветках размещения float (left/right) перед `parse_shape_polygon_px`; fill-rule принимается и игнорируется (обтекание по залитому контуру); inline-контент обтекает контур пути так же, как `polygon()`; 4 unit-теста box_tree.rs; тест 113
 
 - **translate / rotate / scale** (individual CSS Transforms L2 props) — ✅ реализованы как отдельные свойства, compose перед transform в matrix (translate → rotate → scale → transform), тест 46
 

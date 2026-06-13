@@ -3787,6 +3787,44 @@ pub(crate) fn parse_shape_inset_px(s: &str) -> Option<(f32, f32, f32, f32, f32)>
     Some((t, r, b, l, radius))
 }
 
+/// CSS Shapes L1 §4 — parse `path([<fill-rule>,]? "<svg-path>")`.
+/// Flattens the SVG path `d` string into a vertex list in float-local
+/// (reference-box-relative) px coordinates via [`crate::motion_path::flatten_path_to_polygon`].
+/// The optional `<fill-rule>` (nonzero | evenodd) is accepted but ignored — float
+/// wrapping uses the filled outline regardless. The `d` string must be quoted
+/// (`"…"` or `'…'`); its letter case is preserved (SVG commands are case-sensitive).
+/// `path()` coordinates are always px (no percentages per spec). Returns `None`
+/// for any unknown syntax or a degenerate (< 3 vertices) outline.
+pub(crate) fn parse_shape_path_px(s: &str) -> Option<Vec<(f32, f32)>> {
+    let s = s.trim();
+    let open = s.find('(')?;
+    let close = s.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    // Only the function name is case-folded; the inner `d` string keeps its case.
+    if !s[..open].trim().eq_ignore_ascii_case("path") {
+        return None;
+    }
+    let inner = s[open + 1..close].trim();
+    // Strip an optional leading `<fill-rule>,` (ignored for wrapping geometry).
+    let inner = match inner.split_once(',') {
+        Some((head, rest))
+            if head.trim().eq_ignore_ascii_case("nonzero")
+                || head.trim().eq_ignore_ascii_case("evenodd") =>
+        {
+            rest.trim()
+        }
+        _ => inner,
+    };
+    let path_str = inner
+        .strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .or_else(|| inner.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')))?;
+    let pts = crate::motion_path::flatten_path_to_polygon(path_str);
+    if pts.len() >= 3 { Some(pts) } else { None }
+}
+
 /// CSS Shapes L1 §5.2 — polygon shape for `shape-outside` on a float.
 /// Points are stored in content-area coordinates (same as FloatContext).
 struct ShapePolygon {
@@ -4832,7 +4870,9 @@ fn lay_out(
                                         let cx = child.rect.x + fw / 2.0;
                                         let cy = top_y + fh / 2.0;
                                         fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
-                                    } else if let Some(local_pts) = parse_shape_polygon_px(sv) {
+                                    } else if let Some(local_pts) = parse_shape_path_px(sv)
+                                        .or_else(|| parse_shape_polygon_px(sv))
+                                    {
                                         let pts = local_pts.into_iter()
                                             .map(|(px, py)| (px + lx, py + child_y))
                                             .collect();
@@ -4873,7 +4913,9 @@ fn lay_out(
                                         let cx = child.rect.x + fw / 2.0;
                                         let cy = top_y + fh / 2.0;
                                         fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
-                                    } else if let Some(local_pts) = parse_shape_polygon_px(sv) {
+                                    } else if let Some(local_pts) = parse_shape_path_px(sv)
+                                        .or_else(|| parse_shape_polygon_px(sv))
+                                    {
                                         let pts = local_pts.into_iter()
                                             .map(|(px, py)| (px + left_edge, py + child_y))
                                             .collect();
@@ -10885,6 +10927,54 @@ mod tests {
         // Not a polygon.
         assert_eq!(super::parse_shape_polygon_px("circle(50px)"), None);
         assert_eq!(super::parse_shape_polygon_px("none"), None);
+    }
+
+    // ── CSS Shapes L1 — shape-outside path() ──────────────────────────────────
+
+    #[test]
+    fn parse_shape_path_triangle() {
+        // Straight-line triangle: M 0 0 L 100 0 L 50 100 Z → 3 distinct vertices.
+        let pts = super::parse_shape_path_px(r#"path("M 0 0 L 100 0 L 50 100 Z")"#)
+            .expect("triangle path should parse");
+        assert_eq!(pts[0], (0.0, 0.0));
+        assert_eq!(pts[1], (100.0, 0.0));
+        assert_eq!(pts[2], (50.0, 100.0));
+        // Close returns to the sub-path start.
+        assert_eq!(*pts.last().unwrap(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn parse_shape_path_fill_rule_and_quotes() {
+        // Leading fill-rule is accepted and ignored; single quotes work too.
+        let pts = super::parse_shape_path_px(r#"path(evenodd, 'M 0 0 L 10 0 L 10 10 Z')"#)
+            .expect("path with fill-rule + single quotes should parse");
+        assert_eq!(pts[0], (0.0, 0.0));
+        assert_eq!(pts[1], (10.0, 0.0));
+        assert_eq!(pts[2], (10.0, 10.0));
+    }
+
+    #[test]
+    fn parse_shape_path_invalid() {
+        // Not a path() function.
+        assert_eq!(super::parse_shape_path_px("polygon(0 0, 10 0, 10 10)"), None);
+        assert_eq!(super::parse_shape_path_px("none"), None);
+        // Missing quotes around the d-string.
+        assert_eq!(super::parse_shape_path_px("path(M 0 0 L 10 0 L 10 10 Z)"), None);
+        // Degenerate (< 3 vertices).
+        assert_eq!(super::parse_shape_path_px(r#"path("M 0 0 L 10 10")"#), None);
+    }
+
+    #[test]
+    fn float_context_path_left_float() {
+        // path() flattened to the same right-triangle as the polygon case:
+        // M 0 0 L 100 0 L 0 100 Z. At y=50 the hypotenuse right edge = 50.
+        let pts = super::parse_shape_path_px(r#"path("M 0 0 L 100 0 L 0 100 Z")"#)
+            .expect("triangle path should parse");
+        let mut fc = super::FloatContext::new();
+        fc.shape_polygons.push(super::ShapePolygon {
+            top_y: 0.0, bottom_y: 100.0, is_left: true, points: pts,
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
     }
 
     #[test]

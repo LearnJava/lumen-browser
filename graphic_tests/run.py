@@ -175,6 +175,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('110', '110-accent-color.html', 0.5, 'CSS UI L4 §6.1: accent-color — тинт чекбокса/радио/range/progress; пять рядов с разными accent (red/green/orange/purple/UA-blue); <meter> исключён (семантические цвета)'),
     ('111', '111-appearance-none.html', 0.5, 'CSS Basic UI L4 §4.2: appearance: none — снимает нативную отрисовку формы (тик чекбокса/радио, трек/ползунок range, бар progress); контролы внутри светлых обёрток остаются пустыми, лишний синий индикатор = регрессия'),
     ('112', '112-clip-path-fill-rule.html', 0.5, 'CSS Shapes L1 §3/§4: clip-path fill-rule — path()/polygon() с evenodd оставляют полую середину у self-intersecting пентаграммы и пересечения квадратов; nonzero (default) заливает форму целиком'),
+    ('113', '113-shape-outside-path.html', 0.5, 'CSS Shapes L1 §4: shape-outside: path() — inline-block квадраты обтекают треугольный float по флэттенному SVG-контуру; колонка path() должна совпасть с эталонной колонкой polygon() (одинаковая лесенка)'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
