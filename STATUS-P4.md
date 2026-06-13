@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_ — p4-clip-path-path влит 2026-06-14
+_(none)_ — p4-accent-color влит 2026-06-14
 
 ## Workflow
 
@@ -280,6 +280,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-14 | `accent-color` | CSS UI L4 §6.1; `ComputedStyle.accent_color: Option<Color>` уже парсился (inherited, None=auto) — добавлено paint-wiring: `emit_form_control_indicator()` резолвит accent (UA-дефолт `ACCENT_DEFAULT` = синий 21,90,192) и тинтит checked checkbox/radio, залитую часть+thumb range (`emit_range_slider`), value-бар `<progress>` (`emit_progress_bar`); `<meter>` исключён (семантические цвета HTML §4.10.14); 5 unit-тестов display_list.rs + graphic test 110 |
 | 2026-06-14 | `clip-path: path()` | CSS Shapes L1 §4; `motion_path::flatten_path_to_polygon()` разбивает SVG-путь (M/L/H/V/C/S/Q/T/A/Z через существующий `parse_svg_path`) в полигон 24 отрезка/кривую; `ClipPath::Path(Vec<(f32,f32)>)` хранит флэттенные px-точки системы пути; `parse_clip_path` принимает `path([<fill-rule>,]? "<svg>")` (fill-rule отбрасывается, кавычки `"`/`'`); `clip_path_to_shape` смещает точки на border-box → `ResolvedClipShape::Polygon`; проценты в path() недопустимы по спеке (px-координаты); 3 unit-теста lib.rs + 3 motion_path.rs + 2 display_list.rs + graphic test 31 (path-tri + path-curve) |
 | 2026-06-13 | `offset-path: ray(<angle>)` | CSS Motion Path L1 §2.2; `parse_ray_angle()`+`resolve_ray()` в motion_path.rs; `resolve_motion_transform()` распознаёт `ray(...)` до `path()`; угол deg/grad/rad/turn, 0deg=вверх по часовой (linear-gradient-конвенция); offset-rotate auto следует направлению луча, fixed — фиксирован; `<ray-size>`/`contain`/`at <position>` парсятся и игнорируются (px offset-distance их не требует); wiring в property_trees.rs уже был; 7 unit-тестов + graphic test 99 |
 | 2026-06-13 | `revert-layer` | CSS Cascade L5 §6.4.6; pre-pass над отсортированным каскадом в `compute_style()`: для каждого свойства, чей победитель = `revert-layer`, удаляются все его декларации из слоя-победителя (та же important-группа), затем повтор; обычный last-wins loop даёт откатанное значение; defensive-skip для не-победивших `revert-layer`; НЕ `CssWideKeyword` (зависит от слоя декларации); ограничение shorthand↔longhand; 5 unit-тестов style.rs + graphic test 98 |

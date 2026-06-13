@@ -172,6 +172,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('97', '97-counter-set.html', 0.5, 'CSS Lists L3 §4: counter-set — порядок reset→increment→set (set перекрывает increment), создание счётчика на never-reset; ::before content: counter(c) показывает 5/6/0/1/42'),
     ('98', '98-revert-layer.html', 0.5, 'CSS Cascade L5 §6.4.6: revert-layer — откат свойства к значению нижнего каскадного слоя; верхний ряд theme(red), нижний ряд revert-layer→base(green)'),
     ('99', '99-offset-path-ray.html', 0.5, 'CSS Motion Path L1 §2.2: offset-path: ray(<angle>) — восемь боксов по лучам 0/45/.../315deg формируют кольцо вокруг центра; turn-единица; offset-distance 0 держит центр'),
+    ('110', '110-accent-color.html', 0.5, 'CSS UI L4 §6.1: accent-color — тинт чекбокса/радио/range/progress; пять рядов с разными accent (red/green/orange/purple/UA-blue); <meter> исключён (семантические цвета)'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

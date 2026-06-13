@@ -269,3 +269,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 ### Форматы изображений и мультимедиа
 
 - **AVIF (AV1 Image File Format)** — ✅ реализован (ISO/IEC 23008-12 Phase 0): lumen-image::avif модуль + AvifImageDecoder trait; is_avif() проверяет ISOBMFF ftyp-бокс major brand (avif/avis); decode_avif() использует libavif через `image` крейт feature `avif` (требует cmake+nasm); поддерживает статичные AVIF, анимированные распознаются но первый кадр; ICC-профили не извлекаются (Phase 1); 14 unit-тестов в avif/mod.rs; зарегистрирован в image-decoder dispatch + supported_mime_types(); тест 90
+
+### Формы (form controls)
+
+- **accent-color** — ✅ реализован (CSS UI L4 §6.1): `ComputedStyle.accent_color: Option<Color>` (**наследуемое**, `None` = `auto`); parse в `apply_declaration()` (`auto` → None, цвет → Some); wiring в `emit_form_control_indicator()` (paint/display_list.rs) — резолвит `accent-color` (UA-дефолт `ACCENT_DEFAULT` = синий `rgb(21,90,192)` при `auto`) и тинтит checked checkbox/radio-индикатор, залитую часть+thumb range-слайдера (`emit_range_slider`) и value-бар `<progress>` (`emit_progress_bar`); `<meter>` исключён — сохраняет семантические green/yellow/red цвета (HTML §4.10.14); 5 unit-тестов display_list.rs; тест 110

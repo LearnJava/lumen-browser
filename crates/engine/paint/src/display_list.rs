@@ -3773,10 +3773,19 @@ fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
     b.style.opacity > 0.0
 }
 
+/// UA default accent for form controls when `accent-color: auto`. The same
+/// blue previously hard-coded across checkbox / radio / range / progress.
+const ACCENT_DEFAULT: Color = Color { r: 21, g: 90, b: 192, a: 255 };
+
 /// Render checkbox checkmark or radio dot for checked form controls.
 /// P2 note: this renders a simple filled rectangle as indicator; a full
 /// vector checkmark / circle belongs to the renderer GPU primitive set.
 fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
+    // CSS UI L4 §6.1 — accent-color tints the "accent" of checkbox, radio,
+    // range and progress controls. `auto` (None) keeps the UA default blue.
+    // <meter> is intentionally excluded: its bar keeps the semantic
+    // green/yellow/red coloring from HTML §4.10.14, not the accent color.
+    let accent = b.style.accent_color.unwrap_or(ACCENT_DEFAULT);
     match kind {
         FormControlKind::Input { input_type, checked, .. } => {
             if !checked { return; }
@@ -3792,7 +3801,7 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                     (b.rect.width  - inset * 2.0).max(1.0),
                     (b.rect.height - inset * 2.0).max(1.0),
                 ),
-                color: Color { r: 21, g: 90, b: 192, a: 255 },
+                color: accent,
             });
         }
         FormControlKind::Select { selected_text } => {
@@ -3800,10 +3809,10 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
         }
         FormControlKind::Button | FormControlKind::Textarea { .. } => {}
         FormControlKind::Range { value, min, max } => {
-            emit_range_slider(b, *value, *min, *max, out);
+            emit_range_slider(b, *value, *min, *max, accent, out);
         }
         FormControlKind::Progress { value, max } => {
-            emit_progress_bar(b, *value, *max, out);
+            emit_progress_bar(b, *value, *max, accent, out);
         }
         FormControlKind::Meter { value, min, max, low, high, optimum } => {
             emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
@@ -3811,8 +3820,11 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     }
 }
 
-/// Draw a range slider: gray track, blue filled portion, circular thumb.
-fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, out: &mut Vec<DisplayCommand>) {
+/// Draw a range slider: gray track, accent-colored filled portion, circular thumb.
+///
+/// `accent` is the resolved `accent-color` (UA default blue when `auto`); it
+/// tints both the filled track portion and the thumb per CSS UI L4 §6.1.
+fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, accent: Color, out: &mut Vec<DisplayCommand>) {
     let range = (max - min).max(f32::EPSILON);
     let fraction = ((value - min) / range).clamp(0.0, 1.0);
 
@@ -3823,7 +3835,7 @@ fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, out: &mut Ve
     let track_w = (b.rect.width - thumb_r).max(1.0);
 
     let gray = Color { r: 200, g: 200, b: 200, a: 255 };
-    let blue = Color { r: 21, g: 90, b: 192, a: 255 };
+    let blue = accent;
     let track_radius = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
 
     // Gray background track.
@@ -3857,15 +3869,16 @@ fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, out: &mut Ve
 
 /// Draw a `<progress>` bar inside the border box.
 ///
-/// Determinate: blue fill proportional to `value / max`.
+/// Determinate: `accent`-colored fill proportional to `value / max`.
 /// Indeterminate (`value` is `None`): static 30% fill to indicate pending state.
-fn emit_progress_bar(b: &LayoutBox, value: Option<f32>, max: f32, out: &mut Vec<DisplayCommand>) {
+/// `accent` is the resolved `accent-color` (UA default blue when `auto`).
+fn emit_progress_bar(b: &LayoutBox, value: Option<f32>, max: f32, accent: Color, out: &mut Vec<DisplayCommand>) {
     let pad = 2.0_f32;
     let bar_x = b.rect.x + pad;
     let bar_y = b.rect.y + pad;
     let bar_max_w = (b.rect.width - pad * 2.0).max(0.0);
     let bar_h = (b.rect.height - pad * 2.0).max(1.0);
-    let blue = Color { r: 21, g: 90, b: 192, a: 255 };
+    let blue = accent;
     let radii = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
 
     let fraction = match value {
@@ -6143,6 +6156,87 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn rounded_fills(dl: &DisplayList) -> Vec<&Color> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRoundedRect { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// CSS UI L4 §6.1 — `accent-color` tints a checked checkbox indicator.
+    #[test]
+    fn checkbox_accent_color_tints_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { accent-color: rgb(10, 200, 30); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 10 && c.g == 200 && c.b == 30),
+            "checkbox indicator should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `accent-color: auto` (the default) keeps the UA blue indicator.
+    #[test]
+    fn checkbox_default_accent_is_ua_blue() {
+        let dl = build("<input type=checkbox checked>", "");
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 21 && c.g == 90 && c.b == 192),
+            "default checkbox indicator should be UA blue, got {f:?}"
+        );
+    }
+
+    /// Radio dot also honours `accent-color`.
+    #[test]
+    fn radio_accent_color_tints_dot() {
+        let dl = build(
+            "<input type=radio checked>",
+            "input { accent-color: rgb(200, 0, 100); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 200 && c.g == 0 && c.b == 100),
+            "radio dot should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `<progress>` fill bar uses `accent-color` (a rounded-rect fill).
+    #[test]
+    fn progress_accent_color_tints_bar() {
+        let dl = build(
+            "<progress value=0.5 max=1></progress>",
+            "progress { accent-color: rgb(7, 130, 240); }",
+        );
+        let f = rounded_fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 7 && c.g == 130 && c.b == 240),
+            "progress bar should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `<input type=range>` filled track + thumb use `accent-color`; the gray
+    /// background track is left untinted.
+    #[test]
+    fn range_accent_color_tints_fill_not_track() {
+        let dl = build(
+            "<input type=range value=50 min=0 max=100>",
+            "input { accent-color: rgb(240, 60, 8); }",
+        );
+        let f = rounded_fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 240 && c.g == 60 && c.b == 8),
+            "range fill/thumb should use accent-color, got {f:?}"
+        );
+        assert!(
+            f.iter().any(|c| c.r == 200 && c.g == 200 && c.b == 200),
+            "range background track should stay gray, got {f:?}"
+        );
     }
 
     #[test]
