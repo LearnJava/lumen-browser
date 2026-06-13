@@ -14,6 +14,7 @@ pub mod highlight_api;
 pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
+pub mod download_bindings;
 pub mod clipboard;
 pub mod contacts;
 pub mod cookie_banner;
@@ -798,6 +799,12 @@ impl QuickJsRuntime {
                 &self.broadcast_channels,
             ) {
                 eprintln!("BroadcastChannel bindings init failed: {}", e);
+            }
+
+            // Install _lumen_network_download(url, filename) — lets page scripts
+            // and <a download> ask the shell to start a background download.
+            if let Err(e) = download_bindings::install_download_bindings(&ctx) {
+                eprintln!("Download bindings init failed: {}", e);
             }
 
             // Install navigator.credentials (WebAuthn / passkeys) — after DOM so

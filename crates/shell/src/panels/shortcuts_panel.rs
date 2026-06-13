@@ -99,7 +99,7 @@ pub fn default_rows() -> Vec<ShortcutRow> {
         ("ToggleReaderView", "Режим чтения",           "",            "F9"),
         ("ViewSource",       "Исходный код",           "ctrl",        "U"),
         ("ToggleShortcuts",  "Горячие клавиши",        "ctrl+shift",  "Slash"),
-        ("DownloadsPanel",   "Загрузки",               "ctrl+shift",  "J"),
+        ("DownloadsPanel",   "Загрузки",               "ctrl",        "J"),
         ("ToggleShields",    "Shields",                "ctrl+shift",  "S"),
         ("ToggleSidebar",    "Боковая панель",         "ctrl+shift",  "A"),
         ("ToggleFocusMode",  "Режим фокуса",           "ctrl+shift",  "F"),
