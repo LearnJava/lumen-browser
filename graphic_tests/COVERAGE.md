@@ -55,7 +55,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 28-css-containment.html | contain | 5 | baseline (no contain) · contain:size (height=0) · contain:paint (overflow clip) · contain:layout · contain:strict |
 | 29-container-queries.html | @container | 4 | wide container: min-width applies (blue) · narrow: not applies (red) · named container · max-width |
 | 30-css-filter.html | CSS filter + backdrop-filter | 20 | grayscale(1) · sepia(1) · brightness(2) · invert(1) · contrast(3) · saturate(3) · opacity(0.4) · blur(8px) · hue-rotate(90deg/180deg) · backdrop-filter: blur/grayscale/brightness/invert/combo |
-| 31-clip-path.html | clip-path | 9 | inset(1/4-value) · circle(r/at) · ellipse(rx ry/at) · polygon(triangle/rect bbox) · clip-path + overflow:hidden |
+| 31-clip-path.html | clip-path | 11 | inset(1/4-value) · circle(r/at) · ellipse(rx ry/at) · polygon(triangle/rect bbox) · path(M/L/Z + cubic Bézier) · clip-path + overflow:hidden |
 | 32-list-markers.html | list markers | 20 | display:list-item · ::marker box · list-style-type: disc/circle/square/decimal/lower-alpha/lower-roman · list-style-position: outside/inside · list-style-type:none · ::marker { color } CSS override · ::marker { content } CSS override · **@counter-style** custom (alphabetic+prefix, numeric+prefix) · **list-style-type: \<custom-ident\>** lookup in CounterStyleRegistry |
 | 33-multi-column.html | multi-column layout + column-rule | 7 | column-count:2/3/4/5 · column-width · column-gap · column-rule: solid/dashed/dotted · rule centered in gap · rule wider than gap (clamped) |
 | 34-forms.html | form controls static rendering | 18 | input[text/email/password/number/search/range/color/submit] · checkbox (unchecked/checked/disabled) · radio (unchecked/checked) · button · textarea · select · required · disabled UA styles |
@@ -200,7 +200,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **transform** — ✅ полностью реализован (translate/rotate/scale/skew/matrix + transform-origin), тест 22
 - **filter** — ✅ реализован (grayscale/sepia/brightness/invert/contrast/saturate/opacity/hue-rotate + blur), тест 30
 - **backdrop-filter** — ✅ реализован (blur/grayscale/brightness/invert/combo; Phase 0: требует parent stacking context), тест 30
-- **clip-path** — ✅ реализован (inset/circle/ellipse/polygon bounding-box clip), тест 31
+- **clip-path** — ✅ реализован (inset/circle/ellipse/polygon/path() clip), тест 31
 
 - **translate / rotate / scale** (individual CSS Transforms L2 props) — ✅ реализованы как отдельные свойства, compose перед transform в matrix (translate → rotate → scale → transform), тест 46
 
