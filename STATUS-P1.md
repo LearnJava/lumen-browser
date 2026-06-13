@@ -6,8 +6,7 @@
 
 ## In progress
 
-**BB-5: `text-wrap: balance` balance algorithm**  branch: `p1-bb5-text-wrap-balance`
-Next step: `TextWrapMode::Balance` enum + бинарный поиск ширины переноса в inline-flow (`crates/engine/layout/src/`); `// CSS: text-wrap` handoff для P4; 8 unit-тестов
+_(нет)_
 
 ---
 
@@ -30,7 +29,7 @@ Next step: `TextWrapMode::Balance` enum + бинарный поиск ширин
 | ~~BB-2~~ | ~~**`::first-letter` layout split**~~ — **выполнено** (p1-bb2-first-letter, 2026-06-13): float-вариант (drop cap) — `extract_first_letter_float` выделяет первую букву (с ведущей пунктуацией, L4 §5.1) в block-level float `LayoutBox`; shrink-to-fit float-ов без width → fallback на max-content; ::first-line не перекрывает drop cap; non-float путь — segment-level restyle (как раньше); эталон TEST-58 перегенерирован; 8 unit-тестов; попутно BUG-152 | M | `lumen-layout` |
 | ~~BB-3~~ | ~~**CSS Grid L2 subgrid algorithm**~~ — **дубликат**: уже реализовано в p1-css-subgrid (2026-06-03): `GridTrackSize::Subgrid` + `SubgridContext` + размещение по родительским трекам в `lay_out_grid` + `collect_subgrid_items`; P4-работа не нужна (STATUS-P4 #14) | L | `lumen-layout` |
 | ~~BB-4~~ | ~~**`content-visibility: auto` skip rendering**~~ — **выполнено** (p1-bb4-content-visibility, 2026-06-13): модуль `content_visibility.rs` (set_cv_scroll/set_cv_relevant → layout → take_cv_skipped) + хук в `lay_out` (top ниже viewport×1.5 → children очищаются, явная height сохраняется); shell: cv_skipped/cv_relevant ratchet + события `ContentVisibilityChange` (потребитель — P3, contentvisibilityautostatechange) + maybe_expand_cv_relevant в RedrawRequested (скролл → relayout); Phase 0: только below-viewport, без contain-intrinsic-size; 10+5 тестов | M | `lumen-layout`, `lumen-shell` |
-| BB-5 | **`text-wrap: balance` balance algorithm** — бинарный поиск оптимальной ширины переноса, минимизирующей дисбаланс последней строки; `TextWrapMode::Balance` enum; `// CSS: text-wrap` для P4; 8 unit-тестов | M | `lumen-layout` |
+| ~~BB-5~~ | ~~**`text-wrap: balance` balance algorithm**~~ — **дубликат**: уже реализовано в c191dcf8 (2026-05-31, в main): `TextWrapStyle::Balance` enum (style.rs:3614, `balance` — значение `text-wrap-style` по CSS Text L4 §6.4.2, не `text-wrap-mode`) + бинарный поиск `balance_wrap` в [widest_word, container_width] (box_tree.rs:7320, минимизирует wrap_width при сохранении числа строк greedy) + диспетчер box_tree.rs:4276 + парсинг css-parser + 9 unit-тестов. P4-wiring готов. Реального пробела нет | M | `lumen-layout` |
 | BB-6 | **`overscroll-behavior` scroll chain stop** — блокировать распространение скролла на родителя при `overscroll-behavior: contain/none`; `// CSS: overscroll-behavior` для P4; wiring в `try_scroll_overflow_container`; 5 unit-тестов | S | `lumen-layout`, `lumen-shell` |
 | BB-7 | **`scroll-margin`/`scroll-padding` snap offset** — применять `scroll-margin` к snap-target позиции; `scroll-padding` корректировать snap-port; `// CSS: scroll-margin, scroll-padding` для P4; 6 unit-тестов | S | `lumen-layout` |
 | BB-8 | **CSS Anchor Positioning Phase 1** — `position-area` grid resolution (9×9 logic grid); `anchor-scope` ограничение поиска якоря; `anchor-size()` в `width`/`height` вычислениях; wiring из `lay_out_abs_children`; 8 unit-тестов | M | `lumen-layout` |
