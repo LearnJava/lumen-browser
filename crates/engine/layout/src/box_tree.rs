@@ -2181,6 +2181,9 @@ pub fn layout_measured_hyp(
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);
     propagate_canvas_background(doc, &mut root);
+    // CSS Fonts L5 §4 — resolve `font-size-adjust` against the real font x-height
+    // before measurement, so both line wrapping and paint use the scaled size.
+    apply_font_size_adjust(&mut root, measurer);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp, false);
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
@@ -2190,6 +2193,53 @@ pub fn layout_measured_hyp(
     // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
     split_first_line_boxes(&mut root);
     root
+}
+
+/// CSS Fonts L5 §4 — used `font-size` after applying `font-size-adjust`.
+///
+/// The aspect value of the rendered font is `x_height_px(size) / size`. To make
+/// the text's x-height equal `adjust × size`, the size is scaled by
+/// `adjust / aspect`. `None` (initial) and `Auto` (use the first available
+/// font's own aspect — a no-op for a single font) leave the size unchanged.
+fn font_size_adjust_used(style: &ComputedStyle, m: &dyn TextMeasurer) -> f32 {
+    use crate::style::FontSizeAdjust;
+    let size = style.font_size;
+    match style.font_size_adjust {
+        FontSizeAdjust::None | FontSizeAdjust::Auto => size,
+        FontSizeAdjust::Value(z) => {
+            let xh = m.x_height_px(size);
+            if size > 0.0 && xh > 0.0 {
+                let aspect = xh / size;
+                size * z / aspect
+            } else {
+                size
+            }
+        }
+    }
+}
+
+/// CSS Fonts L5 §4 — post-build pass rewriting `font_size` wherever
+/// `font-size-adjust` is a number, using the measurer's real x-height.
+///
+/// Runs after `build_box` and before `lay_out`: mutating `style.font_size` here
+/// makes both inline measurement and the display list (which reads
+/// `frag.style.font_size`) pick up the scaled size from a single source. Inline
+/// text segments carry their own cloned style, so they are adjusted too.
+fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
+    use crate::style::FontSizeAdjust;
+    if !matches!(b.style.font_size_adjust, FontSizeAdjust::None) {
+        b.style.font_size = font_size_adjust_used(&b.style, m);
+    }
+    if let BoxKind::InlineRun { segments, .. } = &mut b.kind {
+        for seg in segments.iter_mut() {
+            if !matches!(seg.style.font_size_adjust, FontSizeAdjust::None) {
+                seg.style.font_size = font_size_adjust_used(&seg.style, m);
+            }
+        }
+    }
+    for child in &mut b.children {
+        apply_font_size_adjust(child, m);
+    }
 }
 
 /// Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5).
@@ -12421,5 +12471,117 @@ mod tests {
         );
     }
 
+    // ── CSS Fonts L5 §4: font-size-adjust ───────────────────────────────────
+
+    /// Measurer whose x-height is a fixed fraction of the size (aspect = 0.8),
+    /// emulating a tall font like Inter so `font-size-adjust` produces a visible
+    /// change.
+    struct AspectMeasurer(f32);
+    impl crate::TextMeasurer for AspectMeasurer {
+        fn char_width(&self, _: char, size: f32) -> f32 {
+            size * 0.5
+        }
+        fn x_height_px(&self, size: f32) -> f32 {
+            size * self.0
+        }
+    }
+
+    #[test]
+    fn font_size_adjust_value_scales_down_for_tall_font() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8); // font aspect 0.8
+        let mut s = ComputedStyle::root();
+        s.font_size = 100.0;
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        // used = 100 * 0.5 / 0.8 = 62.5
+        let used = super::font_size_adjust_used(&s, &m);
+        assert!((used - 62.5).abs() < 0.01, "expected 62.5, got {used}");
+    }
+
+    #[test]
+    fn font_size_adjust_value_scales_up_for_short_font() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.4); // short font, aspect 0.4
+        let mut s = ComputedStyle::root();
+        s.font_size = 100.0;
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        // used = 100 * 0.5 / 0.4 = 125.0
+        let used = super::font_size_adjust_used(&s, &m);
+        assert!((used - 125.0).abs() < 0.01, "expected 125.0, got {used}");
+    }
+
+    #[test]
+    fn font_size_adjust_none_and_auto_are_noops() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8);
+        let mut s = ComputedStyle::root();
+        s.font_size = 40.0;
+        s.font_size_adjust = FontSizeAdjust::None;
+        assert_eq!(super::font_size_adjust_used(&s, &m), 40.0);
+        s.font_size_adjust = FontSizeAdjust::Auto;
+        assert_eq!(super::font_size_adjust_used(&s, &m), 40.0);
+    }
+
+    #[test]
+    fn apply_font_size_adjust_rewrites_box_and_segments() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8);
+        // Block box with font-size-adjust holding an InlineRun child + segment.
+        let mut seg_style = ComputedStyle::root();
+        seg_style.font_size = 100.0;
+        seg_style.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let seg = super::InlineSegment {
+            text: "hi".into(),
+            style: seg_style,
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: super::PseudoKind::None,
+            source_node: lumen_dom::NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+        let mut inline_style = ComputedStyle::root();
+        inline_style.font_size = 100.0;
+        inline_style.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let inline_box = super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            style: inline_style,
+            kind: super::BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+        let mut root_style = ComputedStyle::root();
+        root_style.font_size = 100.0;
+        root_style.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let mut root = super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            style: root_style,
+            kind: super::BoxKind::Block,
+            children: vec![inline_box],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        };
+        super::apply_font_size_adjust(&mut root, &m);
+        assert!((root.style.font_size - 62.5).abs() < 0.01, "root not adjusted: {}", root.style.font_size);
+        let child = &root.children[0];
+        assert!((child.style.font_size - 62.5).abs() < 0.01, "inline box not adjusted: {}", child.style.font_size);
+        if let super::BoxKind::InlineRun { segments, .. } = &child.kind {
+            assert!((segments[0].style.font_size - 62.5).abs() < 0.01, "segment not adjusted: {}", segments[0].style.font_size);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
 }
 

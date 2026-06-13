@@ -167,6 +167,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('92', '92-system-colors.html', 0.5, 'CSS Color 4 §6.2: system color keywords — Canvas, ButtonFace, Highlight, GrayText, AccentColor и т.д. как фон и border-color'),
     ('93', '93-field-sizing.html', 0.5, 'CSS Basic UI L4 §4.4: field-sizing: content — input/textarea подгоняют размер под текст содержимого вместо UA-дефолта'),
     ('94', '94-interpolate-size.html', 0.5, 'CSS Sizing L4 §4.5: interpolate-size: allow-keywords — наследуемый opt-in для интерполяции keyword-размеров; в покое (статичный снимок) layout не меняется'),
+    ('95', '95-font-size-adjust.html', 0.5, 'CSS Fonts L5 §4: font-size-adjust — при одинаковом font-size used-размер масштабируется как adjust/aspect шрифта; видимый x-height строк уменьшается сверху вниз'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

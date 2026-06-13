@@ -2623,7 +2623,8 @@ pub struct ComputedStyle {
     /// Phase 0: parse + store; print rendering path — deferred.
     pub print_color_adjust: PrintColorAdjust,
     /// CSS Fonts L5 §4 — `font-size-adjust`. Inherited. Initial: `None`.
-    /// Phase 0: parse + store; real x-height based font-size scaling — deferred.
+    /// Wired: `box_tree::apply_font_size_adjust` rescales the used `font_size`
+    /// to `size · adjust / aspect` (aspect = font x-height / em) before layout.
     pub font_size_adjust: FontSizeAdjust,
     /// CSS Writing Modes L3 §2.1 — `writing-mode`. Inherited. Initial: `HorizontalTb`.
     /// Phase 0: parse + store; vertical layout — deferred.
