@@ -5180,7 +5180,7 @@ fn lay_out(
             // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
             // col_widths=None → per-row auto-distribution (standalone <tr> outside <table>).
             let row_h = lay_out_table_row(
-                b, content_x, content_y, content_width, None, None, 0.0, measurer, viewport, children_pcb, hp,
+                b, content_x, content_y, content_width, None, None, 0.0, None, measurer, viewport, children_pcb, hp,
             );
             b.rect.height = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -5214,21 +5214,23 @@ fn lay_out(
             let content_height = lay_out_table(
                 b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
             );
-            b.rect.height = if let Some(h_len) = &s.height
+            if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
             {
-                match s.box_sizing {
+                b.rect.height = match s.box_sizing {
                     BoxSizing::ContentBox => (h + padding_top + padding_bottom
                         + s.border_top_width + s.border_bottom_width).max(0.0),
                     BoxSizing::BorderBox => h.max(
                         padding_top + padding_bottom
                             + s.border_top_width + s.border_bottom_width,
                     ),
-                }
-            } else {
-                content_height + padding_top + padding_bottom
-                    + s.border_top_width + s.border_bottom_width
-            };
+                };
+            } else if !matches!(s.border_collapse, BorderCollapse::Collapse) {
+                // Collapse mode sets b.rect.height directly in lay_out_table (the table border-box
+                // coincides with the outer cells' collapsed borders).
+                b.rect.height = content_height + padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width;
+            }
         }
         BoxKind::TableRowGroup => {
             // CSS 2.1 §17 — row group standalone (outside a <table>): block-flow of rows.
@@ -5323,6 +5325,10 @@ fn lay_out_table_row(
     rowspan_map: Option<&mut Vec<u32>>,
     // Horizontal gap between adjacent cells (from table's border-spacing-h). 0.0 for standalone rows.
     h_spacing: f32,
+    // CSS 2.1 §17.6.2 collapsed border model: absolute x of each column's cell border-box left
+    // edge (length = n_cols). When present, cells are positioned here so adjacent borders overlap
+    // by the collapsed grid-line width instead of being spaced by `h_spacing`.
+    collapse_col_x: Option<&[f32]>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -5408,7 +5414,11 @@ fn lay_out_table_row(
     let use_global = col_widths.is_some();
     for (j, &i) in cell_idxs.iter().enumerate() {
         let (col_start, avail) = cell_cols[j];
-        let cell_x = if use_global {
+        let cell_x = if let Some(cx) = collapse_col_x {
+            // Collapsed border model: each column has a precomputed absolute x at which its
+            // cells' border-box starts; adjacent cells overlap by the shared grid-line border.
+            cx.get(col_start).copied().unwrap_or(content_x)
+        } else if use_global {
             // Exact x from column positions, accounting for h_spacing slots.
             // Cell at col_start k: content_x + (k+1)*h_spacing + sum(col_widths[0..k]).
             content_x
@@ -5483,6 +5493,73 @@ fn lay_out_table_row(
     row_h
 }
 
+/// CSS 2.1 §17.6.2 — collapsed vertical border width at each column grid line for a table.
+///
+/// Returns a `Vec<f32>` of length `n_cols + 1`. Index `k` (1..n_cols) is the shared border
+/// width between column `k-1` and column `k`: the maximum, over every row, of the right border
+/// of the cell in column `k-1` and the left border of the cell in column `k`. Indices `0` and
+/// `n_cols` (the outer edges) are left at `0.0` — outer cells are snapped onto the table border
+/// by the caller, so their grid-line width is handled there. Cells are mapped to columns by
+/// sequential order (colspan/rowspan are not accounted for; collapse overlap is exact only for
+/// simple uniform grids, which is the common case).
+fn collapse_v_edges(b: &LayoutBox, n_cols: usize) -> Vec<f32> {
+    let mut edges = vec![0.0_f32; n_cols + 1];
+    let mut visit = |row: &LayoutBox| {
+        let cells: Vec<&LayoutBox> = row
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        for col in 1..cells.len().min(n_cols) {
+            let edge = cells[col].style.border_left_width.max(cells[col - 1].style.border_right_width);
+            edges[col] = edges[col].max(edge);
+        }
+    };
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => visit(child),
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        visit(row);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    edges
+}
+
+/// CSS 2.1 §17.6.2 — representative collapsed horizontal (row-to-row) border width.
+///
+/// Returns the maximum top/bottom border width across all cells in the table. Used as a uniform
+/// row overlap in collapse mode: consecutive rows are pulled together by this amount so their
+/// shared horizontal grid line renders as one border instead of two stacked ones. Uniform (rather
+/// than per-row-pair) is exact when row borders are consistent — the common case.
+fn collapse_max_cross_border(b: &LayoutBox) -> f32 {
+    let mut max_b = 0.0_f32;
+    let mut visit = |row: &LayoutBox| {
+        for cell in row.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)) {
+            max_b = max_b.max(cell.style.border_top_width).max(cell.style.border_bottom_width);
+        }
+    };
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => visit(child),
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        visit(row);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    max_b
+}
+
 /// CSS 2.1 §17 — table layout with colspan/rowspan support.
 ///
 /// Pass 1: compute column widths (span-aware), lay out rows top-to-bottom while tracking
@@ -5503,6 +5580,7 @@ fn lay_out_table(
     hp: &dyn HyphenationProvider,
 ) -> f32 {
     // CSS Tables L2 §17.6: collapse mode zeroes out border-spacing.
+    let collapse = matches!(b.style.border_collapse, BorderCollapse::Collapse);
     let (h_spacing, v_spacing) = match b.style.border_collapse {
         BorderCollapse::Collapse => (0.0, 0.0),
         BorderCollapse::Separate => (b.style.border_spacing_h, b.style.border_spacing_v),
@@ -5510,8 +5588,33 @@ fn lay_out_table(
 
     let col_widths = compute_table_col_widths(b, content_width, viewport, measurer);
 
-    // First row starts after the top outer v_spacing slot.
-    let mut cur_y = content_y + v_spacing;
+    // CSS 2.1 §17.6.2 — collapsing border model. Adjacent cell borders (and the table's own
+    // border with the outer cells) share a single grid line whose width is the larger of the
+    // two meeting borders. We model this by positioning columns so neighbouring cells overlap
+    // by that collapsed width, and by snapping the outer cells onto the table border (so a 2px
+    // table border + 2px cell border render as one 2px line, not 4px). Width/colour conflict
+    // resolution is approximated by max-width (sufficient for same-style same-colour grids).
+    let n_cols = col_widths.len();
+    let (collapse_col_x, collapse_v_overlap, collapse_width) = if collapse && n_cols > 0 {
+        let v_edges = collapse_v_edges(b, n_cols);
+        // base_x = table border-box left edge: outer cell borders coincide with the table border.
+        let base_x = b.rect.x;
+        let mut col_x = Vec::with_capacity(n_cols);
+        col_x.push(base_x);
+        for k in 1..n_cols {
+            let prev = col_x[k - 1] + col_widths[k - 1] - v_edges[k];
+            col_x.push(prev);
+        }
+        let total_w = (col_x[n_cols - 1] + col_widths[n_cols - 1] - base_x).max(0.0);
+        (Some(col_x), collapse_max_cross_border(b), total_w)
+    } else {
+        (None, 0.0, 0.0)
+    };
+    let collapse_col_x_ref = collapse_col_x.as_deref();
+
+    // First row starts after the top outer v_spacing slot; in collapse mode the first row's top
+    // border coincides with the table's top border (start at the table border-box top edge).
+    let mut cur_y = if collapse { b.rect.y } else { content_y + v_spacing };
     let mut rowspan_map: Vec<u32> = Vec::new();
 
     // flat_row_rects[k] = (y, height) for the k-th row in DOM order (across all groups).
@@ -5538,6 +5641,7 @@ fn lay_out_table(
                     Some(&col_widths),
                     Some(&mut rowspan_map),
                     h_spacing,
+                    collapse_col_x_ref,
                     measurer, viewport, pcb, hp,
                 );
                 let row_style_h = {
@@ -5566,9 +5670,10 @@ fn lay_out_table(
                     }
                 }
                 let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
-                // Add v_spacing gap after each row (outer bottom slot included).
+                // Add v_spacing gap after each row (outer bottom slot included); in collapse mode
+                // pull the next row up by the shared horizontal grid-line border instead.
                 // CSS: border-spacing
-                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb + v_spacing;
+                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb + v_spacing - collapse_v_overlap;
                 decrement_rowspan_map(&mut rowspan_map);
             }
             BoxKind::TableRowGroup => {
@@ -5596,6 +5701,7 @@ fn lay_out_table(
                         Some(&col_widths),
                         Some(&mut rowspan_map),
                         h_spacing,
+                        collapse_col_x_ref,
                         measurer, viewport, pcb, hp,
                     );
                     let r_pt = b.children[i].children[r].style.padding_top.resolve_or_zero(r_em, content_width, viewport);
@@ -5611,8 +5717,8 @@ fn lay_out_table(
                         }
                     }
                     let r_mb = b.children[i].children[r].style.margin_bottom.resolve_or_zero(r_em, content_width, viewport);
-                    // CSS: border-spacing
-                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb + v_spacing;
+                    // CSS: border-spacing — collapse mode pulls rows together by the shared border.
+                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb + v_spacing - collapse_v_overlap;
                     decrement_rowspan_map(&mut rowspan_map);
                 }
                 let g_pt = b.children[i].style.padding_top.resolve_or_zero(group_em, content_width, viewport);
@@ -5641,6 +5747,23 @@ fn lay_out_table(
         };
         let new_h = (target_bottom - cell.rect.y).max(cell.rect.height);
         cell.rect.height = new_h;
+    }
+
+    // CSS 2.1 §17.6.2 — collapsing model: the table border-box coincides with the outer cells'
+    // shared borders. Snap the table width to the overlapped grid and the height to the bottom
+    // edge of the last row (which already includes the collapsed top/bottom borders). The caller
+    // skips its own height computation in collapse mode, so set it here for every collapse table
+    // (an empty table with no rows collapses to a zero-height border-box).
+    if collapse {
+        if b.style.width.is_none() && n_cols > 0 {
+            b.rect.width = collapse_width;
+        }
+        if b.style.height.is_none() {
+            b.rect.height = flat_row_rects
+                .last()
+                .map(|&(last_y, last_h)| (last_y + last_h - b.rect.y).max(0.0))
+                .unwrap_or(0.0);
+        }
     }
 
     (cur_y - content_y).max(0.0)
@@ -12441,6 +12564,84 @@ mod tests {
         // Vertical gap between rows should be 20px.
         let v_gap = rows[1].rect.y - (rows[0].rect.y + rows[0].rect.height);
         assert!((v_gap - 20.0).abs() < 1.0, "expected v_gap=20, got {v_gap}");
+    }
+
+    // ─── border-collapse: collapse (CSS 2.1 §17.6.2) — BUG-129 ─────────────────
+
+    #[test]
+    fn collapse_overlaps_adjacent_cell_borders() {
+        // collapse: adjacent cells share one border. Each 100px border-box cell with a 2px
+        // border should overlap its neighbour by 2px, so cell[1].x = cell[0].right - 2.
+        let t = layout_table(
+            "table { border-collapse: collapse; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert_eq!(cells.len(), 3, "expected 3 cells");
+        // border-box width = 96 + 2*2 = 100.
+        assert!((cells[0].rect.width - 100.0).abs() < 0.5, "cell border-box = 100, got {}", cells[0].rect.width);
+        let overlap0 = (cells[0].rect.x + cells[0].rect.width) - cells[1].rect.x;
+        let overlap1 = (cells[1].rect.x + cells[1].rect.width) - cells[2].rect.x;
+        assert!((overlap0 - 2.0).abs() < 0.5, "cells overlap by collapsed 2px border, got {overlap0}");
+        assert!((overlap1 - 2.0).abs() < 0.5, "cells overlap by collapsed 2px border, got {overlap1}");
+    }
+
+    #[test]
+    fn collapse_outer_cells_snap_to_table_border() {
+        // collapse: the first cell's left border coincides with the table's own border edge
+        // (table.x == cell[0].x), and the table border-box width = overlapped grid width.
+        let t = layout_table(
+            "table { border-collapse: collapse; border: 2px solid #000; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert!((cells[0].rect.x - t.rect.x).abs() < 0.5,
+            "first cell left coincides with table border: table.x={}, cell.x={}", t.rect.x, cells[0].rect.x);
+        // 3 cells of 100px overlapping by 2px at 2 internal grid lines → 300 - 2*2 = 296.
+        assert!((t.rect.width - 296.0).abs() < 0.5, "collapsed table width = 296, got {}", t.rect.width);
+    }
+
+    #[test]
+    fn collapse_overlaps_rows_vertically() {
+        // collapse: consecutive rows share their horizontal border. Two 30px-tall rows with a
+        // 2px border collapse the inter-row line, so row[1].y = row[0].bottom - 2.
+        let t = layout_table(
+            "table { border-collapse: collapse; } td { width: 50px; height: 26px; border: 2px solid #000; }",
+            "<table><tr><td></td></tr><tr><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let rows = collect_rows(&t);
+        assert!(rows.len() >= 2, "expected >= 2 rows");
+        let overlap = (rows[0].rect.y + rows[0].rect.height) - rows[1].rect.y;
+        assert!((overlap - 2.0).abs() < 0.5, "rows overlap by collapsed 2px border, got {overlap}");
+        // Top of first row coincides with the table top edge.
+        assert!((rows[0].rect.y - t.rect.y).abs() < 0.5,
+            "first row top coincides with table top: table.y={}, row.y={}", t.rect.y, rows[0].rect.y);
+    }
+
+    #[test]
+    fn separate_mode_keeps_full_cell_borders() {
+        // Regression guard: border-collapse: separate (default) must NOT overlap cells.
+        let t = layout_table(
+            "table { border-collapse: separate; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        // No spacing, no overlap: cell[1].x == cell[0].right exactly.
+        let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
+        assert!(gap.abs() < 0.5, "separate mode: no overlap, gap should be 0, got {gap}");
     }
 
     // ─── object-fit / object-position ────────────────────────────────────────
