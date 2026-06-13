@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_ — p4-offset-ray влит 2026-06-13
+_(none)_ — p4-clip-path-path влит 2026-06-14
 
 ## Workflow
 
