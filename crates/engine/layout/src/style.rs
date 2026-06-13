@@ -2570,6 +2570,15 @@ pub struct ComputedStyle {
     pub inset_area_row: crate::anchor::InsetAreaKeyword,
     /// CSS Anchor Positioning L1 §5 — `inset-area` column (horizontal axis) keyword. Non-inherited.
     pub inset_area_col: crate::anchor::InsetAreaKeyword,
+    /// CSS Anchor Positioning L1 §2.1 — `anchor-scope`. Non-inherited. Initial: `None`.
+    /// Restricts which named anchors from this element's subtree are visible outside.
+    pub anchor_scope: crate::anchor::AnchorScope,
+    /// CSS Anchor Positioning L1 §4 — `anchor-size()` in `width`. Non-inherited. Initial: `None`.
+    /// When set, the element's used width is the referenced anchor's dimension.
+    pub anchor_size_w: Option<crate::anchor::AnchorSizeFunc>,
+    /// CSS Anchor Positioning L1 §4 — `anchor-size()` in `height`. Non-inherited. Initial: `None`.
+    /// When set, the element's used height is the referenced anchor's dimension.
+    pub anchor_size_h: Option<crate::anchor::AnchorSizeFunc>,
 
     /// CSS View Transitions L1 §10 — `view-transition-name`. Non-inherited. Initial: `None` (none).
     /// Custom-ident that marks this element as a named view-transition capture target.
@@ -4735,6 +4744,9 @@ impl ComputedStyle {
             position_anchor: None,
             inset_area_row: crate::anchor::InsetAreaKeyword::None,
             inset_area_col: crate::anchor::InsetAreaKeyword::None,
+            anchor_scope: crate::anchor::AnchorScope::None,
+            anchor_size_w: None,
+            anchor_size_h: None,
             view_transition_name: None,
         }
     }
@@ -5058,6 +5070,9 @@ pub fn compute_style(
         position_anchor: None,
         inset_area_row: crate::anchor::InsetAreaKeyword::None,
         inset_area_col: crate::anchor::InsetAreaKeyword::None,
+        anchor_scope: crate::anchor::AnchorScope::None,
+        anchor_size_w: None,
+        anchor_size_h: None,
         view_transition_name: None,
     };
 
@@ -10514,11 +10529,22 @@ fn apply_declaration(
             apply_grid_area_shorthand(val, style);
         }
         "width" => {
-            // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
-            style.width = parse_sizing_length(val, is_quirks);
+            // CSS Anchor Positioning L1 §4 — intercept `anchor-size()` before normal sizing.
+            if let Some(func) = parse_anchor_size_func(val) {
+                style.anchor_size_w = Some(func);
+            } else {
+                // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
+                style.width = parse_sizing_length(val, is_quirks);
+                style.anchor_size_w = None;
+            }
         }
         "height" => {
-            style.height = parse_sizing_length(val, is_quirks);
+            if let Some(func) = parse_anchor_size_func(val) {
+                style.anchor_size_h = Some(func);
+            } else {
+                style.height = parse_sizing_length(val, is_quirks);
+                style.anchor_size_h = None;
+            }
         }
         // CSS Logical Properties L1 §2.1 — inline-size / block-size.
         "inline-size" => {
@@ -11516,6 +11542,20 @@ fn apply_declaration(
             if let Some(c) = parse_inset_area_keyword(col_tok) {
                 style.inset_area_col = c;
             }
+        }
+        // CSS Anchor Positioning L1 §2.1 — anchor-scope: none | all | <custom-ident>.
+        "anchor-scope" => {
+            use crate::anchor::AnchorScope;
+            let v = val.trim();
+            style.anchor_scope = if v.eq_ignore_ascii_case("none") {
+                AnchorScope::None
+            } else if v.eq_ignore_ascii_case("all") {
+                AnchorScope::All
+            } else if v.starts_with("--") {
+                AnchorScope::Named(v.into())
+            } else {
+                AnchorScope::None
+            };
         }
         // CSS View Transitions L1 §10 — view-transition-name: none | <custom-ident>.
         // Names this element as a capture target during document.startViewTransition().
@@ -14129,6 +14169,9 @@ fn apply_css_wide_keyword(
             style.inset_area_row = if inh_only_inherit { inherited.inset_area_row } else { init.inset_area_row };
             style.inset_area_col = if inh_only_inherit { inherited.inset_area_col } else { init.inset_area_col };
         }
+        "anchor-scope" => {
+            style.anchor_scope = if inh_only_inherit { inherited.anchor_scope.clone() } else { init.anchor_scope.clone() };
+        }
         "view-transition-name" => {
             style.view_transition_name = if inh_only_inherit { inherited.view_transition_name.clone() } else { None };
         }
@@ -16371,6 +16414,37 @@ fn parse_inset_area_keyword(s: &str) -> Option<crate::anchor::InsetAreaKeyword> 
         "span-x-end" | "span-y-end" | "span-inline-end" | "span-block-end" => Some(K::SpanEnd),
         _ => None,
     }
+}
+
+/// CSS Anchor Positioning L1 §4 — parse `anchor-size(<anchor-el>? <anchor-size>)`.
+///
+/// Accepts forms:
+/// - `anchor-size(width)` / `anchor-size(height)` / `anchor-size(block)` / etc.
+/// - `anchor-size(--name, width)` / `anchor-size(--name, height)` / etc.
+///
+/// Returns `None` when `val` is not an `anchor-size()` expression.
+fn parse_anchor_size_func(val: &str) -> Option<crate::anchor::AnchorSizeFunc> {
+    use crate::anchor::{AnchorSizeDimension, AnchorSizeFunc};
+    let v = val.trim();
+    let inner = v.strip_prefix("anchor-size(")?.strip_suffix(')')?;
+    let parts: Vec<&str> = inner.splitn(2, ',').map(str::trim).collect();
+    let (anchor_name, dim_str) = if parts.len() == 2 {
+        let name = parts[0];
+        let anchor_name = if name.starts_with("--") { Some(name.into()) } else { return None };
+        (anchor_name, parts[1])
+    } else {
+        (None, parts[0])
+    };
+    let dimension = match dim_str.to_ascii_lowercase().as_str() {
+        "width"       => AnchorSizeDimension::Width,
+        "height"      => AnchorSizeDimension::Height,
+        "block"       => AnchorSizeDimension::Block,
+        "inline"      => AnchorSizeDimension::Inline,
+        "self-block"  => AnchorSizeDimension::SelfBlock,
+        "self-inline" => AnchorSizeDimension::SelfInline,
+        _ => return None,
+    };
+    Some(AnchorSizeFunc { anchor_name, dimension })
 }
 
 fn parse_break_value(s: &str) -> Option<BreakValue> {

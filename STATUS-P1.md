@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BB-8: CSS Anchor Positioning Phase 1  branch: p1-bb8-anchor-positioning
+Next step: anchor.rs → AnchorScope + AnchorSizeFunc; box_tree.rs → wire stub  crates/engine/layout/src/anchor.rs:1
 
 ---
 
