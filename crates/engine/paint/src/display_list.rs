@@ -3295,19 +3295,50 @@ fn emit_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         }
         let sigma = shadow.blur / 2.0;
         let shadow_rect = Rect::new(x, y, w, h);
+        // CSS Backgrounds L3 §7.1.1: the shadow shape is the border box expanded by
+        // `spread`, and each corner with a non-zero border-radius is rounded with its
+        // radius increased by the spread distance (square corners stay square). Without
+        // this, a hard/blurred shadow on a rounded box renders as a square silhouette.
+        let base_radii = CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height);
         if sigma > 0.0 {
             out.push(DisplayCommand::PushFilter {
                 filters: vec![FilterFn::Blur(sigma)],
                 bounds: Some(shadow_rect),
             });
         }
-        out.push(DisplayCommand::FillRect {
-            rect: shadow_rect,
-            color,
-        });
+        if base_radii.all_zero() {
+            out.push(DisplayCommand::FillRect {
+                rect: shadow_rect,
+                color,
+            });
+        } else {
+            out.push(DisplayCommand::FillRoundedRect {
+                rect: shadow_rect,
+                color,
+                radii: spread_corner_radii(&base_radii, shadow.spread),
+            });
+        }
         if sigma > 0.0 {
             out.push(DisplayCommand::PopFilter);
         }
+    }
+}
+
+/// Expands a box's resolved `CornerRadii` to the corner radii of its outer
+/// box-shadow shape per CSS Backgrounds L3 §7.1.1: a corner with a non-zero
+/// border-radius gets its radius increased by the spread distance (clamped at
+/// zero for large negative spread); a square corner (radius 0) stays square.
+fn spread_corner_radii(base: &CornerRadii, spread: f32) -> CornerRadii {
+    let grow = |r: f32| if r > 0.0 { (r + spread).max(0.0) } else { 0.0 };
+    CornerRadii {
+        tl: grow(base.tl),
+        tl_y: grow(base.tl_y),
+        tr: grow(base.tr),
+        tr_y: grow(base.tr_y),
+        br: grow(base.br),
+        br_y: grow(base.br_y),
+        bl: grow(base.bl),
+        bl_y: grow(base.bl_y),
     }
 }
 
@@ -9034,6 +9065,64 @@ mod tests {
         assert!(
             matches!(first, DisplayCommand::FillRect { .. }),
             "без blur первая команда — FillRect, не PushFilter"
+        );
+    }
+
+    #[test]
+    fn box_shadow_on_rounded_box_emits_rounded_shadow() {
+        // BUG-138: a hard shadow on a border-radius box must follow the rounded
+        // contour — the shadow is a FillRoundedRect (radii = box radii + spread),
+        // not a square FillRect.
+        let dl = build(
+            "<div></div>",
+            "div { width: 180px; height: 180px; background: blue; \
+             border-radius: 40px; box-shadow: 20px 20px 0 black; }",
+        );
+        // First command is the shadow (painter's order: shadow before bg).
+        let first = dl.first().unwrap();
+        match first {
+            DisplayCommand::FillRoundedRect { radii, color, .. } => {
+                assert_eq!(color.r, 0, "shadow color black");
+                assert!((radii.tl - 40.0).abs() < 0.01, "spread=0 → radius == box radius 40, got {}", radii.tl);
+                assert!((radii.br - 40.0).abs() < 0.01);
+            }
+            other => panic!("rounded box shadow must be FillRoundedRect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn box_shadow_spread_increases_corner_radius() {
+        // CSS Backgrounds L3 §7.1.1: spread expands each non-zero corner radius
+        // by the spread distance. Box 160×160, border-radius:50% (=80), spread 24
+        // → shadow corner radius 80+24 = 104.
+        let dl = build(
+            "<div></div>",
+            "div { width: 160px; height: 160px; background: yellow; \
+             border-radius: 50%; box-shadow: 0 0 0 24px black; }",
+        );
+        let first = dl.first().unwrap();
+        match first {
+            DisplayCommand::FillRoundedRect { radii, rect, .. } => {
+                assert!((radii.tl - 104.0).abs() < 0.01, "radius 80+24=104, got {}", radii.tl);
+                // Shadow rect is 160+2*24 = 208 → radius 104 == half → perfect circle.
+                assert!((rect.width - 208.0).abs() < 0.01);
+            }
+            other => panic!("spread shadow on circle must be FillRoundedRect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn box_shadow_square_box_stays_fillrect() {
+        // No border-radius → shadow remains a square FillRect (no regression).
+        let dl = build(
+            "<div></div>",
+            "div { width: 160px; height: 160px; background: green; \
+             box-shadow: 30px 30px 0 red; }",
+        );
+        let first = dl.first().unwrap();
+        assert!(
+            matches!(first, DisplayCommand::FillRect { .. }),
+            "square box shadow stays FillRect, got {first:?}"
         );
     }
 
