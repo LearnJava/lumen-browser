@@ -1177,5 +1177,13 @@
   <div style="width:80px;height:80px;background:#457b9d;border-radius:8px;view-transition-name:--named;"></div>
 </div>
 
+<!-- ── relative color syntax (CSS Color L5 §4) ─────────────────────────────── -->
+<div style="margin-top:24px;padding:12px;background:#1a2035;border-radius:8px;display:flex;gap:18px;align-items:center;">
+  <div style="width:80px;height:80px;border-radius:8px;background:rgb(from #336699 r g b);"></div>
+  <div style="width:80px;height:80px;border-radius:8px;background:rgb(from #336699 calc(r + 80) g b);"></div>
+  <div style="width:80px;height:80px;border-radius:8px;background:hsl(from #e94560 h s calc(l * 0.6));"></div>
+  <div style="width:80px;height:80px;border-radius:8px;background:oklch(from #0f3460 calc(l + 0.12) c h);"></div>
+</div>
+
 </body>
 </html>
