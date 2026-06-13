@@ -1313,5 +1313,15 @@
   <progress value="0.6" max="1" style="accent-color:#7a2fd1;width:140px;height:16px;"></progress>
 </div>
 
+<!-- ── appearance: none (CSS Basic UI L4 §4.2) ────────────────────────────────── -->
+<!-- Strips native control UI: the checkbox/radio/range/progress render as blank
+     boxes inside the light wrappers — no native tick or bar is painted. -->
+<div style="margin-top:24px;padding:12px;background:#f0f0f0;border-radius:8px;display:flex;gap:18px;align-items:center;">
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="checkbox" checked style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="radio" checked style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="range" value="50" min="0" max="100" style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><progress value="0.6" max="1" style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:12px;margin:14px 8px;"></progress></span>
+</div>
+
 </body>
 </html>

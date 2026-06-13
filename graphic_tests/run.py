@@ -173,6 +173,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('98', '98-revert-layer.html', 0.5, 'CSS Cascade L5 §6.4.6: revert-layer — откат свойства к значению нижнего каскадного слоя; верхний ряд theme(red), нижний ряд revert-layer→base(green)'),
     ('99', '99-offset-path-ray.html', 0.5, 'CSS Motion Path L1 §2.2: offset-path: ray(<angle>) — восемь боксов по лучам 0/45/.../315deg формируют кольцо вокруг центра; turn-единица; offset-distance 0 держит центр'),
     ('110', '110-accent-color.html', 0.5, 'CSS UI L4 §6.1: accent-color — тинт чекбокса/радио/range/progress; пять рядов с разными accent (red/green/orange/purple/UA-blue); <meter> исключён (семантические цвета)'),
+    ('111', '111-appearance-none.html', 0.5, 'CSS Basic UI L4 §4.2: appearance: none — снимает нативную отрисовку формы (тик чекбокса/радио, трек/ползунок range, бар progress); контролы внутри светлых обёрток остаются пустыми, лишний синий индикатор = регрессия'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

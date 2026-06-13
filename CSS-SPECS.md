@@ -576,7 +576,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `pointer-events` | 🟡 | none ✅ (cursor wired); auto/shell enforcement ⬜ |
 | `touch-action` | 🟡 | parsed; gesture ⬜ |
 | `resize` | 🟡 | parsed; drag-UI ⬜ |
-| `appearance` | 🟡 | parsed; form widgets ⬜ |
+| `appearance` | ✅ | none/auto/compat; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14) |
 | `caret-color` | 🟡 | parsed; text input ⬜ |
 | `will-change` | 🟡 | parsed; GPU hints ⬜ |
 

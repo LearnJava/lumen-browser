@@ -18,6 +18,7 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
+    Appearance,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
@@ -3781,6 +3782,15 @@ const ACCENT_DEFAULT: Color = Color { r: 21, g: 90, b: 192, a: 255 };
 /// P2 note: this renders a simple filled rectangle as indicator; a full
 /// vector checkmark / circle belongs to the renderer GPU primitive set.
 fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
+    // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`/
+    // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
+    // the native "primitive appearance" of a form control: the checkbox tick,
+    // radio dot, range slider, progress bar, meter bar and select arrow. The box
+    // (border/padding/background) is already stripped in `apply_ua_appearance`;
+    // here we suppress the painted indicator so authors can fully restyle it.
+    if b.style.appearance == Appearance::None {
+        return;
+    }
     // CSS UI L4 §6.1 — accent-color tints the "accent" of checkbox, radio,
     // range and progress controls. `auto` (None) keeps the UA default blue.
     // <meter> is intentionally excluded: its bar keeps the semantic
@@ -6236,6 +6246,64 @@ mod tests {
         assert!(
             f.iter().any(|c| c.r == 200 && c.g == 200 && c.b == 200),
             "range background track should stay gray, got {f:?}"
+        );
+    }
+
+    /// CSS Basic UI L4 §4.2 — `appearance: none` removes the native checkbox
+    /// tick: no UA-blue indicator fill is emitted.
+    #[test]
+    fn appearance_none_suppresses_checkbox_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { appearance: none; }",
+        );
+        let f = fills(&dl);
+        assert!(
+            !f.iter().any(|c| c.r == 21 && c.g == 90 && c.b == 192),
+            "appearance:none must suppress the checkbox indicator, got {f:?}"
+        );
+    }
+
+    /// `appearance: none` also suppresses a custom `accent-color` indicator —
+    /// the author opted out of the native control entirely.
+    #[test]
+    fn appearance_none_suppresses_accent_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { appearance: none; accent-color: rgb(10, 200, 30); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            !f.iter().any(|c| c.r == 10 && c.g == 200 && c.b == 30),
+            "appearance:none must suppress even an accent-tinted indicator, got {f:?}"
+        );
+    }
+
+    /// `appearance: none` removes the native `<progress>` bar (no rounded fill).
+    #[test]
+    fn appearance_none_suppresses_progress_bar() {
+        let dl = build(
+            "<progress value=0.5 max=1></progress>",
+            "progress { appearance: none; }",
+        );
+        assert!(
+            rounded_fills(&dl).is_empty(),
+            "appearance:none must suppress the progress bar, got {:?}",
+            rounded_fills(&dl)
+        );
+    }
+
+    /// `appearance: none` removes the native range slider track and thumb.
+    #[test]
+    fn appearance_none_suppresses_range_slider() {
+        let dl = build(
+            "<input type=range value=50 min=0 max=100>",
+            "input { appearance: none; }",
+        );
+        assert!(
+            rounded_fills(&dl).is_empty(),
+            "appearance:none must suppress the range slider, got {:?}",
+            rounded_fills(&dl)
         );
     }
 
