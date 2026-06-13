@@ -2317,13 +2317,19 @@ fn is_inline_block(
 }
 
 /// Обнуляет box-model spacing анонимного контейнера (InlineRun / InlineBlockRow).
-// BUG-152: anonymous boxes clone the parent's non-inherited float_side/clear/
-// position — an anonymous InlineRun inside a floated block re-enters the float
-// branch of its own parent's layout loop. Anonymous boxes cannot float
-// (CSS 2.1 §9.2.2); needs `s.float_side = FloatSide::None` (and review of
-// clear/position) with regression check of float-containing graphic tests.
+// Anonymous boxes inherit only inheritable properties from their parent; every
+// non-inherited property takes its initial value (CSS 2.1 §9.2.2.1). Cloning the
+// parent style and resetting the non-inherited longhands below approximates that.
+// `float`, `clear` and `position` are non-inherited (CSS 2.1 §9.5.1/§9.5.2, CSS
+// Positioned Layout L3 §3): an anonymous box must NOT float or be positioned
+// (BUG-152 — an anonymous InlineRun cloning a floated parent's `float_side`
+// re-entered the float branch of its own parent's layout loop, so `child_y` never
+// advanced and the run overlapped the following block siblings).
 fn anon_style(parent: &ComputedStyle) -> ComputedStyle {
     let mut s = parent.clone();
+    s.float_side = FloatSide::None;
+    s.clear = ClearSide::None;
+    s.position = Position::Static;
     s.margin_top = LengthOrAuto::ZERO;
     s.margin_right = LengthOrAuto::ZERO;
     s.margin_bottom = LengthOrAuto::ZERO;
@@ -8302,6 +8308,23 @@ mod tests {
             None
         }
         find_empty_block(&root).cloned().expect("empty Block not found in layout tree")
+    }
+
+    #[test]
+    fn anon_style_resets_float_clear_position() {
+        // BUG-152: anonymous boxes must not inherit the parent's non-inherited
+        // float/clear/position (CSS 2.1 §9.2.2.1) — an anon InlineRun cloning a
+        // floated parent re-entered the parent's float branch and overlapped
+        // following block siblings.
+        use crate::style::{ClearSide, ComputedStyle, FloatSide, Position};
+        let mut parent = ComputedStyle::root();
+        parent.float_side = FloatSide::Left;
+        parent.clear = ClearSide::Both;
+        parent.position = Position::Absolute;
+        let anon = super::anon_style(&parent);
+        assert_eq!(anon.float_side, FloatSide::None);
+        assert_eq!(anon.clear, ClearSide::None);
+        assert_eq!(anon.position, Position::Static);
     }
 
     #[test]
