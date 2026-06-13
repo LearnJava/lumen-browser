@@ -11866,6 +11866,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskLayer { rect, .. } => rect,
             DisplayCommand::DrawCrossFade { dest, .. } => dest,
             DisplayCommand::PopClip
+            | DisplayCommand::PushClipPath { .. }
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
             | DisplayCommand::PushBlendMode { .. }
@@ -11922,6 +11923,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskLayer { rect, .. } => rect,
             DisplayCommand::DrawCrossFade { dest, .. } => dest,
             DisplayCommand::PopClip
+            | DisplayCommand::PushClipPath { .. }
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
             | DisplayCommand::PushBlendMode { .. }
