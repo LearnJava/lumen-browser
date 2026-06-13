@@ -2118,7 +2118,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb, &null_hp);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb, &null_hp, false);
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, false);
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
     apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false);
@@ -2162,7 +2162,7 @@ pub fn layout_measured_hyp(
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp, false);
     apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
     apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
     // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
@@ -3970,11 +3970,92 @@ pub(crate) fn lay_out_for_vertical(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) {
-    lay_out(b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp);
+    lay_out(b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp, false);
+}
+
+/// CSS 2.1 §9.4.1 — does this box establish a new Block Formatting Context?
+///
+/// A BFC root does NOT collapse its margins with its in-flow children
+/// (CSS 2.1 §8.3.1). Within the block-layout arm a box is always `Block` or
+/// `FlowRoot`; the remaining BFC triggers detectable from the box alone are a
+/// non-`visible` overflow, a float, and out-of-flow positioning. (Being a flex
+/// / grid item also establishes an independent FC, but that depends on the
+/// parent and is signalled separately via `lay_out`'s `in_block_flow` flag.)
+fn establishes_bfc(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::FlowRoot)
+        || b.style.overflow_x != Overflow::Visible
+        || b.style.overflow_y != Overflow::Visible
+        || b.style.float_side != FloatSide::None
+        || matches!(b.style.position, Position::Absolute | Position::Fixed)
+}
+
+/// Returns the first in-flow `Block` child whose top margin collapses with the
+/// owning box's top margin (CSS 2.1 §8.3.1). Out-of-flow children (floats,
+/// absolutely positioned), `::marker`s and `Skip` boxes are transparent and
+/// skipped. If the first remaining in-flow child is not a plain `Block` (e.g.
+/// an inline run or a replaced element) the collapsing chain is broken and
+/// `None` is returned. A child with clearance also breaks the chain.
+fn first_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
+    for child in &b.children {
+        if matches!(child.kind, BoxKind::Marker { .. } | BoxKind::Skip) {
+            continue;
+        }
+        if child.style.float_side != FloatSide::None
+            || matches!(child.style.position, Position::Absolute | Position::Fixed)
+        {
+            continue;
+        }
+        if child.style.clear != ClearSide::None {
+            return None;
+        }
+        return matches!(child.kind, BoxKind::Block).then_some(child);
+    }
+    None
+}
+
+/// CSS 2.1 §8.3.1 — the *collapsed* top margin of a block-level box (px).
+///
+/// The top margin of an in-flow block collapses with the top margin of its
+/// first in-flow block-level child when nothing separates them: the box has no
+/// top border, no top padding, establishes no BFC, and the first in-flow child
+/// is itself a plain block with no clearance. The collapse recurses down the
+/// chain of first children. `cb` is the containing-block width used to resolve
+/// percentage margins. Only the common non-negative case is folded (parity with
+/// sibling collapse); negative margins fall through as the box's own margin.
+fn collapsed_top_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
+    let em = b.style.font_size;
+    let own = b.style.margin_top.resolve_or_zero(em, cb, viewport);
+    if !matches!(b.kind, BoxKind::Block) || establishes_bfc(b) {
+        return own;
+    }
+    let pt = b.style.padding_top.resolve_or_zero(em, cb, viewport);
+    if pt != 0.0 || b.style.border_top_width != 0.0 {
+        return own;
+    }
+    match first_collapsible_child(b) {
+        Some(child) => {
+            // Child's containing-block width = this box's content width.
+            let child_cb = (cb
+                - b.style.padding_left.resolve_or_zero(em, cb, viewport)
+                - b.style.padding_right.resolve_or_zero(em, cb, viewport)
+                - b.style.border_left_width
+                - b.style.border_right_width)
+                .max(0.0);
+            own.max(collapsed_top_margin(child, child_cb, viewport))
+        }
+        None => own,
+    }
 }
 
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
+///
+/// `in_block_flow` — `true` only when this box is laid out as a normal in-flow
+/// block child of a block container. It gates parent↔first-child margin
+/// collapsing (CSS 2.1 §8.3.1): a box laid out as a flex/grid item, table cell,
+/// or document root establishes an independent formatting context and must not
+/// collapse its top margin into its first child, so those call sites pass
+/// `false`.
 #[allow(clippy::too_many_arguments)]
 fn lay_out(
     b: &mut LayoutBox,
@@ -3988,6 +4069,7 @@ fn lay_out(
     viewport: Size,
     pcb: Rect,
     hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
@@ -4453,6 +4535,19 @@ fn lay_out(
                 // Adjacent Block/FlowRoot siblings collapse their margins (gap = max, not sum).
                 // Inline runs, replaced elements, and floats break the collapsing chain.
                 let mut prev_block_mb: f32 = 0.0;
+                // CSS 2.1 §8.3.1: this block's top margin collapses with the top margin of
+                // its first in-flow block child when nothing separates them — no top border,
+                // no top padding, no BFC, and the box is itself a normal in-flow block (not a
+                // flex/grid item or document root). In that case the first child's top margin
+                // has already been folded into this box's position by the parent loop (via
+                // `collapsed_top_margin`), so the child is placed flush at the content top.
+                let b_collapses_top = in_block_flow
+                    && matches!(b.kind, BoxKind::Block)
+                    && !establishes_bfc(b)
+                    && padding_top == 0.0
+                    && s.border_top_width == 0.0;
+                // Tracks whether the first in-flow child has been positioned yet.
+                let mut seen_inflow_child = false;
                 // CSS Lists L3 §2.4: pending indent from an inside ::marker (em units).
                 // Consumed by the first normal-flow content child after the marker.
                 let mut inside_marker_w: f32 = 0.0;
@@ -4523,7 +4618,7 @@ fn lay_out(
                                 .unwrap_or(avail_w)
                         };
                         lay_out(child, avail_left, child_y, float_layout_w,
-                                children_available_height, measurer, viewport, children_pcb, hp);
+                                children_available_height, measurer, viewport, children_pcb, hp, false);
 
                         let fml = child.style.margin_left.resolve_or_zero(cem, avail_w, viewport);
                         let fmr = child.style.margin_right.resolve_or_zero(cem, avail_w, viewport);
@@ -4635,23 +4730,40 @@ fn lay_out(
 
                     // CSS 2.1 §8.3.1: collapse adjacent sibling block margins.
                     // Only Block/FlowRoot participate; other kinds break the chain.
-                    // Formula: start_y = child_y - min(prev_mb, mt)
-                    // so that lay_out's internal "+mt" yields child_y + max(prev_mb, mt).
+                    // `own_mt` is the child's own resolved top margin (what lay_out re-adds
+                    // internally); `collapsed_mt` additionally folds the child's own first-child
+                    // chain (§8.3.1). The base formula offsets start_y by (collapsed_mt − own_mt)
+                    // so that lay_out's internal "+own_mt" lands the child at its collapsed flow
+                    // position child_y + max(prev_block_mb, collapsed_mt).
                     let is_block = matches!(&child.kind, BoxKind::Block | BoxKind::FlowRoot);
-                    let mt = child.style.margin_top
+                    let is_first_inflow = !seen_inflow_child;
+                    let own_mt = child.style.margin_top
                         .resolve_or_zero(child.style.font_size, eff_w, viewport);
+                    let collapsed_mt = collapsed_top_margin(child, eff_w, viewport);
                     let start_y = if is_block {
-                        child_y - prev_block_mb.min(mt.max(0.0))
+                        if is_first_inflow
+                            && b_collapses_top
+                            && matches!(child.kind, BoxKind::Block)
+                            && child.style.clear == ClearSide::None
+                        {
+                            // Parent↔first-child collapse: the margin escaped up into this box's
+                            // own (already-applied) top margin. Place the child flush at the
+                            // content top; lay_out re-adds own_mt, so pre-subtract it.
+                            content_y - own_mt
+                        } else {
+                            child_y - prev_block_mb.min(collapsed_mt.max(0.0)) + collapsed_mt - own_mt
+                        }
                     } else {
                         child_y
                     };
 
                     lay_out(child, eff_left, start_y, eff_w,
-                            children_available_height, measurer, viewport, children_pcb, hp);
+                            children_available_height, measurer, viewport, children_pcb, hp, true);
                     if matches!(child.kind, BoxKind::Skip) {
                         // Zero-height; does not break the collapsing chain.
                         continue;
                     }
+                    seen_inflow_child = true;
                     let child_mb = child.style.margin_bottom.resolve_or_zero(
                         child.style.font_size, content_width, viewport);
                     child_y = child.rect.y + child.rect.height + child_mb;
@@ -4754,7 +4866,7 @@ fn lay_out(
                 } else {
                     content_width
                 };
-                lay_out(&mut b.children[i], place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp);
+                lay_out(&mut b.children[i], place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp, false);
                 if matches!(b.children[i].kind, BoxKind::Skip) {
                     continue;
                 }
@@ -4781,7 +4893,7 @@ fn lay_out(
                     cur_x = content_x;
                     row_max_h = 0.0;
                     row_has_baseline = false;
-                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp);
+                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
                 }
                 cur_row.push(i);
                 let child_is_baseline = is_run
@@ -4895,7 +5007,7 @@ fn lay_out(
                 }
                 let c_em = b.children[i].style.font_size;
                 let c_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
-                lay_out(&mut b.children[i], content_x, cur_y + c_mt, content_width, None, measurer, viewport, children_pcb, hp);
+                lay_out(&mut b.children[i], content_x, cur_y + c_mt, content_width, None, measurer, viewport, children_pcb, hp, false);
                 let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
                 cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb;
             }
@@ -5094,6 +5206,7 @@ fn lay_out_table_row(
             viewport,
             pcb,
             hp,
+            false,
         );
         if use_global {
             b.children[i].style.width = saved_width;
@@ -5757,7 +5870,7 @@ fn lay_out_multicol_children(
         if !seg_idxs.is_empty() {
             // First pass at (0, 0) to measure intrinsic heights.
             for &i in seg_idxs {
-                lay_out(&mut children[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb, hp);
+                lay_out(&mut children[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb, hp, false);
             }
 
             // Outer height of each segment child = margin_top + rect.height + margin_bottom.
@@ -5807,7 +5920,7 @@ fn lay_out_multicol_children(
             for (j, &i) in seg_idxs.iter().enumerate() {
                 let col = col_assignment[j];
                 let col_x = content_x + col as f32 * (col_w + col_gap);
-                lay_out(&mut children[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb, hp);
+                lay_out(&mut children[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb, hp, false);
                 let mb = children[i].style.margin_bottom
                     .resolve_or_zero(children[i].style.font_size, col_w, viewport);
                 col_y[col] = children[i].rect.y + children[i].rect.height + mb;
@@ -5818,7 +5931,7 @@ fn lay_out_multicol_children(
 
         // column-span: all — element spans the full column container width.
         if let Some(span_i) = *span_idx {
-            lay_out(&mut children[span_i], content_x, cur_y, content_width, None, measurer, viewport, pcb, hp);
+            lay_out(&mut children[span_i], content_x, cur_y, content_width, None, measurer, viewport, pcb, hp, false);
             let mb = children[span_i].style.margin_bottom
                 .resolve_or_zero(children[span_i].style.font_size, content_width, viewport);
             cur_y = children[span_i].rect.y + children[span_i].rect.height + mb;
@@ -5865,7 +5978,7 @@ fn lay_out_abs_children(
             cb.width
         };
 
-        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp);
+        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp, false);
 
         let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
         let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
@@ -5985,7 +6098,7 @@ fn lay_out_flex(
     // Step 1 — preliminary layout for intrinsic sizes.
     let cb = content_width;
     for &i in &item_idxs {
-        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp);
+        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
     }
 
     // Compute hypothetical main sizes for all items (outer = including margins).
@@ -6151,6 +6264,7 @@ fn lay_out_flex(
                     viewport,
                     pcb,
                     hp,
+                    false,
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
             } else {
@@ -6168,6 +6282,7 @@ fn lay_out_flex(
                     viewport,
                     pcb,
                     hp,
+                    false,
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
             }
@@ -6431,7 +6546,7 @@ fn lay_out_grid(
 
         // Step 1: lay out all items at track_size to establish their intrinsic height.
         for &i in &sorted_idxs {
-            lay_out(&mut children[i], content_x, content_y, track_size, None, measurer, viewport, pcb, hp);
+            lay_out(&mut children[i], content_x, content_y, track_size, None, measurer, viewport, pcb, hp, false);
         }
 
         // Step 2: greedy waterfall placement — each item placed in the track with minimum height.
@@ -6797,10 +6912,10 @@ fn lay_out_grid(
                 None
             };
             let _guard = SubgridContextGuard::set(child_col_ctx, child_row_ctx);
-            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp);
+            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp, false);
         } else {
             // Layout at temporary position (y=0) to get intrinsic height.
-            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp);
+            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp, false);
         }
 
         // Update auto row heights.
@@ -6860,7 +6975,7 @@ fn lay_out_grid(
         let (cs, ce, rs, re) = placements[k];
         if cs == 0 || rs == 0 {
             // Unplaced — stack below grid content.
-            lay_out(&mut children[i], content_x, content_y + y_off, content_width, None, measurer, viewport, pcb, hp);
+            lay_out(&mut children[i], content_x, content_y + y_off, content_width, None, measurer, viewport, pcb, hp, false);
             y_off += children[i].rect.height;
             continue;
         }
@@ -6899,9 +7014,9 @@ fn lay_out_grid(
                 None
             };
             let _guard = SubgridContextGuard::set(final_col_ctx, final_row_ctx);
-            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp);
+            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp, false);
         } else {
-            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp);
+            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp, false);
         }
 
         let item = &mut children[i];
@@ -8170,10 +8285,10 @@ fn apply_container_inner(
         for child in &mut b.children {
             if matches!(child.style.position, Position::Absolute | Position::Fixed) {
                 // Re-lay out against new pcb but don't advance child_y.
-                lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp);
+                lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp, false);
                 continue;
             }
-            lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp);
+            lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp, false);
             if matches!(child.kind, BoxKind::Skip) {
                 continue;
             }
@@ -12052,6 +12167,94 @@ mod tests {
             // a first → track 0 (x near 0), b second → track 1 (x near 100).
             assert!(a.rect.x < b.rect.x, "a should be in track 0 (x<b.x), got a.x={} b.x={}", a.rect.x, b.rect.x);
         }
+    }
+
+    // ── parent↔first-child margin collapse (CSS 2.1 §8.3.1) ─────────────────
+
+    fn find_block_by_width(b: &super::LayoutBox, w: f32) -> Option<&super::LayoutBox> {
+        if matches!(b.kind, super::BoxKind::Block) && (b.rect.width - w).abs() < 1.0 {
+            return Some(b);
+        }
+        for child in &b.children {
+            if let Some(found) = find_block_by_width(child, w) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn parent_first_child_margin_collapses_through_no_border_padding() {
+        // CSS 2.1 §8.3.1: parent with no border/padding/BFC, child margin-top: 70px.
+        // The child's margin collapses with the parent's (0), pushing both to y=70.
+        // Before fix: parent at y=0, child at y=70 (70px inside parent).
+        // After fix:  parent at y=70, child at y=70 (flush with parent top).
+        let html = r#"<div id="parent"><div id="child"></div></div>"#;
+        let css = "body { margin: 0; } #parent { width: 300px; height: 300px; } #child { width: 100px; height: 100px; margin-top: 70px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let parent = find_block_by_width(&root, 300.0).expect("parent block not found");
+        let child = find_block_by_width(&root, 100.0).expect("child block not found");
+        assert!(
+            (parent.rect.y - 70.0).abs() < 1.0,
+            "parent should be at y=70 (collapsed margin), got y={}",
+            parent.rect.y
+        );
+        assert!(
+            (child.rect.y - parent.rect.y).abs() < 1.0,
+            "child should be flush with parent top (y={}), got child.y={}",
+            parent.rect.y, child.rect.y
+        );
+    }
+
+    #[test]
+    fn parent_first_child_margin_blocked_by_padding_top() {
+        // CSS 2.1 §8.3.1: padding-top on parent breaks the collapse chain.
+        // Parent at y=0, child at y = padding_top + margin_top = 10 + 70 = 80 (relative to parent).
+        let html = r#"<div id="parent"><div id="child"></div></div>"#;
+        let css = "body { margin: 0; } #parent { width: 300px; height: 400px; padding-top: 10px; } #child { width: 100px; height: 100px; margin-top: 70px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let parent = find_block_by_width(&root, 300.0).expect("parent block not found");
+        let child = find_block_by_width(&root, 100.0).expect("child block not found");
+        assert!(
+            parent.rect.y < 1.0,
+            "parent with padding should NOT have collapsed margin, got parent.y={}",
+            parent.rect.y
+        );
+        // Child placed at parent.y + padding_top(10) + margin_top(70) = 80.
+        let expected_child_y = parent.rect.y + 10.0 + 70.0;
+        assert!(
+            (child.rect.y - expected_child_y).abs() < 1.0,
+            "child with padding-blocked parent should be at y={}, got y={}",
+            expected_child_y, child.rect.y
+        );
+    }
+
+    #[test]
+    fn parent_first_child_margin_blocked_by_bfc() {
+        // CSS 2.1 §8.3.1: overflow:hidden establishes a BFC — no parent↔child collapse.
+        // Parent at y=0, child at y = 0 + margin_top = 70 (relative to parent, stays inside).
+        let html = r#"<div id="parent"><div id="child"></div></div>"#;
+        let css = "body { margin: 0; } #parent { width: 300px; height: 400px; overflow: hidden; } #child { width: 100px; height: 100px; margin-top: 70px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let parent = find_block_by_width(&root, 300.0).expect("parent block not found");
+        let child = find_block_by_width(&root, 100.0).expect("child block not found");
+        assert!(
+            parent.rect.y < 1.0,
+            "BFC parent should NOT have collapsed margin, got parent.y={}",
+            parent.rect.y
+        );
+        let expected_child_y = parent.rect.y + 70.0;
+        assert!(
+            (child.rect.y - expected_child_y).abs() < 1.0,
+            "child inside BFC parent should be at y={}, got y={}",
+            expected_child_y, child.rect.y
+        );
     }
 
 }
