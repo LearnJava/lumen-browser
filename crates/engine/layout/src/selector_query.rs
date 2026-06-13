@@ -405,6 +405,7 @@ fn css_color_to_css(c: &CssColor) -> String {
         CssColor::Rgba(col) => color_to_css(*col),
         CssColor::Wide(f) => color_to_css(f.to_srgb_color()),
         CssColor::CurrentColor => "currentcolor".into(),
+        CssColor::System(sc) => color_to_css(sc.resolve_color(false)),
     }
 }
 

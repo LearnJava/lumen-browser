@@ -253,6 +253,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 
 - **relative color syntax** — ✅ реализован (CSS Color L5 §4): `rgb/hsl/oklch/oklab/lab/lch(from <origin> c1 c2 c3 [/ a])`; parse_relative_color() в style.rs резолвит channel keywords (r/g/b, h/s/l, l/c/h, l/a/b, alpha) из origin-цвета через color_mix::relative_origin_channels(); компоненты поддерживают число/процент/угол/`calc()` с арифметикой над каналами; результат реконструируется в обычную color-функцию и переразбирается; 7 unit-тестов style.rs; тест 91
 
+- **system color keywords** — ✅ реализован (CSS Color 4 §6.2): `Canvas`, `CanvasText`, `Field`, `ButtonFace`, `ButtonBorder`, `ButtonText`, `LinkText`, `VisitedText`, `ActiveText`, `Highlight`, `HighlightText`, `GrayText`, `Mark`, `MarkText`, `AccentColor`, `AccentColorText`, `ThreeDHighlight`, `ThreeDShadow`, `Scrollbar` и ещё 4 алиаса; `SystemColor` Copy enum + `CssColor::System(SystemColor)`; parse в `parse_css_color_legacy()`; color-scheme pre-pass в `compute_style()` + `resolve_system_colors_in_style()` post-pass; `dark_mode: bool` параметр в `apply_declaration()`; 7 unit-тестов style.rs; тест 92
+
 ### Форматы изображений и мультимедиа
 
 - **AVIF (AV1 Image File Format)** — ✅ реализован (ISO/IEC 23008-12 Phase 0): lumen-image::avif модуль + AvifImageDecoder trait; is_avif() проверяет ISOBMFF ftyp-бокс major brand (avif/avis); decode_avif() использует libavif через `image` крейт feature `avif` (требует cmake+nasm); поддерживает статичные AVIF, анимированные распознаются но первый кадр; ICC-профили не извлекаются (Phase 1); 14 unit-тестов в avif/mod.rs; зарегистрирован в image-decoder dispatch + supported_mime_types(); тест 90

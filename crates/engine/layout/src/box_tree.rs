@@ -8153,7 +8153,7 @@ fn apply_container_inner(
         };
         // Re-apply container rules to all direct + indirect descendants.
         for child in &mut b.children {
-            re_style_subtree(child, doc, sheet, &ctx, viewport);
+            re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode);
         }
         // Re-lay out block-flow children with updated styles.
         let content_x = b.rect.x + pad_l + b.style.border_left_width;
@@ -8272,14 +8272,15 @@ fn re_style_subtree(
     sheet: &Stylesheet,
     ctx: &ContainerContext,
     viewport: Size,
+    dark_mode: bool,
 ) {
     if !matches!(b.kind, BoxKind::Skip) {
-        apply_container_rules(&mut b.style, doc, b.node, sheet, ctx, viewport);
+        apply_container_rules(&mut b.style, doc, b.node, sheet, ctx, viewport, dark_mode);
     }
     // Don't propagate into nested containers — they'll build their own context.
     if matches!(b.style.container_type, ContainerType::Normal) {
         for child in &mut b.children {
-            re_style_subtree(child, doc, sheet, ctx, viewport);
+            re_style_subtree(child, doc, sheet, ctx, viewport, dark_mode);
         }
     }
 }
