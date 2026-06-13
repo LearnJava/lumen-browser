@@ -8265,6 +8265,55 @@ mod tests {
     }
 
     #[test]
+    fn counter_set_default_zero() {
+        // CSS Lists L3 §4 — `counter-set: name` без числа → значение 0.
+        let root = lay("<p>x</p>", "p { counter-set: section; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_set, vec![("section".to_string(), 0)]);
+    }
+
+    #[test]
+    fn counter_set_with_explicit_value() {
+        let root = lay("<p>x</p>", "p { counter-set: section 5; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_set, vec![("section".to_string(), 5)]);
+    }
+
+    #[test]
+    fn counter_set_multiple_with_mixed_defaults() {
+        let root = lay("<p>x</p>", "p { counter-set: a 3 b c 5; }");
+        let s = first_block_style(&root);
+        assert_eq!(
+            s.counter_set,
+            vec![
+                ("a".to_string(), 3),
+                ("b".to_string(), 0), // default = 0
+                ("c".to_string(), 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn counter_set_none_yields_empty() {
+        let root = lay("<p>x</p>", "p { counter-set: none; }");
+        let s = first_block_style(&root);
+        assert!(s.counter_set.is_empty());
+    }
+
+    #[test]
+    fn counter_set_not_inherited_by_default() {
+        // counter-set не наследуется (CSS Lists L3 §4).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { counter-set: section 3; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(p.style.counter_set.is_empty());
+        assert!(!div.style.counter_set.is_empty());
+    }
+
+    #[test]
     fn counter_not_inherited_by_default() {
         // counter-reset / -increment не наследуются (CSS Lists L3 §3).
         let root = lay(
@@ -14971,6 +15020,20 @@ mod tests {
         let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         let text = counter_first_inline_text(div);
         assert_eq!(text, "1. ", "counter(section) should resolve to '1'");
+    }
+
+    #[test]
+    fn counter_set_resolves_in_content() {
+        // counter-set runs after counter-increment (CSS Lists L3 §4): the set
+        // value wins, so counter(section) resolves to the set value, not +1.
+        let root = lay(
+            "<div id='a'></div>",
+            "div { counter-reset: section; counter-increment: section; counter-set: section 42; } \
+             div::before { content: counter(section) \". \"; display: block; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let text = counter_first_inline_text(div);
+        assert_eq!(text, "42. ", "counter-set should override the increment");
     }
 
     #[test]

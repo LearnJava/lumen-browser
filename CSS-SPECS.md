@@ -376,7 +376,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `list-style-position` | 🟡 | inside/outside; positioning ⬜ |
 | `list-style-image` | 🟡 | url(); image marker ⬜ |
 | `counter-reset` / `counter-increment` | 🟡 | Vec<(name,val)>; resolution ⬜ |
-| `counter-set` | ⬜ | |
+| `counter-set` | ✅ | CSS Lists L3 §4; Vec<(name,val)>; apply_set после reset/increment; тест 97 2026-06-13 |
 | `@counter-style` | ⬜ | |
 
 ### [T1] @layer / Cascade Layers

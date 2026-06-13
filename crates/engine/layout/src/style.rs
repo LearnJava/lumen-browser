@@ -2341,6 +2341,11 @@ pub struct ComputedStyle {
     /// CSS Lists L3 §3 — `counter-increment: name [N]?`. Каждый element
     /// инкрементирует названный counter на N (default +1). Не наследуется.
     pub counter_increment: Vec<(String, i32)>,
+    /// CSS Lists L3 §4 — `counter-set: name [N]?`. Каждый element
+    /// устанавливает названный counter в N (default 0). Не наследуется.
+    /// Применяется ПОСЛЕ counter-reset и counter-increment (порядок по spec).
+    /// Если счётчика с таким именем нет в области видимости — создаёт его.
+    pub counter_set: Vec<(String, i32)>,
     /// CSS Masking L1 §3 — `clip-path: <basic-shape> | none`. Не
     /// наследуется. Phase 0: parsing only — real geometric clipping
     /// в paint pipeline отложен.
@@ -4839,6 +4844,7 @@ impl ComputedStyle {
             custom_props: HashMap::new(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
+            counter_set: Vec::new(),
             clip_path: None,
             transform: Vec::new(),
             translate: None,
@@ -5137,6 +5143,7 @@ pub fn compute_style(
         // CSS Lists L3 §3 — не наследуются.
         counter_reset: Vec::new(),
         counter_increment: Vec::new(),
+        counter_set: Vec::new(),
         // CSS Masking / Transforms / Filter — не наследуются.
         clip_path: None,
         transform: Vec::new(),
@@ -11241,6 +11248,11 @@ fn apply_declaration(
             // Default value = 1 (по spec).
             style.counter_increment = parse_counter_list(val, 1);
         }
+        "counter-set" => {
+            // CSS Lists L3 §4 — `none | (<custom-ident> <integer>?)+`.
+            // Default value на счётчик при отсутствии числа = 0 (по spec).
+            style.counter_set = parse_counter_list(val, 0);
+        }
         "clip-path" => {
             // CSS Masking L1 §3 — basic-shape | none. `none` чистит.
             let trimmed = val.trim();
@@ -14521,6 +14533,13 @@ fn apply_css_wide_keyword(
                 inherited.counter_increment.clone()
             } else {
                 init.counter_increment.clone()
+            };
+        }
+        "counter-set" => {
+            style.counter_set = if inh_only_inherit {
+                inherited.counter_set.clone()
+            } else {
+                init.counter_set.clone()
             };
         }
         // Masking / Transforms / Filter — все non-inherited.
