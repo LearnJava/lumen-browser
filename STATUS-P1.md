@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**BB-5: `text-wrap: balance` balance algorithm**  branch: `p1-bb5-text-wrap-balance`
+Next step: `TextWrapMode::Balance` enum + бинарный поиск ширины переноса в inline-flow (`crates/engine/layout/src/`); `// CSS: text-wrap` handoff для P4; 8 unit-тестов
 
 ---
 
