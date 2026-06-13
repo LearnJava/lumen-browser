@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_ — p4-field-sizing влит 2026-06-13
+_(none)_ — p4-font-size-adjust влит 2026-06-13
 
 ## Workflow
 
@@ -280,6 +280,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-13 | `font-size-adjust` | CSS Fonts L5 §4; `TextMeasurer::x_height_px()` (real OS/2 `sxHeight` в `FontMeasurer`/`MultiFontMeasurer`, fallback 0.5·size); post-build pass `apply_font_size_adjust()` в box_tree.rs переписывает `font_size` боксов и inline-сегментов как `size·adjust/aspect` до measurement — единый источник для layout и paint; `Auto`/`None` — no-op; 4 unit-теста box_tree.rs + 4 style.rs + graphic test 95 |
 | 2026-06-13 | `interpolate-size` | CSS Sizing L4 §4.5; `InterpolateSizeMode` enum (NumericOnly/AllowKeywords); `ComputedStyle.interpolate_size` **inherited** (initial NumericOnly); parse в `apply_declaration` + inherit/unset; gate `auto_resolved_px` в `TransitionScheduler::sync()` на `AllowKeywords` — keyword-размеры дискретны без opt-in; 5 unit-тестов style.rs + 2 unit-теста animation.rs + graphic test 94 |
 | 2026-06-13 | `field-sizing: content` | CSS Basic UI L4 §4.4; `FieldSizing` enum (Fixed/Content) + `ComputedStyle.field_sizing` (non-inherited); parse в `apply_declaration`; post-cascade `apply_ua_form_controls_field_sizing_clear()` снимает UA-размеры; `FormControlKind::Input/Textarea` несут `value_text`; wiring в `lay_out` через `field_sizing_content_intrinsic()`; 5+5 unit-тестов + graphic test 93 |
 | 2026-06-13 | CSS Color 4 system color keywords | CSS Color 4 §6.2; `SystemColor` Copy enum (23 variants); `CssColor::System(SystemColor)`; `parse_css_color_legacy` детектирует ключевые слова; color-scheme pre-pass + `resolve_system_colors_in_style()` post-pass; `dark_mode: bool` в `apply_declaration()`; 7 unit-тестов + graphic test 92 |

@@ -218,7 +218,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font-stretch` | 🟡 | % parsed; matcher ⬜ |
 | `font-variation-settings` | ✅ | fvar+avar normalization |
 | `font-feature-settings` | ⬜ | OT feature flags |
-| `font-size-adjust` | 🟡 | parsed; x-height scaling ⬜ |
+| `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
 | `font-palette` | ⬜ | CSS Fonts L5 |
 | `@font-face` | 🟡 | all descriptors parsed; file loading ⬜ |
