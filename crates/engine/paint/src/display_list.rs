@@ -230,8 +230,15 @@ pub enum ResolvedClipShape {
         /// Вертикальная полуось (px).
         ry: f32,
     },
-    /// `polygon(...)`: вершины в page px (nonzero fill rule).
-    Polygon(Vec<(f32, f32)>),
+    /// `polygon(...)` / `path(...)`: вершины в page px. `even_odd` выбирает
+    /// правило заливки самопересекающихся контуров (CSS Shapes L1 §3/§4):
+    /// `true` → even-odd (дырки в перекрытиях), `false` → nonzero (default).
+    Polygon {
+        /// Вершины формы в page px (до transform элемента).
+        verts: Vec<(f32, f32)>,
+        /// `true` = even-odd fill rule, `false` = nonzero.
+        even_odd: bool,
+    },
 }
 
 impl ResolvedClipShape {
@@ -246,7 +253,7 @@ impl ResolvedClipShape {
             Self::Ellipse { cx, cy, rx, ry } => {
                 Rect::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
             }
-            Self::Polygon(verts) => {
+            Self::Polygon { verts, .. } => {
                 if verts.is_empty() {
                     return Rect::new(0.0, 0.0, 0.0, 0.0);
                 }
@@ -1345,8 +1352,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                             "PushClipPath ellipse({cx:.2}, {cy:.2}, rx={rx:.2}, ry={ry:.2})\n"
                         ));
                     }
-                    ResolvedClipShape::Polygon(verts) => {
-                        out.push_str("PushClipPath polygon(");
+                    ResolvedClipShape::Polygon { verts, even_odd } => {
+                        out.push_str(if *even_odd {
+                            "PushClipPath polygon evenodd("
+                        } else {
+                            "PushClipPath polygon("
+                        });
                         for (i, (x, y)) in verts.iter().enumerate() {
                             if i > 0 {
                                 out.push_str(", ");
@@ -1937,26 +1948,28 @@ fn clip_path_to_shape(clip: &ClipPath, r: Rect) -> Option<ResolvedClipShape> {
                 ry: ry.resolve(r.height),
             })
         }
-        ClipPath::Polygon(vertices) => {
+        ClipPath::Polygon(vertices, fill_rule) => {
             if vertices.is_empty() {
                 return None;
             }
-            Some(ResolvedClipShape::Polygon(
-                vertices
+            Some(ResolvedClipShape::Polygon {
+                verts: vertices
                     .iter()
                     .map(|(x, y)| (r.x + x.resolve(r.width), r.y + y.resolve(r.height)))
                     .collect(),
-            ))
+                even_odd: matches!(fill_rule, FillRule::EvenOdd),
+            })
         }
         // CSS Shapes L1 §4 — `path()`: точки уже флэттены в px системы пути
         // (origin = верхний левый угол reference box). Смещаем на позицию box.
-        ClipPath::Path(points) => {
+        ClipPath::Path(points, fill_rule) => {
             if points.len() < 3 {
                 return None;
             }
-            Some(ResolvedClipShape::Polygon(
-                points.iter().map(|(x, y)| (r.x + x, r.y + y)).collect(),
-            ))
+            Some(ResolvedClipShape::Polygon {
+                verts: points.iter().map(|(x, y)| (r.x + x, r.y + y)).collect(),
+                even_odd: matches!(fill_rule, FillRule::EvenOdd),
+            })
         }
     }
 }
@@ -10118,44 +10131,45 @@ mod tests {
     #[test]
     fn clip_path_polygon_bounding_box() {
         use super::{clip_path_to_rect, clip_path_to_shape, ResolvedClipShape};
-        use lumen_layout::{ClipPath, ShapeValue};
+        use lumen_layout::{ClipPath, FillRule, ShapeValue};
         let r = Rect::new(0.0, 0.0, 200.0, 200.0);
         // triangle: (100,0) (200,200) (0,200)
-        let clip = ClipPath::Polygon(vec![
-            (ShapeValue::Px(100.0), ShapeValue::Px(0.0)),
-            (ShapeValue::Px(200.0), ShapeValue::Px(200.0)),
-            (ShapeValue::Px(0.0), ShapeValue::Px(200.0)),
-        ]);
+        let clip = ClipPath::Polygon(
+            vec![
+                (ShapeValue::Px(100.0), ShapeValue::Px(0.0)),
+                (ShapeValue::Px(200.0), ShapeValue::Px(200.0)),
+                (ShapeValue::Px(0.0), ShapeValue::Px(200.0)),
+            ],
+            FillRule::NonZero,
+        );
         let cr = clip_path_to_rect(&clip, r);
         assert_eq!(cr, Rect::new(0.0, 0.0, 200.0, 200.0));
         // BUG-140 (TEST-109 c2): точная форма — полигон, не bbox.
         let shape = clip_path_to_shape(&clip, r);
         assert_eq!(
             shape,
-            Some(ResolvedClipShape::Polygon(vec![
-                (100.0, 0.0),
-                (200.0, 200.0),
-                (0.0, 200.0)
-            ]))
+            Some(ResolvedClipShape::Polygon {
+                verts: vec![(100.0, 0.0), (200.0, 200.0), (0.0, 200.0)],
+                even_odd: false,
+            })
         );
     }
 
     #[test]
     fn clip_path_path_resolves_to_polygon() {
         use super::{clip_path_to_shape, ResolvedClipShape};
-        use lumen_layout::ClipPath;
+        use lumen_layout::{ClipPath, FillRule};
         // path() хранит уже флэттенные px-точки в системе пути; clip_path_to_shape
         // только смещает их на позицию border-box (r.x/r.y).
         let r = Rect::new(20.0, 30.0, 100.0, 100.0);
-        let clip = ClipPath::Path(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)]);
+        let clip = ClipPath::Path(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)], FillRule::NonZero);
         let shape = clip_path_to_shape(&clip, r);
         assert_eq!(
             shape,
-            Some(ResolvedClipShape::Polygon(vec![
-                (20.0, 30.0),
-                (120.0, 30.0),
-                (70.0, 110.0),
-            ]))
+            Some(ResolvedClipShape::Polygon {
+                verts: vec![(20.0, 30.0), (120.0, 30.0), (70.0, 110.0)],
+                even_odd: false,
+            })
         );
     }
 

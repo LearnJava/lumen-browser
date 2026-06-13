@@ -361,7 +361,7 @@ fn clip_shape_path(shape: &ResolvedClipShape, t: &femtovg::Transform2D) -> femto
         ResolvedClipShape::Ellipse { cx, cy, rx, ry } => {
             ellipse_path(&mut path, *cx, *cy, *rx, *ry, t, KAPPA);
         }
-        ResolvedClipShape::Polygon(verts) => {
+        ResolvedClipShape::Polygon { verts, .. } => {
             let mut iter = verts.iter();
             if let Some((x, y)) = iter.next() {
                 let (px, py) = t.transform_point(*x, *y);
@@ -1076,8 +1076,15 @@ impl FemtovgBackend {
         self.canvas.reset_transform();
         let css_w = (self.width as f64 / self.scale) as f32;
         let css_h = (self.height as f64 / self.scale) as f32;
+        // CSS Shapes L1 §3/§4 — even-odd оставляет дырки в самопересекающихся
+        // clip-формах (polygon()/path()); по умолчанию nonzero.
+        let fill_rule = match shape {
+            ResolvedClipShape::Polygon { even_odd: true, .. } => femtovg::FillRule::EvenOdd,
+            _ => femtovg::FillRule::NonZero,
+        };
         let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0)
-            .with_anti_alias(true);
+            .with_anti_alias(true)
+            .with_fill_rule(fill_rule);
         let path = clip_shape_path(shape, t);
         self.canvas.fill_path(&path, &paint);
         self.canvas.restore();

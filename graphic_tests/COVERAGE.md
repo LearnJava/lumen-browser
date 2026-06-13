@@ -201,6 +201,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **filter** — ✅ реализован (grayscale/sepia/brightness/invert/contrast/saturate/opacity/hue-rotate + blur), тест 30
 - **backdrop-filter** — ✅ реализован (blur/grayscale/brightness/invert/combo; Phase 0: требует parent stacking context), тест 30
 - **clip-path** — ✅ реализован (inset/circle/ellipse/polygon/path() clip), тест 31
+- **clip-path fill-rule** — ✅ реализован (CSS Shapes L1 §3/§4): опциональный `<fill-rule>` в `path([nonzero|evenodd,]? "…")` и `polygon([nonzero|evenodd,]? …)` сохраняется в `ClipPath::Path/Polygon` (2-е поле `FillRule`, default `NonZero`) и пробрасывается в `ResolvedClipShape::Polygon { even_odd }`; cpu_raster (tiny_skia `FillRule::EvenOdd`) и femtovg (`Paint::with_fill_rule`) уважают правило — self-intersecting пентаграмма/пересечение квадратов с `evenodd` получают полую середину; 2 unit-теста style/lib + 1 cpu_raster (`clip_path_polygon_even_odd_hole`); тест 112
 
 - **translate / rotate / scale** (individual CSS Transforms L2 props) — ✅ реализованы как отдельные свойства, compose перед transform в matrix (translate → rotate → scale → transform), тест 46
 

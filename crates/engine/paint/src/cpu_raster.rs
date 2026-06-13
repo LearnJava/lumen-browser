@@ -535,7 +535,7 @@ fn rasterize_clip_shape_coverage(
         ResolvedClipShape::Ellipse { cx, cy, rx, ry } => {
             pb.push_oval(tiny_skia::Rect::from_xywh(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)?);
         }
-        ResolvedClipShape::Polygon(verts) => {
+        ResolvedClipShape::Polygon { verts, .. } => {
             let mut iter = verts.iter();
             let (x0, y0) = iter.next()?;
             pb.move_to(*x0, *y0);
@@ -545,6 +545,11 @@ fn rasterize_clip_shape_coverage(
             pb.close();
         }
     }
+    // CSS Shapes L1 §3/§4 — even-odd vs nonzero для самопересекающихся форм.
+    let fill_rule = match shape {
+        ResolvedClipShape::Polygon { even_odd: true, .. } => tiny_skia::FillRule::EvenOdd,
+        _ => tiny_skia::FillRule::Winding,
+    };
     let path = pb.finish()?;
     let mut coverage = tiny_skia::Pixmap::new(width, height)?;
     let mut paint = tiny_skia::Paint::default();
@@ -553,7 +558,7 @@ fn rasterize_clip_shape_coverage(
     coverage.fill_path(
         &path,
         &paint,
-        tiny_skia::FillRule::Winding,
+        fill_rule,
         tiny_skia::Transform::identity(),
         None,
     );
@@ -2069,7 +2074,10 @@ mod tests {
         // Треугольник (32,4) (60,60) (4,60) — как polygon(50% 0, 100% 100%, 0 100%).
         let cmds = vec![
             DisplayCommand::PushClipPath {
-                shape: ResolvedClipShape::Polygon(vec![(32.0, 4.0), (60.0, 60.0), (4.0, 60.0)]),
+                shape: ResolvedClipShape::Polygon {
+                    verts: vec![(32.0, 4.0), (60.0, 60.0), (4.0, 60.0)],
+                    even_odd: false,
+                },
             },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
             DisplayCommand::PopClip,
@@ -2081,6 +2089,44 @@ mod tests {
         // Верхние углы bbox — вне треугольника.
         assert_eq!(px(&img, 8, 8), (255, 255, 255, 255), "top-left outside triangle");
         assert_eq!(px(&img, 56, 8), (255, 255, 255, 255), "top-right outside triangle");
+    }
+
+    /// CSS Shapes L1 §3/§4 — `clip-path` fill-rule. Два перекрывающихся
+    /// квадрата одним контуром (одинаковая ориентация → область пересечения
+    /// имеет winding 2). `even_odd: false` (nonzero) заливает её; `even_odd:
+    /// true` оставляет «дырку» (чётное число пересечений).
+    #[test]
+    fn clip_path_polygon_even_odd_hole() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // Квадрат A (8,8)-(40,40) и квадрат B (24,24)-(56,56), сшитые в один
+        // замкнутый контур; пересечение — (24,24)-(40,40), центр (32,32).
+        let verts = vec![
+            (8.0, 8.0), (40.0, 8.0), (40.0, 40.0), (8.0, 40.0), (8.0, 8.0),
+            (24.0, 24.0), (56.0, 24.0), (56.0, 56.0), (24.0, 56.0), (24.0, 24.0),
+        ];
+        let make = |even_odd: bool| {
+            let cmds = vec![
+                DisplayCommand::PushClipPath {
+                    shape: ResolvedClipShape::Polygon { verts: verts.clone(), even_odd },
+                },
+                DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
+                DisplayCommand::PopClip,
+            ];
+            rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize")
+        };
+
+        let nz = make(false);
+        let eo = make(true);
+
+        // Зоны только-A (14,14) и только-B (50,50) заливаются при обоих правилах.
+        assert_eq!(px(&nz, 14, 14), (255, 0, 0, 255), "nonzero: square A red");
+        assert_eq!(px(&eo, 14, 14), (255, 0, 0, 255), "evenodd: square A red");
+        assert_eq!(px(&nz, 50, 50), (255, 0, 0, 255), "nonzero: square B red");
+        assert_eq!(px(&eo, 50, 50), (255, 0, 0, 255), "evenodd: square B red");
+
+        // Центр пересечения (32,32): nonzero заливает, evenodd — дырка (фон).
+        assert_eq!(px(&nz, 32, 32), (255, 0, 0, 255), "nonzero fills the overlap");
+        assert_eq!(px(&eo, 32, 32), (255, 255, 255, 255), "evenodd leaves a hole in the overlap");
     }
 
     /// BUG-140 (TEST-109 c0/c1): clip-path эмитится внутри PushTransform —

@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_ — p4-accent-color влит 2026-06-14
+_(none)_ — p4-clip-path-fill-rule влит 2026-06-14
 
 ## Workflow
 
@@ -280,6 +280,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-14 | `clip-path` `<fill-rule>` | CSS Shapes L1 §3/§4; опциональный `nonzero\|evenodd` в `path([<fill-rule>,]? "…")` и `polygon([<fill-rule>,]? …)` раньше отбрасывался — теперь сохраняется. `ClipPath::Path`/`Polygon` получили 2-е поле `FillRule` (default `NonZero`); `parse_clip_path` распознаёт fill-rule в обоих; `ResolvedClipShape::Polygon` стал struct-вариантом `{ verts, even_odd }`; cpu_raster выбирает `tiny_skia::FillRule::EvenOdd`, femtovg — `Paint::with_fill_rule(FillRule::EvenOdd)` (0.9.2). Self-intersecting пентаграмма/пересечение квадратов с `evenodd` получают полую середину. 2 unit-теста style/lib (nonzero default + evenodd сохраняется для path и polygon) + 1 cpu_raster (`clip_path_polygon_even_odd_hole`) + graphic test 112 + демо в 1000000-final |
 | 2026-06-14 | `appearance: none` | CSS Basic UI L4 §4.2; завершено form-widget wiring (было 🟡 parsed); `emit_form_control_indicator()` (paint/display_list.rs) при `Appearance::None` ничего не рисует — подавлены checkbox-тик, radio-точка, range-трек/ползунок, progress-бар, select-стрелка (box уже снимался `apply_ua_appearance`); `Appearance` реэкспортирован из lumen-layout; 4 unit-теста display_list.rs + graphic test 111 + демо в 1000000-final |
 | 2026-06-14 | `accent-color` | CSS UI L4 §6.1; `ComputedStyle.accent_color: Option<Color>` уже парсился (inherited, None=auto) — добавлено paint-wiring: `emit_form_control_indicator()` резолвит accent (UA-дефолт `ACCENT_DEFAULT` = синий 21,90,192) и тинтит checked checkbox/radio, залитую часть+thumb range (`emit_range_slider`), value-бар `<progress>` (`emit_progress_bar`); `<meter>` исключён (семантические цвета HTML §4.10.14); 5 unit-тестов display_list.rs + graphic test 110 |
 | 2026-06-14 | `clip-path: path()` | CSS Shapes L1 §4; `motion_path::flatten_path_to_polygon()` разбивает SVG-путь (M/L/H/V/C/S/Q/T/A/Z через существующий `parse_svg_path`) в полигон 24 отрезка/кривую; `ClipPath::Path(Vec<(f32,f32)>)` хранит флэттенные px-точки системы пути; `parse_clip_path` принимает `path([<fill-rule>,]? "<svg>")` (fill-rule отбрасывается, кавычки `"`/`'`); `clip_path_to_shape` смещает точки на border-box → `ResolvedClipShape::Polygon`; проценты в path() недопустимы по спеке (px-координаты); 3 unit-теста lib.rs + 3 motion_path.rs + 2 display_list.rs + graphic test 31 (path-tri + path-curve) |
