@@ -479,6 +479,7 @@ fn run_window_mode(
         restore_spinner_start_ms: None,
         resize_active: None,
         tab_drag: None,
+        tab_context_menu: tabs::context_menu::TabContextMenu::default(),
         shell_theme: panels::themes::ShellTheme::default(),
         reader_original_source: None,
         cert_info: None,
@@ -4338,6 +4339,9 @@ struct Lumen {
     /// [`tabs::strip::DRAG_THRESHOLD`] px.  On release, calls
     /// `tab_strip.move_tab` if the drag was active.
     tab_drag: Option<tabs::strip::TabDragState>,
+    /// Right-click tab context menu (CC-4): Duplicate / Pin / Move to new
+    /// window / Close others / Close to the right. Hidden unless `open`.
+    tab_context_menu: tabs::context_menu::TabContextMenu,
     /// Shell UI theme: base brightness + accent colour (§O-9).
     ///
     /// Initialised from `BrowserSettings` on startup.  Updated when the user
@@ -5886,6 +5890,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         None
                     };
                 }
+                // CC-4: update tab context-menu hover highlight.
+                if self.tab_context_menu.is_open() {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    let new_hover = tabs::context_menu::item_at(
+                        &self.tab_context_menu,
+                        x_css,
+                        y_css,
+                        win_w,
+                        win_h,
+                    );
+                    if new_hover != self.tab_context_menu.hovered {
+                        self.tab_context_menu.hovered = new_hover;
+                        self.request_redraw();
+                    }
+                }
                 // B-7: Active resize — update element width/height as mouse moves.
                 #[cfg(feature = "quickjs")]
                 if let Some((node_id, start_x, start_y)) = self.resize_active {
@@ -5947,6 +5974,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .cursor_position
                         .map(|p| ((p.x as f32) / dpr, (p.y as f32) / dpr))
                         .unwrap_or((0.0, 0.0));
+                    // CC-4: right-click on a tab opens the tab context menu
+                    // instead of starting a mouse gesture.
+                    if state == ElementState::Pressed && !self.focus.active {
+                        let tab_area_w =
+                            self.viewport_width_css() - tabs::archive::ARCHIVE_BTN_W;
+                        if let tabs::strip::TabHit::Tab(idx) =
+                            tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w)
+                        {
+                            let pinned = self.tab_strip.is_pinned(idx);
+                            self.tab_context_menu.open_for(idx, pinned, x_css, y_css);
+                            self.request_redraw();
+                            return;
+                        }
+                    }
                     if state == ElementState::Pressed {
                         self.gesture.begin(x_css, y_css);
                     } else if state == ElementState::Released
@@ -5976,6 +6017,26 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+                    // CC-4: while the tab context menu is open it captures the
+                    // click — picking a row runs the action, anywhere else just
+                    // dismisses it. The click never reaches the page / panels.
+                    if self.tab_context_menu.is_open() {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.window_height_css();
+                        let action = tabs::context_menu::action_at(
+                            &self.tab_context_menu,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        );
+                        self.tab_context_menu.close();
+                        if let Some(action) = action {
+                            self.exec_tab_menu_action(action, event_loop);
+                        }
+                        self.request_redraw();
+                        return;
+                    }
                     // Fire mousedown + pointerdown on the hovered DOM element.
                     // Per W3C UI Events §17.6 + Pointer Events L2 §10 — fires before
                     // any default action (click). Only when cursor is over page content.
@@ -7793,6 +7854,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut arch_panel);
                 }
 
+                // CC-4: tab context menu — drawn above the tab strip.
+                if self.tab_context_menu.is_open() {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    let mut menu_cmds = tabs::context_menu::build_overlay(
+                        &self.tab_context_menu,
+                        win_w,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut menu_cmds);
+                }
+
                 // Command palette (task #23): modal — drawn above everything,
                 // including the tab bar, with a full-window dimming scrim.
                 if self.command_palette.visible {
@@ -8818,6 +8891,17 @@ impl Lumen {
             if let Some(js) = &self.js_ctx {
                 js.eval_js("if(typeof _lumen_notify_fullscreen_exit==='function')_lumen_notify_fullscreen_exit()");
             }
+            return;
+        }
+
+        // CC-4: Escape closes the tab context menu before any other handling.
+        if self.tab_context_menu.is_open()
+            && code == KeyCode::Escape
+            && self.modifiers.is_empty()
+            && !key_event.repeat
+        {
+            self.tab_context_menu.close();
+            self.request_redraw();
             return;
         }
 
@@ -10087,6 +10171,19 @@ impl Lumen {
         (total - tabs::strip::TAB_BAR_HEIGHT - ws_bar).max(0.0)
     }
 
+    /// Full logical (CSS px) window height including the tab bar. Used to
+    /// clamp the tab context menu (CC-4) so it stays on-screen. Fallback 720.
+    fn window_height_css(&self) -> f32 {
+        match (self.window.as_ref(), self.renderer.as_ref()) {
+            (Some(w), Some(r)) => {
+                let phys = w.inner_size().height as f32;
+                let dpr = (r.scale_factor() as f32).max(1e-6);
+                phys / dpr
+            }
+            _ => 720.0,
+        }
+    }
+
     /// CSS px ширина viewport-а — полная ширина окна, нужна scrollbar-overlay-у
     /// для размещения у правого края. Fallback на layout-viewport 1024 px (тот
     /// же hardcoded размер, что и в pipeline до создания окна).
@@ -11137,6 +11234,7 @@ impl Lumen {
                 opener_id: None,
                 container: tabs::containers::ContainerKind::None,
                 last_activated_ms: 0.0,
+                pinned: false,
             });
             self.lifecycle_mgr.open_tab(id as u64);
 
@@ -11792,6 +11890,118 @@ impl Lumen {
             let _ = self.tab_snapshots.delete(closing_id as i64);
             let _ = self.t2_store.delete(closing_id as i64);
             self.tab_strip.remove(idx);
+        }
+        self.request_redraw();
+    }
+
+    /// Execute a tab context-menu action (CC-4) on `tab_context_menu.target_idx`.
+    fn exec_tab_menu_action(
+        &mut self,
+        action: tabs::context_menu::MenuAction,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
+        use tabs::context_menu::MenuAction;
+        let idx = self.tab_context_menu.target_idx;
+        if idx >= self.tab_strip.len() {
+            return;
+        }
+        match action {
+            MenuAction::TogglePin => {
+                self.tab_strip.toggle_pin(idx);
+                self.request_redraw();
+            }
+            MenuAction::Duplicate => self.duplicate_tab(idx),
+            MenuAction::MoveToNewWindow => self.move_tab_to_new_window(idx, event_loop),
+            MenuAction::CloseOthers => {
+                // Keep the target visible: switch to it first so a surviving
+                // page is shown, then drop everything else (non-pinned).
+                if idx != self.tab_strip.active {
+                    self.switch_tab(idx);
+                }
+                let keep = self.tab_strip.active;
+                let removed = self.tab_strip.close_others(keep);
+                self.discard_tab_resources(&removed);
+                self.request_redraw();
+            }
+            MenuAction::CloseRight => {
+                // If the active tab would be removed, switch to the target
+                // (which always survives) so the displayed page stays valid.
+                let active = self.tab_strip.active;
+                if active > idx && !self.tab_strip.is_pinned(active) {
+                    self.switch_tab(idx);
+                }
+                let removed = self.tab_strip.close_right(idx);
+                self.discard_tab_resources(&removed);
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Drop the cached page resources of background tabs removed in bulk
+    /// (CC-4 "Close others" / "Close to the right"). Mirrors the background
+    /// branch of [`close_tab`].
+    fn discard_tab_resources(&mut self, ids: &[usize]) {
+        for &id in ids {
+            self.lifecycle_mgr.close_tab(id as u64);
+            self.bg_tabs.remove(&id);
+            self.hibernated_tabs.remove(&id);
+            let _ = self.tab_snapshots.delete(id as i64);
+            let _ = self.t2_store.delete(id as i64);
+        }
+    }
+
+    /// Duplicate the tab at `idx` (CC-4): insert a copy right after it and
+    /// load the same page into it. Phase 0 re-fetches the source URL rather
+    /// than deep-cloning live page/JS state.
+    fn duplicate_tab(&mut self, idx: usize) {
+        // Bring the source tab to the foreground so `self.source` is its page.
+        if idx != self.tab_strip.active {
+            self.switch_tab(idx);
+        }
+        let src_idx = self.tab_strip.active;
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        let Some(new_idx) = self.tab_strip.duplicate(src_idx, now_ms) else {
+            return;
+        };
+        let src_source = self.source.clone();
+        // Park the source page in bg_tabs under its own id.
+        let old_id = self.tab_strip.tabs[src_idx].id;
+        self.tab_strip.set_tab_state(src_idx, TabState::BackgroundRecent);
+        let snap = self.save_page_snapshot();
+        self.bg_tabs.insert(old_id, snap);
+        // Activate the duplicate and load a fresh copy of the page.
+        let new_id = self.tab_strip.tabs[new_idx].id;
+        self.lifecycle_mgr.open_tab(new_id as u64);
+        self.tab_strip.active = new_idx;
+        self.tab_strip.set_tab_state(new_idx, TabState::Active);
+        self.tab_strip.update_last_activated(new_idx, now_ms);
+        self.reset_to_blank_tab();
+        self.source = src_source;
+        self.reload();
+        self.request_redraw();
+    }
+
+    /// Move the tab at `idx` into a new OS window (CC-4). Phase 0 launches a
+    /// fresh Lumen process for the tab's URL and removes the tab from this
+    /// window. The last remaining tab is duplicated rather than moved (closing
+    /// it would quit the app).
+    fn move_tab_to_new_window(
+        &mut self,
+        idx: usize,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
+        if idx != self.tab_strip.active {
+            self.switch_tab(idx);
+        }
+        let url = self.source.url_str().map(str::to_owned);
+        if let Some(url) = url
+            && let Ok(exe) = std::env::current_exe()
+        {
+            let _ = std::process::Command::new(exe).arg(&url).spawn();
+        }
+        // Remove the tab here unless it is the only one (closing it would exit).
+        if self.tab_strip.len() > 1 {
+            self.close_tab(self.tab_strip.active, event_loop);
         }
         self.request_redraw();
     }

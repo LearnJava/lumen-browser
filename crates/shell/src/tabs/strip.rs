@@ -37,6 +37,8 @@ const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
 const DIVIDER: Color = Color { r: 45, g: 46, b: 52, a: 255 };
 
 /// Badge colour for BackgroundOld tier — amber "z" sleep icon.
+/// Indicator colour for a pinned tab (CC-4) — cyan dot at the tab's left edge.
+const PIN_COLOR: Color = Color { r: 90, g: 200, b: 220, a: 255 };
 const BADGE_OLD_COLOR: Color = Color { r: 255, g: 168, b: 0, a: 210 };
 /// Badge colour for Hibernated tier — grey "Z" sleep icon.
 const BADGE_HIBERNATE_COLOR: Color = Color { r: 110, g: 110, b: 120, a: 210 };
@@ -98,6 +100,9 @@ pub struct TabEntry {
     /// against `ARCHIVE_AFTER_MS` to decide whether a background tab should
     /// be moved to [`crate::tabs::archive::TabArchive`].
     pub last_activated_ms: f64,
+    /// Whether the tab is pinned (CC-4). Pinned tabs survive the context-menu
+    /// "Close others" / "Close to the right" bulk operations. Default `false`.
+    pub pinned: bool,
 }
 
 /// State of the tab strip (tab list + active index).
@@ -121,6 +126,7 @@ impl TabStrip {
                 opener_id: None,
                 container: ContainerKind::None,
                 last_activated_ms: 0.0,
+                pinned: false,
             }],
             active: 0,
             next_id: 1,
@@ -146,6 +152,7 @@ impl TabStrip {
             opener_id: None,
             container: ContainerKind::None,
             last_activated_ms: now_ms,
+            pinned: false,
         });
         self.tabs.len() - 1
     }
@@ -167,6 +174,7 @@ impl TabStrip {
             opener_id: Some(opener_id),
             container: ContainerKind::None,
             last_activated_ms: now_ms,
+            pinned: false,
         });
         self.tabs.len() - 1
     }
@@ -242,6 +250,102 @@ impl TabStrip {
         } else {
             self.active
         };
+    }
+
+    /// Toggle the pinned flag of the tab at `idx`. Returns the new state
+    /// (`false` for an out-of-bounds index, which is a no-op).
+    pub fn toggle_pin(&mut self, idx: usize) -> bool {
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.pinned = !tab.pinned;
+            tab.pinned
+        } else {
+            false
+        }
+    }
+
+    /// `true` if the tab at `idx` is pinned. Out-of-bounds → `false`.
+    pub fn is_pinned(&self, idx: usize) -> bool {
+        self.tabs.get(idx).is_some_and(|t| t.pinned)
+    }
+
+    /// Insert a duplicate of the tab at `src` immediately to its right.
+    ///
+    /// The clone gets a fresh `id`, inherits the title/container, sets
+    /// `opener_id` to the source tab's id, and is never pinned. Returns the
+    /// new tab's index, or `None` for an out-of-bounds `src`. `active` shifts
+    /// right if the insertion happened at or before it (the same logical tab
+    /// stays selected). The caller is responsible for cloning the page content.
+    pub fn duplicate(&mut self, src: usize, now_ms: f64) -> Option<usize> {
+        let source = self.tabs.get(src)?;
+        let id = self.next_id;
+        self.next_id += 1;
+        let clone = TabEntry {
+            id,
+            title: source.title.clone(),
+            tab_state: TabState::Active,
+            opener_id: Some(source.id),
+            container: source.container,
+            last_activated_ms: now_ms,
+            pinned: false,
+        };
+        let dst = src + 1;
+        self.tabs.insert(dst, clone);
+        if dst <= self.active {
+            self.active += 1;
+        }
+        Some(dst)
+    }
+
+    /// Remove every tab except `keep_idx` and any pinned tabs.
+    ///
+    /// Returns the ids of the removed tabs (so the shell can drop their cached
+    /// page snapshots). `active` is set to the surviving `keep` tab. Pinned
+    /// tabs are preserved regardless of position.
+    pub fn close_others(&mut self, keep_idx: usize) -> Vec<usize> {
+        let Some(keep_id) = self.tabs.get(keep_idx).map(|t| t.id) else {
+            return Vec::new();
+        };
+        let mut removed = Vec::new();
+        self.tabs.retain(|t| {
+            let keep = t.id == keep_id || t.pinned;
+            if !keep {
+                removed.push(t.id);
+            }
+            keep
+        });
+        self.active = self
+            .tabs
+            .iter()
+            .position(|t| t.id == keep_id)
+            .unwrap_or(0);
+        removed
+    }
+
+    /// Remove all non-pinned tabs positioned to the right of `idx`.
+    ///
+    /// Returns the ids of the removed tabs. `active` is clamped into the new
+    /// valid range if it pointed at a removed tab. Pinned tabs to the right
+    /// are preserved.
+    pub fn close_right(&mut self, idx: usize) -> Vec<usize> {
+        if idx >= self.tabs.len() {
+            return Vec::new();
+        }
+        let active_id = self.tabs.get(self.active).map(|t| t.id);
+        let mut removed = Vec::new();
+        let mut pos = 0usize;
+        self.tabs.retain(|t| {
+            let keep = pos <= idx || t.pinned;
+            pos += 1;
+            if !keep {
+                removed.push(t.id);
+            }
+            keep
+        });
+        // Re-resolve active: if it survived, point at it; else clamp to `idx`.
+        self.active = active_id
+            .and_then(|aid| self.tabs.iter().position(|t| t.id == aid))
+            .unwrap_or_else(|| idx.min(self.tabs.len().saturating_sub(1)));
+        removed
     }
 }
 
@@ -379,6 +483,14 @@ pub fn build_tab_bar(
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(left, 0.0, right - left, CONTAINER_STRIP_HEIGHT),
                 color,
+            });
+        }
+
+        // Pinned indicator (CC-4): a small cyan dot near the tab's left edge.
+        if tab.pinned {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(left + 4.0, TAB_BAR_HEIGHT * 0.5 - 2.5, 5.0, 5.0),
+                color: PIN_COLOR,
             });
         }
 
@@ -832,6 +944,7 @@ mod tests {
             opener_id: None,
             container: ContainerKind::None,
             last_activated_ms: 0.0,
+            pinned: false,
         };
         assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_none());
     }
@@ -845,6 +958,7 @@ mod tests {
             opener_id: None,
             container: ContainerKind::None,
             last_activated_ms: 0.0,
+            pinned: false,
         };
         let cmds = build_tab_tooltip(&tab, 100.0, 36.0);
         assert!(cmds.is_some());
@@ -861,6 +975,7 @@ mod tests {
             opener_id: None,
             container: ContainerKind::None,
             last_activated_ms: 0.0,
+            pinned: false,
         };
         assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_some());
     }
@@ -940,6 +1055,120 @@ mod tests {
         s.active = 4;
         s.move_tab(1, 3);
         assert_eq!(s.active, 4);
+    }
+
+    // ── pin / duplicate / close-others / close-right tests (CC-4) ─────────────
+
+    #[test]
+    fn toggle_pin_flips_state() {
+        let mut s = TabStrip::new();
+        assert!(!s.is_pinned(0));
+        assert!(s.toggle_pin(0));
+        assert!(s.is_pinned(0));
+        assert!(!s.toggle_pin(0));
+        assert!(!s.is_pinned(0));
+    }
+
+    #[test]
+    fn toggle_pin_out_of_bounds_is_false() {
+        let mut s = TabStrip::new();
+        assert!(!s.toggle_pin(99));
+    }
+
+    #[test]
+    fn duplicate_inserts_clone_after_source() {
+        let mut s = strip_with_n(3); // ids [0,1,2]
+        s.tabs[1].title = "Page B".to_owned();
+        let new_idx = s.duplicate(1, 0.0).expect("in-bounds");
+        assert_eq!(new_idx, 2);
+        assert_eq!(s.len(), 4);
+        assert_eq!(s.tabs[2].title, "Page B");
+        // Clone opener points at the source tab id.
+        assert_eq!(s.tabs[2].opener_id, Some(1));
+        // Original ordering preserved around the clone.
+        assert_eq!(ids(&s), vec![0, 1, 3, 2]);
+    }
+
+    #[test]
+    fn duplicate_clone_is_not_pinned() {
+        let mut s = TabStrip::new();
+        s.tabs[0].pinned = true;
+        let new_idx = s.duplicate(0, 0.0).unwrap();
+        assert!(!s.tabs[new_idx].pinned);
+    }
+
+    #[test]
+    fn duplicate_shifts_active_when_inserted_before() {
+        let mut s = strip_with_n(3);
+        s.active = 2;
+        s.duplicate(0, 0.0); // inserts at index 1, before active
+        assert_eq!(s.active, 3);
+    }
+
+    #[test]
+    fn duplicate_out_of_bounds_returns_none() {
+        let mut s = TabStrip::new();
+        assert_eq!(s.duplicate(5, 0.0), None);
+    }
+
+    #[test]
+    fn close_others_keeps_only_target() {
+        let mut s = strip_with_n(4); // ids [0,1,2,3]
+        let removed = s.close_others(2);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.tabs[0].id, 2);
+        assert_eq!(s.active, 0);
+        let mut sorted = removed.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn close_others_preserves_pinned() {
+        let mut s = strip_with_n(4); // ids [0,1,2,3]
+        s.tabs[0].pinned = true;
+        let removed = s.close_others(2);
+        // Tab 0 (pinned) and tab 2 (target) survive.
+        assert_eq!(ids(&s), vec![0, 2]);
+        let mut sorted = removed.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![1, 3]);
+        // Active points at the kept target (id=2 → new index 1).
+        assert_eq!(s.active, 1);
+    }
+
+    #[test]
+    fn close_right_removes_tabs_after_idx() {
+        let mut s = strip_with_n(5); // ids [0,1,2,3,4]
+        s.active = 1;
+        let removed = s.close_right(1);
+        assert_eq!(ids(&s), vec![0, 1]);
+        assert_eq!(s.active, 1);
+        let mut sorted = removed.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn close_right_preserves_pinned_to_right() {
+        let mut s = strip_with_n(5); // ids [0,1,2,3,4]
+        s.tabs[3].pinned = true;
+        let removed = s.close_right(1);
+        // Pinned tab 3 survives; 2 and 4 removed.
+        assert_eq!(ids(&s), vec![0, 1, 3]);
+        let mut sorted = removed.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![2, 4]);
+    }
+
+    #[test]
+    fn close_right_clamps_active_when_active_removed() {
+        let mut s = strip_with_n(5);
+        s.active = 4; // will be removed
+        s.close_right(1);
+        // active clamped to the kept range (idx 1).
+        assert_eq!(s.active, 1);
+        assert!(s.active < s.len());
     }
 
     // ── TabDragState::drop_target tests ──────────────────────────────────────
