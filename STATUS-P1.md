@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+**BB-4: `content-visibility: auto` skip rendering**  branch: `p1-bb4-content-visibility`
+Next step: viewport-интерсекция в `lay_out` (box_tree.rs, существующий hidden-путь box_tree.rs:3139) + `collect_content_visibility_changes` API + shell wiring
 
 ---
 
@@ -27,7 +28,7 @@ _(нет)_
 |---|--------|--------|--------|
 | ~~BB-1~~ | ~~**`::first-line` layout split**~~ — **выполнено** (p1-bb1-first-line, 2026-06-13): two-pass wrap (первая строка меряется шрифтом ::first-line) + `split_first_line_boxes` пост-проход (отдельный `LayoutBox` первой строки, корректная высота без правок paint); 8 unit-тестов | M | `lumen-layout` |
 | ~~BB-2~~ | ~~**`::first-letter` layout split**~~ — **выполнено** (p1-bb2-first-letter, 2026-06-13): float-вариант (drop cap) — `extract_first_letter_float` выделяет первую букву (с ведущей пунктуацией, L4 §5.1) в block-level float `LayoutBox`; shrink-to-fit float-ов без width → fallback на max-content; ::first-line не перекрывает drop cap; non-float путь — segment-level restyle (как раньше); эталон TEST-58 перегенерирован; 8 unit-тестов; попутно BUG-152 | M | `lumen-layout` |
-| BB-3 | **CSS Grid L2 subgrid algorithm** — `subgrid` keyword в `grid-template-columns/rows`; наследование треков от родителя (`SubgridContext`); размещение items вдоль родительских линий; `// CSS: subgrid` для P4; 10 unit-тестов | L | `lumen-layout` |
+| ~~BB-3~~ | ~~**CSS Grid L2 subgrid algorithm**~~ — **дубликат**: уже реализовано в p1-css-subgrid (2026-06-03): `GridTrackSize::Subgrid` + `SubgridContext` + размещение по родительским трекам в `lay_out_grid` + `collect_subgrid_items`; P4-работа не нужна (STATUS-P4 #14) | L | `lumen-layout` |
 | BB-4 | **`content-visibility: auto` skip rendering** — пересечение bounding box с viewport; пропускать `lay_out` для off-screen поддеревьев; emit `ContentVisibilityChange` shell event; `// CSS: content-visibility` для P4; 6 unit-тестов | M | `lumen-layout`, `lumen-shell` |
 | BB-5 | **`text-wrap: balance` balance algorithm** — бинарный поиск оптимальной ширины переноса, минимизирующей дисбаланс последней строки; `TextWrapMode::Balance` enum; `// CSS: text-wrap` для P4; 8 unit-тестов | M | `lumen-layout` |
 | BB-6 | **`overscroll-behavior` scroll chain stop** — блокировать распространение скролла на родителя при `overscroll-behavior: contain/none`; `// CSS: overscroll-behavior` для P4; wiring в `try_scroll_overflow_container`; 5 unit-тестов | S | `lumen-layout`, `lumen-shell` |

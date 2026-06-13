@@ -2109,6 +2109,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
 }
 
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
+    crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     let counters = precompute_counters(doc, sheet, viewport, &flat, false);
@@ -2153,6 +2154,7 @@ pub fn layout_measured_hyp(
     // Invalidate the rule-index cache before each layout pass to prevent
     // stale hits when a new stylesheet lands at the same pointer as a freed one.
     crate::style::invalidate_rule_idx_cache();
+    crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
@@ -3984,6 +3986,21 @@ fn lay_out(
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
         return;
+    }
+
+    // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
+    // flow position starts below the expanded viewport and the shell hasn't
+    // ratcheted the node relevant, drop the children for this pass: the element
+    // keeps its own box (explicit width/height still apply below; auto height
+    // collapses — no contain-intrinsic-size yet) and paint emits nothing for
+    // the subtree. The shell drains `take_cv_skipped()` after layout and emits
+    // ContentVisibilityChange events / triggers relayout on scroll.
+    // CSS: content-visibility — parsing + ComputedStyle field already wired.
+    if b.style.content_visibility == crate::style::ContentVisibility::Auto
+        && !b.children.is_empty()
+        && crate::content_visibility::cv_should_skip(b.node, start_y, viewport.height)
+    {
+        b.children.clear();
     }
 
     // SVG root dispatches to its own layout algorithm: replaced-element sizing
@@ -10427,6 +10444,108 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
         let has_children = root.children.iter().any(|c| !c.children.is_empty());
         assert!(has_children, "visible elements should have children");
+    }
+
+    // ── content-visibility: auto — off-screen subtree skip (BB-4) ───────────
+
+    /// Find the deepest box whose style has `content-visibility: auto`.
+    fn find_cv_auto(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if b.style.content_visibility == crate::style::ContentVisibility::Auto {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_cv_auto)
+    }
+
+    #[test]
+    fn content_visibility_auto_below_viewport_skips_children() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        // Spacer pushes the auto box to y=2000 — beyond 300 * 1.5 = 450.
+        let html = r#"<div class="spacer"></div><div class="cv"><span>off screen</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv = find_cv_auto(&root).expect("auto box present in tree");
+        assert!(cv.children.is_empty(), "off-screen auto subtree must be skipped");
+        let skipped = crate::content_visibility::take_cv_skipped();
+        assert_eq!(skipped.len(), 1, "exactly one node recorded as skipped");
+        assert_eq!(skipped[0].0, cv.node);
+        assert!(skipped[0].1 >= 2000.0, "recorded top is the collapsed flow position");
+    }
+
+    #[test]
+    fn content_visibility_auto_in_viewport_lays_out_children() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".cv { content-visibility: auto; } .inner { height: 50px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv = find_cv_auto(&root).expect("auto box present in tree");
+        assert!(!cv.children.is_empty(), "on-screen auto subtree is laid out");
+        assert!(crate::content_visibility::take_cv_skipped().is_empty());
+    }
+
+    #[test]
+    fn content_visibility_auto_relevant_ratchet_forces_layout() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="spacer"></div><div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; } .inner { height: 50px; }",
+        );
+        // First pass: skipped.
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv_node = find_cv_auto(&root).expect("auto box present").node;
+        let skipped = crate::content_visibility::take_cv_skipped();
+        assert_eq!(skipped.len(), 1);
+        // Shell ratchets the node relevant (user scrolled near it) → laid out.
+        let mut rel = std::collections::HashSet::new();
+        rel.insert(cv_node);
+        crate::content_visibility::set_cv_relevant(rel);
+        let root2 = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv2 = find_cv_auto(&root2).expect("auto box present");
+        assert!(!cv2.children.is_empty(), "relevant node must not be skipped");
+        assert!(crate::content_visibility::take_cv_skipped().is_empty());
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+    }
+
+    #[test]
+    fn content_visibility_auto_scroll_offset_expands_layout() {
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        // Root scroll 1800 → bound = 1800 + 450 = 2250 ≥ 2000 → laid out.
+        crate::content_visibility::set_cv_scroll(0.0, 1800.0);
+        let html = r#"<div class="spacer"></div><div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; } .inner { height: 50px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv = find_cv_auto(&root).expect("auto box present");
+        assert!(!cv.children.is_empty(), "auto subtree inside scrolled viewport is laid out");
+        assert!(crate::content_visibility::take_cv_skipped().is_empty());
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+    }
+
+    #[test]
+    fn content_visibility_auto_skipped_keeps_explicit_height() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="spacer"></div><div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; height: 300px; } .inner { height: 50px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv = find_cv_auto(&root).expect("auto box present");
+        assert!(cv.children.is_empty(), "subtree skipped");
+        assert!((cv.rect.height - 300.0).abs() < 0.5, "explicit height preserved, got {}", cv.rect.height);
+        let _ = crate::content_visibility::take_cv_skipped();
     }
 
     // ── Flex align-content (multi-line flex wrap) ───────────────────────────

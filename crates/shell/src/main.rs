@@ -345,6 +345,9 @@ fn run_window_mode(
         scroll_x: initial_scroll.0,
         content_height: 0.0,
         content_width: 0.0,
+        cv_skipped: Vec::new(),
+        cv_relevant: std::collections::HashSet::new(),
+        cv_events: Vec::new(),
         dark_mode: false,
         cursor_position: None,
         hovered_nid: None,
@@ -3028,6 +3031,57 @@ fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvide
     (dl, layout)
 }
 
+/// CSS Containment L3 §4.4 (BB-4) — shell-событие: элемент с
+/// `content-visibility: auto` сменил skipped-состояние между layout-проходами.
+/// `skipped == true` — поддерево выпало из расширенного viewport и пропущено;
+/// `false` — узел стал relevant и его содержимое снова выложено.
+/// Phase 2: P3 доставляет как `contentvisibilityautostatechange` в JS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ContentVisibilityChange {
+    /// DOM-узел элемента с `content-visibility: auto`.
+    node: NodeId,
+    /// Новое состояние: `true` — содержимое пропущено, `false` — выложено.
+    skipped: bool,
+}
+
+/// Собрать `(node, top_y)` всех `content-visibility: auto` боксов, чьё поддерево
+/// пропущено layout-ом (children пусты). top_y — страница-координаты схлопнутого
+/// бокса. Скан по дереву (а не thread-local) — работает и для layout-а,
+/// выполненного в фоновом потоке загрузки страницы.
+fn collect_cv_skipped(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId, f32)>) {
+    if b.style.content_visibility == lumen_layout::style::ContentVisibility::Auto
+        && b.children.is_empty()
+    {
+        out.push((b.node, b.rect.y));
+    }
+    for c in &b.children {
+        collect_cv_skipped(c, out);
+    }
+}
+
+/// Дифф skipped-состояния между двумя layout-проходами → события
+/// [`ContentVisibilityChange`]: появившиеся узлы — `skipped: true`,
+/// исчезнувшие — `skipped: false`.
+fn diff_cv_skipped(
+    prev: &[(NodeId, f32)],
+    next: &[(NodeId, f32)],
+) -> Vec<ContentVisibilityChange> {
+    let prev_set: std::collections::HashSet<NodeId> = prev.iter().map(|&(n, _)| n).collect();
+    let next_set: std::collections::HashSet<NodeId> = next.iter().map(|&(n, _)| n).collect();
+    let mut out = Vec::new();
+    for &(n, _) in next {
+        if !prev_set.contains(&n) {
+            out.push(ContentVisibilityChange { node: n, skipped: true });
+        }
+    }
+    for &(n, _) in prev {
+        if !next_set.contains(&n) {
+            out.push(ContentVisibilityChange { node: n, skipped: false });
+        }
+    }
+    out
+}
+
 /// Extract `initial-scale` from the `<meta name=viewport>` of a page's document.
 ///
 /// Returns `1.0` when the page has no viewport meta or omits `initial-scale`.
@@ -3758,6 +3812,19 @@ struct Lumen {
     /// Полная ширина контента в CSS px — `max(rect.x + rect.width)` по
     /// текущему display list-у. Обновляется после load/reload. 0 — нет контента.
     content_width: f32,
+    /// CSS Containment L3 §4.4 (BB-4): `(node, top_y)` поддеревьев, пропущенных
+    /// последним layout-проходом из-за `content-visibility: auto` вне расширенного
+    /// viewport. top_y — страница-координаты (scroll 0) схлопнутого бокса.
+    /// Обновляется в `refresh_cv_state` после каждой смены `layout_box`.
+    cv_skipped: Vec<(NodeId, f32)>,
+    /// Ratchet-набор auto-узлов, ставших relevant (вошли в расширенный viewport
+    /// при скролле): прокидывается в layout через `set_cv_relevant`, такие узлы
+    /// больше не пропускаются. Сбрасывается при загрузке страницы.
+    cv_relevant: std::collections::HashSet<NodeId>,
+    /// Очередь shell-событий `ContentVisibilityChange` — диффы skipped-состояния
+    /// между layout-проходами. Потребитель Phase 2: P3 доставляет
+    /// `contentvisibilityautostatechange` в JS. Кап 256 записей.
+    cv_events: Vec<ContentVisibilityChange>,
     /// OS-level `prefers-color-scheme` preference. `true` — система в тёмной теме.
     /// Читается из winit `Window::theme()` при создании окна и обновляется на
     /// `WindowEvent::ThemeChanged`. Прокидывается в JS `matchMedia` через
@@ -4386,8 +4453,16 @@ impl Lumen {
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
+        // content-visibility: auto (BB-4) — relevance-проверка против текущего
+        // scroll-положения + ratchet-набора. Сброс к дефолтам после прохода,
+        // чтобы layout других документов (sidebar, фоновый парс) не унаследовал
+        // чужой scroll/relevant.
+        lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
+        lumen_layout::set_cv_relevant(self.cv_relevant.clone());
         let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider, self.dark_mode);
         lumen_layout::clear_interactive_state();
+        lumen_layout::set_cv_scroll(0.0, 0.0);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.tile_grid.update_from_diff(&self.display_list, &new_dl);
@@ -4439,6 +4514,7 @@ impl Lumen {
         }
         self.prev_styles = new_styles;
         self.layout_box = Some(lb);
+        self.refresh_cv_state();
         // Promote nodes with will-change: transform/opacity/filter to GPU layers so
         // animation ticks can update only the layer matrix, bypassing relayout.
         // CSS: will-change — P4 wires ComputedStyle.will_change to promote_layer calls here.
@@ -4704,6 +4780,11 @@ impl Lumen {
                 self.prev_styles.clear();
                 collect_box_styles(&page.layout_box, &mut self.prev_styles);
                 self.layout_box = Some(page.layout_box);
+                // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
+                self.cv_relevant.clear();
+                self.cv_events.clear();
+                self.cv_skipped.clear();
+                self.refresh_cv_state();
                 self.update_snap_containers();
         self.update_scroll_containers();
                 // Push initial layout geometry so JS can query bounding rects
@@ -4944,6 +5025,11 @@ impl Lumen {
         self.prev_styles.clear();
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
+        // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
+        self.cv_relevant.clear();
+        self.cv_events.clear();
+        self.cv_skipped.clear();
+        self.refresh_cv_state();
         self.update_snap_containers();
         self.update_scroll_containers();
         self.title = page.title.clone();
@@ -7097,6 +7183,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
                 self.try_discard_offscreen_images();
+                // Step 1.6: content-visibility: auto (BB-4) — пропущенный узел
+                // вошёл в расширенный viewport → ratchet relevant + relayout.
+                self.maybe_expand_cv_relevant();
 
                 // Step 1.5: CSS Scroll-Driven Animations — update ScrollTimeline.currentTime.
                 // Spec §8.1.5.1 step «update scroll-linked animations» precedes CSS animations.
@@ -10728,6 +10817,54 @@ impl Lumen {
         self.start_smooth_scroll(target);
     }
 
+    /// CSS Containment L3 §4.4 (BB-4): обновить skipped-состояние
+    /// `content-visibility: auto` после смены `layout_box` — пересканировать
+    /// дерево, задиффать с предыдущим проходом, добавить события в `cv_events`.
+    /// Дренирует thread-local layout-крейта, чтобы записи не пережили проход.
+    fn refresh_cv_state(&mut self) {
+        let _ = lumen_layout::take_cv_skipped();
+        let mut next = Vec::new();
+        if let Some(lb) = self.layout_box.as_ref() {
+            collect_cv_skipped(lb, &mut next);
+        }
+        self.cv_events.extend(diff_cv_skipped(&self.cv_skipped, &next));
+        // Кап очереди: без потребителя (P3 Phase 2) храним только хвост.
+        if self.cv_events.len() > 256 {
+            let drop_n = self.cv_events.len() - 256;
+            self.cv_events.drain(..drop_n);
+        }
+        self.cv_skipped = next;
+    }
+
+    /// Шаг 1.6 «Update the rendering»: если при скролле пропущенный
+    /// `content-visibility: auto` узел вошёл в расширенный viewport —
+    /// ratchet в `cv_relevant` + relayout (его содержимое выкладывается).
+    fn maybe_expand_cv_relevant(&mut self) {
+        if self.cv_skipped.is_empty() {
+            return;
+        }
+        let bound = self.scroll_y
+            + self.viewport_height_css() * (1.0 + lumen_layout::CV_SLACK_FACTOR);
+        let newly: Vec<NodeId> = self
+            .cv_skipped
+            .iter()
+            .filter(|(n, top)| *top <= bound && !self.cv_relevant.contains(n))
+            .map(|&(n, _)| n)
+            .collect();
+        if newly.is_empty() {
+            return;
+        }
+        self.cv_relevant.extend(newly);
+        self.relayout();
+    }
+
+    /// Дренировать очередь [`ContentVisibilityChange`] событий.
+    /// Phase 2: P3 доставляет их в JS как `contentvisibilityautostatechange`.
+    #[allow(dead_code)] // потребитель появится при P3 wiring (STATUS-P3)
+    fn take_cv_events(&mut self) -> Vec<ContentVisibilityChange> {
+        std::mem::take(&mut self.cv_events)
+    }
+
     /// Тик анимации перед `Renderer::render`. Если анимация активна —
     /// обновляет `scroll_y` по out-cubic easing и возвращает `true`,
     /// сигнализируя caller-у запросить ещё один redraw. Сбрасывает
@@ -11203,13 +11340,22 @@ impl Lumen {
         let meta_scale = meta_initial_scale(&layout_source);
         let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, meta_scale, self.zoom_factor);
         let viewport = lumen_core::geom::Size::new(css_w, css_h);
+        // content-visibility: auto (BB-4): relevance против восстановленного
+        // scroll-положения; ratchet новой страницы стартует с нуля.
+        lumen_layout::set_cv_scroll(data.scroll_x, data.scroll_y);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider, self.dark_mode);
+        lumen_layout::set_cv_scroll(0.0, 0.0);
 
         // Install into the active slot.
         self.display_list = display_list;
         self.title = Some(data.title);
         self.layout_source = Some(layout_source);
         self.layout_box = Some(lb);
+        self.cv_relevant.clear();
+        self.cv_events.clear();
+        self.cv_skipped.clear();
+        self.refresh_cv_state();
         self.js_ctx = js_ctx;
         self.scroll_x = data.scroll_x;
         self.scroll_y = data.scroll_y;
@@ -12007,6 +12153,68 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── content-visibility: auto — shell state (BB-4) ───────────────────────
+
+    fn cv_nid(n: usize) -> NodeId {
+        NodeId::from_index(n)
+    }
+
+    #[test]
+    fn diff_cv_skipped_emits_skipped_true_for_new_nodes() {
+        let prev = vec![(cv_nid(1), 100.0)];
+        let next = vec![(cv_nid(1), 100.0), (cv_nid(2), 2000.0)];
+        let events = diff_cv_skipped(&prev, &next);
+        assert_eq!(events, vec![ContentVisibilityChange { node: cv_nid(2), skipped: true }]);
+    }
+
+    #[test]
+    fn diff_cv_skipped_emits_skipped_false_for_removed_nodes() {
+        let prev = vec![(cv_nid(1), 100.0), (cv_nid(2), 2000.0)];
+        let next = vec![(cv_nid(2), 2000.0)];
+        let events = diff_cv_skipped(&prev, &next);
+        assert_eq!(events, vec![ContentVisibilityChange { node: cv_nid(1), skipped: false }]);
+    }
+
+    #[test]
+    fn diff_cv_skipped_no_changes_no_events() {
+        let state = vec![(cv_nid(1), 100.0)];
+        assert!(diff_cv_skipped(&state, &state).is_empty());
+        assert!(diff_cv_skipped(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn collect_cv_skipped_finds_collapsed_auto_boxes() {
+        lumen_layout::set_cv_scroll(0.0, 0.0);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="spacer"></div><div class="cv"><span>off</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; }",
+        );
+        let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let _ = lumen_layout::take_cv_skipped();
+        let mut found = Vec::new();
+        collect_cv_skipped(&lb, &mut found);
+        assert_eq!(found.len(), 1, "ровно один пропущенный auto-бокс");
+        assert!(found[0].1 >= 2000.0, "top_y — позиция схлопнутого бокса");
+    }
+
+    #[test]
+    fn collect_cv_skipped_ignores_on_screen_auto_boxes() {
+        lumen_layout::set_cv_scroll(0.0, 0.0);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".cv { content-visibility: auto; } .inner { height: 50px; }",
+        );
+        let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let _ = lumen_layout::take_cv_skipped();
+        let mut found = Vec::new();
+        collect_cv_skipped(&lb, &mut found);
+        assert!(found.is_empty(), "видимый auto-бокс выложен и не считается skipped");
+    }
 
     fn expect_resolved_url(base: &str, href: &str) -> String {
         match ResourceBase::Url(base.to_owned()).resolve(href) {

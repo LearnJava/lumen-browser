@@ -18,6 +18,7 @@ pub mod anchor;
 pub mod animation;
 pub mod box_tree;
 pub mod color_mix;
+pub mod content_visibility;
 pub mod hyphenation;
 pub mod counters;
 pub mod font_palette;
@@ -100,6 +101,7 @@ pub use snapshot::serialize_layout_tree;
 pub use inert::{collect_inert_regions, is_inert, InertRegion};
 pub use starting_style::{resolve_starting_style, StartingStyleTracker};
 pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};
+pub use content_visibility::{set_cv_scroll, set_cv_relevant, take_cv_skipped, CV_SLACK_FACTOR};
 pub use stacking::{
     box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,
     StackingContext, StackingContextId, StackingTree,
