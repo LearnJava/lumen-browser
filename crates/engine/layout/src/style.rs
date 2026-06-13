@@ -837,25 +837,155 @@ fn rec2020_gamma_decode(c: f32) -> f32 {
     }
 }
 
+/// CSS Color Level 4 §6.2 — system color keywords. Stored as a `Copy` enum to
+/// avoid heap allocation in `CssColor`. Resolved to a concrete RGB at cascade
+/// used-value time via `system_color()`, not at parse time, so the element's
+/// used color scheme (`light`/`dark`) is taken into account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemColor {
+    /// `Canvas` / `Window`
+    Canvas,
+    /// `CanvasText` / `WindowText` / `FieldText`
+    CanvasText,
+    /// `Field` (input/textarea backgrounds)
+    Field,
+    /// `ButtonFace`
+    ButtonFace,
+    /// `ButtonText`
+    ButtonText,
+    /// `ButtonBorder` / `ThreeDFace`
+    ButtonBorder,
+    /// `LinkText`
+    LinkText,
+    /// `VisitedText`
+    VisitedText,
+    /// `ActiveText`
+    ActiveText,
+    /// `Highlight` / `SelectedItem`
+    Highlight,
+    /// `HighlightText` / `SelectedItemText`
+    HighlightText,
+    /// `GrayText` / `GreyText`
+    GrayText,
+    /// `Mark`
+    Mark,
+    /// `MarkText`
+    MarkText,
+    /// `AccentColor`
+    AccentColor,
+    /// `AccentColorText`
+    AccentColorText,
+    /// `ThreeDHighlight`
+    ThreeDHighlight,
+    /// `ThreeDShadow`
+    ThreeDShadow,
+    /// `ThreeDLightShadow`
+    ThreeDLightShadow,
+    /// `ThreeDDarkShadow`
+    ThreeDDarkShadow,
+    /// `Scrollbar`
+    Scrollbar,
+    /// `ScrollbarTrack`
+    ScrollbarTrack,
+    /// `ScrollbarThumb`
+    ScrollbarThumb,
+}
+
+impl SystemColor {
+    /// Parse a CSS system color keyword (case-insensitive). Returns `None` for
+    /// non-system-color strings; aliases are normalised to their canonical variant.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "canvas" | "window" => Some(Self::Canvas),
+            "canvastext" | "windowtext" | "fieldtext" => Some(Self::CanvasText),
+            "field" => Some(Self::Field),
+            "buttonface" => Some(Self::ButtonFace),
+            "buttontext" => Some(Self::ButtonText),
+            "buttonborder" | "threedface" => Some(Self::ButtonBorder),
+            "linktext" => Some(Self::LinkText),
+            "visitedtext" => Some(Self::VisitedText),
+            "activetext" => Some(Self::ActiveText),
+            "highlight" | "selecteditem" => Some(Self::Highlight),
+            "highlighttext" | "selecteditemtext" => Some(Self::HighlightText),
+            "graytext" | "greytext" => Some(Self::GrayText),
+            "mark" => Some(Self::Mark),
+            "marktext" => Some(Self::MarkText),
+            "accentcolor" => Some(Self::AccentColor),
+            "accentcolortext" => Some(Self::AccentColorText),
+            "threedhighlight" => Some(Self::ThreeDHighlight),
+            "threedshadow" => Some(Self::ThreeDShadow),
+            "threedlightshadow" => Some(Self::ThreeDLightShadow),
+            "threeddarkshadow" => Some(Self::ThreeDDarkShadow),
+            "scrollbar" => Some(Self::Scrollbar),
+            "scrollbartrack" => Some(Self::ScrollbarTrack),
+            "scrollbarthumb" => Some(Self::ScrollbarThumb),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical lowercase CSS keyword name for this variant.
+    fn css_name(self) -> &'static str {
+        match self {
+            Self::Canvas => "canvas",
+            Self::CanvasText => "canvastext",
+            Self::Field => "field",
+            Self::ButtonFace => "buttonface",
+            Self::ButtonText => "buttontext",
+            Self::ButtonBorder => "buttonborder",
+            Self::LinkText => "linktext",
+            Self::VisitedText => "visitedtext",
+            Self::ActiveText => "activetext",
+            Self::Highlight => "highlight",
+            Self::HighlightText => "highlighttext",
+            Self::GrayText => "graytext",
+            Self::Mark => "mark",
+            Self::MarkText => "marktext",
+            Self::AccentColor => "accentcolor",
+            Self::AccentColorText => "accentcolortext",
+            Self::ThreeDHighlight => "threedhighlight",
+            Self::ThreeDShadow => "threedshadow",
+            Self::ThreeDLightShadow => "threedlightshadow",
+            Self::ThreeDDarkShadow => "threeddarkshadow",
+            Self::Scrollbar => "scrollbar",
+            Self::ScrollbarTrack => "scrollbartrack",
+            Self::ScrollbarThumb => "scrollbarthumb",
+        }
+    }
+
+    /// Resolve to a concrete sRGB `Color` for the given used color scheme.
+    /// `dark` — result of `ColorScheme::used_dark(prefer_dark)` for this element.
+    pub fn resolve_color(self, dark: bool) -> Color {
+        system_color(self.css_name(), dark)
+            .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 })
+    }
+}
+
 /// CSS Color L4 §4.2 — типизированное цветовое значение каскада.
 ///
 /// `Rgba` — разрешённый конкретный цвет; `CurrentColor` — keyword `currentcolor`,
 /// который разрешается в вычисленное значение `color` элемента при рендеринге.
 /// `Wide` — wide-gamut цвет из `color()` функции (Display P3, Rec2020, sRGB float).
+/// `System` — CSS Color 4 §6.2 system color keyword; resolved to Rgba at cascade
+/// used-value time by `resolve_system_colors` at the end of `compute_style`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CssColor {
     Rgba(Color),
     CurrentColor,
     Wide(ColorFloat),
+    /// System color keyword (e.g. `Canvas`, `ButtonFace`). Resolved to `Rgba`
+    /// at the end of `compute_style` via `resolve_system_colors_in_style`.
+    System(SystemColor),
 }
 
 impl CssColor {
     /// Разрешает значение в sRGB u8 Color. `Wide` конвертируется через матрицу.
+    /// `System` — fallback light-mode resolution (post-pass should have resolved).
     pub fn resolve(self, current_color: Color) -> Color {
         match self {
             CssColor::Rgba(c) => c,
             CssColor::CurrentColor => current_color,
             CssColor::Wide(f) => f.to_srgb_color(),
+            CssColor::System(sc) => sc.resolve_color(false),
         }
     }
 
@@ -866,6 +996,7 @@ impl CssColor {
             CssColor::Rgba(c) => Some(c),
             CssColor::Wide(f) => Some(f.to_srgb_color()),
             CssColor::CurrentColor => None,
+            CssColor::System(sc) => Some(sc.resolve_color(false)),
         }
     }
 
@@ -888,6 +1019,15 @@ impl CssColor {
                 ]
             }
             CssColor::Wide(f) => f.to_linear_srgb(),
+            CssColor::System(sc) => {
+                let c = sc.resolve_color(false);
+                [
+                    srgb_gamma_decode(c.r as f32 / 255.0),
+                    srgb_gamma_decode(c.g as f32 / 255.0),
+                    srgb_gamma_decode(c.b as f32 / 255.0),
+                    c.a as f32 / 255.0,
+                ]
+            }
         }
     }
 }
@@ -3079,6 +3219,7 @@ pub fn apply_container_rules(
     sheet: &Stylesheet,
     ctx: &ContainerContext,
     viewport: Size,
+    dark_mode: bool,
 ) {
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for container_rule in &sheet.container_rules {
@@ -3116,7 +3257,7 @@ pub fn apply_container_rules(
                     } else {
                         decl
                     };
-                    apply_declaration(style, effective_decl, em, viewport, pw, &inherited, is_quirks);
+                    apply_declaration(style, effective_decl, em, viewport, pw, &inherited, is_quirks, dark_mode);
                 }
             }
         }
@@ -5475,6 +5616,16 @@ pub fn compute_style(
         apply_font_size(&mut style, decl, parent_fs, viewport, is_quirks);
     }
 
+    // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
+    // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
+    // ещё в ходе main-pass (для поля `color: Color`; CssColor-поля
+    // резолвятся отдельным post-pass в конце compute_style).
+    for (_, _, _, _, _, _, decl) in &matched {
+        if decl.property.eq_ignore_ascii_case("color-scheme") {
+            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, is_quirks, dark_mode);
+        }
+    }
+
     // Custom-properties pass: все `--name: value` декларации применяются
     // отдельно и ДО main-pass, чтобы любая обычная декларация в main-pass
     // могла видеть финальное значение custom property независимо от порядка
@@ -5531,8 +5682,14 @@ pub fn compute_style(
         } else {
             decl
         };
-        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, is_quirks);
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, is_quirks, dark_mode);
     }
+
+    // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in
+    // CssColor-typed fields (border-color, background-color, etc.) now that
+    // style.color_scheme is final. The `color` field (Color, not CssColor) was
+    // already resolved inline in the `"color"` branch of apply_declaration.
+    resolve_system_colors_in_style(&mut style, dark_mode);
 
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
@@ -5546,6 +5703,39 @@ pub fn compute_style(
     apply_ua_appearance(doc, node, &mut style);
 
     style
+}
+
+/// CSS Color 4 §6.2 — resolve `CssColor::System` variants in all CssColor-typed
+/// fields of `style` to `CssColor::Rgba` using the element's final used color
+/// scheme. Called once at the end of `compute_style`, after all declarations
+/// have been applied so `style.color_scheme` is final.
+fn resolve_system_colors_in_style(style: &mut ComputedStyle, dark_mode: bool) {
+    let dark = style.color_scheme.used_dark(dark_mode);
+
+    macro_rules! resolve_opt {
+        ($field:expr) => {
+            if let Some(CssColor::System(sc)) = $field {
+                *$field = Some(CssColor::Rgba(sc.resolve_color(dark)));
+            }
+        };
+    }
+    macro_rules! resolve {
+        ($field:expr) => {
+            if let CssColor::System(sc) = $field {
+                *$field = CssColor::Rgba(sc.resolve_color(dark));
+            }
+        };
+    }
+
+    resolve_opt!(&mut style.background_color);
+    resolve!(&mut style.text_decoration_color);
+    resolve!(&mut style.text_emphasis_color);
+    resolve!(&mut style.border_top_color);
+    resolve!(&mut style.border_right_color);
+    resolve!(&mut style.border_bottom_color);
+    resolve!(&mut style.border_left_color);
+    resolve!(&mut style.column_rule_color);
+    resolve!(&mut style.gap_rule_color);
 }
 
 /// CSS Overflow L3 §2.1: coerce mismatched overflow axes.
@@ -5700,7 +5890,7 @@ pub fn compute_style_from_declarations(decls: &[Declaration], viewport: Size) ->
     let inherited = ComputedStyle::root();
     let mut style = inherited.clone();
     for decl in decls {
-        apply_declaration(&mut style, decl, 16.0, viewport, FontWeight::NORMAL, &inherited, false);
+        apply_declaration(&mut style, decl, 16.0, viewport, FontWeight::NORMAL, &inherited, false, false);
     }
     style
 }
@@ -5884,7 +6074,7 @@ pub fn compute_pseudo_element_style(
         } else {
             decl
         };
-        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, parent, is_quirks);
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, parent, is_quirks, dark_mode);
     }
 
     // ::before/::after require content: to render; ::first-letter/::first-line do not.
@@ -7871,7 +8061,7 @@ fn apply_svg_presentational_hints(
             value: val.to_string(),
             important: false,
         };
-        apply_declaration(style, &decl, em_basis, viewport, parent_weight, inherited, is_quirks);
+        apply_declaration(style, &decl, em_basis, viewport, parent_weight, inherited, is_quirks, false);
     }
 }
 
@@ -10123,6 +10313,7 @@ fn expand_grouped_transition_property(prop: &str) -> Vec<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -10131,6 +10322,7 @@ fn apply_declaration(
     parent_font_weight: FontWeight,
     inherited: &ComputedStyle,
     is_quirks: bool,
+    dark_mode: bool,
 ) {
     let prop = decl.property.as_str();
 
@@ -10258,6 +10450,14 @@ fn apply_declaration(
                 Some(CssColor::Wide(f)) => {
                     style.color = f.to_srgb_color();
                     style.color_space = f.space;
+                }
+                // CSS Color 4 §6.2 — system color keywords resolve against
+                // the element's used color scheme (pre-pass already set
+                // style.color_scheme for this element).
+                Some(CssColor::System(sc)) => {
+                    let dark = style.color_scheme.used_dark(dark_mode);
+                    style.color = sc.resolve_color(dark);
+                    style.color_space = ColorSpace::Srgb;
                 }
                 None => {}
             }
@@ -16642,6 +16842,12 @@ fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
     if s.eq_ignore_ascii_case("currentcolor") {
         return Some(CssColor::CurrentColor);
     }
+    // CSS Color 4 §6.2 — system color keywords (Canvas, ButtonFace, …).
+    // Stored as CssColor::System so the cascade post-pass can resolve them
+    // against the element's used color scheme.
+    if let Some(sc) = SystemColor::parse(s) {
+        return Some(CssColor::System(sc));
+    }
     // CSS Color L4 §10: color() function with predefined color spaces.
     if let Some(wide) = parse_css_color_fn(s) {
         return Some(CssColor::Wide(wide));
@@ -21796,7 +22002,7 @@ mod tests {
             value: "2s ease-in-out 0.5s 2 alternate forwards paused fade".to_string(),
             important: false,
         };
-        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false);
+        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false, false);
         assert_eq!(s.animation_names, vec!["fade".to_string()]);
         assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
         assert!((s.animation_delays[0] - 0.5).abs() < 1e-4);
@@ -21822,7 +22028,7 @@ mod tests {
         let mut s = ComputedStyle::root();
         let decl = Declaration { property: prop.to_string(), value: val.to_string(), important: false };
         let vp = Size::new(800.0, 600.0);
-        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), false);
+        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), false, false);
         s
     }
 
@@ -21997,7 +22203,7 @@ mod tests {
             value: "transform 0.4s ease-in-out 0.1s".to_string(),
             important: false,
         };
-        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false);
+        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false, false);
         assert_eq!(s.transition_properties, vec!["transform".to_string()]);
         assert!((s.transition_durations[0] - 0.4).abs() < 1e-4);
         assert!((s.transition_delays[0] - 0.1).abs() < 1e-4);
@@ -23690,6 +23896,105 @@ mod tests {
         let light = system_color("scrollbartrack", false).unwrap();
         let dark = system_color("scrollbartrack", true).unwrap();
         assert_ne!(light, dark, "ScrollbarTrack must differ between light and dark");
+    }
+
+    // ── CSS Color 4 §6.2 — cascade integration tests ──
+
+    #[test]
+    fn system_color_parse_keyword_canvas() {
+        assert!(SystemColor::parse("Canvas").is_some());
+        assert!(SystemColor::parse("canvas").is_some());
+        assert!(SystemColor::parse("CANVAS").is_some());
+        // canonical aliases
+        assert_eq!(SystemColor::parse("window"), SystemColor::parse("canvas"));
+    }
+
+    #[test]
+    fn system_color_parse_returns_none_for_named_color() {
+        // "blue" is a named color, NOT a system color
+        assert!(SystemColor::parse("blue").is_none());
+        assert!(SystemColor::parse("red").is_none());
+        assert!(SystemColor::parse("rebeccapurple").is_none());
+    }
+
+    #[test]
+    fn system_color_in_css_cascade_color_property_light() {
+        // color: Canvas on a light-scheme element → white (Canvas light)
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color: Canvas; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 }, "Canvas light = white");
+    }
+
+    #[test]
+    fn system_color_in_css_cascade_color_property_dark() {
+        // color: CanvasText in dark mode → white text
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color: CanvasText; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, true);
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 }, "CanvasText dark = white");
+    }
+
+    #[test]
+    fn system_color_in_background_color_light() {
+        // background-color: Canvas on a light element → white
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { background-color: Canvas; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+        let bg = style.background_color.expect("background-color should be set");
+        assert_eq!(bg, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }), "Canvas light bg = white");
+    }
+
+    #[test]
+    fn system_color_in_background_color_dark() {
+        // background-color: Canvas in dark mode → #1e1e1e
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { background-color: Canvas; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, true);
+        let bg = style.background_color.expect("background-color should be set");
+        assert_eq!(bg, CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 }), "Canvas dark bg = #1e1e1e");
+    }
+
+    #[test]
+    fn system_color_color_scheme_overrides_dark_mode() {
+        // element with `color-scheme: light` uses light system colors even when dark_mode=true
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color-scheme: light; background-color: Canvas; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, true);
+        let bg = style.background_color.expect("background-color should be set");
+        // color-scheme: light forces light Canvas regardless of OS dark_mode
+        assert_eq!(bg, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }), "Canvas light-forced = white");
+    }
+
+    #[test]
+    fn system_color_border_color_resolved() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { border-top-color: ButtonFace; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style_light = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+        let style_dark = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, true);
+        // After post-pass, no System variants should remain
+        assert!(!matches!(style_light.border_top_color, CssColor::System(_)), "System should be resolved in light");
+        assert!(!matches!(style_dark.border_top_color, CssColor::System(_)), "System should be resolved in dark");
+        // Light and dark ButtonFace should differ
+        assert_ne!(style_light.border_top_color, style_dark.border_top_color, "ButtonFace differs by scheme");
     }
 
     // ──────────── CSS Units ────────────
