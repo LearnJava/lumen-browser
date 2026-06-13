@@ -4,8 +4,8 @@
 //! P4 wires the CSS properties (`offset-path`, `offset-distance`, `offset-rotate`,
 //! `offset-anchor`) to `resolve_motion_transform()`.
 //!
-//! Supported path syntax: `path("<svg-path-d>")`, `none`.
-//! Deferred: `ray()`, `url()`, basic-shapes (`circle()`, `ellipse()`, etc.).
+//! Supported path syntax: `path("<svg-path-d>")`, `ray(<angle> …)`, `none`.
+//! Deferred: `url()`, basic-shapes (`circle()`, `ellipse()`, etc.).
 
 // Geometry code naturally has many coordinate parameters.
 #![allow(clippy::too_many_arguments)]
@@ -28,9 +28,11 @@ pub struct MotionTransform {
     pub rotation_deg: f32,
 }
 
-/// Resolve the motion transform for an element with `offset-path: path(...)`.
+/// Resolve the motion transform for an element with `offset-path: path(...)`
+/// or `offset-path: ray(...)`.
 ///
-/// - `path_str`: raw `path("...")` function value, e.g. `path("M 0 0 L 100 0")`.
+/// - `path_str`: raw `offset-path` value, e.g. `path("M 0 0 L 100 0")` or
+///   `ray(45deg closest-side)`.
 /// - `offset_distance_px`: resolved `offset-distance` in CSS px.  Pass the
 ///   containing-block diagonal multiplied by the percentage, or the raw px value.
 /// - `rotate`: resolved `offset-rotate` value from `ComputedStyle`.
@@ -41,6 +43,9 @@ pub fn resolve_motion_transform(
     offset_distance_px: f32,
     rotate: OffsetRotate,
 ) -> Option<MotionTransform> {
+    if let Some(ray_angle_deg) = parse_ray_angle(path_str) {
+        return Some(resolve_ray(ray_angle_deg, offset_distance_px, rotate));
+    }
     let d = extract_path_d(path_str)?;
     let segs = parse_svg_path(d);
     if segs.is_empty() {
@@ -54,6 +59,71 @@ pub fn resolve_motion_transform(
         OffsetRotate::Angle(fixed) => fixed,
     };
     Some(MotionTransform { translate_x: x, translate_y: y, rotation_deg })
+}
+
+// ─── ray() ─────────────────────────────────────────────────────────────────
+
+/// Resolve `offset-path: ray(<angle> …)`.
+///
+/// Per CSS Motion Path L1 §2.2, a ray starts at the element's `offset-position`
+/// (which in this engine's transform model is the box's normal position, i.e.
+/// zero displacement) and extends in the direction `angle`, measured clockwise
+/// from the 12-o'clock (straight up) direction — the same convention as
+/// `linear-gradient()`. The element is placed `offset-distance` px along that
+/// ray.
+///
+/// The optional `<ray-size>` (`closest-side` etc.), `contain`, and `at <position>`
+/// components only affect how *percentage* `offset-distance` values and clamping
+/// resolve; with a px `offset-distance` they have no effect, so this Phase 1
+/// implementation parses only the angle and ignores the rest.
+fn resolve_ray(angle_deg: f32, offset_distance_px: f32, rotate: OffsetRotate) -> MotionTransform {
+    let rad = angle_deg.to_radians();
+    // 0deg points straight up (−y in this Y-down coordinate space); angle grows
+    // clockwise toward +x.
+    let dir_x = rad.sin();
+    let dir_y = -rad.cos();
+    let translate_x = offset_distance_px * dir_x;
+    let translate_y = offset_distance_px * dir_y;
+    // Tangent measured from +x axis (CW positive in Y-down space), to match the
+    // path() tangent convention fed into `OffsetRotate`.
+    let tangent_deg = (dir_y as f64).atan2(dir_x as f64).to_degrees() as f32;
+    let rotation_deg = match rotate {
+        OffsetRotate::Auto => tangent_deg,
+        OffsetRotate::AutoAngle(extra) => tangent_deg + extra,
+        OffsetRotate::Reverse => tangent_deg + 180.0,
+        OffsetRotate::Angle(fixed) => fixed,
+    };
+    MotionTransform { translate_x, translate_y, rotation_deg }
+}
+
+/// Parse the leading `<angle>` from a `ray(...)` value, returning the angle in
+/// degrees. Returns `None` if `s` is not a `ray(...)` value or carries no angle.
+///
+/// Accepts `deg`, `grad`, `rad`, and `turn` units. Non-angle components
+/// (size keywords, `contain`, `at <position>`) are skipped.
+fn parse_ray_angle(s: &str) -> Option<f32> {
+    let inner = s.trim().strip_prefix("ray(")?.strip_suffix(')')?;
+    inner.split_whitespace().find_map(parse_angle_token)
+}
+
+/// Parse a single CSS `<angle>` token (`45deg`, `0.5turn`, `1.57rad`, `50grad`)
+/// to degrees. Returns `None` for non-angle tokens.
+fn parse_angle_token(tok: &str) -> Option<f32> {
+    let tok = tok.trim();
+    // Order matters: "grad" must be checked before "rad", since "50grad" ends in "rad".
+    if let Some(v) = tok.strip_suffix("grad") {
+        return v.trim().parse::<f32>().ok().map(|g| g * 0.9);
+    }
+    if let Some(v) = tok.strip_suffix("turn") {
+        return v.trim().parse::<f32>().ok().map(|t| t * 360.0);
+    }
+    if let Some(v) = tok.strip_suffix("deg") {
+        return v.trim().parse::<f32>().ok();
+    }
+    if let Some(v) = tok.strip_suffix("rad") {
+        return v.trim().parse::<f32>().ok().map(f32::to_degrees);
+    }
+    None
 }
 
 // ─── SVG path parsing ────────────────────────────────────────────────────────
@@ -699,6 +769,64 @@ mod tests {
             OffsetRotate::Reverse,
         ).unwrap();
         assert!((mt.rotation_deg.abs() - 180.0).abs() < 1.0, "rot={}", mt.rotation_deg);
+    }
+
+    #[test]
+    fn ray_angle_parsing_units() {
+        assert_eq!(parse_ray_angle("ray(45deg)"), Some(45.0));
+        assert_eq!(parse_ray_angle("ray( 90deg closest-side )"), Some(90.0));
+        assert_eq!(parse_ray_angle("ray(0.5turn)"), Some(180.0));
+        assert_eq!(parse_ray_angle("ray(100grad)"), Some(90.0));
+        assert!((parse_ray_angle("ray(3.14159rad)").unwrap() - 180.0).abs() < 0.1);
+        assert_eq!(parse_ray_angle("path(\"M 0 0\")"), None);
+        assert_eq!(parse_ray_angle("none"), None);
+        assert_eq!(parse_ray_angle("ray(contain)"), None);
+    }
+
+    #[test]
+    fn ray_zero_deg_goes_up() {
+        // 0deg → straight up: translate_y negative, translate_x ≈ 0.
+        let mt = resolve_motion_transform("ray(0deg)", 100.0, OffsetRotate::Angle(0.0)).unwrap();
+        assert!(mt.translate_x.abs() < 0.01, "tx={}", mt.translate_x);
+        assert!((mt.translate_y + 100.0).abs() < 0.01, "ty={}", mt.translate_y);
+    }
+
+    #[test]
+    fn ray_ninety_deg_goes_right() {
+        // 90deg → straight right: translate_x positive, translate_y ≈ 0.
+        let mt = resolve_motion_transform("ray(90deg)", 100.0, OffsetRotate::Angle(0.0)).unwrap();
+        assert!((mt.translate_x - 100.0).abs() < 0.01, "tx={}", mt.translate_x);
+        assert!(mt.translate_y.abs() < 0.01, "ty={}", mt.translate_y);
+    }
+
+    #[test]
+    fn ray_auto_rotation_tracks_direction() {
+        // 90deg ray travels along +x → tangent 0° → auto rotation ≈ 0°.
+        let right = resolve_motion_transform("ray(90deg)", 50.0, OffsetRotate::Auto).unwrap();
+        assert!(right.rotation_deg.abs() < 0.5, "rot={}", right.rotation_deg);
+        // 0deg ray travels up (−y) → tangent −90° → auto rotation ≈ −90°.
+        let up = resolve_motion_transform("ray(0deg)", 50.0, OffsetRotate::Auto).unwrap();
+        assert!((up.rotation_deg + 90.0).abs() < 0.5, "rot={}", up.rotation_deg);
+    }
+
+    #[test]
+    fn ray_fixed_rotation_ignores_direction() {
+        let mt = resolve_motion_transform("ray(180deg)", 30.0, OffsetRotate::Angle(45.0)).unwrap();
+        assert!((mt.rotation_deg - 45.0).abs() < 0.5, "rot={}", mt.rotation_deg);
+        // 180deg → straight down.
+        assert!((mt.translate_y - 30.0).abs() < 0.01, "ty={}", mt.translate_y);
+        assert!(mt.translate_x.abs() < 0.01, "tx={}", mt.translate_x);
+    }
+
+    #[test]
+    fn ray_ignores_size_and_position_keywords() {
+        let mt = resolve_motion_transform(
+            "ray(90deg farthest-corner contain at center)",
+            100.0,
+            OffsetRotate::Angle(0.0),
+        )
+        .unwrap();
+        assert!((mt.translate_x - 100.0).abs() < 0.01, "tx={}", mt.translate_x);
     }
 
     #[test]
