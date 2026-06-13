@@ -644,7 +644,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `contain` | 🟡 | size/layout/paint enforcement ✅; content-visibility skip-content ⬜ |
-| `content-visibility` | 🟡 | hidden ✅ (P1 2026-06-03); auto Phase 2 |
+| `content-visibility` | 🟡 | hidden ✅ (P1 2026-06-03); auto ✅ below-viewport skip + shell ratchet/relayout (P1 BB-4 2026-06-13); above-viewport skip + contain-intrinsic-size ⬜ |
 
 ### [T4] Scroll-driven Animations
 
