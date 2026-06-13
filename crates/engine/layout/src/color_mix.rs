@@ -601,6 +601,42 @@ fn oklch_to_srgb(c: [f32; 4]) -> [f32; 4] {
     oklab_to_srgb([l, a, b, c[3]])
 }
 
+// ─── Relative color origin channels (CSS Color L5 §4.1) ──────────────────────
+
+/// CSS Color L5 §4.1 — channel values of a relative-color origin color.
+///
+/// Given a straight (non-premultiplied) sRGB color `[r, g, b, a]` with each
+/// component in `[0.0, 1.0]`, returns the four channel values
+/// `[c0, c1, c2, alpha]` in the CSS-canonical units of `space`, matching what
+/// the relative-color channel keywords resolve to:
+///
+/// | space   | c0          | c1        | c2        | alpha   |
+/// |---------|-------------|-----------|-----------|---------|
+/// | `Srgb`  | r·255       | g·255     | b·255     | a (0–1) |
+/// | `Hsl`   | h (deg)     | s (0–100) | l (0–100) | a (0–1) |
+/// | `Lab`   | L (0–100)   | a         | b         | a (0–1) |
+/// | `Lch`   | L (0–100)   | C         | h (deg)   | a (0–1) |
+/// | `Oklab` | L (0–1)     | a         | b         | a (0–1) |
+/// | `Oklch` | L (0–1)     | C         | h (deg)   | a (0–1) |
+///
+/// Spaces other than these six are not valid base functions for relative color
+/// in Lumen and return the sRGB input unchanged.
+#[must_use]
+pub fn relative_origin_channels(space: MixColorSpace, srgb: [f32; 4]) -> [f32; 4] {
+    match space {
+        MixColorSpace::Srgb => [srgb[0] * 255.0, srgb[1] * 255.0, srgb[2] * 255.0, srgb[3]],
+        MixColorSpace::Hsl => {
+            let h = srgb_to_hsl(srgb);
+            [h[0], h[1] * 100.0, h[2] * 100.0, h[3]]
+        }
+        MixColorSpace::Lab => srgb_to_lab(srgb),
+        MixColorSpace::Lch => srgb_to_lch(srgb),
+        MixColorSpace::Oklab => srgb_to_oklab(srgb),
+        MixColorSpace::Oklch => srgb_to_oklch(srgb),
+        _ => srgb,
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

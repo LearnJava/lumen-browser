@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TEST-91: relative color syntax (CSS Color L5 §4)</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #101018;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 40px;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  .row { display: flex; flex-direction: row; gap: 24px; margin-bottom: 32px; }
+  .sw { width: 180px; height: 150px; }
+
+  /* rgb(from …): identity, channel arithmetic, channel reorder */
+  .a1 { background: rgb(from #336699 r g b); }                 /* = #336699        */
+  .a2 { background: rgb(from #336699 calc(r + 80) g b); }      /* brighter red ch. */
+  .a3 { background: rgb(from red g b r); }                     /* channels → blue  */
+
+  /* hsl(from …): identity + lightness scaled via calc() */
+  .b1 { background: hsl(from #e94560 h s l); }                 /* = #e94560        */
+  .b2 { background: hsl(from #e94560 h s calc(l * 0.6)); }     /* darker           */
+  .b3 { background: hsl(from #2ecc71 calc(h + 40) s l); }      /* hue-shifted      */
+
+  /* oklch(from …): identity + lightness/chroma tweaks */
+  .c1 { background: oklch(from #0f3460 l c h); }               /* = #0f3460        */
+  .c2 { background: oklch(from #0f3460 calc(l + 0.12) c h); }  /* lighter          */
+  /* alpha channel over an opaque backdrop (deterministic composite) */
+  .c3wrap { width: 180px; height: 150px; background: #ffffff; }
+  .c3 { width: 180px; height: 150px; background: rgb(from #e94560 r g b / 50%); }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="row">
+      <div class="sw a1"></div>
+      <div class="sw a2"></div>
+      <div class="sw a3"></div>
+    </div>
+    <div class="row">
+      <div class="sw b1"></div>
+      <div class="sw b2"></div>
+      <div class="sw b3"></div>
+    </div>
+    <div class="row">
+      <div class="sw c1"></div>
+      <div class="sw c2"></div>
+      <div class="c3wrap"><div class="c3"></div></div>
+    </div>
+  </div>
+</body>
+</html>

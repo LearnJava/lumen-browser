@@ -16914,6 +16914,10 @@ fn parse_function_color(s: &str) -> Option<Color> {
     } else {
         return None;
     };
+    // CSS Color L5 §4 — relative color: `<fn>(from <origin> c1 c2 c3 [/ a])`.
+    if let Some(rest) = body.trim_start().strip_prefix("from ") {
+        return parse_relative_color(kind, rest.trim());
+    }
     let parts = split_color_args(body);
     if !(parts.len() == 3 || parts.len() == 4) {
         return None;
@@ -16976,6 +16980,7 @@ fn parse_function_color(s: &str) -> Option<Color> {
     }
 }
 
+#[derive(Clone, Copy)]
 enum ColorFn {
     Rgb,
     Hsl,
@@ -16984,6 +16989,280 @@ enum ColorFn {
     Lab,
     Lch,
     // Прочие CSS4 расширения (color()) — позже.
+}
+
+impl ColorFn {
+    /// Interpolation space whose channels back this color function — used to
+    /// resolve relative-color origin channels (CSS Color L5 §4.1).
+    fn mix_space(self) -> crate::color_mix::MixColorSpace {
+        use crate::color_mix::MixColorSpace as M;
+        match self {
+            ColorFn::Rgb => M::Srgb,
+            ColorFn::Hsl => M::Hsl,
+            ColorFn::Oklch => M::Oklch,
+            ColorFn::Oklab => M::Oklab,
+            ColorFn::Lab => M::Lab,
+            ColorFn::Lch => M::Lch,
+        }
+    }
+
+    /// The three relative-color channel keyword names, in component order
+    /// (CSS Color L5 §4.1). `alpha` is always available as a fourth keyword.
+    fn channel_keywords(self) -> [&'static str; 3] {
+        match self {
+            ColorFn::Rgb => ["r", "g", "b"],
+            ColorFn::Hsl => ["h", "s", "l"],
+            ColorFn::Oklch | ColorFn::Lch => ["l", "c", "h"],
+            ColorFn::Oklab | ColorFn::Lab => ["l", "a", "b"],
+        }
+    }
+
+    /// Percent reference basis for each of the three components: a `<percentage>`
+    /// in a component resolves to `pct/100 * basis` in the channel's canonical
+    /// unit (CSS Color L4 §10 reference ranges). `0.0` marks a hue slot where
+    /// percentages are invalid.
+    fn channel_pct_basis(self) -> [f32; 3] {
+        match self {
+            ColorFn::Rgb => [255.0, 255.0, 255.0],
+            ColorFn::Hsl => [0.0, 100.0, 100.0],
+            ColorFn::Lab => [100.0, 125.0, 125.0],
+            ColorFn::Lch => [100.0, 150.0, 0.0],
+            ColorFn::Oklab => [1.0, 0.4, 0.4],
+            ColorFn::Oklch => [1.0, 0.4, 0.0],
+        }
+    }
+
+    /// Rebuild a non-relative color function string from resolved canonical
+    /// channel values + alpha (0–1), to be re-parsed by [`parse_function_color`].
+    fn format_resolved(self, c: [f32; 3], alpha: f32) -> String {
+        match self {
+            ColorFn::Rgb => format!("rgb({} {} {} / {})", c[0], c[1], c[2], alpha),
+            // s / l are percentages in hsl().
+            ColorFn::Hsl => format!("hsl({} {}% {}% / {})", c[0], c[1], c[2], alpha),
+            ColorFn::Lab => format!("lab({} {} {} / {})", c[0], c[1], c[2], alpha),
+            ColorFn::Lch => format!("lch({} {} {} / {})", c[0], c[1], c[2], alpha),
+            ColorFn::Oklab => format!("oklab({} {} {} / {})", c[0], c[1], c[2], alpha),
+            ColorFn::Oklch => format!("oklch({} {} {} / {})", c[0], c[1], c[2], alpha),
+        }
+    }
+}
+
+/// CSS Color L5 §4 — parse the relative-color body `<origin> c1 c2 c3 [/ a]`
+/// (without the surrounding `<fn>(from ` and `)`), for the color function
+/// `kind`. The origin color is parsed recursively and converted into `kind`'s
+/// channel space; each component keyword (`r`/`g`/`b`, `h`/`s`/`l`, …, plus
+/// `alpha`) resolves to the origin's channel value, optionally combined with
+/// numbers/percentages inside `calc()`. Returns `None` on any parse error.
+fn parse_relative_color(kind: ColorFn, body: &str) -> Option<Color> {
+    let toks = tokenize_with_parens(body);
+    if toks.len() < 4 {
+        return None;
+    }
+    let origin = parse_color(&toks[0])?;
+    let comps = &toks[1..];
+    // Modern slash-separated alpha: `c1 c2 c3 / a`.
+    let (chan_toks, alpha_tok): (&[String], Option<&str>) =
+        if let Some(i) = comps.iter().position(|t| t == "/") {
+            (&comps[..i], comps.get(i + 1).map(String::as_str))
+        } else {
+            (comps, None)
+        };
+    if chan_toks.len() != 3 {
+        return None;
+    }
+
+    let srgb = [
+        f32::from(origin.r) / 255.0,
+        f32::from(origin.g) / 255.0,
+        f32::from(origin.b) / 255.0,
+        f32::from(origin.a) / 255.0,
+    ];
+    let chans = crate::color_mix::relative_origin_channels(kind.mix_space(), srgb);
+    let names = kind.channel_keywords();
+    let vars: [(&str, f32); 4] = [
+        (names[0], chans[0]),
+        (names[1], chans[1]),
+        (names[2], chans[2]),
+        ("alpha", chans[3]),
+    ];
+    let basis = kind.channel_pct_basis();
+    let mut resolved = [0.0f32; 3];
+    for (i, slot) in resolved.iter_mut().enumerate() {
+        *slot = eval_color_component(&chan_toks[i], &vars, basis[i])?;
+    }
+    // alpha uses a 0–1 reference basis (100% = 1.0).
+    let alpha = match alpha_tok {
+        Some(a) => eval_color_component(a, &vars, 1.0)?,
+        None => chans[3],
+    };
+    parse_function_color(&kind.format_resolved(resolved, alpha))
+}
+
+/// Resolve one relative-color component to its canonical channel value.
+///
+/// Accepts a bare channel keyword (`r`, `h`, `alpha`, …), `none` (→ 0), a
+/// literal number / `<percentage>` / `<angle>`, or a `calc()` expression mixing
+/// keywords, numbers and percentages with `+ - * /` and parentheses. `pct_basis`
+/// is the channel's percent reference (`50%` → `0.5 * pct_basis`).
+fn eval_color_component(raw: &str, vars: &[(&str, f32)], pct_basis: f32) -> Option<f32> {
+    // `calc(` wrappers (including nested) become plain parens; bare tokens pass through.
+    let normalized = raw.trim().replace("calc(", "(");
+    let tokens = tokenize_color_expr(&normalized, pct_basis)?;
+    let mut pos = 0usize;
+    let v = eval_color_add(&tokens, &mut pos, vars)?;
+    if pos != tokens.len() {
+        return None;
+    }
+    Some(v)
+}
+
+/// Token in a relative-color component expression.
+enum ColorTok {
+    /// A numeric literal with its unit already resolved to a canonical value.
+    Val(f32),
+    /// A bare identifier (channel keyword, `alpha`, or `none`).
+    Ident(String),
+    /// One of `+ - * /`.
+    Op(char),
+    Open,
+    Close,
+}
+
+/// Tokenize a relative-color component expression, resolving number units
+/// (`%` → `pct_basis`, `deg`/`turn`/`grad`/`rad` → degrees) at scan time.
+fn tokenize_color_expr(s: &str, pct_basis: f32) -> Option<Vec<ColorTok>> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        match c {
+            '(' => {
+                out.push(ColorTok::Open);
+                i += 1;
+            }
+            ')' => {
+                out.push(ColorTok::Close);
+                i += 1;
+            }
+            '+' | '-' | '*' | '/' => {
+                out.push(ColorTok::Op(c));
+                i += 1;
+            }
+            _ if c.is_ascii_digit() || c == '.' => {
+                let start = i;
+                while i < bytes.len() && ((bytes[i] as char).is_ascii_digit() || bytes[i] == b'.') {
+                    i += 1;
+                }
+                let num: f32 = s[start..i].parse().ok()?;
+                let unit_start = i;
+                while i < bytes.len() && ((bytes[i] as char).is_ascii_alphabetic() || bytes[i] == b'%') {
+                    i += 1;
+                }
+                let val = apply_color_unit(num, &s[unit_start..i], pct_basis)?;
+                out.push(ColorTok::Val(val));
+            }
+            _ if c.is_ascii_alphabetic() => {
+                let start = i;
+                while i < bytes.len() && (bytes[i] as char).is_ascii_alphabetic() {
+                    i += 1;
+                }
+                out.push(ColorTok::Ident(s[start..i].to_string()));
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Convert a numeric literal + unit suffix to a canonical channel value.
+fn apply_color_unit(num: f32, unit: &str, pct_basis: f32) -> Option<f32> {
+    match unit {
+        "" => Some(num),
+        "%" => Some(num / 100.0 * pct_basis),
+        "deg" => Some(num),
+        "turn" => Some(num * 360.0),
+        "grad" => Some(num * 0.9),
+        "rad" => Some(num.to_degrees()),
+        _ => None,
+    }
+}
+
+fn eval_color_add(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]) -> Option<f32> {
+    let mut v = eval_color_mul(tokens, pos, vars)?;
+    while let Some(ColorTok::Op(op @ ('+' | '-'))) = tokens.get(*pos) {
+        let op = *op;
+        *pos += 1;
+        let rhs = eval_color_mul(tokens, pos, vars)?;
+        v = if op == '+' { v + rhs } else { v - rhs };
+    }
+    Some(v)
+}
+
+fn eval_color_mul(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]) -> Option<f32> {
+    let mut v = eval_color_unary(tokens, pos, vars)?;
+    while let Some(ColorTok::Op(op @ ('*' | '/'))) = tokens.get(*pos) {
+        let op = *op;
+        *pos += 1;
+        let rhs = eval_color_unary(tokens, pos, vars)?;
+        if op == '*' {
+            v *= rhs;
+        } else {
+            if rhs == 0.0 {
+                return None;
+            }
+            v /= rhs;
+        }
+    }
+    Some(v)
+}
+
+fn eval_color_unary(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]) -> Option<f32> {
+    match tokens.get(*pos) {
+        Some(ColorTok::Op('-')) => {
+            *pos += 1;
+            eval_color_unary(tokens, pos, vars).map(|v| -v)
+        }
+        Some(ColorTok::Op('+')) => {
+            *pos += 1;
+            eval_color_unary(tokens, pos, vars)
+        }
+        _ => eval_color_primary(tokens, pos, vars),
+    }
+}
+
+fn eval_color_primary(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]) -> Option<f32> {
+    match tokens.get(*pos)? {
+        ColorTok::Val(v) => {
+            *pos += 1;
+            Some(*v)
+        }
+        ColorTok::Ident(name) => {
+            *pos += 1;
+            if name.eq_ignore_ascii_case("none") {
+                return Some(0.0);
+            }
+            vars.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, val)| *val)
+        }
+        ColorTok::Open => {
+            *pos += 1;
+            let v = eval_color_add(tokens, pos, vars)?;
+            match tokens.get(*pos) {
+                Some(ColorTok::Close) => {
+                    *pos += 1;
+                    Some(v)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Парсит lightness для oklch: число 0..1 или процент 0..100% → 0..1.
@@ -17530,6 +17809,66 @@ mod tests {
     fn oklch_invalid_returns_none() {
         assert_eq!(parse_color("oklch(0.5)"), None);
         assert_eq!(parse_color("oklch(abc def ghi)"), None);
+    }
+
+    // ── CSS Color L5 §4 — relative color syntax ──
+
+    #[test]
+    fn relative_rgb_identity() {
+        // `rgb(from red r g b)` reproduces the origin exactly.
+        assert_eq!(parse_color("rgb(from red r g b)"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color("rgb(from #336699 r g b)"), Some(rgba(0x33, 0x66, 0x99, 255)));
+    }
+
+    #[test]
+    fn relative_rgb_channel_reorder() {
+        // Swapping keywords swaps channels: red → blue.
+        assert_eq!(parse_color("rgb(from red g b r)"), Some(rgba(0, 0, 255, 255)));
+    }
+
+    #[test]
+    fn relative_rgb_calc_on_channel() {
+        // calc() with a channel keyword.
+        assert_eq!(parse_color("rgb(from red calc(r - 50) g b)"), Some(rgba(205, 0, 0, 255)));
+    }
+
+    #[test]
+    fn relative_rgb_alpha_slash_and_keyword() {
+        // Explicit alpha via percentage on the origin's channels.
+        let c = parse_color("rgb(from #336699 r g b / 50%)").unwrap();
+        assert_eq!((c.r, c.g, c.b), (0x33, 0x66, 0x99));
+        assert!(near(c.a, 128, 1), "alpha = {}", c.a);
+        // The `alpha` keyword resolves to the origin's alpha (here opaque).
+        assert_eq!(parse_color("rgb(from red r g b / alpha)"), Some(rgba(255, 0, 0, 255)));
+    }
+
+    #[test]
+    fn relative_hsl_identity_and_calc() {
+        // hsl(from red h s l) round-trips back to red.
+        assert_eq!(parse_color("hsl(from red h s l)"), Some(rgba(255, 0, 0, 255)));
+        // Halving the lightness channel darkens red to ~maroon.
+        let c = parse_color("hsl(from red h s calc(l * 0.5))").unwrap();
+        assert!(near(c.r, 128, 3), "r = {}", c.r);
+        assert_eq!((c.g, c.b), (0, 0));
+    }
+
+    #[test]
+    fn relative_oklch_identity_with_alpha() {
+        // White origin round-trips to white.
+        let w = parse_color("oklch(from white l c h)").unwrap();
+        assert!(near(w.r, 255, 4) && near(w.g, 255, 4) && near(w.b, 255, 4));
+        // Red origin with explicit alpha; round-trip stays near red.
+        let r = parse_color("oklch(from red l c h / 0.5)").unwrap();
+        assert!(r.r > 240, "r = {}", r.r);
+        assert!(near(r.a, 128, 2), "alpha = {}", r.a);
+    }
+
+    #[test]
+    fn relative_color_invalid_returns_none() {
+        // Bad origin color.
+        assert_eq!(parse_color("rgb(from notacolor r g b)"), None);
+        // Wrong component count.
+        assert_eq!(parse_color("rgb(from red r g)"), None);
     }
 
     // ── CSS Color L4 §10.4 — oklab() ──

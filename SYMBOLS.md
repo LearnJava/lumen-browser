@@ -1325,7 +1325,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:77` **fn** `read_later` — Direct access to the read-later store for status / touch operations
 `crates/knowledge/src/store.rs:83` **fn** `notes` — Direct access to the notes store for URL-based note listing and
 
-## lumen-layout  (526 symbols)
+## lumen-layout  (527 symbols)
 
 `crates/engine/layout/src/anchor.rs:40` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:69` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -1398,6 +1398,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
 `crates/engine/layout/src/color_mix.rs:96` **fn** `mix_colors` — CSS Color L5 §10.2 — mix two sRGB colors in the given interpolation space
+`crates/engine/layout/src/color_mix.rs:625` **fn** `relative_origin_channels` — CSS Color L5 §4.1 — channel values of a relative-color origin color
 `crates/engine/layout/src/content_visibility.rs:50` **fn** `set_cv_scroll` — Set the root scroll offset used by the relevance check for the next layout
 `crates/engine/layout/src/content_visibility.rs:56` **fn** `set_cv_relevant` — Install the set of nodes the shell considers relevant (ratchet set)
 `crates/engine/layout/src/content_visibility.rs:69` **fn** `take_cv_skipped` — Drain the skip records of the last layout pass: `(node, collapsed_top_y)`,
@@ -3688,4 +3689,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3623 symbols in 20 crates*
+*Total: 3624 symbols in 20 crates*
