@@ -6,8 +6,7 @@
 
 ## In progress
 
-**BB-2: `::first-letter` layout split**  branch: `p1-bb2-first-letter`
-Next step: изучить BB-1 (`split_first_line_boxes`, p1-bb1-first-line) и извлечь первый графем первой строки как отдельный `LayoutBox` со стилем `::first-letter`; float-вариант (drop cap); `// CSS: ::first-letter` handoff для P4; 6 unit-тестов
+_(нет)_
 
 ---
 
@@ -27,7 +26,7 @@ Next step: изучить BB-1 (`split_first_line_boxes`, p1-bb1-first-line) и 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~BB-1~~ | ~~**`::first-line` layout split**~~ — **выполнено** (p1-bb1-first-line, 2026-06-13): two-pass wrap (первая строка меряется шрифтом ::first-line) + `split_first_line_boxes` пост-проход (отдельный `LayoutBox` первой строки, корректная высота без правок paint); 8 unit-тестов | M | `lumen-layout` |
-| BB-2 | **`::first-letter` layout split** — извлечь первый отображаемый графем как отдельный `LayoutBox` с отдельным стилем; плавающий float-вариант (drop cap); `// CSS: ::first-letter` для P4; 6 unit-тестов | M | `lumen-layout` |
+| ~~BB-2~~ | ~~**`::first-letter` layout split**~~ — **выполнено** (p1-bb2-first-letter, 2026-06-13): float-вариант (drop cap) — `extract_first_letter_float` выделяет первую букву (с ведущей пунктуацией, L4 §5.1) в block-level float `LayoutBox`; shrink-to-fit float-ов без width → fallback на max-content; ::first-line не перекрывает drop cap; non-float путь — segment-level restyle (как раньше); эталон TEST-58 перегенерирован; 8 unit-тестов; попутно BUG-152 | M | `lumen-layout` |
 | BB-3 | **CSS Grid L2 subgrid algorithm** — `subgrid` keyword в `grid-template-columns/rows`; наследование треков от родителя (`SubgridContext`); размещение items вдоль родительских линий; `// CSS: subgrid` для P4; 10 unit-тестов | L | `lumen-layout` |
 | BB-4 | **`content-visibility: auto` skip rendering** — пересечение bounding box с viewport; пропускать `lay_out` для off-screen поддеревьев; emit `ContentVisibilityChange` shell event; `// CSS: content-visibility` для P4; 6 unit-тестов | M | `lumen-layout`, `lumen-shell` |
 | BB-5 | **`text-wrap: balance` balance algorithm** — бинарный поиск оптимальной ширины переноса, минимизирующей дисбаланс последней строки; `TextWrapMode::Balance` enum; `// CSS: text-wrap` для P4; 8 unit-тестов | M | `lumen-layout` |
