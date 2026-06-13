@@ -38,6 +38,9 @@ pub struct AnimatedStyle {
     pub transform: Option<Vec<TransformFn>>,
     pub color: Option<Color>,
     pub background_color: Option<Color>,
+    /// Animated height override — `Some` during a height transition.
+    /// Requires relayout to apply (not a compositor-offloadable property).
+    pub height: Option<Length>,
 }
 
 /// Output of `AnimationScheduler::tick` — per-node animated values for one frame.
@@ -63,6 +66,7 @@ impl AnimationFrame {
             if let Some(v) = style.transform { entry.transform = Some(v); }
             if let Some(v) = style.color { entry.color = Some(v); }
             if let Some(v) = style.background_color { entry.background_color = Some(v); }
+            if let Some(v) = style.height { entry.height = Some(v); }
         }
     }
 
@@ -81,6 +85,7 @@ impl AnimationFrame {
             if style.transform.is_some() { entry.transform = style.transform; }
             if style.color.is_some() { entry.color = style.color; }
             if style.background_color.is_some() { entry.background_color = style.background_color; }
+            if style.height.is_some() { entry.height = style.height; }
         }
     }
 
@@ -1058,6 +1063,22 @@ fn cyclic_get<T>(list: &[T], idx: usize) -> Option<&T> {
     }
 }
 
+/// CSS Sizing L4 §4.5 — resolve `Discrete("auto")` to `Length::Px` when the
+/// auto-height cache has a value for the current node.
+///
+/// When `val` is `Discrete("auto")` and `resolved_px` is `Some(px)`, returns
+/// `AnimValue::Length(Length::Px(px))` — enabling smooth interpolation.
+/// All other values are returned unchanged.
+fn resolve_auto_height(val: AnimValue, resolved_px: Option<f32>) -> AnimValue {
+    if let AnimValue::Discrete(ref s) = val
+        && s == "auto"
+        && let Some(px) = resolved_px
+    {
+        return AnimValue::Length(Length::Px(px));
+    }
+    val
+}
+
 // ─── CSS Transitions L1 §2 — TransitionScheduler ────────────────────────────
 
 /// State for one active property transition on one element.
@@ -1079,6 +1100,12 @@ struct TransitionState {
     /// this preserves the interrupted value for the new `from` calculation.
     #[allow(dead_code)]
     interrupted_value: Option<AnimValue>,
+    /// Resolved px value for `auto`/keyword `height` at transition start.
+    /// Set when an `auto` endpoint is resolved via `TransitionScheduler::auto_height_cache`.
+    /// `None` when neither endpoint is a keyword size.
+    /// Read by P4 when gating keyword-size transitions on `interpolate-size: allow-keywords`.
+    #[allow(dead_code)]
+    auto_resolved_px: Option<f32>,
 }
 
 /// CSS Transitions L1 §2 — detects property value changes and interpolates
@@ -1089,16 +1116,33 @@ struct TransitionState {
 /// changes. Call `sync()` after each relayout that may change computed styles.
 ///
 /// Phase 0 animatable properties: `opacity`, `color`, `background-color`,
-/// `transform`. `transition-property: all` checks all four.
+/// `transform`, `height`. `transition-property: all` checks all five.
 #[derive(Debug, Default)]
 pub struct TransitionScheduler {
     /// Active transitions keyed by `(node, css-property-name)`.
     active: HashMap<(NodeId, String), TransitionState>,
+    /// Per-node resolved auto-height (px), updated after each layout pass.
+    /// Call `set_auto_height` after layout to enable `height: auto` interpolation.
+    ///
+    /// # CSS: interpolate-size
+    /// P4 gates keyword-size interpolation on `ComputedStyle::interpolate_size`.
+    /// When `interpolate_size: AllowKeywords` is parsed, `sync()` checks this cache
+    /// to resolve `height: auto` endpoints to their px equivalent at transition start.
+    auto_height_cache: HashMap<NodeId, f32>,
 }
 
 impl TransitionScheduler {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Store the resolved auto-height for `node` from the last layout pass.
+    ///
+    /// Call after layout whenever an element's intrinsic height may change.
+    /// Used by the height transition algorithm when the endpoint is `auto`.
+    /// See `auto_height_cache` field for the CSS: interpolate-size wiring note.
+    pub fn set_auto_height(&mut self, node: NodeId, px: f32) {
+        self.auto_height_cache.insert(node, px);
     }
 
     /// Detect value changes between `old` and `new` style for properties listed
@@ -1121,7 +1165,7 @@ impl TransitionScheduler {
 
         type PropExtractor = (&'static str, fn(&ComputedStyle) -> AnimValue);
         // Table of Phase-0 animatable properties and how to extract AnimValue.
-        let animatable: [PropExtractor; 4] = [
+        let animatable: [PropExtractor; 5] = [
             ("opacity", |s| AnimValue::Number(s.opacity)),
             ("color", |s| AnimValue::Color(s.color)),
             ("background-color", |s| {
@@ -1131,6 +1175,14 @@ impl TransitionScheduler {
                 )
             }),
             ("transform", |s| AnimValue::TransformList(s.transform.clone())),
+            // `height: auto` (None) → Discrete("auto"); resolved to Px in the loop below when
+            // auto_height_cache has a value for this node. Per CSS Sizing L4 §4.5: keyword sizes
+            // only interpolate when `interpolate-size: allow-keywords` is active.
+            // CSS: interpolate-size — P4 gates this on ComputedStyle::interpolate_size.
+            ("height", |s| match &s.height {
+                Some(l) => AnimValue::Length(l.clone()),
+                None => AnimValue::Discrete("auto".to_string()),
+            }),
         ];
 
         for (prop_idx, (prop_name, extract)) in animatable.iter().enumerate() {
@@ -1162,6 +1214,19 @@ impl TransitionScheduler {
 
             let from_val = interrupted_value.clone().unwrap_or_else(|| extract(old));
 
+            // CSS Sizing L4 §4.5 — resolve `auto`/keyword height endpoints to px.
+            // When a `height` endpoint is `Discrete("auto")` and auto_height_cache has a
+            // resolved px value, substitute it so the transition interpolates smoothly.
+            // CSS: interpolate-size — P4 will gate this block on
+            // `new.interpolate_size == InterpolateSizeMode::AllowKeywords`.
+            let auto_resolved_px = if *prop_name == "height" {
+                self.auto_height_cache.get(&node).copied()
+            } else {
+                None
+            };
+            let from_val = resolve_auto_height(from_val, auto_resolved_px);
+            let to_val = resolve_auto_height(to_val, auto_resolved_px);
+
             if from_val == to_val {
                 continue;
             }
@@ -1187,6 +1252,7 @@ impl TransitionScheduler {
                     timing_fn,
                     fill_mode,
                     interrupted_value,
+                    auto_resolved_px,
                 },
             );
         }
@@ -1218,6 +1284,11 @@ impl TransitionScheduler {
             "transform" => {
                 if let AnimValue::TransformList(tr) = val {
                     entry.transform = Some(tr.clone());
+                }
+            }
+            "height" => {
+                if let AnimValue::Length(l) = val {
+                    entry.height = Some(l.clone());
                 }
             }
             _ => {}
@@ -2556,5 +2627,69 @@ mod tests {
         assert!(frame.has_active);
         let op = frame.overrides[&node].opacity.unwrap();
         assert!((op - 0.0).abs() < 0.01, "expected ~0.0, got {op}");
+    }
+
+    // ─── interpolate-size / height transition (BB-10) ────────────────────────
+
+    #[test]
+    fn interpolate_size_mode_default_is_numeric_only() {
+        use crate::style::InterpolateSizeMode;
+        assert_eq!(InterpolateSizeMode::default(), InterpolateSizeMode::NumericOnly);
+    }
+
+    #[test]
+    fn set_auto_height_stores_and_overwrites() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(5usize);
+        sched.set_auto_height(node, 120.0);
+        assert_eq!(sched.auto_height_cache.get(&node).copied(), Some(120.0));
+        sched.set_auto_height(node, 200.0);
+        assert_eq!(sched.auto_height_cache.get(&node).copied(), Some(200.0));
+    }
+
+    fn make_height_transition_style(height: Option<Length>, dur: f32) -> ComputedStyle {
+        let mut s = ComputedStyle::root();
+        s.height = height;
+        s.transition_properties = vec!["height".to_string()];
+        s.transition_durations = vec![dur];
+        s.transition_timing_functions = vec![TimingFunction::Linear];
+        s
+    }
+
+    #[test]
+    fn height_numeric_transition_interpolates_at_midpoint() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(6usize);
+        let old_s = make_height_transition_style(Some(Length::Px(0.0)), 1.0);
+        let new_s = make_height_transition_style(Some(Length::Px(100.0)), 1.0);
+        sched.sync(node, &old_s, &new_s, 0.0);
+        let frame = sched.tick(0.5);
+        assert!(frame.has_active);
+        let h = frame.overrides[&node].height.as_ref().expect("height override");
+        assert!(
+            matches!(h, Length::Px(v) if (*v - 50.0).abs() < 0.5),
+            "expected ~50px, got {h:?}"
+        );
+    }
+
+    #[test]
+    fn height_auto_resolves_via_cache_and_interpolates() {
+        // Simulates `height: 0 → height: auto` with interpolate-size: allow-keywords.
+        // P4 will gate this on ComputedStyle::interpolate_size; here we test the raw algorithm.
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(7usize);
+        // Register auto-height from last layout pass.
+        sched.set_auto_height(node, 80.0);
+        let old_s = make_height_transition_style(Some(Length::Px(0.0)), 1.0);
+        let new_s = make_height_transition_style(None, 1.0); // None = auto
+        sched.sync(node, &old_s, &new_s, 0.0);
+        let frame = sched.tick(0.5);
+        assert!(frame.has_active);
+        let h = frame.overrides[&node].height.as_ref().expect("height override");
+        // At t=0.5: lerp(0, 80) = 40.
+        assert!(
+            matches!(h, Length::Px(v) if (*v - 40.0).abs() < 0.5),
+            "expected ~40px, got {h:?}"
+        );
     }
 }

@@ -3084,6 +3084,30 @@ pub enum ContentVisibility {
     Hidden,
 }
 
+/// CSS Sizing L4 §4.5 — `interpolate-size` property value.
+///
+/// Controls whether keyword sizes (`auto`, `min-content`, `max-content`,
+/// `fit-content`) can participate in CSS transitions and animations.
+/// When `AllowKeywords` is active, the layout engine resolves keyword sizes
+/// to their px equivalent at transition start, enabling smooth
+/// `height: 0 → height: auto` transitions.
+///
+/// # CSS: interpolate-size
+/// P4 wires this enum via `apply_declaration("interpolate-size", ...)` and
+/// stores the result in `ComputedStyle::interpolate_size`. The engine reads
+/// it in `TransitionScheduler::sync()` to decide whether to allow keyword
+/// size interpolation for a given element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InterpolateSizeMode {
+    /// CSS Sizing L4 §4.5.1 initial value — keyword sizes are discrete.
+    /// Transitions that start or end at a keyword size snap at `t = 0.5`.
+    #[default]
+    NumericOnly,
+    /// CSS Sizing L4 §4.5 `allow-keywords` value — keyword sizes resolve
+    /// to their px value at transition start, enabling smooth animations.
+    AllowKeywords,
+}
+
 /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContainerType {
