@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* CSS Fonts L5 §4 — font-size-adjust.
+     Every row uses the SAME specified font-size (60px) but a different
+     font-size-adjust value, so the rendered x-height (and thus the visible
+     glyph size) scales by adjust / font-aspect. Solid colour boxes dominate
+     the pixel area; the black "x" glyphs visibly shrink down each row. */
+  body { background: #ff00ff; margin: 0; }
+  .__f {
+    background: #ffffff;
+    width: 1022px; height: 718px;
+    margin: 1px; padding: 0;
+    overflow: hidden;
+    font-family: sans-serif;
+  }
+  .row {
+    height: 100px;
+    margin: 12px;
+    background: #e8eef7;
+    border: 3px solid #2050a0;
+    color: #102040;
+    font-size: 60px;
+    line-height: 100px;
+    padding-left: 24px;
+    box-sizing: border-box;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .a0 { font-size-adjust: none; }
+  .a1 { font-size-adjust: 0.60; }
+  .a2 { font-size-adjust: 0.45; }
+  .a3 { font-size-adjust: 0.30; }
+  .a4 { background: #f7e8e8; border-color: #a02020; color: #401010; font-size-adjust: 0.20; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="row a0">xoxoxoxo none</div>
+    <div class="row a1">xoxoxoxo 0.60</div>
+    <div class="row a2">xoxoxoxo 0.45</div>
+    <div class="row a3">xoxoxoxo 0.30</div>
+    <div class="row a4">xoxoxoxo 0.20</div>
+  </div>
+</body>
+</html>

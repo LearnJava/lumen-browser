@@ -98,6 +98,10 @@ pub struct FontMeasurer<'a> {
     units_per_em: u16,
     /// Абсолютное значение hhea.descent (descent < 0 по конвенции OpenType).
     descent_units: u16,
+    /// OS/2 `sxHeight` в font units (высота строчной `x`). CSS Fonts L5 §4 —
+    /// основа для `font-size-adjust`. Если таблица OS/2 отсутствует или версия
+    /// < 2 (нет поля sxHeight), используется приближение `units_per_em / 2`.
+    x_height_units: u16,
 }
 
 impl<'a> FontMeasurer<'a> {
@@ -108,7 +112,15 @@ impl<'a> FontMeasurer<'a> {
         let cmap = font.cmap()?;
         let hhea = font.hhea()?;
         let descent_units = hhea.descent.unsigned_abs();
-        Ok(Self { hmtx, cmap, units_per_em: head.units_per_em, descent_units })
+        let units_per_em = head.units_per_em;
+        // OS/2 sxHeight (v2+); fallback к units_per_em/2 (aspect ≈ 0.5).
+        let x_height_units = font
+            .os2()
+            .ok()
+            .and_then(|o| o.x_height)
+            .filter(|&v| v > 0)
+            .map_or(units_per_em / 2, |v| v as u16);
+        Ok(Self { hmtx, cmap, units_per_em, descent_units, x_height_units })
     }
 }
 
@@ -124,6 +136,10 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
 
     fn descent_px(&self, font_size_px: f32) -> f32 {
         self.descent_units as f32 * font_size_px / self.units_per_em as f32
+    }
+
+    fn x_height_px(&self, font_size_px: f32) -> f32 {
+        self.x_height_units as f32 * font_size_px / self.units_per_em as f32
     }
 }
 
@@ -429,6 +445,10 @@ impl TextMeasurer for MultiFontMeasurer {
 
     fn ascent_px(&self, font_size_px: f32) -> f32 {
         self.fallback.ascent_px(font_size_px)
+    }
+
+    fn x_height_px(&self, font_size_px: f32) -> f32 {
+        self.fallback.x_height_px(font_size_px)
     }
 }
 

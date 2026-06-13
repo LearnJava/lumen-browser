@@ -215,6 +215,16 @@ pub trait TextMeasurer {
     fn ascent_px(&self, font_size_px: f32) -> f32 {
         font_size_px * 0.8
     }
+
+    /// x-height шрифта в пикселях при размере `font_size_px` — высота строчной
+    /// `x` без выносных элементов (таблица OS/2 `sxHeight`).
+    ///
+    /// CSS Fonts L5 §4 — основа для `font-size-adjust`: aspect value шрифта =
+    /// `x_height_px(size) / size`. Реализации без доступа к метрикам возвращают
+    /// приближение `0.5 × size` (то же, что `ex`-юнит в style.rs).
+    fn x_height_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.5
+    }
 }
 
 // ─── Clickable elements iterator (for P3 click-hint overlay, §12.14 task 7B.2) ──
