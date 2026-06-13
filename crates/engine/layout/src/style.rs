@@ -2341,6 +2341,11 @@ pub struct ComputedStyle {
     /// CSS Lists L3 §3 — `counter-increment: name [N]?`. Каждый element
     /// инкрементирует названный counter на N (default +1). Не наследуется.
     pub counter_increment: Vec<(String, i32)>,
+    /// CSS Lists L3 §4 — `counter-set: name [N]?`. Каждый element
+    /// устанавливает названный counter в N (default 0). Не наследуется.
+    /// Применяется ПОСЛЕ counter-reset и counter-increment (порядок по spec).
+    /// Если счётчика с таким именем нет в области видимости — создаёт его.
+    pub counter_set: Vec<(String, i32)>,
     /// CSS Masking L1 §3 — `clip-path: <basic-shape> | none`. Не
     /// наследуется. Phase 0: parsing only — real geometric clipping
     /// в paint pipeline отложен.
@@ -4839,6 +4844,7 @@ impl ComputedStyle {
             custom_props: HashMap::new(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
+            counter_set: Vec::new(),
             clip_path: None,
             transform: Vec::new(),
             translate: None,
@@ -5137,6 +5143,7 @@ pub fn compute_style(
         // CSS Lists L3 §3 — не наследуются.
         counter_reset: Vec::new(),
         counter_increment: Vec::new(),
+        counter_set: Vec::new(),
         // CSS Masking / Transforms / Filter — не наследуются.
         clip_path: None,
         transform: Vec::new(),
@@ -5713,6 +5720,47 @@ pub fn compute_style(
         (imp, inline, lp, spec, rule_idx, decl_idx)
     });
 
+    // CSS Cascade L5 §6.4.6 — `revert-layer`: a declaration whose value is
+    // `revert-layer` rolls the cascaded value back to what it would be if all
+    // declarations of that property in the *current* cascade layer (same
+    // importance) were removed. We resolve it as a pre-pass over the already
+    // cascade-sorted `matched` set: for every property whose winning
+    // declaration (the last occurrence in sort order) is `revert-layer`, drop
+    // every declaration of that property belonging to the winning layer, then
+    // repeat — a lower layer may itself contain `revert-layer`. The normal
+    // last-wins apply loop below then yields the reverted value automatically;
+    // when nothing remains the property keeps its inherited/initial value.
+    //
+    // `revert-layer` is intentionally NOT a `CssWideKeyword`: it depends on the
+    // declaration's own layer, so it cannot be applied per-declaration like
+    // `inherit`/`initial`. Shorthand↔longhand reverts across layers are a known
+    // limitation (grouping is by exact property name).
+    loop {
+        use std::collections::HashMap;
+        // Winner per property = last occurrence in the cascade-sorted vec.
+        // (lp, important, is_revert_layer)
+        let mut winners: HashMap<String, (i32, bool, bool)> = HashMap::new();
+        for &(imp, _inline, lp, _, _, _, decl) in &matched {
+            let key = decl.property.to_ascii_lowercase();
+            let is_revert = decl.value.trim().eq_ignore_ascii_case("revert-layer");
+            winners.insert(key, (lp, imp, is_revert));
+        }
+        let targets: Vec<(String, i32, bool)> = winners
+            .into_iter()
+            .filter(|&(_, (_, _, is_revert))| is_revert)
+            .map(|(k, (lp, imp, _))| (k, lp, imp))
+            .collect();
+        if targets.is_empty() {
+            break;
+        }
+        matched.retain(|&(imp, _inline, lp, _, _, _, decl)| {
+            let key = decl.property.to_ascii_lowercase();
+            !targets
+                .iter()
+                .any(|(tk, tlp, timp)| *tk == key && *tlp == lp && *timp == imp)
+        });
+    }
+
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
     // самого font-size — относительно inherited (родительского) font-size.
@@ -5779,6 +5827,12 @@ pub fn compute_style(
     );
 
     for (_, _, _, _, _, _, decl) in &matched {
+        // CSS Cascade L5 §6.4.6: a `revert-layer` declaration that survived the
+        // pre-pass was overridden by a higher layer for the same property, so it
+        // has no effect — skip it instead of letting it fail property parsing.
+        if decl.value.trim().eq_ignore_ascii_case("revert-layer") {
+            continue;
+        }
         // CSS Values L4 §7.7: expand attr() typed references before applying.
         let attr_buf;
         let effective_decl: &Declaration = if decl.value.contains("attr(") {
@@ -11241,6 +11295,11 @@ fn apply_declaration(
             // Default value = 1 (по spec).
             style.counter_increment = parse_counter_list(val, 1);
         }
+        "counter-set" => {
+            // CSS Lists L3 §4 — `none | (<custom-ident> <integer>?)+`.
+            // Default value на счётчик при отсутствии числа = 0 (по spec).
+            style.counter_set = parse_counter_list(val, 0);
+        }
         "clip-path" => {
             // CSS Masking L1 §3 — basic-shape | none. `none` чистит.
             let trimmed = val.trim();
@@ -14521,6 +14580,13 @@ fn apply_css_wide_keyword(
                 inherited.counter_increment.clone()
             } else {
                 init.counter_increment.clone()
+            };
+        }
+        "counter-set" => {
+            style.counter_set = if inh_only_inherit {
+                inherited.counter_set.clone()
+            } else {
+                init.counter_set.clone()
             };
         }
         // Masking / Transforms / Filter — все non-inherited.
@@ -21922,6 +21988,80 @@ mod tests {
         );
         // .k has higher specificity → blue.
         assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    // ─── revert-layer (CSS Cascade L5 §6.4.6) ────────────────────────────────
+
+    #[test]
+    fn revert_layer_falls_back_to_lower_layer() {
+        // `.r` wins layer `b` with `revert-layer` → layer `b` is rolled back for
+        // `color`, falling to layer `a` (green). Plain `p` stays red.
+        let s = cascade_at(
+            r#"<p class="r">x</p>"#,
+            "@layer a { p { color: green; } } \
+             @layer b { p { color: red; } .r { color: revert-layer; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_unlayered_falls_to_highest_layer() {
+        // Unlayered `revert-layer` reverts the unlayered declarations, so the
+        // value falls to the highest-priority layer `b` (red), not back to `a`.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer a { p { color: green; } } \
+             @layer b { p { color: red; } } \
+             p { color: revert-layer; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_with_no_lower_decl_keeps_inherited() {
+        // No lower-priority author declaration for `color` → reverting the only
+        // layer leaves the inherited value (blue from <body>).
+        let s = cascade_at(
+            "<p>x</p>",
+            "body { color: blue; } \
+             @layer a { p { color: revert-layer; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_overridden_has_no_effect() {
+        // A `revert-layer` declaration overridden by a higher (unlayered) rule
+        // has no effect — red still wins.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer a { p { color: green; } } \
+             @layer b { p { color: revert-layer; } } \
+             p { color: red; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_only_affects_its_own_property() {
+        // `revert-layer` on `color` must not touch `background-color`:
+        // color reverts to green (layer a), background-color stays blue (layer b).
+        let s = cascade_at(
+            r#"<p class="r">x</p>"#,
+            "@layer a { p { color: green; background-color: yellow; } } \
+             @layer b { p { color: red; background-color: blue; } \
+                        .r { color: revert-layer; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+        assert_eq!(
+            s.background_color.map(|c| c.resolve(s.color)),
+            Some(Color { r: 0, g: 0, b: 255, a: 255 })
+        );
     }
 
     // === animation shorthand parsing (CSS Animations L1 §4) ===

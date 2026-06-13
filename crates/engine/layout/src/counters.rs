@@ -10,9 +10,12 @@
 //! For each element in pre-order:
 //! 1. Apply `counter-reset` (push a new scope value onto the named stack).
 //! 2. Apply `counter-increment` (add to the top of the named stack).
-//! 3. Save a snapshot (`NodeId → stacks`) for `counter()` / `counters()` resolution.
-//! 4. Recurse into children.
-//! 5. Pop the scopes added in step 1.
+//! 3. Apply `counter-set` (set the top of the named stack to a value).
+//! 4. Save a snapshot (`NodeId → stacks`) for `counter()` / `counters()` resolution.
+//! 5. Recurse into children.
+//! 6. Pop the scopes added in step 1.
+//!
+//! The reset → increment → set order is normative (CSS Lists L3 §4).
 //!
 //! This gives correct resolution for `::before` pseudo-elements (which read the state
 //! after the element's own increment but before children). `::after` reads post-children
@@ -67,6 +70,21 @@ impl CounterCtx {
                 stack.push(0);
             }
             *stack.last_mut().unwrap() += val;
+        }
+    }
+
+    /// Set top-of-stack to the given value for each entry in `counter-set`
+    /// (CSS Lists L3 §4). Auto-creates the counter (with the set value as its
+    /// only scope) if it has never been reset — `counter-set` on a non-existent
+    /// counter acts as though it created the counter.
+    fn apply_set(&mut self, sets: &[(String, i32)]) {
+        for (name, val) in sets {
+            let stack = self.stacks.entry(name.clone()).or_default();
+            if stack.is_empty() {
+                stack.push(*val);
+            } else {
+                *stack.last_mut().unwrap() = *val;
+            }
         }
     }
 
@@ -140,9 +158,10 @@ fn walk(
 
     let style = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
 
-    // CSS Lists L3 §6.4: counter-reset first, then counter-increment.
+    // CSS Lists L3 §4: counter-reset first, then counter-increment, then counter-set.
     ctx.apply_reset(&style.counter_reset);
     ctx.apply_increment(&style.counter_increment);
+    ctx.apply_set(&style.counter_set);
 
     map.insert(id, ctx.snapshot());
 
@@ -892,6 +911,34 @@ mod tests {
         let mut ctx = CounterCtx::default();
         ctx.apply_increment(&[("y".into(), 1)]);
         assert_eq!(ctx.stacks["y"], vec![1]);
+    }
+
+    #[test]
+    fn counter_ctx_set_overrides_increment() {
+        // CSS Lists L3 §4: order is reset → increment → set, so set wins.
+        let mut ctx = CounterCtx::default();
+        ctx.apply_reset(&[("c".into(), 0)]);
+        ctx.apply_increment(&[("c".into(), 1)]);
+        ctx.apply_set(&[("c".into(), 5)]);
+        assert_eq!(ctx.stacks["c"], vec![5]);
+    }
+
+    #[test]
+    fn counter_ctx_set_auto_creates() {
+        // counter-set on a counter that was never reset acts as if it created it.
+        let mut ctx = CounterCtx::default();
+        ctx.apply_set(&[("z".into(), 7)]);
+        assert_eq!(ctx.stacks["z"], vec![7]);
+    }
+
+    #[test]
+    fn counter_ctx_set_only_top_scope() {
+        // counter-set targets the innermost scope, leaving outer scopes intact.
+        let mut ctx = CounterCtx::default();
+        ctx.apply_reset(&[("c".into(), 1)]);
+        ctx.apply_reset(&[("c".into(), 10)]);
+        ctx.apply_set(&[("c".into(), 99)]);
+        assert_eq!(ctx.stacks["c"], vec![1, 99]);
     }
 
     // ── Custom counter style tests ────────────────────────────────────────────
