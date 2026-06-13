@@ -2366,6 +2366,10 @@ pub struct ComputedStyle {
     /// CSS Basic UI L4 §5 — `appearance`. NOT inherited. Initial: `Auto`.
     /// Phase 0: parse + store; form-widget styling — P2/P3 task.
     pub appearance: Appearance,
+    /// CSS Basic UI L4 §4.4 — `field-sizing`. NOT inherited. Initial: `Fixed`.
+    /// When `Content`, UA-default dimensions are suppressed and `lay_out_box` calls
+    /// `field_sizing_content_intrinsic()` to size the control from its text.
+    pub field_sizing: FieldSizing,
     /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
     pub user_select: UserSelect,
     /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
@@ -2601,6 +2605,11 @@ pub struct ComputedStyle {
     /// CSS Containment L3 §4 — `content-visibility`. NOT inherited. Initial: `Visible`.
     /// Phase 0: parse + store; skip-content optimization — deferred.
     pub content_visibility: ContentVisibility,
+    /// CSS Sizing L4 §4.5 — `interpolate-size`. **Inherited.** Initial: `NumericOnly`.
+    /// Controls whether keyword sizes (`auto`, `min-content`, …) participate in
+    /// transitions/animations. Read by `TransitionScheduler::sync()` to gate
+    /// `height: auto` interpolation.
+    pub interpolate_size: InterpolateSizeMode,
     /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
     /// Phase 0: parse + store; @container query matching — deferred.
     pub container_type: ContainerType,
@@ -3008,6 +3017,18 @@ pub enum Appearance {
     /// `menulist-button` / `searchfield` / `textfield` / `button` и прочие
     /// platform-специфичные значения — хранятся как Compat.
     Compat,
+}
+
+/// CSS Basic UI L4 §4.4 — `field-sizing`. NOT inherited. Initial: `Fixed`.
+/// `Fixed` — UA-specified dimensions apply (default browser behaviour).
+/// `Content` — intrinsic size comes from the control's text content.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FieldSizing {
+    /// UA default dimensions (e.g. `<input>` is 174×21 px).
+    #[default]
+    Fixed,
+    /// Size the control to fit its text content (CSS Basic UI L4 §4.4).
+    Content,
 }
 
 /// CSS Pointer Events L1. Default `auto`.
@@ -4774,6 +4795,7 @@ impl ComputedStyle {
             pointer_events: PointerEvents::Auto,
             touch_action: TouchAction::Auto,
             appearance: Appearance::Auto,
+            field_sizing: FieldSizing::Fixed,
             user_select: UserSelect::Auto,
             resize: Resize::None,
             scroll_behavior: ScrollBehavior::Auto,
@@ -4860,6 +4882,7 @@ impl ComputedStyle {
             widows: 2,
             contain: ContainFlags::NONE,
             content_visibility: ContentVisibility::Visible,
+            interpolate_size: InterpolateSizeMode::NumericOnly,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
             backdrop_filter: Vec::new(),
@@ -5073,6 +5096,7 @@ pub fn compute_style(
         pointer_events: PointerEvents::Auto,
         touch_action: TouchAction::Auto,
         appearance: Appearance::Auto,
+        field_sizing: FieldSizing::Fixed,
         text_align_last: TextAlignLast::Auto,
         // User Select / Scroll Behavior — наследуются.
         user_select: inherited.user_select,
@@ -5181,6 +5205,8 @@ pub fn compute_style(
         // CSS Containment L3 — не наследуются. Initial values.
         contain: ContainFlags::NONE,
         content_visibility: ContentVisibility::Visible,
+        // CSS Sizing L4 §4.5 — interpolate-size is inherited.
+        interpolate_size: inherited.interpolate_size,
         container_type: ContainerType::Normal,
         container_name: Vec::new(),
         // CSS Filter Effects L2 — backdrop-filter не наследуется.
@@ -5702,6 +5728,14 @@ pub fn compute_style(
     // Applied after CSS declarations so author `appearance: none` takes effect.
     apply_ua_appearance(doc, node, &mut style);
 
+    // CSS Basic UI L4 §4.4 — field-sizing: content post-pass.
+    // apply_ua_form_controls ran before the cascade and may have set explicit UA
+    // dimensions. Now that field_sizing is final, clear width/height for text-entry
+    // controls so lay_out picks up field_sizing_content_intrinsic dimensions instead.
+    if style.field_sizing == FieldSizing::Content {
+        apply_ua_form_controls_field_sizing_clear(doc, node, &mut style);
+    }
+
     style
 }
 
@@ -5977,6 +6011,7 @@ pub fn compute_pseudo_element_style(
     style.font_size_adjust = parent.font_size_adjust;
     style.text_wrap_mode = parent.text_wrap_mode;
     style.text_wrap_style = parent.text_wrap_style;
+    style.interpolate_size = parent.interpolate_size;
 
     // Собираем matching declarations из всех правил.
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
@@ -8690,6 +8725,37 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
     style.border_left_color = border;
     style.background_color = Some(bg);
     style.color = fg;
+}
+
+/// CSS Basic UI L4 §4.4 — post-cascade pass: when `field-sizing: content` was set
+/// by the author stylesheet, clears any UA-supplied `width`/`height` on text-entry
+/// controls so that `lay_out` will call `field_sizing_content_intrinsic` instead.
+///
+/// Must run AFTER the CSS cascade so that author `field-sizing: content` is final.
+fn apply_ua_form_controls_field_sizing_clear(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
+    match name.local.as_str() {
+        "input" => {
+            let ty = doc
+                .get(node)
+                .get_attr("type")
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+            // Only text-entry types are eligible; checkbox/radio/range use fixed sizes.
+            match ty.trim() {
+                "checkbox" | "radio" | "range" | "hidden" => {}
+                _ => {
+                    style.width = None;
+                    style.height = None;
+                }
+            }
+        }
+        "textarea" => {
+            style.width = None;
+            style.height = None;
+        }
+        _ => {}
+    }
 }
 
 /// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
@@ -11899,6 +11965,12 @@ fn apply_declaration(
                 _ => Appearance::Compat,
             };
         }
+        "field-sizing" => {
+            style.field_sizing = match val.trim() {
+                "content" => FieldSizing::Content,
+                _ => FieldSizing::Fixed,
+            };
+        }
         "contain" => {
             let v = val.trim();
             style.contain = if v.eq_ignore_ascii_case("none") {
@@ -11928,6 +12000,14 @@ fn apply_declaration(
                 "auto" => ContentVisibility::Auto,
                 "hidden" => ContentVisibility::Hidden,
                 _ => style.content_visibility,
+            };
+        }
+        "interpolate-size" => {
+            // CSS Sizing L4 §4.5 — gates keyword-size interpolation in transitions.
+            style.interpolate_size = match val.trim() {
+                "numeric-only" => InterpolateSizeMode::NumericOnly,
+                "allow-keywords" => InterpolateSizeMode::AllowKeywords,
+                _ => style.interpolate_size,
             };
         }
         "container-type" => {
@@ -13766,6 +13846,10 @@ fn apply_css_wide_keyword(
             } else {
                 init.text_align_last
             };
+        }
+        "interpolate-size" => {
+            style.interpolate_size =
+                if inh { inherited.interpolate_size } else { init.interpolate_size };
         }
         "direction" => {
             style.direction = if inh { inherited.direction } else { init.direction };
@@ -24511,6 +24595,67 @@ mod tests {
         }
     }
 
+    // --- field-sizing ---
+
+    #[test]
+    fn field_sizing_default_is_fixed() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Fixed);
+    }
+
+    #[test]
+    fn field_sizing_content_parses() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+    }
+
+    #[test]
+    fn field_sizing_content_suppresses_ua_width() {
+        // With field-sizing: content, apply_ua_form_controls should NOT set width/height.
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+        assert!(style.width.is_none(), "field-sizing: content must clear UA width");
+        assert!(style.height.is_none(), "field-sizing: content must clear UA height");
+    }
+
+    #[test]
+    fn field_sizing_fixed_preserves_ua_dimensions() {
+        // Default (fixed): UA dimensions are preserved.
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.width, Some(Length::Px(174.0)));
+        assert_eq!(style.height, Some(Length::Px(21.0)));
+    }
+
+    #[test]
+    fn field_sizing_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><input /></div>");
+        let sheet = lumen_css_parser::parse("div { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let input = doc.get(div).children[0];
+        let input_style = compute_style(&doc, input, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.field_sizing, FieldSizing::Content);
+        // field-sizing is not inherited → input keeps Fixed
+        assert_eq!(input_style.field_sizing, FieldSizing::Fixed);
+    }
+
     // --- Display extended values ---
 
     #[test]
@@ -24682,6 +24827,69 @@ mod tests {
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.content_visibility, ContentVisibility::Hidden);
         assert_eq!(span_style.content_visibility, ContentVisibility::Visible);
+    }
+
+    // --- interpolate-size (CSS Sizing L4 §4.5) ---
+
+    #[test]
+    fn interpolate_size_allow_keywords() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: allow-keywords; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+    }
+
+    #[test]
+    fn interpolate_size_numeric_only() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: numeric-only; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::NumericOnly);
+    }
+
+    #[test]
+    fn interpolate_size_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::NumericOnly);
+    }
+
+    #[test]
+    fn interpolate_size_inherited() {
+        // CSS Sizing L4 §4.5 — interpolate-size IS inherited.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: allow-keywords; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+        assert_eq!(span_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+    }
+
+    #[test]
+    fn interpolate_size_unset_inherits() {
+        // `unset` on an inherited property = inherit.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { interpolate-size: allow-keywords; } span { interpolate-size: unset; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
     }
 
     // --- container-type ---
