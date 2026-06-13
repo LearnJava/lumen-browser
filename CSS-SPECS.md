@@ -206,7 +206,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `color-scheme` | 🟡 | parsed; UA switching ⬜ |
 | `forced-color-adjust` | 🟡 | parsed; Forced Colors Mode ⬜ |
 | `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
-| `accent-color` | 🟡 | parsed; UA default ⬜ |
+| `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
 | `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |
 | `color()` predefined spaces | ✅ | srgb/display-p3/rec2020 + srgb-linear/a98-rgb/prophoto-rgb/xyz/xyz-d65/xyz-d50 (P4 2026-06-13); non-displayable gamut-mapped to sRGB; 11 tests; test 96 |
 
