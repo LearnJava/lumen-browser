@@ -130,6 +130,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "content-visibility",
     "counter-increment",
     "counter-reset",
+    "counter-set",
     "cursor",
     "direction",
     "display",
