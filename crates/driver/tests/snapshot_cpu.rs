@@ -183,6 +183,11 @@ const PAGES: &[&str] = &[
     "107-shadow-radius-overflow",
     "108-nested-transforms",
     "109-clippath-transform",
+    // CSS Box Sizing L4 §5 — contain-intrinsic-size: size-contained boxes take the
+    // declared placeholder size, ignoring an oversized child. Pure FillRect geometry;
+    // a GUI-independent gate for geometry the Edge/gdigrab pipeline can't capture
+    // headlessly (the gdigrab capture is blank without a foreground window).
+    "114-contain-intrinsic-size",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.
