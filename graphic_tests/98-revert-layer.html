@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<!-- CSS Cascade L5 §6.4.6: `revert-layer` rolls a property back to the value it
+     would have without the current cascade layer's declarations.
+
+     Layer order: base < theme. `.cell` gets green in `base`, red in `theme`.
+     Cells in the TOP row keep the theme value (red). Cells in the BOTTOM row add
+     `.rev`, whose `background: revert-layer` (declared in `theme`) reverts the
+     theme layer for `background` → falls back to `base` (green).
+
+     Pure solid backgrounds → bit-comparable with Edge. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f {
+    background: #ffffff; width: 1022px; height: 718px; margin: 1px;
+    overflow: hidden; display: flex; flex-wrap: wrap;
+    align-content: flex-start; gap: 8px; padding: 8px; box-sizing: border-box;
+  }
+
+  @layer base, theme;
+
+  @layer base {
+    .cell { background: #2e7d32; } /* green — lower layer */
+  }
+  @layer theme {
+    .cell { background: #c62828; } /* red — higher layer, normally wins */
+    /* revert-layer reverts the `theme` layer for `background` → green again. */
+    .rev  { background: revert-layer; }
+  }
+
+  .cell { width: 326px; height: 340px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- Top row: theme wins → red -->
+  <div class="cell"></div>
+  <div class="cell"></div>
+  <div class="cell"></div>
+  <!-- Bottom row: revert-layer → base → green -->
+  <div class="cell rev"></div>
+  <div class="cell rev"></div>
+  <div class="cell rev"></div>
+</div>
+</body>
+</html>

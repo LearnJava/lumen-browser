@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_ — p4-color-function-spaces влит 2026-06-13
+_(none)_ — p4-revert-layer влит 2026-06-13
 
 ## Workflow
 
@@ -280,6 +280,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-13 | `revert-layer` | CSS Cascade L5 §6.4.6; pre-pass над отсортированным каскадом в `compute_style()`: для каждого свойства, чей победитель = `revert-layer`, удаляются все его декларации из слоя-победителя (та же important-группа), затем повтор; обычный last-wins loop даёт откатанное значение; defensive-skip для не-победивших `revert-layer`; НЕ `CssWideKeyword` (зависит от слоя декларации); ограничение shorthand↔longhand; 5 unit-тестов style.rs + graphic test 98 |
 | 2026-06-13 | `counter-set` | CSS Lists L3 §4; `ComputedStyle.counter_set: Vec<(String,i32)>` (non-inherited); parse через `parse_counter_list(val, 0)` (default 0); `CounterCtx::apply_set()` в counters.rs устанавливает top-of-stack (создаёт на never-reset); порядок reset→increment→set нормативен (set перекрывает increment); 6 unit-тестов lib.rs + 4 counters.rs + graphic test 97 |
 | 2026-06-13 | `color()` predefined spaces | CSS Color 4 §10; добавлены `srgb-linear`/`a98-rgb`/`prophoto-rgb`/`xyz`/`xyz-d65`/`xyz-d50` к `color()` (раньше только srgb/display-p3/rec2020); displayable пространства хранятся как `ColorFloat` со своим `ColorSpace`, не-displayable гамут-маппятся в sRGB при разборе (`predefined_to_srgb_linear()` + `encode_srgb_f32()`); XYZ(D65)→sRGB и Bradford D50→D65 матрицы переиспользуют константы из `lab_to_srgb`; lumen-core не тронут; 6 unit-тестов style.rs + graphic test 96 |
 | 2026-06-13 | `font-size-adjust` | CSS Fonts L5 §4; `TextMeasurer::x_height_px()` (real OS/2 `sxHeight` в `FontMeasurer`/`MultiFontMeasurer`, fallback 0.5·size); post-build pass `apply_font_size_adjust()` в box_tree.rs переписывает `font_size` боксов и inline-сегментов как `size·adjust/aspect` до measurement — единый источник для layout и paint; `Auto`/`None` — no-op; 4 unit-теста box_tree.rs + 4 style.rs + graphic test 95 |

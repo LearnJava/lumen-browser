@@ -264,6 +264,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 
 - **counter-set** — ✅ реализован (CSS Lists L3 §4): `ComputedStyle.counter_set: Vec<(String, i32)>` non-inherited; parse `counter-set: none | (<custom-ident> <integer>?)+` через `parse_counter_list(val, 0)` (default 0); `CounterCtx::apply_set()` в counters.rs устанавливает top-of-stack (создаёт счётчик на never-reset); порядок reset→increment→set нормативен — set перекрывает increment того же элемента; 6 unit-тестов lib.rs + 4 unit-теста counters.rs; тест 97
 
+- **revert-layer** — ✅ реализован (CSS Cascade L5 §6.4.6): значение `revert-layer` откатывает свойство к значению, которое было бы без деклараций текущего каскадного слоя (та же important-группа). Резолвится pre-pass'ом над отсортированным каскадом в `compute_style()`: для каждого свойства, чей победитель = `revert-layer`, удаляются все его декларации из слоя-победителя, затем повтор (нижний слой тоже может содержать `revert-layer`); обычный last-wins loop затем даёт откатанное значение. НЕ является `CssWideKeyword` (зависит от слоя самой декларации). Ограничение: shorthand↔longhand откаты группируются по точному имени свойства; 5 unit-тестов style.rs; тест 98
+
 ### Форматы изображений и мультимедиа
 
 - **AVIF (AV1 Image File Format)** — ✅ реализован (ISO/IEC 23008-12 Phase 0): lumen-image::avif модуль + AvifImageDecoder trait; is_avif() проверяет ISOBMFF ftyp-бокс major brand (avif/avis); decode_avif() использует libavif через `image` крейт feature `avif` (требует cmake+nasm); поддерживает статичные AVIF, анимированные распознаются но первый кадр; ICC-профили не извлекаются (Phase 1); 14 unit-тестов в avif/mod.rs; зарегистрирован в image-decoder dispatch + supported_mime_types(); тест 90
