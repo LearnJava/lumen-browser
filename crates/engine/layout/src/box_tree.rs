@@ -1735,16 +1735,20 @@ fn apply_first_letter_style(
 }
 
 /// CSS Pseudo-elements L4 §5.1 — byte length of the `::first-letter` text unit
-/// at the start of `text`: leading punctuation plus the first letter itself.
+/// at the start of `text`: leading whitespace (raw segment text keeps source
+/// newlines/indent until wrap-time collapsing) plus leading punctuation plus
+/// the first letter itself.
 ///
 /// Phase 0 approximation: char-level (no grapheme clustering), leading
 /// punctuation only (the spec also includes punctuation immediately following
-/// the letter). Returns `text.len()` when the text is punctuation-only.
+/// the letter); `white-space: pre` significance of the swallowed leading
+/// whitespace is ignored. Returns `text.len()` when no letter is found.
 fn first_letter_text_len(text: &str) -> usize {
     for (i, c) in text.char_indices() {
-        if !is_first_letter_punctuation(c) {
-            return i + c.len_utf8();
+        if c.is_whitespace() || is_first_letter_punctuation(c) {
+            continue;
         }
+        return i + c.len_utf8();
     }
     text.len()
 }
@@ -1788,6 +1792,13 @@ fn extract_first_letter_float(
         let mut seg = segments.remove(pos);
         seg.pre_space = 0.0;
         seg.post_space = 0.0;
+        // Strip leading source whitespace (raw newlines/indent from pretty-printed
+        // HTML): it would inflate the drop cap's max-content shrink-to-fit width.
+        let ws_len = seg.text.len() - seg.text.trim_start().len();
+        if ws_len > 0 {
+            seg.text.drain(..ws_len);
+            seg.source_char_offset += ws_len as u32;
+        }
         let node = seg.source_node;
         if segments.is_empty() {
             row_items.remove(ri);
@@ -9375,6 +9386,28 @@ mod tests {
             };
             assert_eq!(segments[0].text, "\u{201C}H");
             assert_eq!(segments[0].style.font_size, 32.0);
+        }
+
+        #[test]
+        fn float_extraction_skips_leading_whitespace() {
+            // Pretty-printed HTML: raw segment text starts with "\n  " — the
+            // first-letter unit must be the first non-whitespace character,
+            // not the newline (regression: TEST-58 drop cap rendered "\n").
+            let root = layout(
+                "<p>\n          Once upon a time</p>",
+                "p::first-letter { float: left; font-size: 48px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert_eq!(letter_seg(cap).text.trim(), "O");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            let super::super::BoxKind::InlineRun { lines, .. } = &rest.kind else {
+                unreachable!();
+            };
+            assert!(
+                lines[0][0].text.starts_with("nce"),
+                "rest must start with 'nce', got {:?}",
+                lines[0][0].text,
+            );
         }
 
         #[test]
