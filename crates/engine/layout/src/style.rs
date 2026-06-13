@@ -2605,6 +2605,11 @@ pub struct ComputedStyle {
     /// CSS Containment L3 §4 — `content-visibility`. NOT inherited. Initial: `Visible`.
     /// Phase 0: parse + store; skip-content optimization — deferred.
     pub content_visibility: ContentVisibility,
+    /// CSS Sizing L4 §4.5 — `interpolate-size`. **Inherited.** Initial: `NumericOnly`.
+    /// Controls whether keyword sizes (`auto`, `min-content`, …) participate in
+    /// transitions/animations. Read by `TransitionScheduler::sync()` to gate
+    /// `height: auto` interpolation.
+    pub interpolate_size: InterpolateSizeMode,
     /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
     /// Phase 0: parse + store; @container query matching — deferred.
     pub container_type: ContainerType,
@@ -4877,6 +4882,7 @@ impl ComputedStyle {
             widows: 2,
             contain: ContainFlags::NONE,
             content_visibility: ContentVisibility::Visible,
+            interpolate_size: InterpolateSizeMode::NumericOnly,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
             backdrop_filter: Vec::new(),
@@ -5199,6 +5205,8 @@ pub fn compute_style(
         // CSS Containment L3 — не наследуются. Initial values.
         contain: ContainFlags::NONE,
         content_visibility: ContentVisibility::Visible,
+        // CSS Sizing L4 §4.5 — interpolate-size is inherited.
+        interpolate_size: inherited.interpolate_size,
         container_type: ContainerType::Normal,
         container_name: Vec::new(),
         // CSS Filter Effects L2 — backdrop-filter не наследуется.
@@ -6003,6 +6011,7 @@ pub fn compute_pseudo_element_style(
     style.font_size_adjust = parent.font_size_adjust;
     style.text_wrap_mode = parent.text_wrap_mode;
     style.text_wrap_style = parent.text_wrap_style;
+    style.interpolate_size = parent.interpolate_size;
 
     // Собираем matching declarations из всех правил.
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
@@ -11993,6 +12002,14 @@ fn apply_declaration(
                 _ => style.content_visibility,
             };
         }
+        "interpolate-size" => {
+            // CSS Sizing L4 §4.5 — gates keyword-size interpolation in transitions.
+            style.interpolate_size = match val.trim() {
+                "numeric-only" => InterpolateSizeMode::NumericOnly,
+                "allow-keywords" => InterpolateSizeMode::AllowKeywords,
+                _ => style.interpolate_size,
+            };
+        }
         "container-type" => {
             style.container_type = match val.trim() {
                 "normal" => ContainerType::Normal,
@@ -13829,6 +13846,10 @@ fn apply_css_wide_keyword(
             } else {
                 init.text_align_last
             };
+        }
+        "interpolate-size" => {
+            style.interpolate_size =
+                if inh { inherited.interpolate_size } else { init.interpolate_size };
         }
         "direction" => {
             style.direction = if inh { inherited.direction } else { init.direction };
@@ -24806,6 +24827,69 @@ mod tests {
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.content_visibility, ContentVisibility::Hidden);
         assert_eq!(span_style.content_visibility, ContentVisibility::Visible);
+    }
+
+    // --- interpolate-size (CSS Sizing L4 §4.5) ---
+
+    #[test]
+    fn interpolate_size_allow_keywords() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: allow-keywords; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+    }
+
+    #[test]
+    fn interpolate_size_numeric_only() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: numeric-only; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::NumericOnly);
+    }
+
+    #[test]
+    fn interpolate_size_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::NumericOnly);
+    }
+
+    #[test]
+    fn interpolate_size_inherited() {
+        // CSS Sizing L4 §4.5 — interpolate-size IS inherited.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: allow-keywords; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+        assert_eq!(span_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+    }
+
+    #[test]
+    fn interpolate_size_unset_inherits() {
+        // `unset` on an inherited property = inherit.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { interpolate-size: allow-keywords; } span { interpolate-size: unset; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
     }
 
     // --- container-type ---
