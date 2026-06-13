@@ -2471,7 +2471,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (760 symbols)
+## lumen-shell  (774 symbols)
 
 `crates/shell/src/address_bar.rs:56` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:70` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -3206,24 +3206,38 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/containers.rs:144` **fn** `get` — Look up an existing store id without allocating
 `crates/shell/src/tabs/containers.rs:150` **fn** `len` — Number of `(origin, container)` mappings tracked
 `crates/shell/src/tabs/containers.rs:156` **fn** `is_empty` — `true` if no mapping has been allocated yet
-`crates/shell/src/tabs/strip.rs:68` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:104` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:115` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:131` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:139` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:160` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:178` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
-`crates/shell/src/tabs/strip.rs:190` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:198` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:210` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:220` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:230` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
-`crates/shell/src/tabs/strip.rs:254` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
-`crates/shell/src/tabs/strip.rs:268` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
-`crates/shell/src/tabs/strip.rs:280` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:300` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:334` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
-`crates/shell/src/tabs/strip.rs:474` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
+`crates/shell/src/tabs/context_menu.rs:40` **fn** `menu_height` — Total menu height in CSS px (background box)
+`crates/shell/src/tabs/context_menu.rs:48` **enum** `MenuAction` — An action the user can pick from the tab context menu
+`crates/shell/src/tabs/context_menu.rs:91` **struct** `TabContextMenu` — State of the right-click tab context menu
+`crates/shell/src/tabs/context_menu.rs:122` **fn** `open_for` — Open the menu for tab `idx` at cursor `(x, y)`. `pinned` is the target
+`crates/shell/src/tabs/context_menu.rs:132` **fn** `close` — Hide the menu
+`crates/shell/src/tabs/context_menu.rs:138` **fn** `is_open` — `true` while the menu is visible
+`crates/shell/src/tabs/context_menu.rs:156` **fn** `item_at` — Map a CSS-px `(x, y)` to the menu row index under it, or `None` if the
+`crates/shell/src/tabs/context_menu.rs:174` **fn** `action_at` — Map a CSS-px `(x, y)` to the [`MenuAction`] under it, or `None`
+`crates/shell/src/tabs/context_menu.rs:184` **fn** `build_overlay` — Build a viewport-locked display list for the open menu
+`crates/shell/src/tabs/strip.rs:70` **struct** `TabEntry` — Metadata for one browser tab
+`crates/shell/src/tabs/strip.rs:109` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:120` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:137` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:145` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:167` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:186` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:198` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:206` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:218` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:228` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:238` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
+`crates/shell/src/tabs/strip.rs:257` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
+`crates/shell/src/tabs/strip.rs:267` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
+`crates/shell/src/tabs/strip.rs:278` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
+`crates/shell/src/tabs/strip.rs:304` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
+`crates/shell/src/tabs/strip.rs:329` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
+`crates/shell/src/tabs/strip.rs:358` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
+`crates/shell/src/tabs/strip.rs:372` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
+`crates/shell/src/tabs/strip.rs:384` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:404` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:438` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:586` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -3703,4 +3717,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3638 symbols in 20 crates*
+*Total: 3652 symbols in 20 crates*
