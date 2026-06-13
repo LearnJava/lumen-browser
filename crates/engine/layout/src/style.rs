@@ -4618,15 +4618,19 @@ pub enum ClipPath {
         /// Центр; `None` = 50% 50%.
         center: Option<(ShapeValue, ShapeValue)>,
     },
-    /// `polygon(x1 y1, x2 y2, ...)` — список вершин (x — % от width,
-    /// y — % от height).
-    Polygon(Vec<(ShapeValue, ShapeValue)>),
+    /// `polygon([<fill-rule>,]? x1 y1, x2 y2, ...)` — список вершин (x — % от
+    /// width, y — % от height) + правило заливки. `FillRule` (CSS Shapes L1
+    /// §3) управляет самопересекающимися полигонами: `EvenOdd` оставляет
+    /// «дырки» в местах перекрытия, `NonZero` (default) заливает их.
+    Polygon(Vec<(ShapeValue, ShapeValue)>, FillRule),
     /// `path([<fill-rule>,]? "<svg-path>")` — CSS Shapes L1 §4. Хранит
     /// предварительно флэттенный полигон в px-координатах системы пути
     /// (origin = верхний левый угол reference box; проценты в `path()`
     /// недопустимы по спецификации). Кривые разбиты на отрезки на этапе
-    /// парсинга через `motion_path::flatten_path_to_polygon`.
-    Path(Vec<(f32, f32)>),
+    /// парсинга через `motion_path::flatten_path_to_polygon`. Второе поле —
+    /// `FillRule` (default `NonZero`); `EvenOdd` делает дырки в
+    /// самопересекающихся путях (звёзды-пентаграммы и т. п.).
+    Path(Vec<(f32, f32)>, FillRule),
 }
 
 /// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
@@ -14972,12 +14976,14 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
     match func.as_str() {
         "path" => {
             // `path([<fill-rule>,]? "<svg-path>")`. Опциональный fill-rule
-            // (nonzero|evenodd) отбрасывается — Lumen клиппит полигоном по
-            // nonzero (см. ResolvedClipShape::Polygon). Строка пути в кавычках.
+            // (nonzero|evenodd) управляет заливкой самопересекающихся путей
+            // (CSS Shapes L1 §4). Строка пути — в кавычках.
+            let mut fill_rule = FillRule::NonZero;
             let inner = match inner.split_once(',') {
-                Some((head, rest))
-                    if matches!(head.trim(), "nonzero" | "evenodd") =>
-                {
+                Some((head, rest)) if matches!(head.trim(), "nonzero" | "evenodd") => {
+                    if head.trim().eq_ignore_ascii_case("evenodd") {
+                        fill_rule = FillRule::EvenOdd;
+                    }
                     rest.trim()
                 }
                 _ => inner,
@@ -14990,7 +14996,7 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             if pts.len() < 3 {
                 None
             } else {
-                Some(ClipPath::Path(pts))
+                Some(ClipPath::Path(pts, fill_rule))
             }
         }
         "inset" => {
@@ -15036,6 +15042,19 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             })
         }
         "polygon" => {
+            // `polygon([<fill-rule>,]? x1 y1, ...)`. Опциональный fill-rule —
+            // первый токен перед первой запятой (CSS Shapes L1 §3).
+            let mut fill_rule = FillRule::NonZero;
+            let mut inner = inner;
+            if let Some((head, rest)) = inner.split_once(',') {
+                let head = head.trim();
+                if head.eq_ignore_ascii_case("nonzero") || head.eq_ignore_ascii_case("evenodd") {
+                    if head.eq_ignore_ascii_case("evenodd") {
+                        fill_rule = FillRule::EvenOdd;
+                    }
+                    inner = rest.trim();
+                }
+            }
             let mut vertices = Vec::new();
             for pair in inner.split(',') {
                 let coords: Vec<ShapeValue> = pair
@@ -15049,7 +15068,7 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             if vertices.is_empty() {
                 None
             } else {
-                Some(ClipPath::Polygon(vertices))
+                Some(ClipPath::Polygon(vertices, fill_rule))
             }
         }
         _ => None,
