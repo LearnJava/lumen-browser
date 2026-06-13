@@ -93,7 +93,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Media Queries L4/L5 | [mediaqueries-4](https://www.w3.org/TR/mediaqueries-4/) | 🟡 | prefers-reduced-motion; hover; pointer | **#35** |
 | CSS Conditional L4 | [css-conditional-4](https://www.w3.org/TR/css-conditional-4/) | 🟡 | @supports full feature detection | **#36** |
 | CSS Color Adjust L1 | [css-color-adjust-1](https://www.w3.org/TR/css-color-adjust-1/) | 🟡 | color-scheme UA switching | **#37** |
-| CSS Box Sizing L4 | [css-sizing-4](https://www.w3.org/TR/css-sizing-4/) | 🟡 | contain-intrinsic-size (interpolate-size ✅) | **#38** |
+| CSS Box Sizing L4 | [css-sizing-4](https://www.w3.org/TR/css-sizing-4/) | ✅ | contain-intrinsic-size ✅ 2026-06-14 (p4-contain-intrinsic-size: longhands + logical aliases + shorthand; size-containment wiring for block/flex/grid height + inline-block width); interpolate-size ✅ | **#38** |
 | CSS Overflow L4 | [css-overflow-4](https://www.w3.org/TR/css-overflow-4/) | ✅ | line-clamp multi-line truncation (layout algorithm done; -webkit-line-clamp/line-clamp, ellipsis, N-line truncation) | **#39** |
 | CSS Easing L1 | [css-easing-1](https://www.w3.org/TR/css-easing-1/) | 🟡 | cubic-bezier/steps interpolation wiring | **#40** |
 

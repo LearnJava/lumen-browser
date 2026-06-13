@@ -2689,6 +2689,17 @@ pub struct ComputedStyle {
     /// CSS Containment L3 §4 — `content-visibility`. NOT inherited. Initial: `Visible`.
     /// Phase 0: parse + store; skip-content optimization — deferred.
     pub content_visibility: ContentVisibility,
+    /// CSS Box Sizing L4 §5 — `contain-intrinsic-width`. NOT inherited. Initial: `None`.
+    /// Placeholder inline-size used as the box's intrinsic width when the element
+    /// is subject to size containment (`contain: size`, `content-visibility: hidden`,
+    /// or `content-visibility: auto` while skipped off-screen). `None` = the CSS
+    /// keyword `none` (no placeholder; content-based width collapses). The optional
+    /// `auto` keyword (last-remembered size) is parsed but treated as the length.
+    /// Stored as a content-box `Length`, resolved against the font-size at layout.
+    pub contain_intrinsic_width: Option<Length>,
+    /// CSS Box Sizing L4 §5 — `contain-intrinsic-height`. NOT inherited. Initial: `None`.
+    /// Placeholder block-size under size containment. See `contain_intrinsic_width`.
+    pub contain_intrinsic_height: Option<Length>,
     /// CSS Sizing L4 §4.5 — `interpolate-size`. **Inherited.** Initial: `NumericOnly`.
     /// Controls whether keyword sizes (`auto`, `min-content`, …) participate in
     /// transitions/animations. Read by `TransitionScheduler::sync()` to gate
@@ -4978,6 +4989,8 @@ impl ComputedStyle {
             widows: 2,
             contain: ContainFlags::NONE,
             content_visibility: ContentVisibility::Visible,
+            contain_intrinsic_width: None,
+            contain_intrinsic_height: None,
             interpolate_size: InterpolateSizeMode::NumericOnly,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
@@ -5302,6 +5315,9 @@ pub fn compute_style(
         // CSS Containment L3 — не наследуются. Initial values.
         contain: ContainFlags::NONE,
         content_visibility: ContentVisibility::Visible,
+        // CSS Box Sizing L4 §5 — contain-intrinsic-* are NOT inherited.
+        contain_intrinsic_width: None,
+        contain_intrinsic_height: None,
         // CSS Sizing L4 §4.5 — interpolate-size is inherited.
         interpolate_size: inherited.interpolate_size,
         container_type: ContainerType::Normal,
@@ -12151,6 +12167,27 @@ fn apply_declaration(
                 _ => style.content_visibility,
             };
         }
+        // CSS Box Sizing L4 §5 — contain-intrinsic-size and its longhands.
+        // Each value is `auto? [ none | <length> ]`. `none` → field stays/becomes
+        // `None`; the optional `auto` (last-remembered size) is accepted and
+        // ignored (we always use the length). Logical `*-block-size` /
+        // `*-inline-size` map to height / width under horizontal-tb writing modes.
+        "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
+            if let Some(v) = parse_contain_intrinsic_one(val) {
+                style.contain_intrinsic_width = v;
+            }
+        }
+        "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
+            if let Some(v) = parse_contain_intrinsic_one(val) {
+                style.contain_intrinsic_height = v;
+            }
+        }
+        "contain-intrinsic-size" => {
+            if let Some((w, h)) = parse_contain_intrinsic_size(val) {
+                style.contain_intrinsic_width = w;
+                style.contain_intrinsic_height = h;
+            }
+        }
         "interpolate-size" => {
             // CSS Sizing L4 §4.5 — gates keyword-size interpolation in transitions.
             style.interpolate_size = match val.trim() {
@@ -13676,6 +13713,55 @@ fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks
 /// `<'text-wrap-mode'> || <'text-wrap-style'>` — 1..=2 keyword-а, любой
 /// порядок, без повторов внутри своего слота. Нераспознанный токен ⇒
 /// весь shorthand невалиден (initial-значения сохраняются как «после reset»).
+/// CSS Box Sizing L4 §5 — parse one `contain-intrinsic-*` component:
+/// `auto? [ none | <length> ]`. Returns `Some(None)` for `none` (no placeholder),
+/// `Some(Some(len))` for a length, and `None` on a parse error (declaration is
+/// then ignored, leaving the previous value). The leading `auto` keyword
+/// (last-remembered-size hint) is accepted and discarded.
+fn parse_contain_intrinsic_one(val: &str) -> Option<Option<Length>> {
+    let mut v = val.trim();
+    if let Some(rest) = v.strip_prefix("auto")
+        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        v = rest.trim_start();
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    parse_length(v).map(Some)
+}
+
+/// CSS Box Sizing L4 §5 — parse the `contain-intrinsic-size` shorthand:
+/// `[ auto? [ none | <length> ] ]{1,2}`. One component sets both axes; two set
+/// width then height. Returns `None` on any parse error.
+fn parse_contain_intrinsic_size(val: &str) -> Option<(Option<Length>, Option<Length>)> {
+    let tokens: Vec<&str> = val.split_whitespace().collect();
+    let mut comps: Vec<Option<Length>> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i].eq_ignore_ascii_case("auto") {
+            i += 1;
+            if i >= tokens.len() {
+                return None;
+            }
+        }
+        let t = tokens[i];
+        if t.eq_ignore_ascii_case("none") {
+            comps.push(None);
+        } else if let Some(l) = parse_length(t) {
+            comps.push(Some(l));
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    match comps.len() {
+        1 => Some((comps[0].clone(), comps[0].clone())),
+        2 => Some((comps[0].clone(), comps[1].clone())),
+        _ => None,
+    }
+}
+
 fn apply_text_wrap_shorthand(style: &mut ComputedStyle, val: &str) {
     style.text_wrap_mode = TextWrapMode::Wrap;
     style.text_wrap_style = TextWrapStyle::Auto;
@@ -14161,6 +14247,29 @@ fn apply_css_wide_keyword(
             } else {
                 init.content_visibility
             };
+        }
+        "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
+            style.contain_intrinsic_width = if inh_only_inherit {
+                inherited.contain_intrinsic_width.clone()
+            } else {
+                init.contain_intrinsic_width.clone()
+            };
+        }
+        "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
+            style.contain_intrinsic_height = if inh_only_inherit {
+                inherited.contain_intrinsic_height.clone()
+            } else {
+                init.contain_intrinsic_height.clone()
+            };
+        }
+        "contain-intrinsic-size" => {
+            if inh_only_inherit {
+                style.contain_intrinsic_width = inherited.contain_intrinsic_width.clone();
+                style.contain_intrinsic_height = inherited.contain_intrinsic_height.clone();
+            } else {
+                style.contain_intrinsic_width = init.contain_intrinsic_width.clone();
+                style.contain_intrinsic_height = init.contain_intrinsic_height.clone();
+            }
         }
         "container-type" => {
             style.container_type = if inh_only_inherit {
@@ -24938,6 +25047,89 @@ mod tests {
         assert_eq!(div_style.field_sizing, FieldSizing::Content);
         // field-sizing is not inherited → input keeps Fixed
         assert_eq!(input_style.field_sizing, FieldSizing::Fixed);
+    }
+
+    // --- contain-intrinsic-size (CSS Box Sizing L4 §5) ---
+
+    #[test]
+    fn contain_intrinsic_size_default_is_none() {
+        let s = ComputedStyle::root();
+        assert!(s.contain_intrinsic_width.is_none());
+        assert!(s.contain_intrinsic_height.is_none());
+    }
+
+    #[test]
+    fn contain_intrinsic_size_shorthand_two_values() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 200px 100px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(200.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(100.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_shorthand_one_value_both_axes() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 50px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(50.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_auto_keyword_uses_length() {
+        // `auto <length>` — the `auto` last-remembered hint is accepted and the
+        // length is used as the placeholder.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: auto 300px auto 150px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(300.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(150.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_none_is_no_placeholder() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(s.contain_intrinsic_width.is_none());
+        assert!(s.contain_intrinsic_height.is_none());
+    }
+
+    #[test]
+    fn contain_intrinsic_height_longhand_and_logical_alias() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { contain-intrinsic-height: 80px; contain-intrinsic-inline-size: 40px; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(80.0)));
+        // inline-size maps to width under horizontal-tb.
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(40.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 200px 100px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.contain_intrinsic_height, Some(Length::Px(100.0)));
+        assert!(span_style.contain_intrinsic_width.is_none());
+        assert!(span_style.contain_intrinsic_height.is_none());
     }
 
     // --- Display extended values ---
