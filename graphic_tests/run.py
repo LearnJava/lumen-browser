@@ -165,6 +165,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('90', '90-avif-image.html', 0.5, 'AVIF image decoder — <picture> с AVIF source + PNG fallback, direct <img src="...avif">'),
     ('91', '91-relative-color.html', 0.5, 'CSS Color L5 §4: relative color syntax — rgb/hsl/oklch(from <color> …) с channel keywords, calc() над каналами, channel reorder, alpha-канал над непрозрачным фоном'),
     ('92', '92-system-colors.html', 0.5, 'CSS Color 4 §6.2: system color keywords — Canvas, ButtonFace, Highlight, GrayText, AccentColor и т.д. как фон и border-color'),
+    ('93', '93-field-sizing.html', 0.5, 'CSS Basic UI L4 §4.4: field-sizing: content — input/textarea подгоняют размер под текст содержимого вместо UA-дефолта'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

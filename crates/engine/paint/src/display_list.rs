@@ -3688,7 +3688,7 @@ fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
 /// vector checkmark / circle belongs to the renderer GPU primitive set.
 fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
     match kind {
-        FormControlKind::Input { input_type, checked } => {
+        FormControlKind::Input { input_type, checked, .. } => {
             if !checked { return; }
             let inset = match input_type {
                 InputType::Checkbox => (b.rect.width * 0.2).clamp(2.0, 4.0),
@@ -3708,7 +3708,7 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
         FormControlKind::Select { selected_text } => {
             emit_select_indicator(b, selected_text, out);
         }
-        FormControlKind::Button | FormControlKind::Textarea => {}
+        FormControlKind::Button | FormControlKind::Textarea { .. } => {}
         FormControlKind::Range { value, min, max } => {
             emit_range_slider(b, *value, *min, *max, out);
         }

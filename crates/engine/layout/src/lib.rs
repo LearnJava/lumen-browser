@@ -307,7 +307,7 @@ fn collect_clickable_rec(
                 FormControlKind::Button => ClickableKind::Button,
                 FormControlKind::Input { .. }
                 | FormControlKind::Select { .. }
-                | FormControlKind::Textarea
+                | FormControlKind::Textarea { .. }
                 | FormControlKind::Range { .. }
                 | FormControlKind::Progress { .. }
                 | FormControlKind::Meter { .. } => ClickableKind::Input,
