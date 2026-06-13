@@ -1642,7 +1642,7 @@ pub fn build_display_list_ordered_dpr(
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr);
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr, &[]);
 
     let mut out = Vec::new();
     for (sc_id, phase) in &order.steps {
@@ -1703,7 +1703,7 @@ pub fn build_display_list_ordered_with_anim_dpr(
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr);
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr, &[]);
 
     let mut out = Vec::new();
     for (sc_id, phase) in &order.steps {
@@ -2425,6 +2425,16 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
 /// - Для non-SC box-а (typically `overflow: hidden` без других триггеров —
 ///   opacity/blend сами триггерят SC) Push/Pop эмитятся inline в
 ///   `bucket.contents` вокруг собственного contents-emit-а и потомков.
+///
+/// `inherited_clips` (BUG-131): rect-клипы (`PushClipRect` /
+/// `PushClipRoundedRect`) от non-SC предков, чьи inline push/pop остались в
+/// бакете родительского SC и уже закрылись там. Дочерний stacking context
+/// рисуется в более позднем слоте painting order, поэтому эти клипы к моменту
+/// его отрисовки уже неактивны — их надо переустановить как внешний слой
+/// данного SC (push в начало `pre`, pop после `post`/CloseLayer). Без этого
+/// трансформированный ребёнок (собственный SC) сбегает из `overflow:hidden`
+/// предка.
+#[allow(clippy::too_many_arguments)]
 fn fill_buckets(
     b: &LayoutBox,
     current_sc: StackingContextId,
@@ -2433,12 +2443,17 @@ fn fill_buckets(
     is_sc_root: bool,
     anim: Option<&CompositorAnimFrame>,
     dpr: f32,
+    inherited_clips: &[DisplayCommand],
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
     let ops = box_layer_ops(b, ov);
 
     if is_sc_root {
         let bucket = &mut buckets[current_sc.0 as usize];
+        // BUG-131: переустановить клипы non-SC предков как внешний слой SC.
+        for clip in inherited_clips {
+            bucket.pre.push(clip.clone());
+        }
         bucket.pre.extend(ops.pre);
         emit_box_self(b, &mut bucket.root_bg, dpr, None);
         // Overflow-клип — после собственных bg/border (они не клиппятся
@@ -2448,16 +2463,25 @@ fn fill_buckets(
         // его сейчас, чтобы не повторно вычислять триггеры.
         bucket.post.extend(ops.overflow_post);
         bucket.post.extend(ops.post);
+        // PopClip для переустановленных клипов — в LIFO порядке, после
+        // собственных Pop-команд SC (CloseLayer).
+        for clip in inherited_clips.iter().rev() {
+            bucket.post.push(clip_pop_for(clip));
+        }
 
+        // Этот SC становится новым clip-anchor: его собственный клип +
+        // переустановленные inherited-клипы охватывают дочерние SC через
+        // root_bg/post (PopClip в CloseLayer после всех детей). Цепочка
+        // сбрасывается.
         for child in &b.children {
             let child_creates_sc =
                 box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &[]);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &[]);
             }
         }
     } else {
@@ -2468,7 +2492,21 @@ fn fill_buckets(
         bucket.contents.extend(ops.pre);
         emit_box_self(b, &mut bucket.contents, dpr, None);
         // Overflow-клип после собственных bg/border (BUG-123).
-        bucket.contents.extend(ops.overflow_pre);
+        bucket.contents.extend(ops.overflow_pre.iter().cloned());
+
+        // BUG-131: собственный rect-клип этого non-SC box-а добавляется к
+        // цепочке для дочерних SC (его inline push/pop их не охватывает).
+        // Scroll-слои не наследуем — переустановка translate конфликтовала бы
+        // с `set_transform` ребёнка (вне scope; overflow:hidden не затронут).
+        let mut child_clips: Vec<DisplayCommand> = inherited_clips.to_vec();
+        for cmd in &ops.overflow_pre {
+            if matches!(
+                cmd,
+                DisplayCommand::PushClipRect { .. } | DisplayCommand::PushClipRoundedRect { .. }
+            ) {
+                child_clips.push(cmd.clone());
+            }
+        }
 
         for child in &b.children {
             let child_creates_sc =
@@ -2476,15 +2514,26 @@ fn fill_buckets(
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_clips);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &child_clips);
             }
         }
 
         let bucket = &mut buckets[current_sc.0 as usize];
         bucket.contents.extend(ops.overflow_post);
         bucket.contents.extend(ops.post);
+    }
+}
+
+/// Парный `Pop` для переустановленного push-клипа (BUG-131 clip inheritance).
+/// `inherited_clips` содержит только `PushClipRect` / `PushClipRoundedRect`
+/// (scroll-слои отфильтрованы), поэтому всегда `PopClip`; match оставлен общим
+/// на случай расширения набора наследуемых клипов.
+fn clip_pop_for(push: &DisplayCommand) -> DisplayCommand {
+    match push {
+        DisplayCommand::PushScrollLayer { .. } => DisplayCommand::PopScrollLayer,
+        _ => DisplayCommand::PopClip,
     }
 }
 
@@ -7909,6 +7958,64 @@ mod tests {
             assert!(push_idx < text_idx);
             assert!(text_idx < pop_idx);
         }
+    }
+
+    #[test]
+    fn ordered_transformed_child_clipped_by_overflow_hidden_ancestor() {
+        // BUG-131: a transformed child creates its own stacking context and is
+        // emitted in a later painting-order slot. The overflow:hidden ancestor's
+        // clip is emitted inline in the parent SC bucket and closes before the
+        // child SC paints — so the clip must be re-established around the child.
+        // Regression: net open clip-rects at the inner box must be > 0.
+        let dl = build_ordered(
+            "<div class='clip'><div class='inner'></div></div>",
+            ".clip { width:100px; height:100px; overflow:hidden; } \
+             .inner { width:50px; height:50px; background:#0000ff; \
+                      transform:translate(40px,40px); }",
+        );
+        // The inner transformed box (#0000ff) sits in its own SC.
+        let inner_fill = dl
+            .iter()
+            .position(|c| matches!(
+                c,
+                DisplayCommand::FillRect { color, .. }
+                    if color.r == 0 && color.g == 0 && color.b == 255
+            ))
+            .expect("inner box FillRect must be emitted");
+        // It must be wrapped by a PushTransform (its own SC layer).
+        let transform_before = dl[..inner_fill]
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::PushTransform { .. }));
+        assert!(
+            transform_before.is_some(),
+            "inner box must be inside its PushTransform layer"
+        );
+        // Net open rect-clips just before the inner FillRect: with the fix the
+        // ancestor `.clip` overflow clip is re-pushed, so depth >= 1.
+        let mut depth: i32 = 0;
+        for c in &dl[..inner_fill] {
+            match c {
+                DisplayCommand::PushClipRect { .. }
+                | DisplayCommand::PushClipRoundedRect { .. } => depth += 1,
+                DisplayCommand::PopClip => depth -= 1,
+                _ => {}
+            }
+        }
+        assert!(
+            depth >= 1,
+            "transformed child must stay inside its overflow:hidden ancestor's \
+             clip (open clip depth = {depth}, expected >= 1)"
+        );
+        // The re-established clip must be the container's content box (0,0,100,100).
+        let has_container_clip = dl[..inner_fill].iter().any(|c| matches!(
+            c,
+            DisplayCommand::PushClipRect { rect }
+                if (rect.width - 100.0).abs() < 0.5 && (rect.height - 100.0).abs() < 0.5
+        ));
+        assert!(
+            has_container_clip,
+            "container's 100x100 overflow clip must wrap the transformed child"
+        );
     }
 
     #[test]
