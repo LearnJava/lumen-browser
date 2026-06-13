@@ -1696,8 +1696,8 @@ fn apply_first_letter_style(
                 continue;
             }
             let text = segments[i].text.clone();
-            // Split at the first char boundary (CSS "typographic character unit").
-            let boundary = text.char_indices().nth(1).map(|(b, _)| b).unwrap_or(text.len());
+            // CSS Pseudo-elements L4 §5.1: leading punctuation + first letter.
+            let boundary = first_letter_text_len(&text);
             if boundary < text.len() {
                 // Multi-char segment: split into first-letter + rest.
                 let rest_text = text[boundary..].to_string();
@@ -1734,6 +1734,121 @@ fn apply_first_letter_style(
     }
 }
 
+/// CSS Pseudo-elements L4 §5.1 — byte length of the `::first-letter` text unit
+/// at the start of `text`: leading whitespace (raw segment text keeps source
+/// newlines/indent until wrap-time collapsing) plus leading punctuation plus
+/// the first letter itself.
+///
+/// Phase 0 approximation: char-level (no grapheme clustering), leading
+/// punctuation only (the spec also includes punctuation immediately following
+/// the letter); `white-space: pre` significance of the swallowed leading
+/// whitespace is ignored. Returns `text.len()` when no letter is found.
+fn first_letter_text_len(text: &str) -> usize {
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() || is_first_letter_punctuation(c) {
+            continue;
+        }
+        return i + c.len_utf8();
+    }
+    text.len()
+}
+
+/// True for punctuation that joins the `::first-letter` text unit
+/// (CSS Pseudo-elements L4 §5.1: Unicode Ps/Pe/Pi/Pf/Po classes; approximated
+/// as ASCII punctuation + common typographic quotes — no Unicode tables yet).
+fn is_first_letter_punctuation(c: char) -> bool {
+    c.is_ascii_punctuation()
+        || matches!(c, '«' | '»' | '“' | '”' | '‘' | '’' | '„' | '‚' | '‹' | '›')
+}
+
+/// CSS Pseudo-elements L4 §5.2 — `::first-letter` layout split, float variant
+/// (drop cap, BB-2).
+///
+/// When the `::first-letter` rule contains `float: left|right`, the first-letter
+/// segment (already split out and styled by `apply_first_letter_pseudo`) is
+/// removed from its `InlineRun` and promoted to a block-level float `LayoutBox`;
+/// the parent block's float machinery then places it and narrows the remaining
+/// text lines around it. Returns `None` when no `FirstLetter` segment exists.
+///
+/// Box structure: the outer `Block` carries the full ::first-letter style
+/// (float, margins, padding, border, background); the inner anonymous
+/// `InlineRun` holds the single letter segment and supplies the line metrics
+/// (::first-letter `font-size` × `line-height`). An `InlineRun` emptied by the
+/// extraction is dropped from `row_items`.
+// CSS: ::first-letter — P4 wires further drop-cap properties on top of this
+// split (initial-letter, initial-letter-align).
+fn extract_first_letter_float(
+    row_items: &mut Vec<LayoutBox>,
+    fl_style: &ComputedStyle,
+) -> Option<LayoutBox> {
+    for ri in 0..row_items.len() {
+        let BoxKind::InlineRun { segments, .. } = &mut row_items[ri].kind else {
+            continue;
+        };
+        let Some(pos) = segments.iter().position(|s| s.pseudo_kind == PseudoKind::FirstLetter)
+        else {
+            continue;
+        };
+        let mut seg = segments.remove(pos);
+        seg.pre_space = 0.0;
+        seg.post_space = 0.0;
+        // Strip leading source whitespace (raw newlines/indent from pretty-printed
+        // HTML): it would inflate the drop cap's max-content shrink-to-fit width.
+        let ws_len = seg.text.len() - seg.text.trim_start().len();
+        if ws_len > 0 {
+            seg.text.drain(..ws_len);
+            seg.source_char_offset += ws_len as u32;
+        }
+        let node = seg.source_node;
+        if segments.is_empty() {
+            row_items.remove(ri);
+        }
+        // Inner anonymous run: ::first-letter font metrics for the line box,
+        // but it must not itself float, clear, or indent inside the drop cap.
+        let mut inner_style = anon_style(fl_style);
+        inner_style.float_side = FloatSide::None;
+        inner_style.clear = ClearSide::None;
+        inner_style.text_indent = Length::Px(0.0);
+        let inner = LayoutBox {
+            node,
+            rect: Rect::ZERO,
+            style: inner_style,
+            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+            children: vec![],
+            col_span: 1,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        };
+        let mut outer_style = fl_style.clone();
+        outer_style.display = Display::Block;
+        outer_style.text_indent = Length::Px(0.0);
+        return Some(LayoutBox {
+            node,
+            rect: Rect::ZERO,
+            style: outer_style,
+            kind: BoxKind::Block,
+            children: vec![inner],
+            col_span: 1,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        });
+    }
+    None
+}
+
+/// True for the synthesized drop-cap box produced by
+/// [`extract_first_letter_float`]: a float `Block` whose only child is an
+/// `InlineRun` with a single `PseudoKind::FirstLetter` segment. Used to keep
+/// `::first-line` overrides off the drop cap (CSS Pseudo-elements L4 §5.2:
+/// ::first-letter wins where the two pseudo-elements conflict).
+fn is_first_letter_box(b: &LayoutBox) -> bool {
+    b.style.float_side != FloatSide::None
+        && b.children.len() == 1
+        && matches!(
+            &b.children[0].kind,
+            BoxKind::InlineRun { segments, .. }
+                if segments.len() == 1 && segments[0].pseudo_kind == PseudoKind::FirstLetter
+        )
+}
+
 /// CSS Pseudo-elements L4 §3.1 — apply `::first-line` style overrides after layout.
 ///
 /// Must be called after `lay_out` has populated `InlineRun.lines` with `InlineFrag`s.
@@ -1747,6 +1862,11 @@ pub(crate) fn apply_first_line_pseudo_styles(
     viewport: Size,
     dark_mode: bool,
 ) {
+    // CSS Pseudo-elements L4 §5.2 (BB-2): never apply ::first-line inside the
+    // synthesized drop-cap box — ::first-letter wins where the two conflict.
+    if is_first_letter_box(b) {
+        return;
+    }
     for child in &mut b.children {
         apply_first_line_pseudo_styles(child, doc, sheet, viewport, dark_mode);
     }
@@ -2195,6 +2315,11 @@ fn is_inline_block(
 }
 
 /// Обнуляет box-model spacing анонимного контейнера (InlineRun / InlineBlockRow).
+// BUG-152: anonymous boxes clone the parent's non-inherited float_side/clear/
+// position — an anonymous InlineRun inside a floated block re-enters the float
+// branch of its own parent's layout loop. Anonymous boxes cannot float
+// (CSS 2.1 §9.2.2); needs `s.float_side = FloatSide::None` (and review of
+// clear/position) with regression check of float-containing graphic tests.
 fn anon_style(parent: &ComputedStyle) -> ComputedStyle {
     let mut s = parent.clone();
     s.margin_top = LengthOrAuto::ZERO;
@@ -2253,9 +2378,10 @@ fn apply_first_letter_pseudo(
     ) else {
         return;
     };
-    // Split at first Unicode scalar boundary (good-enough for Phase 0; full grapheme
-    // cluster support requires unicode-segmentation which is not yet a dependency).
-    let first_char_end = segs[pos].text.chars().next().map_or(0, |c| c.len_utf8());
+    // CSS Pseudo-elements L4 §5.1: leading punctuation + first letter. Char-level
+    // boundary (full grapheme cluster support requires unicode-segmentation,
+    // which is not yet a dependency).
+    let first_char_end = first_letter_text_len(&segs[pos].text);
     if first_char_end == 0 {
         return;
     }
@@ -3168,7 +3294,20 @@ fn build_box(
                 if let Some(fl_style) = compute_pseudo_element_style(
                     doc, id, "first-letter", sheet, &style, viewport, dark_mode,
                 ) {
-                    apply_first_letter_style(&mut row_items, fl_style, &style);
+                    // CSS Pseudo-elements L4 §5.2 — float ::first-letter → drop cap
+                    // (BB-2): promote the letter to a block-level float sibling placed
+                    // before the run. Only for the inline group that opens the block
+                    // (::first-letter targets the block's first formatted line).
+                    let first_group = children
+                        .iter()
+                        .all(|c| matches!(c.kind, BoxKind::Marker { .. }));
+                    if fl_style.float_side != FloatSide::None && first_group {
+                        if let Some(letter) = extract_first_letter_float(&mut row_items, &fl_style) {
+                            children.push(letter);
+                        }
+                    } else {
+                        apply_first_letter_style(&mut row_items, fl_style, &style);
+                    }
                 }
 
                 match row_items.len() {
@@ -4345,12 +4484,18 @@ fn lay_out(
                         let avail_right = fc.right_edge_at(child_y, container_right);
                         let avail_w = (avail_right - avail_left).max(0.0);
 
-                        // Shrink-to-fit width: explicit CSS width wins; otherwise use
-                        // preferred content width clamped to available space.
+                        // Shrink-to-fit width (CSS 2.1 §10.3.5): explicit CSS width wins;
+                        // otherwise preferred content width, falling back to max-content
+                        // measurement for text-only floats (e.g. the ::first-letter
+                        // drop-cap box, BB-2), clamped to available space.
                         let float_layout_w = if child.style.width.is_some() {
                             avail_w
                         } else {
                             preferred_inline_block_width(child, measurer, viewport)
+                                .or_else(|| {
+                                    let w = max_content_outer_width(child, measurer, viewport);
+                                    (w > 0.0).then_some(w)
+                                })
                                 .map(|pw| pw.min(avail_w))
                                 .unwrap_or(avail_w)
                         };
@@ -9078,6 +9223,208 @@ mod tests {
                     "each run's first seg should be FirstLetter"
                 );
             }
+        }
+    }
+
+    /// Shared helpers for the ::first-letter drop-cap tests (BB-2).
+    mod first_letter_drop_cap {
+        struct Fixed8;
+        impl super::super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        fn layout(html: &str, css: &str) -> super::super::LayoutBox {
+            super::super::layout_measured(
+                &lumen_html_parser::parse(html),
+                &lumen_css_parser::parse(css),
+                lumen_core::geom::Size::new(800.0, 600.0),
+                &Fixed8,
+            )
+        }
+
+        /// Depth-first search for the synthesized drop-cap box.
+        fn find_drop_cap(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+            if super::super::is_first_letter_box(b) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_drop_cap)
+        }
+
+        /// First non-drop-cap InlineRun in the tree (the paragraph remainder).
+        fn find_rest_run(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+            if super::super::is_first_letter_box(b) {
+                return None;
+            }
+            if matches!(b.kind, super::super::BoxKind::InlineRun { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_rest_run)
+        }
+
+        fn letter_seg(b: &super::super::LayoutBox) -> &super::super::InlineSegment {
+            let super::super::BoxKind::InlineRun { segments, .. } = &b.children[0].kind else {
+                panic!("drop-cap inner box must be InlineRun");
+            };
+            &segments[0]
+        }
+
+        #[test]
+        fn float_extracts_drop_cap_box() {
+            let root = layout(
+                "<p>Hello world</p>",
+                "p::first-letter { float: left; font-size: 32px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert_eq!(letter_seg(cap).text, "H");
+            assert_eq!(letter_seg(cap).style.font_size, 32.0);
+            let rest = find_rest_run(&root).expect("rest run missing");
+            let super::super::BoxKind::InlineRun { segments, .. } = &rest.kind else {
+                unreachable!();
+            };
+            assert_eq!(segments[0].text, "ello world");
+        }
+
+        #[test]
+        fn float_narrows_text_beside_drop_cap() {
+            let root = layout(
+                "<p>Hello world</p>",
+                "p::first-letter { float: left; font-size: 32px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            assert!(
+                rest.rect.x >= cap.rect.x + cap.rect.width - 0.01,
+                "rest run x={} must start after drop cap right edge {}",
+                rest.rect.x,
+                cap.rect.x + cap.rect.width,
+            );
+        }
+
+        #[test]
+        fn float_drop_cap_shrinks_to_letter_width() {
+            // Fixed8: every char 8px. padding 6px each side → 8 + 12 = 20px outer,
+            // height = 32px × line-height 1 + 12 = 44px.
+            let root = layout(
+                "<p>Hello world</p>",
+                "p::first-letter { float: left; font-size: 32px; line-height: 1; padding: 6px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert!(
+                (cap.rect.width - 20.0).abs() < 0.1,
+                "drop cap width {} ≠ 20",
+                cap.rect.width,
+            );
+            assert!(
+                (cap.rect.height - 44.0).abs() < 0.1,
+                "drop cap height {} ≠ 44",
+                cap.rect.height,
+            );
+        }
+
+        #[test]
+        fn float_single_char_paragraph_drops_empty_run() {
+            let root = layout("<p>X</p>", "p::first-letter { float: left; font-size: 32px; line-height: 1; }");
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert_eq!(letter_seg(cap).text, "X");
+            assert!(find_rest_run(&root).is_none(), "emptied InlineRun must be dropped");
+            // CSS 2.1 §9.5: the paragraph height still encloses the float.
+            fn find_p<'a>(b: &'a super::super::LayoutBox, cap: &super::super::LayoutBox) -> Option<&'a super::super::LayoutBox> {
+                if b.children.iter().any(|c| std::ptr::eq(c, cap)) {
+                    return Some(b);
+                }
+                b.children.iter().find_map(|c| find_p(c, cap))
+            }
+            let p = find_p(&root, cap).expect("paragraph not found");
+            assert!(
+                p.rect.height >= cap.rect.height - 0.01,
+                "paragraph height {} must enclose float {}",
+                p.rect.height,
+                cap.rect.height,
+            );
+        }
+
+        #[test]
+        fn float_right_places_drop_cap_at_right_edge() {
+            let root = layout(
+                "<p>Hello world</p>",
+                "p::first-letter { float: right; font-size: 32px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            assert!(
+                cap.rect.x > rest.rect.x,
+                "right-floated drop cap x={} must sit right of the text x={}",
+                cap.rect.x,
+                rest.rect.x,
+            );
+            assert!(
+                cap.rect.x + cap.rect.width <= 800.0 + 0.01,
+                "drop cap must not overflow the container",
+            );
+        }
+
+        #[test]
+        fn non_float_first_letter_stays_inline() {
+            let root = layout("<p>Hello world</p>", "p::first-letter { font-size: 32px; }");
+            assert!(find_drop_cap(&root).is_none(), "no drop-cap box without float");
+            let run = find_rest_run(&root).expect("run missing");
+            let super::super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+                unreachable!();
+            };
+            assert_eq!(segments[0].text, "H");
+            assert_eq!(segments[0].style.font_size, 32.0);
+            assert_eq!(segments[1].text, "ello world");
+        }
+
+        #[test]
+        fn leading_punctuation_joins_first_letter() {
+            // CSS Pseudo-elements L4 §5.1: leading punctuation is part of the unit.
+            let root = layout("<p>\u{201C}Hello world\u{201D}</p>", "p::first-letter { font-size: 32px; }");
+            let run = find_rest_run(&root).expect("run missing");
+            let super::super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+                unreachable!();
+            };
+            assert_eq!(segments[0].text, "\u{201C}H");
+            assert_eq!(segments[0].style.font_size, 32.0);
+        }
+
+        #[test]
+        fn float_extraction_skips_leading_whitespace() {
+            // Pretty-printed HTML: raw segment text starts with "\n  " — the
+            // first-letter unit must be the first non-whitespace character,
+            // not the newline (regression: TEST-58 drop cap rendered "\n").
+            let root = layout(
+                "<p>\n          Once upon a time</p>",
+                "p::first-letter { float: left; font-size: 48px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert_eq!(letter_seg(cap).text.trim(), "O");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            let super::super::BoxKind::InlineRun { lines, .. } = &rest.kind else {
+                unreachable!();
+            };
+            assert!(
+                lines[0][0].text.starts_with("nce"),
+                "rest must start with 'nce', got {:?}",
+                lines[0][0].text,
+            );
+        }
+
+        #[test]
+        fn first_line_does_not_override_drop_cap() {
+            // ::first-letter wins over ::first-line where they conflict.
+            let root = layout(
+                "<p>Hello world and more words here</p>",
+                "p::first-letter { float: left; font-size: 32px; } p::first-line { font-size: 20px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            let super::super::BoxKind::InlineRun { lines, .. } = &cap.children[0].kind else {
+                unreachable!();
+            };
+            assert!(
+                lines[0].iter().all(|f| f.style.font_size == 32.0),
+                "drop-cap frags must keep the ::first-letter font, not ::first-line",
+            );
         }
     }
 
