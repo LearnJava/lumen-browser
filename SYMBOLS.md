@@ -1325,7 +1325,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:77` **fn** `read_later` — Direct access to the read-later store for status / touch operations
 `crates/knowledge/src/store.rs:83` **fn** `notes` — Direct access to the notes store for URL-based note listing and
 
-## lumen-layout  (527 symbols)
+## lumen-layout  (528 symbols)
 
 `crates/engine/layout/src/anchor.rs:40` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:69` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -1389,11 +1389,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:2133` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
 `crates/engine/layout/src/box_tree.rs:2146` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
 `crates/engine/layout/src/box_tree.rs:2181` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:6964` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:7147` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:7166` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:7196` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:8097` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:6970` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:7153` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:7172` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:7202` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:8103` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -1447,11 +1447,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/lib.rs:923` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
 `crates/engine/layout/src/lib.rs:946` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
 `crates/engine/layout/src/lib.rs:996` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
-`crates/engine/layout/src/lib.rs:1021` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
-`crates/engine/layout/src/lib.rs:1090` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
-`crates/engine/layout/src/lib.rs:1116` **fn** `set_scroll_position` — Update the scroll position of a node in the layout tree
-`crates/engine/layout/src/lib.rs:1149` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
-`crates/engine/layout/src/lib.rs:1170` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
+`crates/engine/layout/src/lib.rs:1028` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
+`crates/engine/layout/src/lib.rs:1084` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
+`crates/engine/layout/src/lib.rs:1132` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
+`crates/engine/layout/src/lib.rs:1158` **fn** `set_scroll_position` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/lib.rs:1191` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
+`crates/engine/layout/src/lib.rs:1212` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
 `crates/engine/layout/src/masonry.rs:33` **fn** `lay_out_masonry` — Greedy waterfall masonry placement algorithm (CSS Grid L3 §14)
 `crates/engine/layout/src/masonry.rs:64` **fn** `min_track_idx` — Returns the index of the track with the minimum running height
 `crates/engine/layout/src/mathml.rs:23` **enum** `MathmlElementKind` — Represents the type of MathML element and its visual role
@@ -3689,4 +3690,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3624 symbols in 20 crates*
+*Total: 3625 symbols in 20 crates*
