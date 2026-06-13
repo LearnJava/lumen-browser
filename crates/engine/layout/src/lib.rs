@@ -8917,6 +8917,43 @@ mod tests {
     }
 
     #[test]
+    fn clip_path_path_triangle() {
+        // CSS Shapes L1 §4 — path() флэттится в полигон; прямые сегменты
+        // (M/L/Z) сохраняют вершины 1:1.
+        let root = lay(
+            "<p>x</p>",
+            r#"p { clip-path: path("M 0 0 L 100 0 L 50 80 Z"); }"#,
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Path(pts)) => {
+                assert!(pts.contains(&(0.0, 0.0)));
+                assert!(pts.contains(&(100.0, 0.0)));
+                assert!(pts.contains(&(50.0, 80.0)));
+            }
+            _ => panic!("expected Path, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_path_with_fill_rule() {
+        // Опциональный fill-rule перед строкой пути отбрасывается.
+        let root = lay(
+            "<p>x</p>",
+            r#"p { clip-path: path(evenodd, "M 0 0 L 10 0 L 10 10 Z"); }"#,
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        assert!(matches!(cp, Some(ClipPath::Path(_))), "got {cp:?}");
+    }
+
+    #[test]
+    fn clip_path_path_degenerate_rejected() {
+        // Путь без замкнутой области (< 3 точек) не создаёт клип.
+        let root = lay("<p>x</p>", r#"p { clip-path: path("M 0 0"); }"#);
+        assert_eq!(first_p_style(&root).clip_path, None);
+    }
+
+    #[test]
     fn clip_path_none_clears() {
         let root = lay("<p>x</p>", "p { clip-path: circle(50px); clip-path: none; }");
         assert_eq!(first_p_style(&root).clip_path, None);
