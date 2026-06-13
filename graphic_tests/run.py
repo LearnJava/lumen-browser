@@ -163,6 +163,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('88', '88-anchor-nested.html', 0.5, 'anchor-name в вложенных элементах — иерархия DOM, поиск якорей (стаб)'),
     ('89', '89-anchor-multiple-names.html', 0.5, 'несколько anchor-name элементов — регистрация множества якорей в дереве (стаб)'),
     ('90', '90-avif-image.html', 0.5, 'AVIF image decoder — <picture> с AVIF source + PNG fallback, direct <img src="...avif">'),
+    ('91', '91-relative-color.html', 0.5, 'CSS Color L5 §4: relative color syntax — rgb/hsl/oklch(from <color> …) с channel keywords, calc() над каналами, channel reorder, alpha-канал над непрозрачным фоном'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
