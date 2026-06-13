@@ -266,6 +266,17 @@
     </div>
   </div>
 
+  <!-- contain-intrinsic-size: size-contained boxes take the declared placeholder
+       size, ignoring the oversized child (CSS Box Sizing L4 §5). -->
+  <div style="margin-top:8px;display:flex;gap:6px;align-items:flex-start">
+    <div style="display:inline-block;contain:size;contain-intrinsic-size:90px 40px;background:#7e3ff2;overflow:hidden">
+      <div style="width:300px;height:300px;background:#b794f6"></div>
+    </div>
+    <div style="display:inline-block;contain:size;contain-intrinsic-size:50px 60px;background:#c0501a;overflow:hidden">
+      <div style="width:300px;height:300px;background:#f6ad55"></div>
+    </div>
+  </div>
+
   <!-- @container queries: wide(blue tall) · narrow(red short) · named(green) · max-width(yellow) -->
   <style>
     .cq-wide  { container-type:size; width:120px; height:50px; background:#0f3460; border:1px solid #1a5276; }

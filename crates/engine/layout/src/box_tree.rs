@@ -4190,6 +4190,29 @@ fn collapsed_top_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
     }
 }
 
+/// CSS Box Sizing L4 §5 — content block-size contribution under size containment.
+/// When `size_contained` is true the box ignores its children for auto sizing and
+/// uses the resolved `contain-intrinsic-height` (content-box px, clamped ≥ 0), or
+/// `0.0` when the value is `none`/unset. Otherwise returns the measured
+/// `content_height` unchanged.
+fn contained_content_height(
+    size_contained: bool,
+    style: &ComputedStyle,
+    em: f32,
+    viewport: Size,
+    content_height: f32,
+) -> f32 {
+    if size_contained {
+        style
+            .contain_intrinsic_height
+            .as_ref()
+            .and_then(|l| l.resolve(em, None, viewport))
+            .map_or(0.0, |v| v.max(0.0))
+    } else {
+        content_height
+    }
+}
+
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
 ///
@@ -4222,15 +4245,16 @@ fn lay_out(
     // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
     // flow position starts below the expanded viewport and the shell hasn't
     // ratcheted the node relevant, drop the children for this pass: the element
-    // keeps its own box (explicit width/height still apply below; auto height
-    // collapses — no contain-intrinsic-size yet) and paint emits nothing for
-    // the subtree. The shell drains `take_cv_skipped()` after layout and emits
+    // keeps its own box and paint emits nothing for the subtree. While skipped,
+    // the element is size-contained, so its auto block-size collapses to the
+    // `contain-intrinsic-height` placeholder (see `size_contained` below). The
+    // shell drains `take_cv_skipped()` after layout and emits
     // ContentVisibilityChange events / triggers relayout on scroll.
     // CSS: content-visibility — parsing + ComputedStyle field already wired.
-    if b.style.content_visibility == crate::style::ContentVisibility::Auto
+    let cv_auto_skipped = b.style.content_visibility == crate::style::ContentVisibility::Auto
         && !b.children.is_empty()
-        && crate::content_visibility::cv_should_skip(b.node, start_y, viewport.height)
-    {
+        && crate::content_visibility::cv_should_skip(b.node, start_y, viewport.height);
+    if cv_auto_skipped {
         b.children.clear();
     }
 
@@ -4266,6 +4290,16 @@ fn lay_out(
     let s = b.style.clone();
     let em = s.font_size;
     let cb = available_width;
+
+    // CSS Box Sizing L4 §5 — the box is subject to size containment (its size is
+    // computed as if it had no contents) when `contain: size` is set, when
+    // `content-visibility: hidden` (always skips/contains its subtree), or when
+    // `content-visibility: auto` skipped the subtree this pass. Under size
+    // containment, auto width/height come from `contain-intrinsic-*` (or 0 when
+    // the value is `none`) instead of the content.
+    let size_contained = s.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
+        || s.content_visibility == crate::style::ContentVisibility::Hidden
+        || cv_auto_skipped;
 
     // Резолвим typed Length-поля с known containing block.
     let margin_left = s.margin_left.resolve_or_zero(em, cb, viewport);
@@ -4391,10 +4425,22 @@ fn lay_out(
     // Phase 0 shrink-to-fit для inline-block без явной CSS width.
     // Полный алгоритм (CSS 2.1 §10.3.9) требует двух проходов; здесь —
     // упрощение: ищем максимальную explicit-width среди потомков.
-    if s.width.is_none() && s.display == Display::InlineBlock
-        && let Some(pref_w) = preferred_inline_block_width(b, measurer, viewport)
-    {
-        b.rect.width = pref_w.min(b.rect.width);
+    // CSS Box Sizing L4 §5: a size-contained inline-block ignores its content
+    // for auto inline-size and uses contain-intrinsic-width (content-box → +pad/
+    // border), or 0 when `none`/unset — exactly as if it had no contents.
+    if s.width.is_none() && s.display == Display::InlineBlock {
+        if size_contained {
+            let cw = s
+                .contain_intrinsic_width
+                .as_ref()
+                .and_then(|l| l.resolve(em, None, viewport))
+                .map_or(0.0, |v| v.max(0.0));
+            b.rect.width = (cw + padding_left + padding_right
+                + s.border_left_width + s.border_right_width)
+                .min(b.rect.width);
+        } else if let Some(pref_w) = preferred_inline_block_width(b, measurer, viewport) {
+            b.rect.width = pref_w.min(b.rect.width);
+        }
     }
 
     // CSS 2.1 §10.3.3 — auto horizontal-margin centering for block-level
@@ -4635,7 +4681,7 @@ fn lay_out(
                 {
                     (b.rect.width * ah / aw).max(0.0)
                 } else {
-                    let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                    let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                     ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
                 return;
@@ -4664,7 +4710,7 @@ fn lay_out(
                 {
                     (b.rect.width * ah / aw).max(0.0)
                 } else {
-                    let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                    let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                     ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
                 return;
@@ -5067,9 +5113,10 @@ fn lay_out(
                 // Phase 0: ratio applied in border-box space.
                 (b.rect.width * ah / aw).max(0.0)
             } else {
-                // CSS Containment L3 §3.3: contain:size suppresses children contribution
-                // to auto height — intrinsic height = 0.
-                let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                // CSS Containment L3 §3.3 / CSS Box Sizing L4 §5: size containment
+                // suppresses children's contribution to auto height — the box uses
+                // contain-intrinsic-height (or 0 when `none`/unset) instead.
+                let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                 ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
             };
             // CSS Basic UI L4 §4.4 — field-sizing: content height override.
@@ -11204,6 +11251,60 @@ mod tests {
         assert_eq!(skipped.len(), 1, "exactly one node recorded as skipped");
         assert_eq!(skipped[0].0, cv.node);
         assert!(skipped[0].1 >= 2000.0, "recorded top is the collapsed flow position");
+    }
+
+    // ── contain-intrinsic-size under size containment (CSS Box Sizing L4 §5) ──
+
+    /// Find the first box that is size-contained via `contain: size`.
+    fn find_size_contained(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if b.style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0 {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_size_contained)
+    }
+
+    #[test]
+    fn contain_intrinsic_size_sets_block_height() {
+        // Size-contained block ignores its tall child and uses the
+        // contain-intrinsic-height placeholder (content-box → 100px border-box,
+        // no padding/border here).
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { contain: size; contain-intrinsic-size: 200px 100px; } .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!((c.rect.height - 100.0).abs() < 0.5, "height should be 100px, got {}", c.rect.height);
+    }
+
+    #[test]
+    fn contain_intrinsic_size_none_collapses_block_height() {
+        // Size containment with no contain-intrinsic-size → auto height collapses to 0
+        // (plus padding/border, which are 0 here).
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { contain: size; } .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!(c.rect.height.abs() < 0.5, "height should collapse to 0, got {}", c.rect.height);
+    }
+
+    #[test]
+    fn contain_intrinsic_size_sets_inline_block_width() {
+        // Size-contained inline-block uses contain-intrinsic-width for shrink-to-fit.
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { display: inline-block; contain: size; contain-intrinsic-size: 200px 100px; } \
+             .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!((c.rect.width - 200.0).abs() < 0.5, "width should be 200px, got {}", c.rect.width);
+        assert!((c.rect.height - 100.0).abs() < 0.5, "height should be 100px, got {}", c.rect.height);
     }
 
     #[test]

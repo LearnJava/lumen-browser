@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!-- CSS Box Sizing L4 §5 — contain-intrinsic-size.
+     A box subject to size containment (contain: size) sizes itself from
+     contain-intrinsic-size instead of from its contents. Each box below holds an
+     oversized child that would otherwise blow up its dimensions; with size
+     containment the child is ignored and the box takes the declared placeholder
+     size. Solid backgrounds make the resulting box geometry the thing compared. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 16px; box-sizing: border-box; }
+
+  /* Oversized child — must NOT influence a size-contained parent. */
+  .big { width: 800px; height: 600px; background: #00ff00; }
+
+  /* Inline-block boxes: width comes from contain-intrinsic-width, height from
+     contain-intrinsic-height. */
+  .ib {
+    display: inline-block;
+    contain: size;
+    vertical-align: top;
+    margin-right: 16px;
+    overflow: hidden;
+  }
+  .a { contain-intrinsic-size: 200px 120px; background: #1a5ac0; }
+  .b { contain-intrinsic-size: 120px 200px; background: #c0501a; }
+  /* em-relative placeholder: 10em x 5em at font-size 20px = 200 x 100. */
+  .c { contain-intrinsic-size: 10em 5em; font-size: 20px; background: #2aa55a; }
+
+  /* Block box: width fills the container, height = contain-intrinsic-height. */
+  .blk {
+    contain: size;
+    contain-intrinsic-size: 0 90px;
+    background: #6a1ac0;
+    margin-top: 16px;
+    overflow: hidden;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="ib a"><div class="big"></div></div>
+  <div class="ib b"><div class="big"></div></div>
+  <div class="ib c"><div class="big"></div></div>
+  <div class="blk"><div class="big"></div></div>
+</div>
+</body>
+</html>
