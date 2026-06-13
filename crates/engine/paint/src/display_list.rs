@@ -1947,6 +1947,16 @@ fn clip_path_to_shape(clip: &ClipPath, r: Rect) -> Option<ResolvedClipShape> {
                     .collect(),
             ))
         }
+        // CSS Shapes L1 §4 — `path()`: точки уже флэттены в px системы пути
+        // (origin = верхний левый угол reference box). Смещаем на позицию box.
+        ClipPath::Path(points) => {
+            if points.len() < 3 {
+                return None;
+            }
+            Some(ResolvedClipShape::Polygon(
+                points.iter().map(|(x, y)| (r.x + x, r.y + y)).collect(),
+            ))
+        }
     }
 }
 
@@ -9966,6 +9976,38 @@ mod tests {
                 (0.0, 200.0)
             ]))
         );
+    }
+
+    #[test]
+    fn clip_path_path_resolves_to_polygon() {
+        use super::{clip_path_to_shape, ResolvedClipShape};
+        use lumen_layout::ClipPath;
+        // path() хранит уже флэттенные px-точки в системе пути; clip_path_to_shape
+        // только смещает их на позицию border-box (r.x/r.y).
+        let r = Rect::new(20.0, 30.0, 100.0, 100.0);
+        let clip = ClipPath::Path(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)]);
+        let shape = clip_path_to_shape(&clip, r);
+        assert_eq!(
+            shape,
+            Some(ResolvedClipShape::Polygon(vec![
+                (20.0, 30.0),
+                (120.0, 30.0),
+                (70.0, 110.0),
+            ]))
+        );
+    }
+
+    #[test]
+    fn clip_path_path_emits_push_clip_path() {
+        let dl = build(
+            "<div></div>",
+            r#"div { width:100px; height:100px; background:red; clip-path:path("M 0 0 L 100 0 L 50 80 Z"); }"#,
+        );
+        let push = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::PushClipPath { .. }))
+            .count();
+        assert_eq!(push, 1, "clip-path:path() должен эмитить PushClipPath");
     }
 
     #[test]

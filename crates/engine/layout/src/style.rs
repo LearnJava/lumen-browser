@@ -4621,6 +4621,12 @@ pub enum ClipPath {
     /// `polygon(x1 y1, x2 y2, ...)` — список вершин (x — % от width,
     /// y — % от height).
     Polygon(Vec<(ShapeValue, ShapeValue)>),
+    /// `path([<fill-rule>,]? "<svg-path>")` — CSS Shapes L1 §4. Хранит
+    /// предварительно флэттенный полигон в px-координатах системы пути
+    /// (origin = верхний левый угол reference box; проценты в `path()`
+    /// недопустимы по спецификации). Кривые разбиты на отрезки на этапе
+    /// парсинга через `motion_path::flatten_path_to_polygon`.
+    Path(Vec<(f32, f32)>),
 }
 
 /// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
@@ -14952,7 +14958,8 @@ fn parse_shape_value(s: &str) -> Option<ShapeValue> {
 
 /// Парсит `<basic-shape>` для `clip-path` (CSS Masking L1 §3.5).
 /// Поддерживает: `inset(t r b l)`, `circle(r at cx cy)`,
-/// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`.
+/// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`,
+/// `path([<fill-rule>,]? "<svg>")` (CSS Shapes L1 §4).
 fn parse_clip_path(s: &str) -> Option<ClipPath> {
     let s = s.trim();
     let open = s.find('(')?;
@@ -14963,6 +14970,29 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
     let func = s[..open].trim().to_ascii_lowercase();
     let inner = s[open + 1..close].trim();
     match func.as_str() {
+        "path" => {
+            // `path([<fill-rule>,]? "<svg-path>")`. Опциональный fill-rule
+            // (nonzero|evenodd) отбрасывается — Lumen клиппит полигоном по
+            // nonzero (см. ResolvedClipShape::Polygon). Строка пути в кавычках.
+            let inner = match inner.split_once(',') {
+                Some((head, rest))
+                    if matches!(head.trim(), "nonzero" | "evenodd") =>
+                {
+                    rest.trim()
+                }
+                _ => inner,
+            };
+            let path_str = inner
+                .strip_prefix('"')
+                .and_then(|t| t.strip_suffix('"'))
+                .or_else(|| inner.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')))?;
+            let pts = crate::motion_path::flatten_path_to_polygon(path_str);
+            if pts.len() < 3 {
+                None
+            } else {
+                Some(ClipPath::Path(pts))
+            }
+        }
         "inset" => {
             let parts: Vec<ShapeValue> = inner
                 .split_whitespace()
