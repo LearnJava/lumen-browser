@@ -1696,8 +1696,8 @@ fn apply_first_letter_style(
                 continue;
             }
             let text = segments[i].text.clone();
-            // Split at the first char boundary (CSS "typographic character unit").
-            let boundary = text.char_indices().nth(1).map(|(b, _)| b).unwrap_or(text.len());
+            // CSS Pseudo-elements L4 §5.1: leading punctuation + first letter.
+            let boundary = first_letter_text_len(&text);
             if boundary < text.len() {
                 // Multi-char segment: split into first-letter + rest.
                 let rest_text = text[boundary..].to_string();
@@ -1734,6 +1734,110 @@ fn apply_first_letter_style(
     }
 }
 
+/// CSS Pseudo-elements L4 §5.1 — byte length of the `::first-letter` text unit
+/// at the start of `text`: leading punctuation plus the first letter itself.
+///
+/// Phase 0 approximation: char-level (no grapheme clustering), leading
+/// punctuation only (the spec also includes punctuation immediately following
+/// the letter). Returns `text.len()` when the text is punctuation-only.
+fn first_letter_text_len(text: &str) -> usize {
+    for (i, c) in text.char_indices() {
+        if !is_first_letter_punctuation(c) {
+            return i + c.len_utf8();
+        }
+    }
+    text.len()
+}
+
+/// True for punctuation that joins the `::first-letter` text unit
+/// (CSS Pseudo-elements L4 §5.1: Unicode Ps/Pe/Pi/Pf/Po classes; approximated
+/// as ASCII punctuation + common typographic quotes — no Unicode tables yet).
+fn is_first_letter_punctuation(c: char) -> bool {
+    c.is_ascii_punctuation()
+        || matches!(c, '«' | '»' | '“' | '”' | '‘' | '’' | '„' | '‚' | '‹' | '›')
+}
+
+/// CSS Pseudo-elements L4 §5.2 — `::first-letter` layout split, float variant
+/// (drop cap, BB-2).
+///
+/// When the `::first-letter` rule contains `float: left|right`, the first-letter
+/// segment (already split out and styled by `apply_first_letter_pseudo`) is
+/// removed from its `InlineRun` and promoted to a block-level float `LayoutBox`;
+/// the parent block's float machinery then places it and narrows the remaining
+/// text lines around it. Returns `None` when no `FirstLetter` segment exists.
+///
+/// Box structure: the outer `Block` carries the full ::first-letter style
+/// (float, margins, padding, border, background); the inner anonymous
+/// `InlineRun` holds the single letter segment and supplies the line metrics
+/// (::first-letter `font-size` × `line-height`). An `InlineRun` emptied by the
+/// extraction is dropped from `row_items`.
+// CSS: ::first-letter — P4 wires further drop-cap properties on top of this
+// split (initial-letter, initial-letter-align).
+fn extract_first_letter_float(
+    row_items: &mut Vec<LayoutBox>,
+    fl_style: &ComputedStyle,
+) -> Option<LayoutBox> {
+    for ri in 0..row_items.len() {
+        let BoxKind::InlineRun { segments, .. } = &mut row_items[ri].kind else {
+            continue;
+        };
+        let Some(pos) = segments.iter().position(|s| s.pseudo_kind == PseudoKind::FirstLetter)
+        else {
+            continue;
+        };
+        let mut seg = segments.remove(pos);
+        seg.pre_space = 0.0;
+        seg.post_space = 0.0;
+        let node = seg.source_node;
+        if segments.is_empty() {
+            row_items.remove(ri);
+        }
+        // Inner anonymous run: ::first-letter font metrics for the line box,
+        // but it must not itself float, clear, or indent inside the drop cap.
+        let mut inner_style = anon_style(fl_style);
+        inner_style.float_side = FloatSide::None;
+        inner_style.clear = ClearSide::None;
+        inner_style.text_indent = Length::Px(0.0);
+        let inner = LayoutBox {
+            node,
+            rect: Rect::ZERO,
+            style: inner_style,
+            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+            children: vec![],
+            col_span: 1,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        };
+        let mut outer_style = fl_style.clone();
+        outer_style.display = Display::Block;
+        outer_style.text_indent = Length::Px(0.0);
+        return Some(LayoutBox {
+            node,
+            rect: Rect::ZERO,
+            style: outer_style,
+            kind: BoxKind::Block,
+            children: vec![inner],
+            col_span: 1,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        });
+    }
+    None
+}
+
+/// True for the synthesized drop-cap box produced by
+/// [`extract_first_letter_float`]: a float `Block` whose only child is an
+/// `InlineRun` with a single `PseudoKind::FirstLetter` segment. Used to keep
+/// `::first-line` overrides off the drop cap (CSS Pseudo-elements L4 §5.2:
+/// ::first-letter wins where the two pseudo-elements conflict).
+fn is_first_letter_box(b: &LayoutBox) -> bool {
+    b.style.float_side != FloatSide::None
+        && b.children.len() == 1
+        && matches!(
+            &b.children[0].kind,
+            BoxKind::InlineRun { segments, .. }
+                if segments.len() == 1 && segments[0].pseudo_kind == PseudoKind::FirstLetter
+        )
+}
+
 /// CSS Pseudo-elements L4 §3.1 — apply `::first-line` style overrides after layout.
 ///
 /// Must be called after `lay_out` has populated `InlineRun.lines` with `InlineFrag`s.
@@ -1747,6 +1851,11 @@ pub(crate) fn apply_first_line_pseudo_styles(
     viewport: Size,
     dark_mode: bool,
 ) {
+    // CSS Pseudo-elements L4 §5.2 (BB-2): never apply ::first-line inside the
+    // synthesized drop-cap box — ::first-letter wins where the two conflict.
+    if is_first_letter_box(b) {
+        return;
+    }
     for child in &mut b.children {
         apply_first_line_pseudo_styles(child, doc, sheet, viewport, dark_mode);
     }
@@ -2195,6 +2304,11 @@ fn is_inline_block(
 }
 
 /// Обнуляет box-model spacing анонимного контейнера (InlineRun / InlineBlockRow).
+// BUG-150: anonymous boxes clone the parent's non-inherited float_side/clear/
+// position — an anonymous InlineRun inside a floated block re-enters the float
+// branch of its own parent's layout loop. Anonymous boxes cannot float
+// (CSS 2.1 §9.2.2); needs `s.float_side = FloatSide::None` (and review of
+// clear/position) with regression check of float-containing graphic tests.
 fn anon_style(parent: &ComputedStyle) -> ComputedStyle {
     let mut s = parent.clone();
     s.margin_top = LengthOrAuto::ZERO;
@@ -2253,9 +2367,10 @@ fn apply_first_letter_pseudo(
     ) else {
         return;
     };
-    // Split at first Unicode scalar boundary (good-enough for Phase 0; full grapheme
-    // cluster support requires unicode-segmentation which is not yet a dependency).
-    let first_char_end = segs[pos].text.chars().next().map_or(0, |c| c.len_utf8());
+    // CSS Pseudo-elements L4 §5.1: leading punctuation + first letter. Char-level
+    // boundary (full grapheme cluster support requires unicode-segmentation,
+    // which is not yet a dependency).
+    let first_char_end = first_letter_text_len(&segs[pos].text);
     if first_char_end == 0 {
         return;
     }
@@ -3168,7 +3283,20 @@ fn build_box(
                 if let Some(fl_style) = compute_pseudo_element_style(
                     doc, id, "first-letter", sheet, &style, viewport, dark_mode,
                 ) {
-                    apply_first_letter_style(&mut row_items, fl_style, &style);
+                    // CSS Pseudo-elements L4 §5.2 — float ::first-letter → drop cap
+                    // (BB-2): promote the letter to a block-level float sibling placed
+                    // before the run. Only for the inline group that opens the block
+                    // (::first-letter targets the block's first formatted line).
+                    let first_group = children
+                        .iter()
+                        .all(|c| matches!(c.kind, BoxKind::Marker { .. }));
+                    if fl_style.float_side != FloatSide::None && first_group {
+                        if let Some(letter) = extract_first_letter_float(&mut row_items, &fl_style) {
+                            children.push(letter);
+                        }
+                    } else {
+                        apply_first_letter_style(&mut row_items, fl_style, &style);
+                    }
                 }
 
                 match row_items.len() {
@@ -4345,12 +4473,18 @@ fn lay_out(
                         let avail_right = fc.right_edge_at(child_y, container_right);
                         let avail_w = (avail_right - avail_left).max(0.0);
 
-                        // Shrink-to-fit width: explicit CSS width wins; otherwise use
-                        // preferred content width clamped to available space.
+                        // Shrink-to-fit width (CSS 2.1 §10.3.5): explicit CSS width wins;
+                        // otherwise preferred content width, falling back to max-content
+                        // measurement for text-only floats (e.g. the ::first-letter
+                        // drop-cap box, BB-2), clamped to available space.
                         let float_layout_w = if child.style.width.is_some() {
                             avail_w
                         } else {
                             preferred_inline_block_width(child, measurer, viewport)
+                                .or_else(|| {
+                                    let w = max_content_outer_width(child, measurer, viewport);
+                                    (w > 0.0).then_some(w)
+                                })
                                 .map(|pw| pw.min(avail_w))
                                 .unwrap_or(avail_w)
                         };
