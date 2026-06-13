@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_ — p4-font-size-adjust влит 2026-06-13
+_(none)_ — p4-color-function-spaces влит 2026-06-13
 
 ## Workflow
 
@@ -280,6 +280,8 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-13 | `counter-set` | CSS Lists L3 §4; `ComputedStyle.counter_set: Vec<(String,i32)>` (non-inherited); parse через `parse_counter_list(val, 0)` (default 0); `CounterCtx::apply_set()` в counters.rs устанавливает top-of-stack (создаёт на never-reset); порядок reset→increment→set нормативен (set перекрывает increment); 6 unit-тестов lib.rs + 4 counters.rs + graphic test 97 |
+| 2026-06-13 | `color()` predefined spaces | CSS Color 4 §10; добавлены `srgb-linear`/`a98-rgb`/`prophoto-rgb`/`xyz`/`xyz-d65`/`xyz-d50` к `color()` (раньше только srgb/display-p3/rec2020); displayable пространства хранятся как `ColorFloat` со своим `ColorSpace`, не-displayable гамут-маппятся в sRGB при разборе (`predefined_to_srgb_linear()` + `encode_srgb_f32()`); XYZ(D65)→sRGB и Bradford D50→D65 матрицы переиспользуют константы из `lab_to_srgb`; lumen-core не тронут; 6 unit-тестов style.rs + graphic test 96 |
 | 2026-06-13 | `font-size-adjust` | CSS Fonts L5 §4; `TextMeasurer::x_height_px()` (real OS/2 `sxHeight` в `FontMeasurer`/`MultiFontMeasurer`, fallback 0.5·size); post-build pass `apply_font_size_adjust()` в box_tree.rs переписывает `font_size` боксов и inline-сегментов как `size·adjust/aspect` до measurement — единый источник для layout и paint; `Auto`/`None` — no-op; 4 unit-теста box_tree.rs + 4 style.rs + graphic test 95 |
 | 2026-06-13 | `interpolate-size` | CSS Sizing L4 §4.5; `InterpolateSizeMode` enum (NumericOnly/AllowKeywords); `ComputedStyle.interpolate_size` **inherited** (initial NumericOnly); parse в `apply_declaration` + inherit/unset; gate `auto_resolved_px` в `TransitionScheduler::sync()` на `AllowKeywords` — keyword-размеры дискретны без opt-in; 5 unit-тестов style.rs + 2 unit-теста animation.rs + graphic test 94 |
 | 2026-06-13 | `field-sizing: content` | CSS Basic UI L4 §4.4; `FieldSizing` enum (Fixed/Content) + `ComputedStyle.field_sizing` (non-inherited); parse в `apply_declaration`; post-cascade `apply_ua_form_controls_field_sizing_clear()` снимает UA-размеры; `FormControlKind::Input/Textarea` несут `value_text`; wiring в `lay_out` через `field_sizing_content_intrinsic()`; 5+5 unit-тестов + graphic test 93 |

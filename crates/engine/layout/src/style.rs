@@ -801,6 +801,85 @@ impl ColorFloat {
     }
 }
 
+/// CSS Color L4 §17 — XYZ (D65) → linear sRGB (sRGB primary matrix, CIE 1931).
+/// Constants match the D65→linear-sRGB block already used in `lab_to_srgb`.
+fn xyz_d65_to_srgb_linear(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let lr = 3.240_625_5 * x - 1.537_208 * y - 0.498_628_6 * z;
+    let lg = -0.968_930_7 * x + 1.875_756_1 * y + 0.041_517_5 * z;
+    let lb = 0.055_710_1 * x - 0.204_021_1 * y + 1.056_995_9 * z;
+    (lr, lg, lb)
+}
+
+/// CSS Color L4 §11 — Bradford D50 → D65 chromatic adaptation of XYZ.
+/// Constants match the D50→D65 block already used in `lab_to_srgb`.
+fn xyz_d50_to_d65(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let xn = 0.955_576_6 * x - 0.023_039_3 * y + 0.063_163_6 * z;
+    let yn = -0.028_289_5 * x + 1.009_941_6 * y + 0.021_007_7 * z;
+    let zn = 0.012_298_2 * x - 0.020_483_0 * y + 1.329_909_8 * z;
+    (xn, yn, zn)
+}
+
+/// CSS Color L4 §10 — convert a non-displayable predefined `color()` space to
+/// linear sRGB. `c1`/`c2`/`c3` are the raw channel values. Returns `None` for
+/// an unknown space token (caller treats the whole `color()` as invalid).
+///
+/// Displayable spaces (`srgb`/`display-p3`/`rec2020`) are *not* handled here —
+/// they are stored verbatim as `ColorFloat` to preserve linear precision for
+/// GPU paint. The spaces below have no sRGB-displayable representation, so they
+/// are gamut-mapped to sRGB at parse time.
+fn predefined_to_srgb_linear(space: &str, c1: f32, c2: f32, c3: f32) -> Option<(f32, f32, f32)> {
+    Some(match space {
+        // Linear-light sRGB primaries — channels are already linear sRGB.
+        "srgb-linear" => (c1, c2, c3),
+        // Adobe RGB (1998): gamma 563/256, then A98 linear → XYZ(D65) → sRGB.
+        "a98-rgb" => {
+            let dec = |c: f32| c.signum() * c.abs().powf(563.0 / 256.0);
+            let (r, g, b) = (dec(c1), dec(c2), dec(c3));
+            let x = 0.576_669 * r + 0.185_558 * g + 0.188_229 * b;
+            let y = 0.297_345 * r + 0.627_364 * g + 0.075_291 * b;
+            let z = 0.027_031 * r + 0.070_689 * g + 0.991_338 * b;
+            xyz_d65_to_srgb_linear(x, y, z)
+        }
+        // ProPhoto RGB: gamma 1.8 (linear toe below 16·Et), linear → XYZ(D50)
+        // → D65 → sRGB.
+        "prophoto-rgb" => {
+            let dec = |c: f32| {
+                if c.abs() <= 16.0 / 512.0 {
+                    c / 16.0
+                } else {
+                    c.signum() * c.abs().powf(1.8)
+                }
+            };
+            let (r, g, b) = (dec(c1), dec(c2), dec(c3));
+            let x = 0.797_761 * r + 0.135_186 * g + 0.031_349 * b;
+            let y = 0.288_071 * r + 0.711_843 * g + 0.000_086 * b;
+            let z = 0.825_105 * b;
+            let (x65, y65, z65) = xyz_d50_to_d65(x, y, z);
+            xyz_d65_to_srgb_linear(x65, y65, z65)
+        }
+        // CIE XYZ with a D65 white point (`xyz` is an alias for `xyz-d65`).
+        "xyz" | "xyz-d65" => xyz_d65_to_srgb_linear(c1, c2, c3),
+        // CIE XYZ with a D50 white point — adapt to D65 first.
+        "xyz-d50" => {
+            let (x65, y65, z65) = xyz_d50_to_d65(c1, c2, c3);
+            xyz_d65_to_srgb_linear(x65, y65, z65)
+        }
+        _ => return None,
+    })
+}
+
+/// Linear sRGB → gamma sRGB float in [0,1] (IEC 61966-2-1). Float twin of
+/// [`encode_srgb`], used to store gamut-mapped wide-gamut colours back into a
+/// `ColorFloat` with `space = Srgb`.
+fn encode_srgb_f32(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 /// Display P3 linear → sRGB linear (ICC/CSS Color L4 §10.9 matrix).
 fn p3_linear_to_srgb_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let sr =  1.224_94 * r - 0.224_94 * g;
@@ -2262,6 +2341,11 @@ pub struct ComputedStyle {
     /// CSS Lists L3 §3 — `counter-increment: name [N]?`. Каждый element
     /// инкрементирует названный counter на N (default +1). Не наследуется.
     pub counter_increment: Vec<(String, i32)>,
+    /// CSS Lists L3 §4 — `counter-set: name [N]?`. Каждый element
+    /// устанавливает названный counter в N (default 0). Не наследуется.
+    /// Применяется ПОСЛЕ counter-reset и counter-increment (порядок по spec).
+    /// Если счётчика с таким именем нет в области видимости — создаёт его.
+    pub counter_set: Vec<(String, i32)>,
     /// CSS Masking L1 §3 — `clip-path: <basic-shape> | none`. Не
     /// наследуется. Phase 0: parsing only — real geometric clipping
     /// в paint pipeline отложен.
@@ -4760,6 +4844,7 @@ impl ComputedStyle {
             custom_props: HashMap::new(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
+            counter_set: Vec::new(),
             clip_path: None,
             transform: Vec::new(),
             translate: None,
@@ -5058,6 +5143,7 @@ pub fn compute_style(
         // CSS Lists L3 §3 — не наследуются.
         counter_reset: Vec::new(),
         counter_increment: Vec::new(),
+        counter_set: Vec::new(),
         // CSS Masking / Transforms / Filter — не наследуются.
         clip_path: None,
         transform: Vec::new(),
@@ -11162,6 +11248,11 @@ fn apply_declaration(
             // Default value = 1 (по spec).
             style.counter_increment = parse_counter_list(val, 1);
         }
+        "counter-set" => {
+            // CSS Lists L3 §4 — `none | (<custom-ident> <integer>?)+`.
+            // Default value на счётчик при отсутствии числа = 0 (по spec).
+            style.counter_set = parse_counter_list(val, 0);
+        }
         "clip-path" => {
             // CSS Masking L1 §3 — basic-shape | none. `none` чистит.
             let trimmed = val.trim();
@@ -14444,6 +14535,13 @@ fn apply_css_wide_keyword(
                 init.counter_increment.clone()
             };
         }
+        "counter-set" => {
+            style.counter_set = if inh_only_inherit {
+                inherited.counter_set.clone()
+            } else {
+                init.counter_set.clone()
+            };
+        }
         // Masking / Transforms / Filter — все non-inherited.
         "clip-path" => {
             style.clip_path = if inh_only_inherit { inherited.clip_path.clone() } else { init.clip_path.clone() };
@@ -16941,7 +17039,14 @@ fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
 }
 
 /// CSS Color L4 §10.1 — парсит `color(<space> c1 c2 c3 [/ alpha])`.
-/// Поддерживаемые пространства: `srgb`, `display-p3`, `rec2020`.
+///
+/// Displayable spaces — `srgb`, `display-p3`, `rec2020` — хранятся как
+/// `ColorFloat` со своим `ColorSpace`, чтобы сохранить линейную точность для
+/// GPU-paint. Остальные предопределённые пространства CSS Color L4 §10
+/// (`srgb-linear`, `a98-rgb`, `prophoto-rgb`, `xyz`, `xyz-d65`, `xyz-d50`) не
+/// представимы на sRGB-экране, поэтому гамут-маппятся в sRGB сразу при разборе
+/// и хранятся как `ColorFloat { space: Srgb }` с gamma-encoded каналами.
+///
 /// Каналы: unitless float или % (100% = 1.0). Слэш — разделитель alpha.
 fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
     let lower = s.to_ascii_lowercase();
@@ -16951,21 +17056,29 @@ fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
     if tokens.len() < 4 {
         return None;
     }
-    let space = match tokens[0] {
-        "srgb" => ColorSpace::Srgb,
-        "display-p3" => ColorSpace::DisplayP3,
-        "rec2020" => ColorSpace::Rec2020,
-        _ => return None,
-    };
-    let r = parse_color_fn_channel(tokens[1])?;
-    let g = parse_color_fn_channel(tokens[2])?;
-    let b = parse_color_fn_channel(tokens[3])?;
+    let c1 = parse_color_fn_channel(tokens[1])?;
+    let c2 = parse_color_fn_channel(tokens[2])?;
+    let c3 = parse_color_fn_channel(tokens[3])?;
     let a = if tokens.len() >= 5 {
         parse_color_fn_channel(tokens[4])?.clamp(0.0, 1.0)
     } else {
         1.0
     };
-    Some(ColorFloat { r, g, b, a, space })
+    match tokens[0] {
+        "srgb" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Srgb }),
+        "display-p3" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::DisplayP3 }),
+        "rec2020" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Rec2020 }),
+        other => {
+            let (lr, lg, lb) = predefined_to_srgb_linear(other, c1, c2, c3)?;
+            Some(ColorFloat {
+                r: encode_srgb_f32(lr),
+                g: encode_srgb_f32(lg),
+                b: encode_srgb_f32(lb),
+                a,
+                space: ColorSpace::Srgb,
+            })
+        }
+    }
 }
 
 /// Парсит channel для `color()`: unitless float или процент (100% = 1.0).
@@ -26568,6 +26681,68 @@ mod tests {
         assert!(parse_color("color-mix(srgb, red, blue)").is_none());
         // Only 2 comma-separated parts → None
         assert!(parse_color("color-mix(in srgb, red)").is_none());
+    }
+
+    // ── color() predefined color spaces (CSS Color L4 §10) ─────────────────────
+
+    /// Parse a `color()` string through the cascade colour path and resolve to
+    /// a displayable sRGB `Color`.
+    fn color_fn_srgb(s: &str) -> Color {
+        match parse_css_color_legacy(s, false).expect("color() should parse") {
+            CssColor::Wide(f) => f.to_srgb_color(),
+            CssColor::Rgba(c) => c,
+            other => panic!("unexpected CssColor variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_fn_srgb_linear_extremes() {
+        let black = color_fn_srgb("color(srgb-linear 0 0 0)");
+        assert_eq!((black.r, black.g, black.b), (0, 0, 0));
+        let white = color_fn_srgb("color(srgb-linear 1 1 1)");
+        assert_eq!((white.r, white.g, white.b), (255, 255, 255));
+        // Linear 0.5 → gamma-encoded sRGB ≈ 0.735 → ~188.
+        let mid = color_fn_srgb("color(srgb-linear 0.5 0.5 0.5)");
+        assert!(mid.r >= 186 && mid.r <= 190, "mid grey r={}", mid.r);
+    }
+
+    #[test]
+    fn color_fn_xyz_d65_white_and_black() {
+        // D65 reference white in XYZ → sRGB white.
+        let white = color_fn_srgb("color(xyz-d65 0.9505 1.0 1.089)");
+        assert!(white.r >= 253 && white.g >= 253 && white.b >= 253, "white={white:?}");
+        // `xyz` is an alias for `xyz-d65`.
+        let black = color_fn_srgb("color(xyz 0 0 0)");
+        assert_eq!((black.r, black.g, black.b), (0, 0, 0));
+    }
+
+    #[test]
+    fn color_fn_xyz_d50_black() {
+        let black = color_fn_srgb("color(xyz-d50 0 0 0)");
+        assert_eq!((black.r, black.g, black.b), (0, 0, 0));
+    }
+
+    #[test]
+    fn color_fn_a98_and_prophoto_white() {
+        // Each space's (1,1,1) is its own reference white → maps to sRGB white.
+        let a98 = color_fn_srgb("color(a98-rgb 1 1 1)");
+        assert!(a98.r >= 252 && a98.g >= 252 && a98.b >= 252, "a98 white={a98:?}");
+        let pp = color_fn_srgb("color(prophoto-rgb 1 1 1)");
+        assert!(pp.r >= 250 && pp.g >= 250 && pp.b >= 250, "prophoto white={pp:?}");
+        let pp_black = color_fn_srgb("color(prophoto-rgb 0 0 0)");
+        assert_eq!((pp_black.r, pp_black.g, pp_black.b), (0, 0, 0));
+    }
+
+    #[test]
+    fn color_fn_predefined_alpha() {
+        let c = color_fn_srgb("color(srgb-linear 0 0 0 / 0.5)");
+        assert!(c.a >= 127 && c.a <= 128, "alpha={}", c.a);
+    }
+
+    #[test]
+    fn color_fn_unknown_space_is_none() {
+        // Unknown predefined space → whole color() is invalid.
+        assert!(parse_css_color_legacy("color(foobar 1 2 3)", false).is_none());
     }
 
     // ── ::selection pseudo-element ─────────────────────────────────────────────

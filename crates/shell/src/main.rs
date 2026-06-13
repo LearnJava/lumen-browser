@@ -9742,6 +9742,8 @@ impl Lumen {
                 self.scroll_to_active_match();
                 self.request_redraw();
             }
+            // Enter / F3 — следующий матч (Shift — предыдущий).
+            // Ctrl+G / Cmd+G — то же (Firefox-стиль find-next), Shift — предыдущий.
             KeyCode::Enter | KeyCode::F3 => {
                 if !key_event.repeat {
                     let total = self.current_matches().len();
@@ -9753,6 +9755,16 @@ impl Lumen {
                     self.scroll_to_active_match();
                     self.request_redraw();
                 }
+            }
+            KeyCode::KeyG if ctrl_or_super && !key_event.repeat => {
+                let total = self.current_matches().len();
+                if shift {
+                    self.find.prev(total);
+                } else {
+                    self.find.next(total);
+                }
+                self.scroll_to_active_match();
+                self.request_redraw();
             }
             // Ctrl+R — переключить plain-text ↔ regex режим.
             KeyCode::KeyR if ctrl_or_super && !key_event.repeat => {

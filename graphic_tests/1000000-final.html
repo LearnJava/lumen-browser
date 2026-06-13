@@ -1139,6 +1139,28 @@
 </div><!-- /list-style-type custom card -->
 
 
+<!-- counter-set demo card (TEST-97) -->
+<style>
+  .cset-card { background:#16213e; padding:8px; border-radius:4px; margin-top:16px; counter-reset: step 0; }
+  .cset-card h4 { margin:0 0 8px 0; }
+  .cset-row { display:flex; gap:10px; }
+  .cset-item { flex:1; height:48px; line-height:48px; text-align:center; color:#102040;
+               background:#cfe0ff; border-radius:4px; font-size:20px; }
+  .cset-item::before { content: "#" counter(step) "  "; font-weight:bold; }
+  .cset-jump { counter-set: step 10; background:#ffd9b0; }
+  .cset-item { counter-increment: step; }
+</style>
+<div class="card cset-card">
+  <h4>counter-set (reset→increment→set)</h4>
+  <div class="cset-row">
+    <div class="cset-item">a</div>
+    <div class="cset-item">b</div>
+    <div class="cset-item cset-jump">jump→10</div>
+    <div class="cset-item">d</div>
+  </div>
+</div><!-- /counter-set card -->
+
+
 <!-- @starting-style entry animation demo (TEST-71) -->
 <style>
   .ss-card { background:#1a1a2e; border-radius:8px; padding:16px; margin-top:16px; display:flex; gap:16px; align-items:center; }
@@ -1198,6 +1220,15 @@
   <div style="width:80px;height:80px;border-radius:8px;background:rgb(from #336699 calc(r + 80) g b);"></div>
   <div style="width:80px;height:80px;border-radius:8px;background:hsl(from #e94560 h s calc(l * 0.6));"></div>
   <div style="width:80px;height:80px;border-radius:8px;background:oklch(from #0f3460 calc(l + 0.12) c h);"></div>
+</div>
+
+<!-- ── color() predefined spaces (CSS Color 4 §10) ───────────────────────────── -->
+<div style="margin-top:24px;padding:12px;background:#1a2035;border-radius:8px;display:flex;gap:12px;align-items:center;">
+  <div style="width:72px;height:72px;border-radius:8px;background:color(srgb-linear 1 0 0);"></div>
+  <div style="width:72px;height:72px;border-radius:8px;background:color(srgb-linear 0.2140 0.2140 0.2140);"></div>
+  <div style="width:72px;height:72px;border-radius:8px;background:color(xyz-d65 0.9505 1.0 1.089);"></div>
+  <div style="width:72px;height:72px;border-radius:8px;background:color(a98-rgb 0 0 0);"></div>
+  <div style="width:72px;height:72px;border-radius:8px;background:color(prophoto-rgb 1 1 1);"></div>
 </div>
 
 <!-- ── system color keywords (CSS Color 4 §6.2) ──────────────────────────────── -->

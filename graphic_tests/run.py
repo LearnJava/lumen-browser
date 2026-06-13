@@ -168,6 +168,8 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('93', '93-field-sizing.html', 0.5, 'CSS Basic UI L4 §4.4: field-sizing: content — input/textarea подгоняют размер под текст содержимого вместо UA-дефолта'),
     ('94', '94-interpolate-size.html', 0.5, 'CSS Sizing L4 §4.5: interpolate-size: allow-keywords — наследуемый opt-in для интерполяции keyword-размеров; в покое (статичный снимок) layout не меняется'),
     ('95', '95-font-size-adjust.html', 0.5, 'CSS Fonts L5 §4: font-size-adjust — при одинаковом font-size used-размер масштабируется как adjust/aspect шрифта; видимый x-height строк уменьшается сверху вниз'),
+    ('96', '96-color-function-spaces.html', 0.5, 'CSS Color 4 §10: color() предопределённые пространства — srgb-linear, a98-rgb, prophoto-rgb, xyz, xyz-d65, xyz-d50; in-gamut цвета совпадают с эталоном после маппинга в sRGB'),
+    ('97', '97-counter-set.html', 0.5, 'CSS Lists L3 §4: counter-set — порядок reset→increment→set (set перекрывает increment), создание счётчика на never-reset; ::before content: counter(c) показывает 5/6/0/1/42'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
