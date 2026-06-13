@@ -3992,6 +3992,17 @@ impl FloatContext {
     fn is_empty(&self) -> bool {
         self.left.is_empty() && self.right.is_empty()
     }
+
+    /// CSS 2.1 §9.5.1 rule 8 — the smallest float bottom strictly below `y`
+    /// across both sides. A float that does not fit beside the current floats
+    /// drops to the next such bottom, where the line widens. Returns `None`
+    /// when no float ends below `y` (nothing left to clear).
+    fn next_float_bottom(&self, y: f32) -> Option<f32> {
+        self.left.iter().chain(self.right.iter())
+            .map(|(bot, _)| *bot)
+            .filter(|bot| *bot > y + 0.01)
+            .fold(None, |acc, bot| Some(acc.map_or(bot, |a: f32| a.min(bot))))
+    }
 }
 
 /// CSS Shapes L1 §4 — rightmost x of polygon boundary at scanline `y`.
@@ -4063,6 +4074,24 @@ fn establishes_bfc(b: &LayoutBox) -> bool {
         || b.style.overflow_y != Overflow::Visible
         || b.style.float_side != FloatSide::None
         || matches!(b.style.position, Position::Absolute | Position::Fixed)
+}
+
+/// True if the box has any in-flow child that produces content (i.e. a child
+/// that is not a float, out-of-flow box, `::marker`, or zero-height `Skip`).
+///
+/// CSS 2.1 §9.5: a block-level box beside a float keeps full containing-block
+/// width while only its *line boxes* are shortened. Lumen cannot yet shorten
+/// line boxes inside a child block (floats are not propagated into nested
+/// layout), so it approximates the narrowing by clipping the box itself. That
+/// clip is only geometrically faithful when the box has no in-flow content to
+/// reflow — this predicate gates the full-width path to such boxes (e.g. an
+/// empty `<div>` background sitting in the gap between two floats).
+fn has_in_flow_content(b: &LayoutBox) -> bool {
+    b.children.iter().any(|c| {
+        !matches!(c.kind, BoxKind::Skip | BoxKind::Marker { .. })
+            && c.style.float_side == FloatSide::None
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+    })
 }
 
 /// Returns the first in-flow `Block` child whose top margin collapses with the
@@ -4695,34 +4724,90 @@ fn lay_out(
                     }
 
                     // CSS 2.1 §9.5.2: clear — advance child_y past relevant floats.
-                    if !fc.is_empty() && child.style.clear != ClearSide::None {
+                    // Clearance is inserted between the top margin and the top border, so the
+                    // final border edge ends up at max(natural-flow border, float bottom): the
+                    // top margin is *absorbed* by clearance, not stacked on top of the float
+                    // bottom. `clearance_pre` remembers the pre-clear flow position so the
+                    // start_y computation below can place the border at that maximum (fixes the
+                    // double-count where a cleared block dropped to float_bottom + margin_top).
+                    let clearance_pre = if !fc.is_empty() && child.style.clear != ClearSide::None {
+                        let pre = child_y;
                         child_y = fc.clear_y(child_y, child.style.clear);
-                    }
+                        Some(pre)
+                    } else {
+                        None
+                    };
 
                     // CSS 2.1 §9.5.1: float box — placed out of normal flow.
                     if child.style.float_side != FloatSide::None {
                         let cem = child.style.font_size;
-                        let avail_left  = fc.left_edge_at(child_y, content_x);
-                        let avail_right = fc.right_edge_at(child_y, container_right);
-                        let avail_w = (avail_right - avail_left).max(0.0);
-
                         // Shrink-to-fit width (CSS 2.1 §10.3.5): explicit CSS width wins;
                         // otherwise preferred content width, falling back to max-content
                         // measurement for text-only floats (e.g. the ::first-letter
-                        // drop-cap box, BB-2), clamped to available space.
-                        let float_layout_w = if child.style.width.is_some() {
-                            avail_w
+                        // drop-cap box, BB-2), clamped to available space. `probe_w` decides
+                        // the float's box at the *current* line; the outer width is then used
+                        // to test whether the float fits or must drop (rule 8 below).
+                        let probe_avail = {
+                            let l = fc.left_edge_at(child_y, content_x);
+                            let r = fc.right_edge_at(child_y, container_right);
+                            (r - l).max(0.0)
+                        };
+                        let probe_w = if child.style.width.is_some() {
+                            probe_avail
                         } else {
                             preferred_inline_block_width(child, measurer, viewport)
                                 .or_else(|| {
                                     let w = max_content_outer_width(child, measurer, viewport);
                                     (w > 0.0).then_some(w)
                                 })
-                                .map(|pw| pw.min(avail_w))
-                                .unwrap_or(avail_w)
+                                .map(|pw| pw.min(probe_avail))
+                                .unwrap_or(probe_avail)
                         };
-                        lay_out(child, avail_left, child_y, float_layout_w,
+                        lay_out(child, fc.left_edge_at(child_y, content_x), child_y, probe_w,
                                 children_available_height, measurer, viewport, children_pcb, hp, false);
+
+                        // CSS 2.1 §9.5.1 rule 8: if the float's outer margin box does not fit
+                        // in the space beside existing floats, drop it below them until it fits
+                        // (or no float remains to clear). This wraps a row of left floats onto a
+                        // new line in a narrow container instead of overflowing past the edge.
+                        let probe_ml = child.style.margin_left.resolve_or_zero(cem, probe_avail, viewport);
+                        let probe_mr = child.style.margin_right.resolve_or_zero(cem, probe_avail, viewport);
+                        let outer_w = probe_ml + child.rect.width + probe_mr;
+                        let mut float_y = child_y;
+                        while !fc.is_empty() {
+                            let l = fc.left_edge_at(float_y, content_x);
+                            let r = fc.right_edge_at(float_y, container_right);
+                            if outer_w <= (r - l).max(0.0) {
+                                break;
+                            }
+                            match fc.next_float_bottom(float_y) {
+                                Some(ny) => float_y = ny,
+                                None => break,
+                            }
+                        }
+                        let dropped = (float_y - child_y).abs() > f32::EPSILON;
+                        // Shadow child_y at the (possibly dropped) line for the placement below.
+                        let child_y = float_y;
+                        let avail_left  = fc.left_edge_at(child_y, content_x);
+                        let avail_right = fc.right_edge_at(child_y, container_right);
+                        let avail_w = (avail_right - avail_left).max(0.0);
+                        // Re-lay-out at the dropped line: an auto-width float may grow into the
+                        // wider line, and the box's origin changed.
+                        if dropped {
+                            let w = if child.style.width.is_some() {
+                                avail_w
+                            } else {
+                                preferred_inline_block_width(child, measurer, viewport)
+                                    .or_else(|| {
+                                        let w = max_content_outer_width(child, measurer, viewport);
+                                        (w > 0.0).then_some(w)
+                                    })
+                                    .map(|pw| pw.min(avail_w))
+                                    .unwrap_or(avail_w)
+                            };
+                            lay_out(child, avail_left, child_y, w,
+                                    children_available_height, measurer, viewport, children_pcb, hp, false);
+                        }
 
                         let fml = child.style.margin_left.resolve_or_zero(cem, avail_w, viewport);
                         let fmr = child.style.margin_right.resolve_or_zero(cem, avail_w, viewport);
@@ -4824,13 +4909,40 @@ fn lay_out(
                     let flow_left  = fc.left_edge_at(child_y, content_x);
                     let flow_right = fc.right_edge_at(child_y, container_right);
                     // Apply inside-marker indent to the first normal-flow content child.
-                    let (eff_left, eff_w) = if inside_marker_w > 0.0 {
+                    let (mut eff_left, mut eff_w) = if inside_marker_w > 0.0 {
                         let l = flow_left + inside_marker_w;
                         inside_marker_w = 0.0;
                         (l, (flow_right - l).max(0.0))
                     } else {
                         (flow_left, (flow_right - flow_left).max(0.0))
                     };
+                    // CSS 2.1 §9.5: a block-level box in normal flow is NOT narrowed by
+                    // floats — its width and margins resolve against the full containing
+                    // block and only its line boxes are shortened. For an *empty* auto-width
+                    // block (no in-flow content to reflow) resolve geometry against the full
+                    // content width, then clip the result to the non-float band: this keeps
+                    // the visual identical when the box would overlap a float (Lumen paints
+                    // floats in source order, so the clip stands in for float-over-block
+                    // painting), while restoring a margin'd box that fits in the gap between
+                    // two floats — which the naive narrowing collapsed to zero width.
+                    if (flow_left > content_x || flow_right < container_right)
+                        && child.style.width.is_none()
+                        && matches!(child.kind, BoxKind::Block)
+                        && !establishes_bfc(child)
+                        && !has_in_flow_content(child)
+                    {
+                        let cem = child.style.font_size;
+                        let ml = child.style.margin_left.resolve_or_zero(cem, content_width, viewport);
+                        let mr = child.style.margin_right.resolve_or_zero(cem, content_width, viewport);
+                        let bw = (content_width - ml - mr).max(0.0);
+                        let nat_x = content_x + ml;
+                        let vx = nat_x.max(flow_left);
+                        let vw = ((nat_x + bw).min(flow_right) - vx).max(0.0);
+                        // Reproduce the clipped border-box through lay_out's margin re-add:
+                        // it places x at eff_left + ml and width at eff_w − ml − mr.
+                        eff_left = vx - ml;
+                        eff_w = vw + ml + mr;
+                    }
 
                     // CSS 2.1 §8.3.1: collapse adjacent sibling block margins.
                     // Only Block/FlowRoot participate; other kinds break the chain.
@@ -4844,7 +4956,16 @@ fn lay_out(
                     let own_mt = child.style.margin_top
                         .resolve_or_zero(child.style.font_size, eff_w, viewport);
                     let collapsed_mt = collapsed_top_margin(child, eff_w, viewport);
-                    let start_y = if is_block {
+                    let start_y = if let Some(pre_clear_y) = clearance_pre {
+                        // CSS 2.1 §9.5.2: a cleared block's border edge sits at the larger of
+                        // its natural flow position (margin included) and the cleared float
+                        // bottom (`child_y`, advanced by clear_y above). Clearance fills any
+                        // gap; the margin is not added a second time on top of the float
+                        // bottom. `natural_border` is the pre-clearance border-top.
+                        let natural_border = pre_clear_y
+                            - prev_block_mb.min(collapsed_mt.max(0.0)) + collapsed_mt;
+                        natural_border.max(child_y) - own_mt
+                    } else if is_block {
                         if is_first_inflow
                             && b_collapses_top
                             && matches!(child.kind, BoxKind::Block)
@@ -10490,6 +10611,105 @@ mod tests {
             (markers[0].style.font_size - 20.0).abs() < 0.5,
             "marker should inherit 20px font-size from li, got {}", markers[0].style.font_size,
         );
+    }
+
+    // ── BUG-136 — float / clear / margin interaction (TEST-105) ───────────────
+
+    /// Collect every box whose background color matches `hex` (0xRRGGBB).
+    fn boxes_with_bg(b: &super::LayoutBox, hex: u32, out: &mut Vec<super::Rect>) {
+        let (r, g, bl) = ((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+        if let Some(col) = b.style.background_color.and_then(|c| c.to_color_opt())
+            && col.r == r && col.g == g && col.b == bl
+        {
+            out.push(b.rect);
+        }
+        for ch in &b.children {
+            boxes_with_bg(ch, hex, out);
+        }
+    }
+
+    fn find_one_bg(root: &super::LayoutBox, hex: u32) -> super::Rect {
+        let mut v = Vec::new();
+        boxes_with_bg(root, hex, &mut v);
+        assert_eq!(v.len(), 1, "expected exactly one box with bg #{hex:06x}, found {}", v.len());
+        v[0]
+    }
+
+    #[test]
+    fn float_inflow_block_keeps_full_width_between_floats() {
+        // c1: left float + right float + an empty in-flow block with margin:0 100px.
+        // CSS 2.1 §9.5 — the block keeps the full containing-block width (300) minus
+        // its margins (200) → width 100, positioned at content_left + margin_left.
+        // The naive float-narrowing collapsed it to width 0 (squeezed in the gap).
+        let root = super::layout(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=fl></div>\
+                   <div class=fr></div>\
+                   <div class=mid></div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                 .fl{float:left;width:90px;height:120px;background:#e53e3e}\
+                 .fr{float:right;width:90px;height:120px;background:#9f7aea}\
+                 .mid{height:60px;margin:0 100px;background:#f6e05e}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+        );
+        let mid = find_one_bg(&root, 0xf6e05e);
+        assert!((mid.width - 100.0).abs() < 1.0, "mid width should be 100, got {}", mid.width);
+    }
+
+    #[test]
+    fn float_clear_absorbs_margin_top() {
+        // c2: float left, then a `clear:both; margin-top:30px` block. CSS 2.1 §9.5.2 —
+        // clearance places the border edge at max(natural, float bottom); the margin is
+        // absorbed by clearance, NOT stacked on top (float_bottom 120 + margin 30 = 150
+        // was the bug; correct is 120).
+        let root = super::layout(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=fl></div>\
+                   <div class=cl></div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                 .fl{float:left;width:120px;height:120px;background:#ed8936}\
+                 .cl{clear:both;margin-top:30px;height:80px;background:#4fd1c5}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+        );
+        let cl = find_one_bg(&root, 0x4fd1c5);
+        // Cell content top is 0 (no padding); float is 120 tall → cleared block at y=120.
+        assert!((cl.y - 120.0).abs() < 1.0, "cleared block should sit at float bottom y=120, got {}", cl.y);
+    }
+
+    #[test]
+    fn floats_wrap_to_next_line_when_they_overflow() {
+        // c3: three 130px floats with 8px margins in a 300px container — the third
+        // does not fit (146*2 = 292 ≤ 300 < 146*3) and must drop to a new line
+        // (CSS 2.1 §9.5.1 rule 8) instead of overflowing past the right edge.
+        let root = super::layout(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=f></div>\
+                   <div class=f></div>\
+                   <div class=g></div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                 .f{float:left;width:130px;height:90px;margin:8px;background:#4299e1}\
+                 .g{float:left;width:130px;height:90px;margin:8px;background:#fc8181}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+        );
+        let third = find_one_bg(&root, 0xfc8181);
+        // First two floats occupy line 1 (top ~8); the third wraps below them.
+        assert!(third.y > 100.0, "third float should wrap to a new line (y>100), got {}", third.y);
+        assert!((third.x - 8.0).abs() < 1.0, "wrapped float should reset to left (x=8), got {}", third.x);
     }
 
     // ── CSS Shapes L1 — shape-outside circle() ────────────────────────────────
