@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BB-6: `overscroll-behavior` scroll chain stop  branch: p1-bb6-overscroll
+Next step: wiring в `try_scroll_overflow_container` (shell) + `overscroll_should_propagate` (layout/src/lib.rs)
 
 ---
 

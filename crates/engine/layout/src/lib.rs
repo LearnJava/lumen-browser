@@ -1007,6 +1007,13 @@ pub struct ScrollContainer {
     pub scroll_x: f32,
     /// Current vertical scroll offset in CSS px. Clamped to [0, scroll_height - clip_rect.height].
     pub scroll_y: f32,
+    /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior-x`. Governs whether a
+    /// horizontal scroll delta this container cannot consume propagates to the
+    /// ancestor scroll chain (`Auto` propagates; `Contain`/`None` stop it).
+    pub overscroll_behavior_x: style::OverscrollBehavior,
+    /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior-y`. Same semantics
+    /// as `overscroll_behavior_x` for the vertical axis.
+    pub overscroll_behavior_y: style::OverscrollBehavior,
 }
 
 /// Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree.
@@ -1049,11 +1056,46 @@ fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>
             scroll_height,
             scroll_x: b.scroll_x,
             scroll_y: b.scroll_y,
+            overscroll_behavior_x: s.overscroll_behavior_x,
+            overscroll_behavior_y: s.overscroll_behavior_y,
         });
     }
     for child in &b.children {
         collect_scroll_containers_inner(child, out);
     }
+}
+
+/// CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
+/// could not consume should propagate up the ancestor scroll chain (e.g. to the
+/// page).
+///
+/// `dx`/`dy` are the requested deltas in CSS px; `moved_x`/`moved_y` report
+/// whether the container actually scrolled on each axis (false ⇒ the container
+/// is at its boundary in that direction). Returns `true` when the residual delta
+/// is allowed to bubble to the parent.
+///
+/// Rules:
+/// - If the container moved on either axis it has consumed the gesture, so the
+///   chain stops here (returns `false`).
+/// - Otherwise the container is fully at its boundary. Propagation is blocked
+///   when any axis carrying a non-zero delta has `Contain` or `None`; if every
+///   delta-bearing axis is `Auto` the delta propagates.
+#[must_use]
+pub fn overscroll_should_propagate(
+    overscroll_x: style::OverscrollBehavior,
+    overscroll_y: style::OverscrollBehavior,
+    dx: f32,
+    dy: f32,
+    moved_x: bool,
+    moved_y: bool,
+) -> bool {
+    use style::OverscrollBehavior;
+    if moved_x || moved_y {
+        return false;
+    }
+    let blocked = (dx != 0.0 && overscroll_x != OverscrollBehavior::Auto)
+        || (dy != 0.0 && overscroll_y != OverscrollBehavior::Auto);
+    !blocked
 }
 
 /// Compute the content scroll-width of a box: rightmost child edge relative to container left.
@@ -16068,6 +16110,8 @@ mod tests {
             scroll_height: h + 400.0,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            overscroll_behavior_x: style::OverscrollBehavior::Auto,
+            overscroll_behavior_y: style::OverscrollBehavior::Auto,
         }
     }
 
@@ -16152,5 +16196,59 @@ mod tests {
         assert!(names.is_empty(), "view-transition-name:none should not appear");
     }
 
+    // ──────────── CSS Overscroll Behavior L1 — scroll chain stop ────────────
+
+    #[test]
+    fn overscroll_collected_from_style() {
+        let root = lay(
+            "<div class='s'><div class='t'></div></div>",
+            ".s { width: 100px; height: 100px; overflow: scroll; \
+               overscroll-behavior-x: contain; overscroll-behavior-y: none; } \
+             .t { width: 300px; height: 300px; }",
+        );
+        let containers = collect_scroll_containers(&root);
+        let c = containers
+            .iter()
+            .find(|c| matches!(c.overscroll_behavior_x, style::OverscrollBehavior::Contain))
+            .expect("scroll container with overscroll-behavior-x: contain");
+        assert_eq!(c.overscroll_behavior_x, style::OverscrollBehavior::Contain);
+        assert_eq!(c.overscroll_behavior_y, style::OverscrollBehavior::None);
+    }
+
+    #[test]
+    fn overscroll_auto_propagates_at_boundary() {
+        use style::OverscrollBehavior::Auto;
+        // At boundary (no movement), default `auto` lets the delta bubble up.
+        assert!(overscroll_should_propagate(Auto, Auto, 0.0, 30.0, false, false));
+        assert!(overscroll_should_propagate(Auto, Auto, 30.0, 0.0, false, false));
+    }
+
+    #[test]
+    fn overscroll_contain_blocks_propagation() {
+        use style::OverscrollBehavior::{Auto, Contain, None};
+        // Vertical delta at boundary with overscroll-behavior-y: contain stays put.
+        assert!(!overscroll_should_propagate(Auto, Contain, 0.0, 30.0, false, false));
+        // None behaves like contain for chain-stopping.
+        assert!(!overscroll_should_propagate(None, Auto, 30.0, 0.0, false, false));
+    }
+
+    #[test]
+    fn overscroll_blocked_axis_only_matters_for_its_delta() {
+        use style::OverscrollBehavior::{Auto, Contain};
+        // contain on Y, but the delta is purely horizontal on an `auto` X axis →
+        // the horizontal delta is free to propagate.
+        assert!(overscroll_should_propagate(Auto, Contain, 30.0, 0.0, false, false));
+        // contain on X but delta is vertical on `auto` Y → propagates.
+        assert!(overscroll_should_propagate(Contain, Auto, 0.0, 30.0, false, false));
+    }
+
+    #[test]
+    fn overscroll_consumed_when_container_moves() {
+        use style::OverscrollBehavior::Auto;
+        // Any actual movement consumes the gesture — chain never reaches parent,
+        // regardless of overscroll-behavior.
+        assert!(!overscroll_should_propagate(Auto, Auto, 0.0, 30.0, false, true));
+        assert!(!overscroll_should_propagate(Auto, Auto, 30.0, 30.0, true, false));
+    }
 }
 

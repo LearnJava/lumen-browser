@@ -10611,16 +10611,28 @@ impl Lumen {
         // Find current position and compute new target.
         let current = self.scroll_containers.iter()
             .find(|c| c.node == target)
-            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height));
-        let Some((cur_x, cur_y, sw, sh)) = current else { return false };
-
-        let clip = self.scroll_containers.iter()
-            .find(|c| c.node == target)
-            .map(|c| (c.clip_rect.width, c.clip_rect.height));
-        let Some((clip_w, clip_h)) = clip else { return false };
+            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height,
+                      c.clip_rect.width, c.clip_rect.height,
+                      c.overscroll_behavior_x, c.overscroll_behavior_y));
+        let Some((cur_x, cur_y, sw, sh, clip_w, clip_h, ob_x, ob_y)) = current else { return false };
 
         let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
         let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
+
+        // CSS Overscroll Behavior L1 §3 — scroll-chain stop. If the container is
+        // at its boundary on every axis and `overscroll-behavior` permits it, let
+        // the residual delta propagate to the page; otherwise the chain stops
+        // here (event consumed even if the container did not move).
+        let moved_x = (new_x - cur_x).abs() > f32::EPSILON;
+        let moved_y = (new_y - cur_y).abs() > f32::EPSILON;
+        if lumen_layout::overscroll_should_propagate(ob_x, ob_y, dx, dy, moved_x, moved_y) {
+            return false;
+        }
+        if !moved_x && !moved_y {
+            // Boundary reached but propagation is blocked (contain/none) — consume
+            // the gesture without a relayout/redraw.
+            return true;
+        }
 
         // Borrow layout_box mutably after releasing the immutable scroll_containers borrow.
         let scrolled = if let Some(lb) = self.layout_box.as_mut() {
