@@ -6,8 +6,7 @@
 
 ## In progress
 
-BB-8: CSS Anchor Positioning Phase 1  branch: p1-bb8-anchor-positioning
-Next step: anchor.rs → AnchorScope + AnchorSizeFunc; box_tree.rs → wire stub  crates/engine/layout/src/anchor.rs:1
+_(нет)_
 
 ---
 
@@ -33,7 +32,7 @@ Next step: anchor.rs → AnchorScope + AnchorSizeFunc; box_tree.rs → wire stub
 | ~~BB-5~~ | ~~**`text-wrap: balance` balance algorithm**~~ — **дубликат**: уже реализовано в c191dcf8 (2026-05-31, в main): `TextWrapStyle::Balance` enum (style.rs:3614, `balance` — значение `text-wrap-style` по CSS Text L4 §6.4.2, не `text-wrap-mode`) + бинарный поиск `balance_wrap` в [widest_word, container_width] (box_tree.rs:7320, минимизирует wrap_width при сохранении числа строк greedy) + диспетчер box_tree.rs:4276 + парсинг css-parser + 9 unit-тестов. P4-wiring готов. Реального пробела нет | M | `lumen-layout` |
 | ~~BB-6~~ | ~~**`overscroll-behavior` scroll chain stop**~~ — **выполнено** (p1-bb6-overscroll, 2026-06-13): `overscroll_behavior_x/y` в `ScrollContainer`; `overscroll_should_propagate()` (lib.rs); wiring в `try_scroll_overflow_container` (shell); 5 unit-тестов | S | `lumen-layout`, `lumen-shell` |
 | ~~BB-7~~ | ~~**`scroll-margin`/`scroll-padding` snap offset**~~ — **выполнено** (p1-bb7-scroll-margin, 2026-06-13): `snap_offset_x/y` принимают margin/padding параметры; `SnapContainer` получил `scroll_padding_*` поля; `find_snap_target` считает proximity threshold по эффективному порту; 6 unit-тестов | S | `lumen-layout` |
-| BB-8 | **CSS Anchor Positioning Phase 1** — `position-area` grid resolution (9×9 logic grid); `anchor-scope` ограничение поиска якоря; `anchor-size()` в `width`/`height` вычислениях; wiring из `lay_out_abs_children`; 8 unit-тестов | M | `lumen-layout` |
+| ~~BB-8~~ | ~~**CSS Anchor Positioning Phase 1**~~ — **выполнено** (p1-bb8-anchor-positioning, 2026-06-13): `AnchorScope` {None/All/Named} + `anchor-scope` парсинг; `AnchorSizeFunc`/`AnchorSizeDimension` + `anchor-size()` в width/height; `AnchorEntry.scope_root` + `get_scoped()`; `resolve_inset_area_scoped()`; `apply_anchor_positions_rec` с ancestor-стеком; stub в `lay_out_abs_children` убран — реальный `inset_area_row/col`; 8+3 unit-тестов | M | `lumen-layout` |
 | BB-9 | **`field-sizing: content` form control auto-sizing** — `textarea`/`input` с `field-sizing: content` получают intrinsic ширину по содержимому (TextMeasurer.measure_text); `// CSS: field-sizing` для P4; 5 unit-тестов | S | `lumen-layout` |
 | BB-10 | **`interpolate-size: allow-keywords` Phase 0** — разрешить CSS transition от `height: 0` к `height: auto`; `InterpolateSizeMode` enum; сохранить computed auto-height в `TransitionState`; `// CSS: interpolate-size` для P4; 4 unit-теста | S | `lumen-layout` |
 
