@@ -6324,6 +6324,15 @@ fn lay_out_flex(
         line_cross_sizes.push(line_cross);
 
         if !is_column {
+            // CSS Flexbox §9.5: for a single-line (non-wrapping) flex container the line
+            // cross size equals the container's inner cross size (if definite). This lets
+            // align-items: center/end position items relative to the full container height
+            // rather than just the tallest item in the line.
+            let effective_cross = if !is_wrap {
+                explicit_cross.unwrap_or(line_cross)
+            } else {
+                line_cross
+            };
             for &k in line_keys {
                 let i = item_idxs[k];
                 let item = &mut children[i];
@@ -6335,13 +6344,20 @@ fn lay_out_flex(
                 let outer_cross = item.rect.height + m_t + m_b;
                 match align {
                     AlignValue::End => {
-                        item.rect.y = content_y + cross_cursor + line_cross - outer_cross + m_t;
+                        item.rect.y = content_y + cross_cursor + effective_cross - outer_cross + m_t;
                     }
                     AlignValue::Center => {
-                        item.rect.y = content_y + cross_cursor + m_t + (line_cross - outer_cross) / 2.0;
+                        item.rect.y = content_y + cross_cursor + m_t + (effective_cross - outer_cross) / 2.0;
                     }
                     AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-                        let stretch_h = (line_cross - m_t - m_b).max(item.rect.height);
+                        // CSS Flexbox §9.5: stretch applies only when the item's cross size
+                        // is auto (no explicit height). Items with explicit heights are not
+                        // grown beyond their declared size.
+                        let stretch_h = if is.height.is_none() {
+                            (effective_cross - m_t - m_b).max(0.0)
+                        } else {
+                            item.rect.height
+                        };
                         if item.rect.height < stretch_h {
                             item.rect.height = stretch_h;
                         }
@@ -10883,6 +10899,60 @@ mod tests {
         let c = find_by_id_all(&root, &doc, "c").expect("c");
         assert_eq!(a.rect.y, 0.0, "a.y (line1) {}", a.rect.y);
         assert_eq!(c.rect.y, 150.0, "c.y (line2 shifted) {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_nowrap_align_items_center_uses_container_cross_size() {
+        // BUG-141: in a non-wrapping flex container with an explicit height,
+        // align-items: center must center items relative to the full container
+        // height, not the tallest item height (line_cross).
+        // Container 500×400, item 100×100 → y = (400 - 100) / 2 = 150.
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:500px;height:400px;align-items:center} #item{width:100px;height:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.y, 150.0, "align-items:center nowrap should be at (400-100)/2=150, got {}", item.rect.y);
+    }
+
+    #[test]
+    fn flex_nowrap_align_items_end_uses_container_cross_size() {
+        // align-items: flex-end in a non-wrapping container → item at bottom of container.
+        // Container 500×400, item 100×100 → y = 400 - 100 = 300.
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:500px;height:400px;align-items:flex-end} #item{width:100px;height:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.y, 300.0, "align-items:flex-end nowrap should be 300, got {}", item.rect.y);
+    }
+
+    #[test]
+    fn flex_nowrap_align_items_stretch_auto_height_fills_container() {
+        // CSS Flexbox §9.5: stretch with height:auto stretches item to container cross size.
+        // Container 500×400, item width:100px height:auto → item should fill 400px.
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:500px;height:400px;align-items:stretch} #item{width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.height, 400.0, "align-items:stretch auto-height item should fill container (400), got {}", item.rect.height);
+    }
+
+    #[test]
+    fn flex_nowrap_align_items_stretch_explicit_height_not_grown() {
+        // CSS Flexbox §9.5: stretch must NOT grow items with explicit cross sizes.
+        // Container 500×400, item 100×100 → item stays at 100px (not stretched to 400).
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:500px;height:400px;align-items:stretch} #item{width:100px;height:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.height, 100.0, "explicit height should not be stretched by align-items:stretch, got {}", item.rect.height);
     }
 
     #[test]
