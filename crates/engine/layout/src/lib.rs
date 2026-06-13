@@ -16450,6 +16450,36 @@ mod tests {
         assert!(names.is_empty(), "view-transition-name:none should not appear");
     }
 
+    // BUG-130: view-transition-name must not affect normal-flow rendering — a box
+    // carrying the property lays out identically to a plain box (CSS View
+    // Transitions L1 §10; the property only marks elements for capture during
+    // document.startViewTransition()). Regression mirrors TEST-81: two equal boxes
+    // in a centered flex row, one named, one not — same y/size/height.
+    #[test]
+    fn vt_name_does_not_affect_layout_geometry() {
+        let root = lay_viewport(
+            "<div class='f'><div class='box plain'></div><div class='box named'></div></div>",
+            ".f { display: flex; align-items: center; justify-content: center; gap: 60px; \
+                  width: 1022px; height: 718px; } \
+             .box { width: 200px; height: 200px; } \
+             .named { view-transition-name: hero; }",
+            Size::new(1024.0, 720.0),
+        );
+        let flex = first_element_child(&root);
+        let plain = &flex.children[0];
+        let named = &flex.children[1];
+        // align-items:center → both vertically centered at the same y in the 718px row.
+        assert_eq!(plain.rect.y, named.rect.y, "named box must share the plain box y");
+        assert_eq!(plain.rect.height, named.rect.height, "same height");
+        assert_eq!(plain.rect.width, named.rect.width, "same width");
+        // Centered cross-size: (718 - 200) / 2 = 259 (BUG-141), not pinned to row top.
+        assert!(
+            (plain.rect.y - 259.0).abs() < 0.5,
+            "boxes centered on cross axis, got y={}",
+            plain.rect.y
+        );
+    }
+
     // ──────────── CSS Overscroll Behavior L1 — scroll chain stop ────────────
 
     #[test]
