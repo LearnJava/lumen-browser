@@ -105,6 +105,18 @@ Ordered by priority. Задачи с `→ [docs/tasks/…]` имеют подр�
   `lumen-layout/src/box_tree.rs:5623` — inline masonry dispatch block (`// CSS: masonry-auto-flow`).
 - **CSS comment location:** `box_tree.rs` at masonry dispatch: `// CSS: masonry-auto-flow`.
 
+### `field-sizing: content` form control auto-sizing (P1 feature p1-bb9-field-sizing, 2026-06-13)
+- **Status:** Measurement algorithm ready: `field_sizing_content_intrinsic(tag, value_text, font_size_px, line_height_px, m) -> (f32, f32)` in `lumen-layout/src/field_sizing.rs`.
+  Computes padding-box size from text content for `"input"` and `"textarea"`. 5 unit tests pass.
+- **P4 task:**
+  1. Add `FieldSizing` enum (`Fixed` | `Content`, default `Fixed`) and `pub field_sizing: FieldSizing` to `ComputedStyle` in `style.rs`.
+  2. Parse `field-sizing: fixed | content` in `apply_declaration()`.
+  3. In `apply_ua_form_controls`, skip assigning `style.width` / `style.height` for `"input"` / `"textarea"` when `style.field_sizing == FieldSizing::Content` (leave them `None` so layout picks up content size).
+  4. In `lay_out_box` at the `is_replaced && s.width.is_none()` branch (box_tree.rs, `// CSS: field-sizing` comment), call `lumen_layout::field_sizing_content_intrinsic(tag, value_text, s.font_size, resolved_lh, measurer)` and assign `(padding_w + border_widths)` as `b.rect.width`; do same for height.
+- **Entry points:** `lumen-layout/src/field_sizing.rs:field_sizing_content_intrinsic`;
+  `lumen-layout/src/box_tree.rs` at `// CSS: field-sizing` comment (replaced-element width branch);
+  `lumen-layout/src/style.rs:apply_ua_form_controls`.
+
 ### ✅ `@starting-style` entry transitions — **ВЫПОЛНЕНО** (p4-starting-style, 2026-06-10)
 `compute_style_from_declarations()` в `style.rs`; `StartingStyleTracker` + wiring в shell `relayout()` — для новых нод (не в `prev_styles`) матчит `@starting-style` и вызывает `sync` с starting-style как `old`. 4 unit-теста + graphic test 71.
 

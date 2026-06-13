@@ -19,6 +19,7 @@ pub mod animation;
 pub mod box_tree;
 pub mod color_mix;
 pub mod content_visibility;
+pub mod field_sizing;
 pub mod hyphenation;
 pub mod counters;
 pub mod font_palette;
@@ -52,6 +53,7 @@ pub use counters::{
     CounterSystem, CounterRange, RangeBound,
 };
 pub use color_mix::{MixColorSpace, mix_colors};
+pub use field_sizing::field_sizing_content_intrinsic;
 pub use hyphenation::{collect_hyphen_points, SoftHyphenPoint};
 pub use image_gating::gate_image_requests;
 pub use image_set::{

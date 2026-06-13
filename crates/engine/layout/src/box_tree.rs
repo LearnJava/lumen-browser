@@ -4140,6 +4140,12 @@ fn lay_out(
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
     let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. });
+    // CSS: field-sizing — P4 wiring point.
+    // When style.field_sizing == FieldSizing::Content and is_replaced and s.width.is_none()
+    // (UA did not set a fixed width), call `field_sizing_content_intrinsic(tag, value_text,
+    // style.font_size, resolved_line_height, measurer)` and assign the returned
+    // padding_box_width + border widths as b.rect.width instead of 0.0.
+    // See `lumen_layout::field_sizing::field_sizing_content_intrinsic` for the algorithm.
     b.rect.width = if is_replaced {
         0.0
     } else {

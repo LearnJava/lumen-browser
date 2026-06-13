@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+BB-9: `field-sizing: content` form control auto-sizing  branch: p1-bb9-field-sizing
+Next step: cargo check + tests  crates/engine/layout/src/field_sizing.rs
 
 ---
 
