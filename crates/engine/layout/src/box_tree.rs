@@ -32,6 +32,8 @@ use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
                       build_list_marker_text};
 use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
 use crate::anchor::{collect_anchors, InsetAreaKeyword};
+use crate::field_sizing::field_sizing_content_intrinsic;
+use crate::style::FieldSizing;
 use crate::TextMeasurer;
 
 /// Layout-side gutter width for `scrollbar-width: auto` in CSS px.
@@ -316,13 +318,16 @@ pub enum FormControlKind {
     /// `<input>` — carries input type (from `type` attribute) and initial
     /// checked state (from presence of `checked` attribute in DOM). Paint uses
     /// this to draw checkbox/radio indicators without re-querying the DOM.
-    Input { input_type: lumen_dom::InputType, checked: bool },
+    /// `value_text` is the `value` attribute content, used by `field-sizing: content`.
+    Input { input_type: lumen_dom::InputType, checked: bool, value_text: String },
     Button,
     /// `<select>` — `selected_text` is the label of the currently selected
     /// `<option>` (first option if none is explicitly selected). Paint uses this
     /// to draw the visible label without re-querying the DOM.
     Select { selected_text: String },
-    Textarea,
+    /// `<textarea>` — `value_text` is the text content of all direct text children,
+    /// used by `field-sizing: content` to compute intrinsic dimensions.
+    Textarea { value_text: String },
     /// `<input type="range">` — carries current value and bounds so paint can
     /// draw track / fill / thumb without re-querying the DOM.
     Range {
@@ -716,6 +721,21 @@ fn collect_text_content(doc: &Document, node_id: NodeId) -> String {
         }
     }
 
+    text
+}
+
+/// Collects the text content of a `<textarea>` from its direct text-node children.
+///
+/// Used by `field-sizing: content` to determine the intrinsic size of the control.
+/// Newlines are preserved (each `\n` becomes a line for height computation).
+fn collect_textarea_content(doc: &Document, node_id: NodeId) -> String {
+    let mut text = String::new();
+    let node = doc.get(node_id);
+    for child_id in node.children.iter() {
+        if let NodeData::Text(s) = &doc.get(*child_id).data {
+            text.push_str(s);
+        }
+    }
     text
 }
 
@@ -3035,7 +3055,10 @@ fn build_box(
                             let selected_text = collect_select_label(doc, id);
                             FormControlKind::Select { selected_text }
                         }
-                        "textarea" => FormControlKind::Textarea,
+                        "textarea" => {
+                            let value_text = collect_textarea_content(doc, id);
+                            FormControlKind::Textarea { value_text }
+                        }
                         "progress" => {
                             let max = node.get_attr("max")
                                 .and_then(|v| v.trim().parse::<f32>().ok())
@@ -3095,7 +3118,10 @@ fn build_box(
                                 FormControlKind::Range { value, min, max }
                             } else {
                                 let checked = node.get_attr("checked").is_some();
-                                FormControlKind::Input { input_type, checked }
+                                let value_text = node.get_attr("value")
+                                    .unwrap_or("")
+                                    .to_owned();
+                                FormControlKind::Input { input_type, checked, value_text }
                             }
                         }
                     }
@@ -4140,14 +4166,36 @@ fn lay_out(
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
     let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. });
-    // CSS: field-sizing — P4 wiring point.
-    // When style.field_sizing == FieldSizing::Content and is_replaced and s.width.is_none()
-    // (UA did not set a fixed width), call `field_sizing_content_intrinsic(tag, value_text,
-    // style.font_size, resolved_line_height, measurer)` and assign the returned
-    // padding_box_width + border widths as b.rect.width instead of 0.0.
-    // See `lumen_layout::field_sizing::field_sizing_content_intrinsic` for the algorithm.
+    // CSS Basic UI L4 §4.4 — field-sizing: content.
+    // Pre-compute intrinsic (padding-box width, padding-box height) from text content.
+    // Only applies to text-entry FormControls when UA did not supply explicit dimensions.
+    let field_intrinsic: Option<(f32, f32)> = if s.field_sizing == FieldSizing::Content
+        && is_replaced
+        && s.width.is_none()
+    {
+        if let (BoxKind::FormControl { kind }, Some(m)) = (&b.kind, measurer) {
+            let lh = s.font_size * s.line_height;
+            match kind {
+                FormControlKind::Input { value_text, .. } => {
+                    Some(field_sizing_content_intrinsic("input", value_text, s.font_size, lh, m))
+                }
+                FormControlKind::Textarea { value_text } => {
+                    Some(field_sizing_content_intrinsic("textarea", value_text, s.font_size, lh, m))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     b.rect.width = if is_replaced {
-        0.0
+        if let Some((pw, _)) = field_intrinsic {
+            pw + s.border_left_width + s.border_right_width
+        } else {
+            0.0
+        }
     } else {
         (available_width - margin_left - margin_right).max(0.0)
     };
@@ -4811,6 +4859,14 @@ fn lay_out(
                 let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
                 ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
             };
+            // CSS Basic UI L4 §4.4 — field-sizing: content height override.
+            // When s.height was not set by UA (field_intrinsic is Some), replace the
+            // zero content_height with the padding-box height from the measurement.
+            if let Some((_, ph)) = field_intrinsic
+                && s.height.is_none()
+            {
+                b.rect.height = ph + s.border_top_width + s.border_bottom_width;
+            }
             // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с
             // width: max сначала, потом min → «min побеждает max». Content
             // оверфлоу-ит коробку если min режет ниже — это правильное
