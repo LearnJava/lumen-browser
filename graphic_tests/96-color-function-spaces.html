@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<!-- CSS Color 4 §10 predefined color spaces in color(): srgb-linear, a98-rgb,
+     prophoto-rgb, xyz, xyz-d65, xyz-d50. Every cell uses an IN-GAMUT colour so
+     the sRGB result is identical in Lumen and Edge (no out-of-gamut mapping
+     ambiguity). Whites/blacks/greys and the sRGB primaries are exactly
+     representable in each space. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; padding: 4px; box-sizing: border-box; }
+
+  .cell { width: 156px; height: 80px; }
+
+  /* srgb-linear: channels are linear-light sRGB primaries. */
+  .c-srgblin-white { background: color(srgb-linear 1 1 1); }
+  .c-srgblin-black { background: color(srgb-linear 0 0 0); }
+  .c-srgblin-grey  { background: color(srgb-linear 0.2140 0.2140 0.2140); } /* ≈ sRGB grey 128 */
+  .c-srgblin-red   { background: color(srgb-linear 1 0 0); }               /* = sRGB red */
+  .c-srgblin-green { background: color(srgb-linear 0 1 0); }               /* = sRGB green */
+
+  /* xyz / xyz-d65: CIE XYZ with a D65 white point. */
+  .c-xyz-white { background: color(xyz-d65 0.9505 1.0 1.089); }            /* D65 white */
+  .c-xyz-black { background: color(xyz 0 0 0); }
+  .c-xyz-grey  { background: color(xyz 0.2034 0.2140 0.2331); }           /* ≈ sRGB grey 128 */
+
+  /* xyz-d50: CIE XYZ with a D50 white point. */
+  .c-xyzd50-white { background: color(xyz-d50 0.9642 1.0 0.8251); }       /* D50 white */
+
+  /* a98-rgb (Adobe RGB 1998). */
+  .c-a98-white { background: color(a98-rgb 1 1 1); }
+  .c-a98-black { background: color(a98-rgb 0 0 0); }
+
+  /* prophoto-rgb. */
+  .c-pp-white { background: color(prophoto-rgb 1 1 1); }
+  .c-pp-black { background: color(prophoto-rgb 0 0 0); }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cell c-srgblin-white"></div>
+  <div class="cell c-srgblin-black"></div>
+  <div class="cell c-srgblin-grey"></div>
+  <div class="cell c-srgblin-red"></div>
+  <div class="cell c-srgblin-green"></div>
+  <div class="cell c-xyz-white"></div>
+  <div class="cell c-xyz-black"></div>
+  <div class="cell c-xyz-grey"></div>
+  <div class="cell c-xyzd50-white"></div>
+  <div class="cell c-a98-white"></div>
+  <div class="cell c-a98-black"></div>
+  <div class="cell c-pp-white"></div>
+  <div class="cell c-pp-black"></div>
+</div>
+</body>
+</html>
