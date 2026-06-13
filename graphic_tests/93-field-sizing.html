@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!-- CSS Basic UI L4 §4.4 — field-sizing: content.
+     Form controls with field-sizing: content size to their text content instead
+     of the UA default (input 174px, textarea 200×48). Each control is filled with
+     a solid background so its box dimensions are visible; longer value text yields
+     a wider box. The fixed-size controls in the bottom row keep their UA width. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 12px; box-sizing: border-box; }
+
+  /* Remove UA chrome variability: flat appearance, fixed font, solid fill so the
+     box geometry is the only thing being compared. */
+  input, textarea {
+    appearance: none;
+    font: 16px monospace;
+    border: 2px solid #003366;
+    background: #b3d9ff;
+    padding: 0;
+    margin: 0 0 12px 0;
+    display: block;
+  }
+
+  /* field-sizing: content — width grows with the value text length. */
+  .fs-content { field-sizing: content; }
+
+  /* Reference fixed-size controls (UA default dimensions). */
+  .fs-fixed { field-sizing: fixed; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- Content-sized: each input box hugs its value text -->
+  <input class="fs-content" type="text" value="ab">
+  <input class="fs-content" type="text" value="abcdefghij">
+  <input class="fs-content" type="text" value="abcdefghijklmnopqrstuvwxyz">
+
+  <!-- Content-sized textarea: width = widest line, height = line count -->
+  <textarea class="fs-content">one
+two two
+three three three</textarea>
+
+  <!-- Fixed (UA default 174×21 input, 200×48 textarea) for comparison -->
+  <input class="fs-fixed" type="text" value="fixed">
+  <textarea class="fs-fixed">fixed box</textarea>
+</div>
+</body>
+</html>

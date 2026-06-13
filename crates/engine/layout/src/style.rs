@@ -2366,6 +2366,10 @@ pub struct ComputedStyle {
     /// CSS Basic UI L4 §5 — `appearance`. NOT inherited. Initial: `Auto`.
     /// Phase 0: parse + store; form-widget styling — P2/P3 task.
     pub appearance: Appearance,
+    /// CSS Basic UI L4 §4.4 — `field-sizing`. NOT inherited. Initial: `Fixed`.
+    /// When `Content`, UA-default dimensions are suppressed and `lay_out_box` calls
+    /// `field_sizing_content_intrinsic()` to size the control from its text.
+    pub field_sizing: FieldSizing,
     /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
     pub user_select: UserSelect,
     /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
@@ -3010,6 +3014,18 @@ pub enum Appearance {
     Compat,
 }
 
+/// CSS Basic UI L4 §4.4 — `field-sizing`. NOT inherited. Initial: `Fixed`.
+/// `Fixed` — UA-specified dimensions apply (default browser behaviour).
+/// `Content` — intrinsic size comes from the control's text content.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FieldSizing {
+    /// UA default dimensions (e.g. `<input>` is 174×21 px).
+    #[default]
+    Fixed,
+    /// Size the control to fit its text content (CSS Basic UI L4 §4.4).
+    Content,
+}
+
 /// CSS Pointer Events L1. Default `auto`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PointerEvents {
@@ -3082,6 +3098,30 @@ pub enum ContentVisibility {
     Visible,
     Auto,
     Hidden,
+}
+
+/// CSS Sizing L4 §4.5 — `interpolate-size` property value.
+///
+/// Controls whether keyword sizes (`auto`, `min-content`, `max-content`,
+/// `fit-content`) can participate in CSS transitions and animations.
+/// When `AllowKeywords` is active, the layout engine resolves keyword sizes
+/// to their px equivalent at transition start, enabling smooth
+/// `height: 0 → height: auto` transitions.
+///
+/// # CSS: interpolate-size
+/// P4 wires this enum via `apply_declaration("interpolate-size", ...)` and
+/// stores the result in `ComputedStyle::interpolate_size`. The engine reads
+/// it in `TransitionScheduler::sync()` to decide whether to allow keyword
+/// size interpolation for a given element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InterpolateSizeMode {
+    /// CSS Sizing L4 §4.5.1 initial value — keyword sizes are discrete.
+    /// Transitions that start or end at a keyword size snap at `t = 0.5`.
+    #[default]
+    NumericOnly,
+    /// CSS Sizing L4 §4.5 `allow-keywords` value — keyword sizes resolve
+    /// to their px value at transition start, enabling smooth animations.
+    AllowKeywords,
 }
 
 /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
@@ -4750,6 +4790,7 @@ impl ComputedStyle {
             pointer_events: PointerEvents::Auto,
             touch_action: TouchAction::Auto,
             appearance: Appearance::Auto,
+            field_sizing: FieldSizing::Fixed,
             user_select: UserSelect::Auto,
             resize: Resize::None,
             scroll_behavior: ScrollBehavior::Auto,
@@ -5049,6 +5090,7 @@ pub fn compute_style(
         pointer_events: PointerEvents::Auto,
         touch_action: TouchAction::Auto,
         appearance: Appearance::Auto,
+        field_sizing: FieldSizing::Fixed,
         text_align_last: TextAlignLast::Auto,
         // User Select / Scroll Behavior — наследуются.
         user_select: inherited.user_select,
@@ -5677,6 +5719,14 @@ pub fn compute_style(
     // CSS Basic UI L4 §5 — appearance: none removes UA styling from form controls.
     // Applied after CSS declarations so author `appearance: none` takes effect.
     apply_ua_appearance(doc, node, &mut style);
+
+    // CSS Basic UI L4 §4.4 — field-sizing: content post-pass.
+    // apply_ua_form_controls ran before the cascade and may have set explicit UA
+    // dimensions. Now that field_sizing is final, clear width/height for text-entry
+    // controls so lay_out picks up field_sizing_content_intrinsic dimensions instead.
+    if style.field_sizing == FieldSizing::Content {
+        apply_ua_form_controls_field_sizing_clear(doc, node, &mut style);
+    }
 
     style
 }
@@ -8666,6 +8716,37 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
     style.border_left_color = border;
     style.background_color = Some(bg);
     style.color = fg;
+}
+
+/// CSS Basic UI L4 §4.4 — post-cascade pass: when `field-sizing: content` was set
+/// by the author stylesheet, clears any UA-supplied `width`/`height` on text-entry
+/// controls so that `lay_out` will call `field_sizing_content_intrinsic` instead.
+///
+/// Must run AFTER the CSS cascade so that author `field-sizing: content` is final.
+fn apply_ua_form_controls_field_sizing_clear(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
+    match name.local.as_str() {
+        "input" => {
+            let ty = doc
+                .get(node)
+                .get_attr("type")
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+            // Only text-entry types are eligible; checkbox/radio/range use fixed sizes.
+            match ty.trim() {
+                "checkbox" | "radio" | "range" | "hidden" => {}
+                _ => {
+                    style.width = None;
+                    style.height = None;
+                }
+            }
+        }
+        "textarea" => {
+            style.width = None;
+            style.height = None;
+        }
+        _ => {}
+    }
 }
 
 /// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
@@ -11873,6 +11954,12 @@ fn apply_declaration(
                 "auto" => Appearance::Auto,
                 "none" => Appearance::None,
                 _ => Appearance::Compat,
+            };
+        }
+        "field-sizing" => {
+            style.field_sizing = match val.trim() {
+                "content" => FieldSizing::Content,
+                _ => FieldSizing::Fixed,
             };
         }
         "contain" => {
@@ -24485,6 +24572,67 @@ mod tests {
             Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
             _ => panic!("Expected rgba color"),
         }
+    }
+
+    // --- field-sizing ---
+
+    #[test]
+    fn field_sizing_default_is_fixed() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Fixed);
+    }
+
+    #[test]
+    fn field_sizing_content_parses() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+    }
+
+    #[test]
+    fn field_sizing_content_suppresses_ua_width() {
+        // With field-sizing: content, apply_ua_form_controls should NOT set width/height.
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+        assert!(style.width.is_none(), "field-sizing: content must clear UA width");
+        assert!(style.height.is_none(), "field-sizing: content must clear UA height");
+    }
+
+    #[test]
+    fn field_sizing_fixed_preserves_ua_dimensions() {
+        // Default (fixed): UA dimensions are preserved.
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.width, Some(Length::Px(174.0)));
+        assert_eq!(style.height, Some(Length::Px(21.0)));
+    }
+
+    #[test]
+    fn field_sizing_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><input /></div>");
+        let sheet = lumen_css_parser::parse("div { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let input = doc.get(div).children[0];
+        let input_style = compute_style(&doc, input, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.field_sizing, FieldSizing::Content);
+        // field-sizing is not inherited → input keeps Fixed
+        assert_eq!(input_style.field_sizing, FieldSizing::Fixed);
     }
 
     // --- Display extended values ---

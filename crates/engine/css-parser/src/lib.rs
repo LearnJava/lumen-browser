@@ -136,6 +136,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "empty-cells",
     "fill",
     "fill-opacity",
+    "field-sizing",
     "fill-rule",
     "filter",
     "flex",
