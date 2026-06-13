@@ -34,6 +34,7 @@ mod forms;
 mod gc_tick;
 mod hints;
 mod memory_poll;
+mod newtab;
 mod input;
 mod links;
 mod momentum_anim;
@@ -1067,6 +1068,10 @@ enum PageSource {
     /// сетевой запрос не нужен. `base_url` — оригинальный URL страницы
     /// (для разрешения относительных ссылок внутри HTML).
     Snapshot { html: String, base_url: String },
+    /// Внутренняя статическая страница (`about:newtab`): HTML генерируется
+    /// в памяти, сетевой запрос не нужен. `url` — канонический about-URL,
+    /// показывается в адресной строке и истории.
+    Static { html: String, url: String },
 }
 
 /// Запись в стеке истории навигации браузера.
@@ -1614,6 +1619,7 @@ impl PageSource {
             PageSource::Url(u) => u.clone(),
             PageSource::AboutBlank => "about:blank".to_owned(),
             PageSource::Snapshot { base_url, .. } => format!("[bfcache] {base_url}"),
+            PageSource::Static { url, .. } => url.clone(),
         }
     }
 
@@ -1637,6 +1643,7 @@ impl PageSource {
             PageSource::Url(u) => Some(u.as_str()),
             PageSource::Snapshot { base_url, .. } => Some(base_url.as_str()),
             PageSource::AboutBlank => Some("about:blank"),
+            PageSource::Static { url, .. } => Some(url.as_str()),
             _ => None,
         }
     }
@@ -1649,7 +1656,9 @@ impl PageSource {
             PageSource::File(p) => ResourceBase::File(p.clone()),
             PageSource::Url(u) => ResourceBase::Url(u.clone()),
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-            PageSource::Empty | PageSource::AboutBlank => return href.to_owned(),
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => {
+                return href.to_owned();
+            }
         };
         base.resolve_str(href)
     }
@@ -1706,6 +1715,14 @@ impl PageSource {
                 Ok(RawPage {
                     bytes: html.as_bytes().to_vec(),
                     base: ResourceBase::Url(base_url.clone()),
+                    content_type: Some("text/html"),
+                })
+            }
+            PageSource::Static { html, url } => {
+                // Internal about: page: HTML generated in memory, no network request.
+                Ok(RawPage {
+                    bytes: html.as_bytes().to_vec(),
+                    base: ResourceBase::Url(url.clone()),
                     content_type: Some("text/html"),
                 })
             }
@@ -4584,7 +4601,7 @@ impl Lumen {
             PageSource::File(p) => ResourceBase::File(p.clone()),
             PageSource::Url(u) => ResourceBase::Url(u.clone()),
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-            PageSource::Empty | PageSource::AboutBlank => return,
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
         };
         for (nid, url) in requests {
             let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
@@ -9517,6 +9534,30 @@ impl Lumen {
     ///
     /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
     /// → record in search_history → plain navigate.
+    /// Build a fresh `about:newtab` [`PageSource::Static`] from the current
+    /// history. Reads the top-[`newtab::MAX_TILES`] most-visited sites from
+    /// `history_store`; an empty/failed read yields a tile-less page.
+    fn build_newtab_source(&self) -> PageSource {
+        let sites: Vec<newtab::TopSite> = self
+            .history_store
+            .most_visited(newtab::MAX_TILES as i64)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| {
+                let title = if e.title.trim().is_empty() {
+                    e.url.clone()
+                } else {
+                    e.title
+                };
+                newtab::TopSite { url: e.url, title }
+            })
+            .collect();
+        PageSource::Static {
+            html: newtab::build_newtab_html(&sites),
+            url: newtab::NEWTAB_URL.to_owned(),
+        }
+    }
+
     fn handle_omnibox_commit(&mut self, value: String) {
         // `view-source:<url>` — fetch and display syntax-highlighted source (§D-2).
         if let Some(target_url) = value.trim().strip_prefix("view-source:") {
@@ -9530,6 +9571,13 @@ impl Lumen {
             let snap = self.settings_store.snapshot();
             self.settings_panel.open(snap);
             self.request_redraw();
+            return;
+        }
+
+        // `about:newtab` — internal start page with a speed dial of the
+        // top-5 most-visited sites (task CC-5).
+        if value.trim() == newtab::NEWTAB_URL {
+            self.navigate_to(self.build_newtab_source());
             return;
         }
 
@@ -11116,7 +11164,7 @@ impl Lumen {
     /// Silent — ошибки записи не ломают выход. Не сохраняет Empty-страницу.
     fn save_session_on_close(&self) {
         let url = match &self.source {
-            PageSource::Empty | PageSource::AboutBlank => return,
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
@@ -11297,7 +11345,7 @@ impl Lumen {
             PageSource::Url(u) => u.clone(),
             PageSource::File(p) => format!("file://{}", p.display()),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
-            PageSource::Empty | PageSource::AboutBlank => String::new(),
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => String::new(),
         };
         let title = snap.title.clone().unwrap_or_default();
         let scroll_x = snap.scroll_x;
@@ -12096,7 +12144,7 @@ fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
 /// (нечего восстанавливать). `File` → путь, `Snapshot` → `base_url`.
 fn source_url_string(src: &PageSource) -> Option<String> {
     match src {
-        PageSource::Empty | PageSource::AboutBlank => None,
+        PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => None,
         PageSource::File(p) => Some(p.display().to_string()),
         PageSource::Url(u) => Some(u.clone()),
         PageSource::Snapshot { base_url, .. } => Some(base_url.clone()),
