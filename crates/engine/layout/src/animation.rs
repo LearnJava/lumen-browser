@@ -22,7 +22,7 @@
 
 use crate::style::{
     AnimationDirection, AnimationFillMode, AnimationPlayState, Color, ComputedStyle, FilterFn,
-    GradientStop, IterationCount, Length, TimingFunction, TransformFn,
+    GradientStop, InterpolateSizeMode, IterationCount, Length, TimingFunction, TransformFn,
 };
 use lumen_css_parser::{Declaration, KeyframesRule, Stylesheet};
 use lumen_dom::NodeId;
@@ -1217,9 +1217,10 @@ impl TransitionScheduler {
             // CSS Sizing L4 §4.5 — resolve `auto`/keyword height endpoints to px.
             // When a `height` endpoint is `Discrete("auto")` and auto_height_cache has a
             // resolved px value, substitute it so the transition interpolates smoothly.
-            // CSS: interpolate-size — P4 will gate this block on
-            // `new.interpolate_size == InterpolateSizeMode::AllowKeywords`.
-            let auto_resolved_px = if *prop_name == "height" {
+            // Gated on `interpolate-size: allow-keywords`: per spec, keyword sizes are
+            // discrete (snap at t=0.5) unless the element opts in via `interpolate-size`.
+            let allow_keyword_size = new.interpolate_size == InterpolateSizeMode::AllowKeywords;
+            let auto_resolved_px = if *prop_name == "height" && allow_keyword_size {
                 self.auto_height_cache.get(&node).copied()
             } else {
                 None
@@ -2633,7 +2634,6 @@ mod tests {
 
     #[test]
     fn interpolate_size_mode_default_is_numeric_only() {
-        use crate::style::InterpolateSizeMode;
         assert_eq!(InterpolateSizeMode::default(), InterpolateSizeMode::NumericOnly);
     }
 
@@ -2674,14 +2674,14 @@ mod tests {
 
     #[test]
     fn height_auto_resolves_via_cache_and_interpolates() {
-        // Simulates `height: 0 → height: auto` with interpolate-size: allow-keywords.
-        // P4 will gate this on ComputedStyle::interpolate_size; here we test the raw algorithm.
+        // Simulates `height: 0 → height: auto` with `interpolate-size: allow-keywords`.
         let mut sched = TransitionScheduler::new();
         let node = lumen_dom::NodeId::from_index(7usize);
         // Register auto-height from last layout pass.
         sched.set_auto_height(node, 80.0);
         let old_s = make_height_transition_style(Some(Length::Px(0.0)), 1.0);
-        let new_s = make_height_transition_style(None, 1.0); // None = auto
+        let mut new_s = make_height_transition_style(None, 1.0); // None = auto
+        new_s.interpolate_size = InterpolateSizeMode::AllowKeywords;
         sched.sync(node, &old_s, &new_s, 0.0);
         let frame = sched.tick(0.5);
         assert!(frame.has_active);
@@ -2691,5 +2691,25 @@ mod tests {
             matches!(h, Length::Px(v) if (*v - 40.0).abs() < 0.5),
             "expected ~40px, got {h:?}"
         );
+    }
+
+    #[test]
+    fn height_auto_stays_discrete_without_allow_keywords() {
+        // Default `interpolate-size: numeric-only` — the `auto` endpoint is NOT
+        // resolved to px, so the value snaps discretely instead of interpolating.
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(8usize);
+        sched.set_auto_height(node, 80.0);
+        let old_s = make_height_transition_style(Some(Length::Px(0.0)), 1.0);
+        let new_s = make_height_transition_style(None, 1.0); // None = auto, NumericOnly default
+        sched.sync(node, &old_s, &new_s, 0.0);
+        let frame = sched.tick(0.5);
+        // No numeric override at t=0.5 — the auto endpoint stays a discrete keyword.
+        let no_px_override = frame
+            .overrides
+            .get(&node)
+            .and_then(|o| o.height.as_ref())
+            .is_none_or(|h| !matches!(h, Length::Px(v) if (*v - 40.0).abs() < 0.5));
+        assert!(no_px_override, "auto must not interpolate without allow-keywords");
     }
 }

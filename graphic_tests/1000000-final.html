@@ -1202,5 +1202,14 @@
   <input type="text" value="fixed" style="field-sizing:fixed;appearance:none;font:16px monospace;border:2px solid #663300;background:#ffd9b3;padding:0;">
 </div>
 
+<!-- ── interpolate-size: allow-keywords (CSS Sizing L4 §4.5) ──────────────────── -->
+<!-- Inherited opt-in; at rest the auto-height box sizes to its strips only. -->
+<div style="margin-top:24px;interpolate-size:allow-keywords;">
+  <div style="width:280px;height:auto;background:#2f6db5;padding:8px;box-sizing:border-box;">
+    <div style="height:24px;margin-bottom:6px;background:#ffd23f;"></div>
+    <div style="height:24px;background:#ffd23f;"></div>
+  </div>
+</div>
+
 </body>
 </html>

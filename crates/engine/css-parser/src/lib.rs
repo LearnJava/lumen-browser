@@ -184,6 +184,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "inset-block",
     "inset-inline",
     "inset-inline-start",
+    "interpolate-size",
     "isolation",
     "justify-content",
     "justify-items",
