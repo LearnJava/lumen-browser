@@ -1031,6 +1031,28 @@
   </div>
 </div><!-- /offset-path card -->
 
+<!-- offset-path: ray() demo card -->
+<style>
+  .ray-scene { position:relative; height:120px; }
+  .ray-box { position:absolute; width:20px; height:20px; top:50px; left:140px;
+             offset-distance:46px; offset-rotate:0deg; }
+  .ray-0   { background:#e63946; offset-path: ray(0deg); }
+  .ray-90  { background:#2a9d8f; offset-path: ray(90deg); }
+  .ray-180 { background:#9d4edd; offset-path: ray(180deg); }
+  .ray-270 { background:#e9c46a; offset-path: ray(270deg); }
+  .ray-c   { background:#ffffff; offset-path: ray(0deg); offset-distance:0px; }
+</style>
+<div class="card mp-card">
+  <h4>offset-path: ray(&lt;angle&gt;) (Motion Path L1)</h4>
+  <div class="ray-scene">
+    <div class="ray-box ray-0"></div>
+    <div class="ray-box ray-90"></div>
+    <div class="ray-box ray-180"></div>
+    <div class="ray-box ray-270"></div>
+    <div class="ray-box ray-c"></div>
+  </div>
+</div><!-- /offset-path ray card -->
+
 <!-- anchor-positioning demo card -->
 <style>
   .anc-card { background:#16213e; padding:8px; border-radius:4px; }
@@ -1159,6 +1181,30 @@
     <div class="cset-item">d</div>
   </div>
 </div><!-- /counter-set card -->
+
+
+<!-- revert-layer demo card (TEST-98) -->
+<style>
+  .rl-card { background:#16213e; padding:8px; border-radius:4px; margin-top:16px; }
+  .rl-card h4 { margin:0 0 8px 0; }
+  .rl-row { display:flex; gap:10px; }
+  @layer rl-base, rl-theme;
+  @layer rl-base  { .rl-cell { background:#2e7d32; } }   /* green, lower layer */
+  @layer rl-theme {
+    .rl-cell { background:#c62828; }                     /* red, higher layer */
+    .rl-rev  { background:revert-layer; }                /* → back to green */
+  }
+  .rl-cell { flex:1; height:48px; border-radius:4px; }
+</style>
+<div class="card rl-card">
+  <h4>revert-layer (theme → base)</h4>
+  <div class="rl-row">
+    <div class="rl-cell"></div>
+    <div class="rl-cell"></div>
+    <div class="rl-cell rl-rev"></div>
+    <div class="rl-cell rl-rev"></div>
+  </div>
+</div><!-- /revert-layer card -->
 
 
 <!-- @starting-style entry animation demo (TEST-71) -->
