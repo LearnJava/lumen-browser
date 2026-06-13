@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-**shape-outside: path()**  branch: `p4-shape-outside-path`
-Next step: merge готов — parse_shape_path_px + wiring + 4 теста + graphic test 113
+_(none)_ — p4-shape-outside-path влит 2026-06-14
 
 ## Workflow
 
