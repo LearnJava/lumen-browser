@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-**clip-path fill-rule** branch: `p4-clip-path-fill-rule` — `<fill-rule>` (nonzero/evenodd) в `clip-path: path()` / `polygon()` (CSS Shapes L1 §3/§4).
-Next step: финальный clippy/тесты → merge.
+_(none)_ — p4-clip-path-fill-rule влит 2026-06-14
 
 ## Workflow
 
