@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+GG-4: Vertical tabs layout mode  branch: p1-gg4-vertical-tabs
+Next step: TabLayout enum + toggle button in strip.rs + scroll in vertical_tabs.rs + BrowserSettings persist  strip.rs:577
 
 ---
 

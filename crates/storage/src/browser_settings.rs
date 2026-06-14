@@ -24,6 +24,7 @@ const KEY_DOH_ENABLED: &str = "doh_enabled";
 const KEY_FONT_SIZE: &str = "font_size";
 const KEY_THEME: &str = "theme";
 const KEY_DOWNLOAD_PATH: &str = "download_path";
+const KEY_TAB_LAYOUT: &str = "tab_layout";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ const DEFAULT_DOH_ENABLED: bool = false;
 const DEFAULT_FONT_SIZE: f64 = 16.0;
 const DEFAULT_THEME: &str = "dark";
 const DEFAULT_DOWNLOAD_PATH: &str = "";
+const DEFAULT_TAB_LAYOUT: &str = "horizontal";
 
 /// All browser settings in a single value type for easy read/write.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +57,10 @@ pub struct BrowserSettingsSnapshot {
     pub theme: String,
     /// Absolute path to the default download directory. Empty = OS default.
     pub download_path: String,
+    /// Tab layout mode: `"horizontal"` (default top strip) or `"vertical"` (left sidebar).
+    ///
+    /// Serialised as a string so future modes can be added without a schema migration.
+    pub tab_layout: String,
 }
 
 impl Default for BrowserSettingsSnapshot {
@@ -68,6 +74,7 @@ impl Default for BrowserSettingsSnapshot {
             font_size: DEFAULT_FONT_SIZE,
             theme: DEFAULT_THEME.to_owned(),
             download_path: DEFAULT_DOWNLOAD_PATH.to_owned(),
+            tab_layout: DEFAULT_TAB_LAYOUT.to_owned(),
         }
     }
 }
@@ -241,6 +248,16 @@ impl BrowserSettings {
         self.set_str(KEY_DOWNLOAD_PATH, path)
     }
 
+    /// Tab layout mode: `"horizontal"` or `"vertical"` (GG-4).
+    pub fn tab_layout(&self) -> String {
+        self.get_str(KEY_TAB_LAYOUT, DEFAULT_TAB_LAYOUT)
+    }
+
+    /// Set tab layout mode.
+    pub fn set_tab_layout(&self, mode: &str) -> Result<()> {
+        self.set_str(KEY_TAB_LAYOUT, mode)
+    }
+
     /// Read all settings into a snapshot value.
     pub fn snapshot(&self) -> BrowserSettingsSnapshot {
         BrowserSettingsSnapshot {
@@ -252,6 +269,7 @@ impl BrowserSettings {
             font_size: self.font_size(),
             theme: self.theme(),
             download_path: self.download_path(),
+            tab_layout: self.tab_layout(),
         }
     }
 
@@ -265,6 +283,7 @@ impl BrowserSettings {
         self.set_font_size(snap.font_size)?;
         self.set_theme(&snap.theme)?;
         self.set_download_path(&snap.download_path)?;
+        self.set_tab_layout(&snap.tab_layout)?;
         Ok(())
     }
 }
@@ -364,8 +383,24 @@ mod tests {
             font_size: 14.0,
             theme: "light".to_owned(),
             download_path: "/tmp/dl".to_owned(),
+            tab_layout: "vertical".to_owned(),
         };
         s.apply_snapshot(&snap).unwrap();
         assert_eq!(s.snapshot(), snap);
+    }
+
+    #[test]
+    fn tab_layout_default_is_horizontal() {
+        let s = store();
+        assert_eq!(s.tab_layout(), "horizontal");
+    }
+
+    #[test]
+    fn tab_layout_round_trip() {
+        let s = store();
+        s.set_tab_layout("vertical").unwrap();
+        assert_eq!(s.tab_layout(), "vertical");
+        s.set_tab_layout("horizontal").unwrap();
+        assert_eq!(s.tab_layout(), "horizontal");
     }
 }

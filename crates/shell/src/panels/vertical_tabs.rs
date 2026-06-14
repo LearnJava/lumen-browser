@@ -54,17 +54,31 @@ const BADGE_SZ: f32 = 5.0;
 pub struct VerticalTabsPanel {
     /// `true` while the panel is visible. Toggled via Ctrl+B.
     pub visible: bool,
+    /// Vertical scroll offset in CSS px. 0.0 = top of the tab list.
+    ///
+    /// Rows above `scroll_y` are clipped; rows below `scroll_y + panel_h`
+    /// are not emitted. Adjusted via [`scroll_by`][Self::scroll_by].
+    pub scroll_y: f32,
 }
 
 impl VerticalTabsPanel {
     /// Create a new (hidden) panel.
     pub fn new() -> Self {
-        Self { visible: false }
+        Self { visible: false, scroll_y: 0.0 }
     }
 
     /// Flip visibility. Caller must trigger relayout + redraw.
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
+    }
+
+    /// Scroll the panel by `delta` CSS px (positive = down).
+    ///
+    /// Clamps to `[0, max_scroll]` where `max_scroll = tab_count × ROW_H − panel_h`.
+    /// `panel_h` is the visible panel height in CSS px.
+    pub fn scroll_by(&mut self, delta: f32, tab_count: usize, panel_h: f32) {
+        let max_scroll = (tab_count as f32 * ROW_H - panel_h).max(0.0);
+        self.scroll_y = (self.scroll_y + delta).clamp(0.0, max_scroll);
     }
 }
 
@@ -92,17 +106,19 @@ pub enum VTabHit {
 /// Returns `None` if the coordinates are outside the panel bounds.
 /// `tab_bar_height` is the horizontal tab strip height (panel starts below it).
 /// `window_h` is the full window height in CSS px.
+/// `scroll_y` is the current scroll offset from [`VerticalTabsPanel::scroll_y`].
 pub fn hit_test(
     strip: &TabStrip,
     x: f32,
     y: f32,
     tab_bar_height: f32,
     window_h: f32,
+    scroll_y: f32,
 ) -> Option<VTabHit> {
     if x >= PANEL_WIDTH || y < tab_bar_height || y >= window_h {
         return None;
     }
-    let row_y = y - tab_bar_height;
+    let row_y = (y - tab_bar_height) + scroll_y;
     let idx = (row_y / ROW_H) as usize;
     if idx >= strip.tabs.len() {
         return Some(VTabHit::Empty);
@@ -117,12 +133,18 @@ pub fn hit_test(
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-/// Build the display list for the vertical tabs panel.
+/// Build the display list for the vertical tabs panel with scroll support.
 ///
 /// Panel occupies `x = 0..PANEL_WIDTH`, `y = tab_bar_height..window_h`.
-/// Rows are clipped to the visible panel area; rows scrolled off the bottom
-/// are not emitted.
-pub fn build_panel(strip: &TabStrip, tab_bar_height: f32, window_h: f32) -> DisplayList {
+/// `scroll_y` shifts rendered rows upward: rows whose bottom edge is above
+/// `tab_bar_height` (after scrolling) are skipped; rows whose top edge is at
+/// or below `window_h` are not emitted.
+pub fn build_tab_bar_vertical(
+    strip: &TabStrip,
+    tab_bar_height: f32,
+    window_h: f32,
+    scroll_y: f32,
+) -> DisplayList {
     let panel_h = (window_h - tab_bar_height).max(0.0);
     let mut out = DisplayList::with_capacity(4 + strip.tabs.len() * 8);
 
@@ -139,7 +161,12 @@ pub fn build_panel(strip: &TabStrip, tab_bar_height: f32, window_h: f32) -> Disp
     });
 
     for (i, tab) in strip.tabs.iter().enumerate() {
-        let row_top = tab_bar_height + i as f32 * ROW_H;
+        let row_top = tab_bar_height + i as f32 * ROW_H - scroll_y;
+        // Skip rows scrolled above the panel top.
+        if row_top + ROW_H <= tab_bar_height {
+            continue;
+        }
+        // Stop at rows scrolled off the bottom.
         if row_top >= window_h {
             break;
         }
@@ -240,6 +267,7 @@ pub fn build_panel(strip: &TabStrip, tab_bar_height: f32, window_h: f32) -> Disp
     out
 }
 
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -285,21 +313,21 @@ mod tests {
     fn hit_outside_panel_returns_none() {
         let s = TabStrip::new();
         // x = PANEL_WIDTH is outside
-        assert_eq!(hit_test(&s, PANEL_WIDTH, 50.0, TAB_H, WIN_H), None);
+        assert_eq!(hit_test(&s, PANEL_WIDTH, 50.0, TAB_H, WIN_H, 0.0), None);
     }
 
     #[test]
     fn hit_inside_tab_bar_returns_none() {
         let s = TabStrip::new();
         // y < TAB_H is the horizontal tab bar area
-        assert_eq!(hit_test(&s, 10.0, TAB_H - 1.0, TAB_H, WIN_H), None);
+        assert_eq!(hit_test(&s, 10.0, TAB_H - 1.0, TAB_H, WIN_H, 0.0), None);
     }
 
     #[test]
     fn hit_first_row_body() {
         let s = TabStrip::new();
         // First row: y = TAB_H..TAB_H+ROW_H; click in the middle of the row body
-        let hit = hit_test(&s, 50.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, 50.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, 0.0);
         assert_eq!(hit, Some(VTabHit::Tab(0)));
     }
 
@@ -308,7 +336,7 @@ mod tests {
         let s = TabStrip::new();
         // Close button starts at PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W
         let close_x = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W + 2.0;
-        let hit = hit_test(&s, close_x, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, close_x, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, 0.0);
         assert_eq!(hit, Some(VTabHit::Close(0)));
     }
 
@@ -316,7 +344,7 @@ mod tests {
     fn hit_second_row() {
         let s = strip2();
         let row2_y = TAB_H + ROW_H + ROW_H * 0.5;
-        let hit = hit_test(&s, 50.0, row2_y, TAB_H, WIN_H);
+        let hit = hit_test(&s, 50.0, row2_y, TAB_H, WIN_H, 0.0);
         assert_eq!(hit, Some(VTabHit::Tab(1)));
     }
 
@@ -324,7 +352,7 @@ mod tests {
     fn hit_below_all_rows_returns_empty() {
         let s = TabStrip::new(); // 1 tab → rows end at TAB_H + ROW_H
         let below_y = TAB_H + ROW_H + 1.0;
-        let hit = hit_test(&s, 50.0, below_y, TAB_H, WIN_H);
+        let hit = hit_test(&s, 50.0, below_y, TAB_H, WIN_H, 0.0);
         assert_eq!(hit, Some(VTabHit::Empty));
     }
 
@@ -333,14 +361,14 @@ mod tests {
     #[test]
     fn build_panel_emits_commands() {
         let s = TabStrip::new();
-        let dl = build_panel(&s, TAB_H, WIN_H);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
         assert!(!dl.is_empty());
     }
 
     #[test]
     fn build_panel_has_title_text() {
         let s = TabStrip::new();
-        let dl = build_panel(&s, TAB_H, WIN_H);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         });
@@ -350,7 +378,7 @@ mod tests {
     #[test]
     fn build_panel_no_badge_for_active() {
         let s = TabStrip::new(); // single Active tab
-        let dl = build_panel(&s, TAB_H, WIN_H);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
         // Active tab has no badge (only FillRect background + accent bar, no badge radii for lifecycle)
         // Panel uses FillRoundedRect for favicon + possibly badge. Badge colors are BADGE_OLD/BADGE_HIB.
         let has_lifecycle_badge = dl.iter().any(|c| match c {
@@ -368,7 +396,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
-        let dl = build_panel(&s, TAB_H, WIN_H);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
         let has_amber = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_OLD.r && color.g == BADGE_OLD.g
@@ -383,7 +411,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
-        let dl = build_panel(&s, TAB_H, WIN_H);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
         let has_grey = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_HIB.r && color.g == BADGE_HIB.g
@@ -402,11 +430,51 @@ mod tests {
         }
         // window_h only fits a few rows.
         let small_h = TAB_H + 3.0 * ROW_H;
-        let dl = build_panel(&s, TAB_H, small_h);
+        let dl = build_tab_bar_vertical(&s, TAB_H, small_h, 0.0);
         // Count DrawText commands with tab titles — must be <= 3 (rows that fit).
         let title_count = dl.iter().filter(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         }).count();
         assert!(title_count <= 3, "must not render rows beyond window height");
+    }
+
+    // ── Scroll (GG-4) ────────────────────────────────────────────────────────
+
+    #[test]
+    fn scroll_offset_shifts_rows_down_in_y() {
+        // With 2 tabs and scroll_y = ROW_H, the first row's rendered top
+        // is tab_bar_height + 0 * ROW_H - ROW_H = tab_bar_height - ROW_H,
+        // which is above the panel top — it should be skipped.  The second
+        // row is now the first visible one.
+        let s = strip2(); // 2 tabs
+        let dl_scrolled = build_tab_bar_vertical(&s, TAB_H, WIN_H, ROW_H);
+        // Only the second tab title should appear.
+        let titles: Vec<_> = dl_scrolled.iter().filter_map(|c| match c {
+            DisplayCommand::DrawText { text, .. } if text.contains("вкладка") => Some(text.clone()),
+            _ => None,
+        }).collect();
+        // First row is clipped (row_top + ROW_H <= tab_bar_height after scroll).
+        // So 1 title visible instead of 2.
+        assert_eq!(titles.len(), 1, "first row should be clipped after scrolling one ROW_H");
+    }
+
+    #[test]
+    fn scroll_by_clamps_to_max() {
+        let mut p = VerticalTabsPanel::new();
+        // 3 tabs, panel_h = 2 * ROW_H → max_scroll = 3*ROW_H - 2*ROW_H = ROW_H.
+        let panel_h = 2.0 * ROW_H;
+        p.scroll_by(9999.0, 3, panel_h);
+        let expected = ROW_H; // (3 * ROW_H - 2 * ROW_H).max(0.0)
+        assert!((p.scroll_y - expected).abs() < f32::EPSILON, "scroll_y must clamp to max");
+    }
+
+    #[test]
+    fn hit_test_with_scroll_offset_resolves_correct_row() {
+        // With scroll_y = ROW_H, a click at visual row 0 maps to logical row 1.
+        let s = strip2(); // 2 tabs
+        // Click at y = TAB_H + ROW_H / 2 (middle of visual first row).
+        // scroll_y = ROW_H → row_y = ROW_H / 2 + ROW_H = 1.5 * ROW_H → idx = 1.
+        let hit = hit_test(&s, 50.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, ROW_H);
+        assert_eq!(hit, Some(VTabHit::Tab(1)), "scroll offset must shift row index");
     }
 }

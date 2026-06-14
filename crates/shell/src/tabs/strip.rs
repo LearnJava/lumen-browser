@@ -26,6 +26,11 @@ pub const DRAG_THRESHOLD: f32 = 6.0;
 /// Width of the drop-indicator bar rendered between tabs during a drag.
 const DROP_INDICATOR_W: f32 = 3.0;
 
+/// Width of the vertical-tab layout toggle button in CSS px.
+/// Rendered at the right edge of the tab strip, between the tabs and the
+/// archive button.
+pub const LAYOUT_BTN_W: f32 = 28.0;
+
 /// Colour of the vertical drop-indicator bar.
 const DROP_INDICATOR_COLOR: Color = Color { r: 255, g: 255, b: 255, a: 180 };
 
@@ -524,6 +529,76 @@ pub enum TabHit {
     Close(usize),
     /// Clicked empty area (right of all tabs).
     Empty,
+}
+
+/// Tab layout mode: horizontal strip or vertical sidebar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabLayout {
+    /// Horizontal strip at the top of the window (default).
+    #[default]
+    Horizontal,
+    /// Vertical 200 px sidebar on the left (GG-4).
+    Vertical,
+}
+
+impl TabLayout {
+    /// Parse from a stored settings string (`"horizontal"` or `"vertical"`).
+    pub fn from_str(s: &str) -> Self {
+        if s == "vertical" { Self::Vertical } else { Self::Horizontal }
+    }
+
+    /// Serialize to a settings string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Horizontal => "horizontal",
+            Self::Vertical => "vertical",
+        }
+    }
+}
+
+/// Returns `true` if `(x, y)` falls inside the layout-mode toggle button.
+///
+/// The button is `LAYOUT_BTN_W` wide, positioned at `btn_x..btn_x + LAYOUT_BTN_W`
+/// in the tab bar row (`y ∈ 0..TAB_BAR_HEIGHT`).  `btn_x` is typically
+/// `win_w − archive_btn_w − LAYOUT_BTN_W`.
+pub fn hit_test_layout_btn(x: f32, y: f32, btn_x: f32) -> bool {
+    (btn_x..btn_x + LAYOUT_BTN_W).contains(&x) && (0.0..TAB_BAR_HEIGHT).contains(&y)
+}
+
+/// Build a display list for the vertical-tab layout toggle button.
+///
+/// `btn_x` — CSS-px x coordinate of the button's left edge (positioned between
+/// the tab strip and the archive button).  `tab_layout` controls the highlight:
+/// the button background is lit when [`TabLayout::Vertical`] is active.
+pub fn build_layout_toggle_btn(tab_layout: TabLayout, btn_x: f32) -> DisplayList {
+    let is_active = tab_layout == TabLayout::Vertical;
+    let bg = if is_active {
+        Color { r: 30, g: 60, b: 100, a: 255 }
+    } else {
+        BAR_BG
+    };
+    let icon_color = Color { r: 160, g: 160, b: 180, a: 255 };
+    const ICON_SZ: f32 = 12.0;
+    let icon_x = btn_x + (LAYOUT_BTN_W - ICON_SZ) * 0.5;
+    let icon_y = (TAB_BAR_HEIGHT - ICON_SZ * 1.2) * 0.5;
+    vec![
+        DisplayCommand::FillRect {
+            rect: Rect::new(btn_x, 0.0, LAYOUT_BTN_W, TAB_BAR_HEIGHT),
+            color: bg,
+        },
+        DisplayCommand::DrawText {
+            rect: Rect::new(icon_x, icon_y, ICON_SZ, ICON_SZ * 1.2),
+            text: "\u{2630}".to_owned(), // ☰ trigram for heaven / hamburger
+            font_size: ICON_SZ,
+            color: icon_color,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            tab_size: 0.0,
+            highlight_name: None,
+        },
+    ]
 }
 
 /// Returns the `[left, right)` x-range of tab `idx` given `n_tabs` tabs and
@@ -1568,5 +1643,32 @@ mod tests {
         assert_eq!(visible, vec![0, 1, 3]);
         let hit = hit_test(&s, 250.0, 18.0, 1024.0);
         assert_eq!(hit, TabHit::Tab(1));
+    }
+
+    // ── TabLayout / layout toggle button (GG-4) ──────────────────────────────
+
+    #[test]
+    fn layout_toggle_hit_inside_button() {
+        // btn_x = 500.0; button occupies [500, 528).
+        let btn_x = 500.0_f32;
+        assert!(hit_test_layout_btn(510.0, 18.0, btn_x));
+    }
+
+    #[test]
+    fn layout_toggle_hit_outside_button() {
+        let btn_x = 500.0_f32;
+        // Left of button.
+        assert!(!hit_test_layout_btn(499.0, 18.0, btn_x));
+        // Right of button.
+        assert!(!hit_test_layout_btn(btn_x + LAYOUT_BTN_W + 1.0, 18.0, btn_x));
+        // Below tab bar.
+        assert!(!hit_test_layout_btn(510.0, TAB_BAR_HEIGHT + 1.0, btn_x));
+    }
+
+    #[test]
+    fn build_layout_toggle_btn_emits_icon_text() {
+        let dl = build_layout_toggle_btn(TabLayout::Horizontal, 700.0);
+        let has_icon = dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { .. }));
+        assert!(has_icon, "toggle button must emit an icon glyph");
     }
 }
