@@ -208,17 +208,20 @@ fn collect_source_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
 ///
 /// # Использование
 ///
-/// ```rust
+/// ```rust,no_run
 /// use lumen_html_parser::preload_scanner::PreloadScanner;
 ///
+/// let html_chunks: &[&[u8]] = &[];
 /// let mut scanner = PreloadScanner::new();
 /// for chunk in html_chunks {
 ///     for hint in scanner.feed_bytes(chunk) {
 ///         // ранний fetch
+///         let _ = hint;
 ///     }
 /// }
 /// for hint in scanner.end() {
 ///     // финальные hint-ы из незавершённого хвоста
+///     let _ = hint;
 /// }
 /// ```
 pub struct PreloadScanner {
