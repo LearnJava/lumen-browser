@@ -1476,6 +1476,9 @@ fn install_primitives(
                         id_json
                     )
                 }
+                JsSseEvent::Retry(ms) => {
+                    format!(r#"{{"t":"retry","ms":{ms}}}"#)
+                }
                 JsSseEvent::Close => r#"{"t":"close"}"#.to_string(),
                 JsSseEvent::Error(e) => {
                     format!(r#"{{"t":"error","message":{}}}"#, json_str(&e))
@@ -5547,14 +5550,31 @@ function _lumen_sse_pump_one(es) {
                 me.origin = es._origin;
                 if (me.lastEventId) { es._lastEventId = me.lastEventId; }
                 _lumen_sse_fire(es, type, me);
+            } else if (ev.t === 'retry') {
+                // Server requested a specific reconnect delay (HTML Living Standard §9.2.3).
+                if (typeof ev.ms === 'number' && ev.ms >= 0) { es._retryMs = ev.ms; }
             } else if (ev.t === 'close') {
-                es.readyState = 2;
+                // Server-initiated close: per spec fire error with CONNECTING, then reconnect.
                 _lumen_sse_close(es._handle);
                 es._handle = 0;
+                if (es.readyState !== 2) {
+                    es.readyState = 0; // CONNECTING
+                    var errEv = new Event('error', { isTrusted: true });
+                    _lumen_sse_fire(es, 'error', errEv);
+                    es._reconnecting = true;
+                    (function(target, delay) {
+                        setTimeout(function() {
+                            if (!target._reconnecting || target.readyState === 2) return;
+                            target._reconnecting = false;
+                            var h = _lumen_sse_connect(target.url);
+                            if (!h) { target.readyState = 2; return; }
+                            target._handle = h;
+                        }, delay);
+                    })(es, es._retryMs);
+                }
                 break;
             } else if (ev.t === 'error') {
-                // Per spec a failed connection fires `error` and stays/transitions
-                // to CLOSED when no reconnection is attempted (Phase 0: no retry).
+                // Network or protocol error: fire error and close (no reconnect for hard errors).
                 es.readyState = 2;
                 var err = new Event('error', { isTrusted: true });
                 err.message = ev.message;
@@ -5585,6 +5605,8 @@ function EventSource(url, opts) {
     this._listeners = {};
     this._handle = 0;
     this._lastEventId = '';
+    this._retryMs = 3000; // default reconnect delay (HTML Living Standard §9.2.7)
+    this._reconnecting = false;
     // Origin best-effort: scheme+host of the target URL (for MessageEvent.origin).
     this._origin = '';
     var _sep = this.url.indexOf('://');
@@ -5628,6 +5650,7 @@ EventSource.prototype.close = function() {
         _lumen_sse_close(this._handle);
         this._handle = 0;
     }
+    this._reconnecting = false; // cancel any pending reconnect
     this.readyState = 2; // CLOSED
 };
 EventSource.CONNECTING = 0;
@@ -13158,18 +13181,27 @@ mod tests {
     }
 
     #[test]
-    fn eventsource_error_on_server_close() {
+    fn eventsource_server_close_fires_error_and_reconnects() {
         use lumen_core::ext::JsSseEvent;
-        // A Close event from the stream transitions to CLOSED (no reconnect, Phase 0).
+        // Server-initiated close: readyState becomes CONNECTING (0), error fires,
+        // reconnect scheduled (HTML Living Standard §9.2.7).
         let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
         let r = rt
             .eval(
-                "var es = new EventSource('https://x/sse');
+                "var errored = false;
+                 var es = new EventSource('https://x/sse');
+                 es.onerror = function() { errored = true; };
                  _lumen_pump_sse();
-                 es.readyState",
+                 [es.readyState, errored]",
             )
             .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::Number(0.0)); // CONNECTING
+                assert_eq!(arr[1], lumen_core::JsValue::Bool(true));  // error fired
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
     }
 
     #[test]
@@ -13226,6 +13258,75 @@ mod tests {
             r,
             lumen_core::JsValue::String("line1\nline2 \"quoted\"".into())
         );
+    }
+
+    #[test]
+    fn eventsource_retry_event_updates_reconnect_delay() {
+        use lumen_core::ext::JsSseEvent;
+        // A Retry event from the server updates the internal reconnect delay.
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![JsSseEvent::Open, JsSseEvent::Retry(500)],
+        );
+        let r = rt
+            .eval(
+                "var es = new EventSource('https://x/sse');
+                 _lumen_pump_sse();
+                 es._retryMs",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(500.0));
+    }
+
+    #[test]
+    fn eventsource_close_cancels_pending_reconnect() {
+        use lumen_core::ext::JsSseEvent;
+        // Calling close() after server-close must cancel the pending reconnect.
+        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
+        let r = rt
+            .eval(
+                "var es = new EventSource('https://x/sse');
+                 _lumen_pump_sse();
+                 es.close();
+                 [es.readyState, es._reconnecting]",
+            )
+            .unwrap();
+        match r {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::Number(2.0)); // CLOSED
+                assert_eq!(arr[1], lumen_core::JsValue::Bool(false)); // no reconnect
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eventsource_remove_event_listener() {
+        use lumen_core::ext::JsSseEvent;
+        // removeEventListener must stop delivery to the removed handler.
+        let rt = runtime_with_mock_sse(
+            make_doc(),
+            vec![
+                JsSseEvent::Open,
+                JsSseEvent::Message {
+                    event_type: "ping".into(),
+                    data: "p".into(),
+                    id: None,
+                },
+            ],
+        );
+        let r = rt
+            .eval(
+                "var count = 0;
+                 var fn1 = function() { count++; };
+                 var es = new EventSource('https://x/sse');
+                 es.addEventListener('ping', fn1);
+                 es.removeEventListener('ping', fn1);
+                 _lumen_pump_sse();
+                 count",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
     }
 
     #[test]
