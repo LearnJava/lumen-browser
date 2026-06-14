@@ -6,6 +6,9 @@
 
 ## In progress
 
+II-2: Passkeys/WebAuthn platform HID enumeration  branch: p1-ii2-webauthn-hid
+Next step: implement platform_enumerate_ctap2_devices() in crates/network/src/ctap2.rs
+
 ---
 
 ## Next
