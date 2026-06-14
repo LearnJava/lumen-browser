@@ -6,9 +6,6 @@
 
 ## In progress
 
-II-1: Navigation Timing shell delivery  branch: p1-ii1-nav-timing
-Next step: add nav_start field to Lumen struct + deliver_nav_timing to PersistentJs  crates/shell/src/main.rs:2611
-
 ---
 
 ## Next
@@ -298,6 +295,7 @@ Next step: add nav_start field to Lumen struct + deliver_nav_timing to Persisten
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-14 | II-1: Navigation Timing L2 shell delivery | W3C Navigation Timing Level 2 §4.2: `nav_start: Option<Instant>` в `Lumen` + `PageSnapshot`; `PersistentJs::deliver_nav_timing(url, duration_ms)` + `QuickPersistentJs` impl (вызывает `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, null)`). `reload()` фиксирует nav_start и доставляет entry после успешной загрузки (inline/File/Snapshot/Url). `resumed()` фиксирует nav_start перед `start_streaming_load()`; `user_event(LoadDone)` доставляет entry после streaming-загрузки. Ошибки и `reset_to_blank_tab` обнуляют nav_start. 4 новых теста в dom.rs (observer, startTime=0, name=URL, buffered replay). |
 | 2026-06-14 | II-1: import.meta.url + import.meta.resolve() + import.meta.env | `crates/js/src/import_meta.rs` — source-level препроцессор: находит `import.meta` вне строк/комментов через минимальный лексер → заменяет на `__$lumen_meta__` + вставляет преамбулу с `.url` (resolved specifier), `.resolve()` (relative join), `.env` (Vite-compat stub). Wiring: `LumenLoader::load()` в `esm.rs` + `eval_module()` в `lib.rs` (page_url). 5 unit + 3 integration тестов; 1979 lumen-js тестов зелёных. |
 | 2026-06-12 | HH-5: Compression Streams API Phase 1 | (d8f53ccc) `CompressionStream`/`DecompressionStream` через `miniz_oxide`; deflate/gzip/deflate-raw; `TransformStream`-based API; `ReadableStream` pipe; 8 unit-тестов |
 | 2026-06-12 | HH-4: BroadcastChannel API | (d5a630b7) `new BroadcastChannel(name)`, `postMessage/onmessage`; `_lumen_broadcast_post/subscribe`; multi-instance dispatch; 14 unit-тестов |
