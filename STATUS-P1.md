@@ -6,8 +6,7 @@
 
 ## In progress
 
-FF-2: EventSource (Server-Sent Events)  branch: p1-ff2-event-source
-Next step: JsSseEvent::Retry + auto-reconnect  crates/core/src/ext.rs:1377
+_(нет)_
 
 ---
 
@@ -77,7 +76,7 @@ Next step: JsSseEvent::Retry + auto-reconnect  crates/core/src/ext.rs:1377
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~FF-1~~ | ~~**Fetch streaming response**~~ — **выполнено** (p1-ff1-fetch-streaming, 2026-06-14): per-response stream slots `_lumen_stream_alloc/length/chunk/free` в Rust; `Response._fromFetchCache` хранит `handle` → тело ответа изолировано от перезаписи последующими `fetch()`; `_consumeBody`/`.text()`/`.arrayBuffer()` читают из слота; 8 K-3 тестов (6 существующих + `stream_slot_alloc_returns_zero_when_no_cache` + `fetch_response_body_getreader_yields_correct_bytes`) | M | `lumen-js` |
-| FF-2 | **EventSource (Server-Sent Events)** — `new EventSource(url)`, state machine (CONNECTING/OPEN/CLOSED); `message`/`open`/`error` events; `data:` / `event:` / `id:` / `retry:` parsing (W3C SSE §9.2); auto-reconnect с backoff; 10 unit-тестов | M | `lumen-js`, `lumen-network` |
+| ~~FF-2~~ | ~~**EventSource (Server-Sent Events)**~~ — **выполнено** (p1-ff2-event-source, 2026-06-14): `new EventSource(url)` state machine (CONNECTING/OPEN/CLOSED) уже был; добавлено: `JsSseEvent::Retry(u64)` в lumen-core; форвард `retry_ms → JsSseEvent::Retry` в JsSseSessionImpl (lumen-network); сериализация `{"t":"retry","ms":N}` в `_lumen_sse_poll`; JS reconnect-логика: server close → CONNECTING + error + `setTimeout(reconnect, _retryMs)` с `_reconnecting`-флагом; `close()` отменяет reconnect; `_retryMs=3000` по умолчанию; итого 12 unit-тестов (eventsource_server_close_fires_error_and_reconnects + retry_event_updates_reconnect_delay + close_cancels_pending_reconnect + remove_event_listener) | M | `lumen-js`, `lumen-network` |
 | FF-3 | **`navigator.sendBeacon(url, data)`** — WHATWG Fetch §3.6: fire-and-forget POST; данные: `string | Blob | FormData | URLSearchParams`; возвращает `bool`; использует background HttpClient task; 5 unit-тестов | XS | `lumen-js`, `lumen-network` |
 | FF-4 | **Cache API Phase 1** — `caches.open(name)` → `Cache`; `cache.put/match/matchAll/delete/keys`; persist в SQLite через `lumen-storage::CacheStore`; `caches.has/keys/delete` на `CacheStorage`; 12 unit-тестов | M | `lumen-js`, `lumen-storage` |
 | FF-5 | **Fetch `keepalive` + `priority`** — `fetch(url, { keepalive: true })` = sendBeacon semantics (выживает при unload); `priority: 'high'|'low'|'auto'` → network queue приоритет; `// network: priority queue` для lumen-network Phase 2; 4 unit-теста | XS | `lumen-js`, `lumen-network` |
