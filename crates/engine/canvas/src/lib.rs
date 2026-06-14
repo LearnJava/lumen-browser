@@ -656,6 +656,37 @@ impl Context2D {
         self.pixels = vec![0u8; size];
     }
 
+    /// Resize the canvas by scaling existing pixels to the new dimensions (nearest-neighbour).
+    ///
+    /// Unlike [`resize`] this preserves visual content — used when CSS layout dimensions
+    /// change and the backing bitmap should follow without clearing the drawing.
+    pub fn scale_resize(&mut self, new_w: u32, new_h: u32) {
+        if new_w == 0 || new_h == 0 {
+            return;
+        }
+        if new_w == self.width && new_h == self.height {
+            return;
+        }
+        let old_w = self.width;
+        let old_h = self.height;
+        let old_pixels = std::mem::replace(
+            &mut self.pixels,
+            vec![0u8; (new_w * new_h * 4) as usize],
+        );
+        self.width = new_w;
+        self.height = new_h;
+        for dst_y in 0..new_h {
+            let src_y = (dst_y * old_h / new_h).min(old_h.saturating_sub(1));
+            for dst_x in 0..new_w {
+                let src_x = (dst_x * old_w / new_w).min(old_w.saturating_sub(1));
+                let src_off = ((src_y * old_w + src_x) * 4) as usize;
+                let dst_off = ((dst_y * new_w + dst_x) * 4) as usize;
+                self.pixels[dst_off..dst_off + 4]
+                    .copy_from_slice(&old_pixels[src_off..src_off + 4]);
+            }
+        }
+    }
+
     // ── State stack ───────────────────────────────────────────────────────────
 
     /// `save()` — push the current drawing state onto the stack.
