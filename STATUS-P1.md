@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+JJ-1: `CloseWatcher` API Phase 0  branch: p1-jj-modern-html-apis
+Next step: реализовать `close_watcher.rs` в lumen-js  `crates/js/src/close_watcher.rs`
 
 ---
 
@@ -105,7 +106,17 @@ _(нет)_
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| II-1 | **`import.meta.url` + `import.meta.resolve()`** — source-level preprocessor в `LumenLoader::load`; заменяет `import.meta` → `__$lumen_meta__` var (url + resolve + env-stub); 6 unit-тестов | S | `lumen-js` |
+| ~~II-1~~ | ~~**`import.meta.url` + `import.meta.resolve()`**~~ — **выполнено** (96a61267, Merge p1-hh-status): `import_meta.rs` source-level препроцессор; `.url` + `.resolve()` + `.env` stub; 8 тестов | S | `lumen-js` |
+
+### JJ — Modern HTML5 APIs Phase 4
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| JJ-1 | **`CloseWatcher` API Phase 0** (WICG) — `new CloseWatcher()`, `requestClose()`, `destroy()`, `cancel`/`close` events, Escape-key intercept через `keydown` listener | XS | `lumen-js` |
+| JJ-2 | **`<details name>` exclusive accordion** (HTML LS §4.11.1) — при открытии `<details>` с `name="X"` закрываем все остальные siblings с тем же `name` в одном owner-документе; 5 unit-тестов | S | `lumen-js`, `lumen-layout` |
+| JJ-3 | **`HTMLInputElement.showPicker()` Phase 0** (HTML LS §4.10.18.5) — `input.showPicker()` для type=color/date/time/month/week/datetime-local/file; в Phase 0 эмитирует `focus`+`click` событие (native picker через shell — Phase 1); 4 unit-теста | XS | `lumen-js` |
+| JJ-4 | **`popover="hint"` type** (Popover API Level 2) — третий тип помимо `auto`/`manual`; семантика: показывается при hover/focus над invoker-ом; light-dismiss + кнопка popovertarget; 6 unit-тестов | S | `lumen-js` |
+| JJ-5 | **`document.caretPositionFromPoint(x, y)` Phase 0** (CSSOM View §12.2) — возвращает `CaretPosition { offsetNode, offset }` через hit-test layout-дерева; Phase 0: находит ближайший text-узел по hit, offset via character count; 5 unit-тестов | S | `lumen-js`, `lumen-layout` |
 
 ---
 

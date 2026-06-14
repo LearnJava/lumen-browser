@@ -10194,6 +10194,31 @@ document.addEventListener('click', function(evt) {
                 toggleEvt.oldState = oldState;
                 toggleEvt.newState = newState;
                 _lumen_dispatch(pid, toggleEvt);
+
+                // HTML LS §4.11.1.1: exclusive accordion — opening a <details name=X>
+                // closes all sibling <details> with the same name attribute.
+                if (!wasOpen) {
+                    var detailsName = _lumen_u2n(_lumen_get_attr(pid, 'name'));
+                    if (detailsName !== null && detailsName !== '') {
+                        var parentNid = _lumen_u2n(_lumen_get_parent(pid));
+                        if (parentNid !== null) {
+                            var siblings = _lumen_get_children(parentNid);
+                            for (var _si = 0; _si < siblings.length; _si++) {
+                                var sib = siblings[_si];
+                                if (sib === pid) continue;
+                                if (_lumen_get_tag_name(sib).toLowerCase() !== 'details') continue;
+                                var sibName = _lumen_u2n(_lumen_get_attr(sib, 'name'));
+                                if (sibName !== detailsName) continue;
+                                if (_lumen_get_attr(sib, 'open') === undefined) continue;
+                                _lumen_remove_attr(sib, 'open');
+                                var sibEvt = new Event('toggle', { bubbles: false, cancelable: false });
+                                sibEvt.oldState = 'open';
+                                sibEvt.newState = 'closed';
+                                _lumen_dispatch(sib, sibEvt);
+                            }
+                        }
+                    }
+                }
             }
             return;
         }
