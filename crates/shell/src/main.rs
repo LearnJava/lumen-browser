@@ -5343,6 +5343,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.window = Some(window);
         self.renderer = Some(renderer);
 
+        // GG-4: Restore vertical-tab layout from persisted settings.
+        if tabs::strip::TabLayout::from_str(&self.settings_store.tab_layout())
+            == tabs::strip::TabLayout::Vertical
+        {
+            self.vertical_tabs.visible = true;
+        }
+
         // Запустить background-загрузку сразу после создания окна —
         // первый кадр (пустой) уже виден, пока идёт fetch/parse.
         // Сбрасываем набор уже отправленных preload-хинтов — новая страница.
@@ -6089,7 +6096,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let y_css = (position.y as f32) / dpr;
                     let win_w = self.viewport_width_css();
                     self.hovered_tab_idx = if y_css < tabs::strip::TAB_BAR_HEIGHT {
-                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, win_w) {
+                        let tab_area_w = win_w
+                            - tabs::archive::ARCHIVE_BTN_W
+                            - tabs::strip::LAYOUT_BTN_W;
+                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
                             tabs::strip::TabHit::Tab(idx) => Some(idx),
                             _ => None,
                         }
@@ -6184,8 +6194,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // CC-4: right-click on a tab opens the tab context menu
                     // instead of starting a mouse gesture.
                     if state == ElementState::Pressed && !self.focus.active {
-                        let tab_area_w =
-                            self.viewport_width_css() - tabs::archive::ARCHIVE_BTN_W;
+                        let tab_area_w = self.viewport_width_css()
+                            - tabs::archive::ARCHIVE_BTN_W
+                            - tabs::strip::LAYOUT_BTN_W;
                         if let tabs::strip::TabHit::Tab(idx) =
                             tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w)
                         {
@@ -6412,9 +6423,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             self.request_redraw();
                             return;
                         }
-                        // Tab area: pass effective width (excluding archive button).
+                        // Layout toggle button (GG-4): between tabs and archive button.
+                        let layout_btn_x = win_w
+                            - tabs::archive::ARCHIVE_BTN_W
+                            - tabs::strip::LAYOUT_BTN_W;
+                        if tabs::strip::hit_test_layout_btn(x_css, y_css, layout_btn_x) {
+                            self.vertical_tabs.toggle();
+                            let new_layout = if self.vertical_tabs.visible {
+                                tabs::strip::TabLayout::Vertical
+                            } else {
+                                tabs::strip::TabLayout::Horizontal
+                            };
+                            let _ = self.settings_store.set_tab_layout(new_layout.as_str());
+                            self.request_redraw();
+                            return;
+                        }
+                        // Tab area: pass effective width (excluding archive + layout buttons).
                         let tab_area_w =
-                            win_w - tabs::archive::ARCHIVE_BTN_W;
+                            win_w - tabs::archive::ARCHIVE_BTN_W - tabs::strip::LAYOUT_BTN_W;
                         match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
                             tabs::strip::TabHit::Tab(idx) => {
                                 // Record a potential drag; switch tab only if no drag occurs
@@ -6481,6 +6507,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             y_css,
                             tabs::strip::TAB_BAR_HEIGHT,
                             win_h,
+                            self.vertical_tabs.scroll_y,
                         ) {
                             Some(panels::vertical_tabs::VTabHit::Tab(idx)) => {
                                 self.switch_tab(idx);
@@ -7227,7 +7254,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 .map_or(1.0_f32, |r| r.scale_factor() as f32)
                                 .max(1e-6);
                             let win_w = self.viewport_width_css();
-                            let tab_area_w = win_w - tabs::archive::ARCHIVE_BTN_W;
+                            let tab_area_w = win_w
+                                - tabs::archive::ARCHIVE_BTN_W
+                                - tabs::strip::LAYOUT_BTN_W;
                             let release_x = self.cursor_position
                                 .map(|p| (p.x as f32) / dpr)
                                 .unwrap_or(drag.ghost_x);
@@ -7368,6 +7397,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
                     };
                     self.cert_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // Vertical tabs panel (GG-4) intercepts the wheel while visible.
+                if self.vertical_tabs.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + tab_h;
+                    let panel_h = win_h - tab_h;
+                    self.vertical_tabs.scroll_by(
+                        -lines * LINE_STEP_CSS_PX,
+                        self.tab_strip.len(),
+                        panel_h,
+                    );
                     self.request_redraw();
                     return;
                 }
@@ -7958,10 +8004,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Rendered before the tab bar so tab bar draws on top.
                 if self.vertical_tabs.visible {
                     let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
-                    let mut vt_cmds = panels::vertical_tabs::build_panel(
+                    let mut vt_cmds = panels::vertical_tabs::build_tab_bar_vertical(
                         &self.tab_strip,
                         tabs::strip::TAB_BAR_HEIGHT,
                         win_h,
+                        self.vertical_tabs.scroll_y,
                     );
                     overlay_buf.append(&mut vt_cmds);
                 }
@@ -8149,8 +8196,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // mode never reflows content (the strip shows page background).
                 if !self.focus.active {
                     let win_w = self.viewport_width_css();
-                    // Tab strip uses the area to the left of the archive button.
-                    let tab_area_w = win_w - tabs::archive::ARCHIVE_BTN_W;
+                    // Tab strip uses the area to the left of the layout toggle + archive buttons.
+                    let tab_area_w = win_w
+                        - tabs::archive::ARCHIVE_BTN_W
+                        - tabs::strip::LAYOUT_BTN_W;
                     let mut tab_cmds = tabs::strip::build_tab_bar(
                         &self.tab_strip,
                         tab_area_w,
@@ -8171,6 +8220,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 overlay_buf.append(&mut tooltip_cmds);
                             }
                         }
+                    // Layout toggle button (GG-4): between tabs and archive button.
+                    let layout_btn_x = win_w
+                        - tabs::archive::ARCHIVE_BTN_W
+                        - tabs::strip::LAYOUT_BTN_W;
+                    let tab_layout = tabs::strip::TabLayout::from_str(
+                        &self.settings_store.tab_layout(),
+                    );
+                    let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x);
+                    overlay_buf.append(&mut layout_btn);
                     // Archive toolbar button (rightmost 36 px of tab bar).
                     let mut arch_btn = tabs::archive::build_button(
                         &self.archive,
