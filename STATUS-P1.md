@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+GG-3: Privacy shields Phase 1  branch: p1-gg3-privacy-shields
+Next step: DefaultFilterList + /regex/ rule support  crates/network/src/filter/
 
 ---
 
