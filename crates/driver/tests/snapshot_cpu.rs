@@ -188,6 +188,11 @@ const PAGES: &[&str] = &[
     // a GUI-independent gate for geometry the Edge/gdigrab pipeline can't capture
     // headlessly (the gdigrab capture is blank without a foreground window).
     "114-contain-intrinsic-size",
+    // CSS Images L4 §3.1 — gradient color-interpolation-method (`in <space>`).
+    // Dense gradient stops (color-mix maths) rendered as linear gradients; a
+    // GUI-independent gate since the Edge/gdigrab pipeline can't capture
+    // headlessly. Polar oklch/lch excluded pending BUG-154.
+    "116-gradient-interpolation",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

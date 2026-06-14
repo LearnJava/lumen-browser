@@ -454,6 +454,15 @@
     <div style="width:60px; height:60px;background:repeating-conic-gradient(#1a1a2e 0deg,#1a1a2e 45deg,#f1faee 45deg,#f1faee 90deg);"></div>
   </div>
 
+  <!-- gradient color-interpolation-method (CSS Images L4 §3.1) -->
+  <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
+    <div style="width:120px;height:30px;background:linear-gradient(to right in srgb,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in srgb-linear,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in oklab,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in lab,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in hsl,red,blue);"></div>
+  </div>
+
 
   <!-- CSS Backgrounds L3 §3 — multiple background layers -->
   <div style="margin-top:8px;display:flex;gap:8px;">
