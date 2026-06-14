@@ -4203,6 +4203,30 @@ function _lumen_make_element(nid) {
             if (m) _validity_msg[nid] = m;
             else delete _validity_msg[nid];
         },
+        // HTML LS §4.10.5.1.14: showPicker() — programmatically opens the
+        // UA-provided picker for applicable input types.
+        // Phase 0: fires a synthetic 'click' event so shell integrations can hook it;
+        // throws NotSupportedError for types that have no picker.
+        showPicker: function() {
+            var t = (this.type || 'text').toLowerCase();
+            var pickerTypes = ['color', 'date', 'datetime-local', 'month', 'time', 'week', 'file'];
+            var supported = false;
+            for (var _pi = 0; _pi < pickerTypes.length; _pi++) {
+                if (pickerTypes[_pi] === t) { supported = true; break; }
+            }
+            if (!supported) {
+                var err = new Error('showPicker() is not supported for type ' + t);
+                err.name = 'NotSupportedError';
+                throw err;
+            }
+            if (this.disabled) {
+                var err2 = new Error('showPicker() called on a disabled element');
+                err2.name = 'InvalidStateError';
+                throw err2;
+            }
+            // Fire a click event; shell / test code can listen to open a native picker.
+            this.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
+        },
         // HTMLFormElement.elements — live collection of associated form controls.
         // Phase 0: selector engine handles only single-tag selectors, so query
         // each tag separately and merge (avoids comma-selector limitation).
@@ -20249,6 +20273,40 @@ mod tests {
         let rt = runtime_with_dom(make_form_doc());
         assert!(bool_eval(&rt,
             "document.getElementById('inp').type === 'text'"));
+    }
+
+    // ── HTMLInputElement.showPicker() tests ────────────────────────────────────
+
+    #[test]
+    fn show_picker_exists_on_input() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "typeof document.getElementById('inp').showPicker === 'function'"));
+    }
+
+    #[test]
+    fn show_picker_throws_for_text_type() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "(function() { \
+               var inp = document.getElementById('inp'); \
+               try { inp.showPicker(); return false; } \
+               catch(e) { return e.name === 'NotSupportedError'; } \
+             })()"));
+    }
+
+    #[test]
+    fn show_picker_fires_click_for_color() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "(function() { \
+               var inp = document.getElementById('inp'); \
+               inp.setAttribute('type', 'color'); \
+               var clicked = false; \
+               inp.addEventListener('click', function() { clicked = true; }); \
+               try { inp.showPicker(); } catch(e) {} \
+               return clicked; \
+             })()"));
     }
 
     // ── requestIdleCallback / cancelIdleCallback tests ─────────────────────────
