@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+FF-3: `navigator.sendBeacon`  branch: p1-ff3-send-beacon
+Next step: upgrade `_lumen_send_beacon` to background thread + add 2 tests  crates/js/src/dom.rs:1231
 
 ---
 

@@ -1230,7 +1230,8 @@ fn install_primitives(
 
         // _lumen_send_beacon(url, body, content_type) → bool
         // Beacon API (W3C Beacon §3): fire-and-forget POST; response is ignored.
-        // Returns false if no network provider is available.
+        // Returns false if no network provider is available, true if the request was queued.
+        // The actual POST runs on a detached background thread so the JS caller is not blocked.
         {
             let fp = fp_beacon;
             reg!(
@@ -1238,13 +1239,15 @@ fn install_primitives(
                 move |url: String, body: String, content_type: String| -> bool {
                     let Some(ref provider) = fp else { return false };
                     let ct = if content_type.is_empty() {
-                        "text/plain;charset=UTF-8"
+                        "text/plain;charset=UTF-8".to_string()
                     } else {
-                        &content_type
+                        content_type
                     };
-                    provider
-                        .fetch_with_body_sync(&url, "POST", ct, body.as_bytes())
-                        .is_ok()
+                    let p = Arc::clone(provider);
+                    std::thread::spawn(move || {
+                        let _ = p.fetch_with_body_sync(&url, "POST", &ct, body.as_bytes());
+                    });
+                    true
                 }
             );
         }
@@ -18233,6 +18236,26 @@ mod tests {
             "typeof navigator.sendBeacon === 'function' && \
              navigator.sendBeacon('https://example.com/', new URLSearchParams('k=v')) === false"
         ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn send_beacon_blob_body() {
+        let rt = runtime_with_dom(make_doc());
+        // Blob body: content_type taken from blob.type; no provider → false.
+        let r = rt.eval(
+            "var b = new Blob(['ping'], { type: 'application/octet-stream' }); \
+             navigator.sendBeacon('https://example.com/b', b) === false"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn send_beacon_with_provider_returns_true() {
+        // W3C Beacon §4: sendBeacon returns true when request is queued (not when complete).
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        let r = rt.eval("navigator.sendBeacon('https://example.com/ping', 'hit')").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
