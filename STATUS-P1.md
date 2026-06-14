@@ -6,8 +6,7 @@
 
 ## In progress
 
-GG-2 @notes omnibox Phase 1  branch: p1-gg2-notes-omnibox
-Next step: tests running, then commit  crates/shell/src/panels/note_viewer.rs
+_(нет)_
 
 ---
 
@@ -87,7 +86,7 @@ Next step: tests running, then commit  crates/shell/src/panels/note_viewer.rs
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~GG-1~~ | ~~**AI sidebar Phase 0**~~ — **выполнено** (p1-gg1-ai-sidebar, 2026-06-14): `AiBackend` trait в `lumen-core::ext` (query sync Phase 0) + `NullAiBackend`; `ai_panel.rs` 200px right-docked (header + response area + input row); `Ctrl+Shift+A` → `ToggleAiPanel`; `handle_ai_panel_key` (Esc/Backspace/Enter/printable); `// UNIQUE: §12.8 AI assistant`; 14 тестов (12 panel + 2 core) | M | `lumen-core`, `lumen-shell` |
-| GG-2 | **@notes omnibox Phase 1** — поиск `KnowledgeStore` при вводе с `@`-префиксом; `search_notes(q)` → `Vec<NoteResult>`; dropdown до 5 результатов в omnibox; Enter → открыть note viewer; 6 unit-тестов | S | `lumen-shell`, `lumen-knowledge` |
+| ~~GG-2~~ | ~~**@notes omnibox Phase 1**~~ — **выполнено** (p1-gg2-notes-omnibox, 2026-06-14): `OmniboxSuggestion::Note` с `viewer_url=note-viewer:<id>`; лимит снижен до 5; `NoteViewerPanel` (floating overlay 560px: header + URL + selection + comment + [×]); `handle_omnibox_commit` перехватывает `note-viewer:<id>` → `notes_store.get(id)` → `open()`; Escape/клик [×] закрывают; 9 тестов note_viewer + 4 address_bar = 13 тестов | S | `lumen-shell`, `lumen-knowledge` |
 | GG-3 | **Privacy shields Phase 1** — парсить EasyList формат (`||domain^`, `##.selector`, `/regex/`); `EasyListParser::load(text)`; `FilterListSource` impl (`DefaultFilterList`); интеграция в `fetch_with_redirect`: блокировать запрос если url matches; 10 unit-тестов | M | `lumen-network`, `lumen-core` |
 | GG-4 | **Vertical tabs layout mode** — `TabLayout::Vertical` (200px left sidebar); тоггл кнопка в title bar; `build_tab_bar_vertical()` — список табов по вертикали с scroll; persist `tab_layout` в `BrowserSettings`; 8 unit-тестов | M | `lumen-shell` |
 | GG-5 | **Tab hibernation Phase 2 (LZ4 compression)** — сжимать JS heap blob через `lz4_flex::compress_prepend_size` перед записью в `SleepingTabStore`; `decompress_size_prepended` при restore; сохранять `compressed: bool` в таблице; 5 unit-тестов | S | `lumen-storage`, `lumen-shell` |
