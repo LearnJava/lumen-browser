@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+EE-1 IntersectionObserver Phase 1 + EE-2 ResizeObserver Phase 1  branch: p1-ee1-intersection-observer
+Next step: add 6 IO + 3 RO unit tests  crates/js/src/dom.rs:14123
 
 ---
 

@@ -14120,6 +14120,76 @@ mod tests {
         assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
     }
 
+    #[test]
+    fn resize_observer_fires_again_on_size_change() {
+        // After a size change, observer should fire a second time.
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 50.0])].into_iter().collect());
+        rt.eval(r#"
+            var _ro_sz_cnt = 0;
+            var ro_sz = new ResizeObserver(function() { _ro_sz_cnt++; });
+            ro_sz.observe(document.body);
+            _lumen_deliver_resize_observers();
+        "#).unwrap();
+        // Change size
+        rt.update_layout_rects([(nid, [0.0, 0.0, 200.0, 80.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_resize_observers()").unwrap();
+        let cnt = rt.eval("_ro_sz_cnt").unwrap();
+        assert_eq!(cnt, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn resize_observer_border_box_size_fields() {
+        // Entry must expose borderBoxSize and contentBoxSize arrays.
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 150.0, 75.0])].into_iter().collect());
+        rt.eval(r#"
+            var _ro_bb_entry = null;
+            var ro_bb = new ResizeObserver(function(entries) { _ro_bb_entry = entries[0]; });
+            ro_bb.observe(document.body);
+            _lumen_deliver_resize_observers();
+        "#).unwrap();
+        let is = rt.eval("_ro_bb_entry && _ro_bb_entry.borderBoxSize[0].inlineSize").unwrap();
+        assert_eq!(is, lumen_core::JsValue::Number(150.0));
+        let bs = rt.eval("_ro_bb_entry && _ro_bb_entry.contentBoxSize[0].blockSize").unwrap();
+        assert_eq!(bs, lumen_core::JsValue::Number(75.0));
+    }
+
+    #[test]
+    fn resize_observer_unobserve_stops_delivery() {
+        // Save element reference — document.body may create a new proxy each access.
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 50.0])].into_iter().collect());
+        rt.eval(r#"
+            var _ro_un_cnt = 0;
+            var _ro_un_target = document.body;
+            var ro_un = new ResizeObserver(function() { _ro_un_cnt++; });
+            ro_un.observe(_ro_un_target);
+            ro_un.unobserve(_ro_un_target);
+            _lumen_deliver_resize_observers();
+        "#).unwrap();
+        let cnt = rt.eval("_ro_un_cnt").unwrap();
+        assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
+    }
+
     // ── IntersectionObserver tests ────────────────────────────────────────────
 
     #[test]
@@ -14185,6 +14255,165 @@ mod tests {
         "#).unwrap();
         let intersecting = rt.eval("_io2_entry && _io2_entry.isIntersecting").unwrap();
         assert_eq!(intersecting, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn intersection_observer_threshold_fires_only_on_crossing() {
+        // element partially in viewport (ratio≈0.7), then fully out — only 2 callbacks:
+        // initial delivery + crossing back out below threshold 0.5.
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        // Partially visible: y=650, h=100, viewport h=720 → ratio=70/100=0.7
+        rt.update_layout_rects([(nid, [0.0, 650.0, 100.0, 100.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _thr_cnt = 0;
+            var io_thr = new IntersectionObserver(function(entries) {
+                _thr_cnt++;
+            }, { threshold: 0.5 });
+            io_thr.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        // Second delivery same rect — no crossing → no fire
+        rt.eval("_lumen_deliver_intersection_observers()").unwrap();
+        let cnt1 = rt.eval("_thr_cnt").unwrap();
+        assert_eq!(cnt1, lumen_core::JsValue::Number(1.0));
+        // Move fully out of viewport — ratio=0 crosses 0.5 → fires again
+        rt.update_layout_rects([(nid, [0.0, 800.0, 100.0, 100.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_intersection_observers()").unwrap();
+        let cnt2 = rt.eval("_thr_cnt").unwrap();
+        assert_eq!(cnt2, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn intersection_observer_rootmargin_expands_viewport() {
+        // Element just below viewport; positive rootMargin makes it visible.
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        // Element top at y=730 (10px below 720px viewport)
+        rt.update_layout_rects([(nid, [0.0, 730.0, 100.0, 50.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _rm_entry = null;
+            var io_rm = new IntersectionObserver(function(entries) {
+                _rm_entry = entries[0];
+            }, { rootMargin: '0px 0px 50px 0px' });
+            io_rm.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        let intersecting = rt.eval("_rm_entry && _rm_entry.isIntersecting").unwrap();
+        assert_eq!(intersecting, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn intersection_observer_rootmargin_contracts_viewport() {
+        // Element near bottom; negative rootMargin pushes root boundary up, element leaves root.
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        // Element at y=700, h=50 → nominally intersects 720px viewport by 20px
+        rt.update_layout_rects([(nid, [0.0, 700.0, 100.0, 50.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _rm2_entry = null;
+            var io_rm2 = new IntersectionObserver(function(entries) {
+                _rm2_entry = entries[0];
+            }, { rootMargin: '0px 0px -50px 0px' });
+            io_rm2.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        // rootBottom = 720-50 = 670; element top=700 > 670 → no intersection
+        let intersecting = rt.eval("_rm2_entry && _rm2_entry.isIntersecting").unwrap();
+        assert_eq!(intersecting, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn intersection_observer_unobserve_stops_delivery() {
+        // document.body may return a new proxy object each call, so save the reference
+        // and use the same object for both observe() and unobserve().
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 50.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _un_cnt = 0;
+            var _un_target = document.body;
+            var io_un = new IntersectionObserver(function() { _un_cnt++; });
+            io_un.observe(_un_target);
+            io_un.unobserve(_un_target);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        let cnt = rt.eval("_un_cnt").unwrap();
+        assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn intersection_observer_two_observers_fire_independently() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 200.0, 100.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _cnt_a = 0, _cnt_b = 0;
+            var io_a = new IntersectionObserver(function() { _cnt_a++; });
+            var io_b = new IntersectionObserver(function() { _cnt_b++; });
+            io_a.observe(document.body);
+            io_b.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        let a = rt.eval("_cnt_a").unwrap();
+        let b = rt.eval("_cnt_b").unwrap();
+        assert_eq!(a, lumen_core::JsValue::Number(1.0));
+        assert_eq!(b, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn intersection_observer_intersection_rect_height() {
+        // intersectionRect.height must equal the visible slice of the element.
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        // Element at y=680, h=100; viewport h=720 → 40px visible
+        rt.update_layout_rects([(nid, [0.0, 680.0, 100.0, 100.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _ir_entry = null;
+            var io_ir = new IntersectionObserver(function(entries) { _ir_entry = entries[0]; });
+            io_ir.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        let ih = rt.eval("_ir_entry && _ir_entry.intersectionRect.height").unwrap();
+        assert_eq!(ih, lumen_core::JsValue::Number(40.0));
+        let ratio_ok = rt.eval("_ir_entry && Math.abs(_ir_entry.intersectionRatio - 0.4) < 0.01").unwrap();
+        assert_eq!(ratio_ok, lumen_core::JsValue::Bool(true));
     }
 
     // ── ChildNode / ParentNode mixin tests ───────────────────────────────────
