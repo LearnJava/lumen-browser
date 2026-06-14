@@ -2313,6 +2313,20 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     let mut overflow_pre = Vec::new();
     let mut overflow_post = Vec::new();
     if !box_can_own_stacking_context(b) {
+        // SVG §7.4: the outermost SVG viewport establishes a clip (UA default
+        // `overflow: hidden`). With object-fit: cover (or a viewBox larger than
+        // the viewport) the scaled content overflows the SVG box; without this
+        // clip it would paint over sibling boxes. SvgRoot is not a stacking-
+        // context owner, so emit the viewport clip here. BUG-110.
+        if matches!(b.kind, BoxKind::SvgRoot { .. }) {
+            let s = &b.style;
+            let px = b.rect.x + s.border_left_width;
+            let py = b.rect.y + s.border_top_width;
+            let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
+            let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
+            overflow_pre.push(DisplayCommand::PushClipRect { rect: Rect::new(px, py, pw, ph) });
+            overflow_post.push(DisplayCommand::PopClip);
+        }
         return BoxLayerOps { pre, post, overflow_pre, overflow_post };
     }
     let s = &b.style;
@@ -5300,9 +5314,21 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             {
                 out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
             }
+            // SVG §7.4: the outermost SVG viewport clips its content (UA default
+            // `overflow: hidden`) — object-fit: cover / oversized viewBox content
+            // must not paint outside the SVG box. BUG-110.
+            let s = &b.style;
+            let clip = Rect::new(
+                b.rect.x + s.border_left_width,
+                b.rect.y + s.border_top_width,
+                (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+                (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+            );
+            out.push(DisplayCommand::PushClipRect { rect: clip });
             for child in &b.children {
                 walk(child, out, dpr, sel);
             }
+            out.push(DisplayCommand::PopClip);
         }
         BoxKind::SvgShape { shape, .. } => {
             // CSS: fill, stroke, stroke-width — P4 wires ComputedStyle svg_fill/svg_stroke fields.
@@ -11755,6 +11781,24 @@ mod tests {
                 if color.r == 255 && color.g == 0 && color.b == 0
         ));
         assert!(has_red_fill, "ordered path must emit FillRect for SVG <rect>, got {dl:?}");
+    }
+
+    #[test]
+    fn svg_viewport_clips_overflowing_content() {
+        // BUG-110: an SVG with object-fit: cover scales its viewBox to overflow the box;
+        // the SVG viewport (UA default `overflow: hidden`) must clip it. Both the `walk`
+        // and the ordered pipeline must wrap the SVG's shape children in a PushClipRect
+        // bounded by the SVG box (160×120), so cover content cannot paint over siblings.
+        let html = "<svg width='160' height='120' viewBox='0 0 200 80' style='object-fit:cover;'>\
+                    <rect width='200' height='80' style='fill:#ff0000;'/></svg>";
+        for dl in [build(html, ""), build_ordered(html, "")] {
+            let clip = dl.iter().find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } if (rect.width - 160.0).abs() < 1.0
+                    && (rect.height - 120.0).abs() < 1.0 => Some(*rect),
+                _ => None,
+            });
+            assert!(clip.is_some(), "SVG viewport must emit a 160×120 PushClipRect, got {dl:?}");
+        }
     }
 
     #[test]
