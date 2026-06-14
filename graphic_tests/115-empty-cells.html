@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<!-- CSS Tables L2 §17.6.1.1 — empty-cells.
+     In the separated-borders model, `empty-cells: hide` makes table cells with no
+     in-flow content draw neither their border nor their background; `show` (the
+     initial value) draws both. Two identical 4x3 tables use a checkerboard of
+     filled cells (each holds a solid inner block) and truly-empty <td></td> cells.
+     Top table: empty-cells: hide — the empty cells vanish to the page background,
+     leaving a checkerboard of bordered filled cells. Bottom table: empty-cells:
+     show — every cell keeps its border + light background. Graphics only, no text. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 40px; overflow: hidden; box-sizing: border-box; }
+
+  table {
+    border-collapse: separate;
+    border-spacing: 8px;
+    background: #c9d6e3;
+    margin-bottom: 48px;
+  }
+  td {
+    width: 96px;
+    height: 64px;
+    border: 4px solid #2b6cb0;
+    background: #a8c8ec;
+    box-sizing: border-box;
+    padding: 0;
+  }
+  /* A solid inner block makes the cell "non-empty" without using text. */
+  .blk {
+    width: 52px;
+    height: 32px;
+    margin: 16px auto;
+    background: #16325c;
+  }
+
+  table.hide { empty-cells: hide; }
+  table.show { empty-cells: show; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- empty-cells: hide — empty cells lose border + background -->
+  <table class="hide">
+    <tr><td><div class="blk"></div></td><td></td><td><div class="blk"></div></td><td></td></tr>
+    <tr><td></td><td><div class="blk"></div></td><td></td><td><div class="blk"></div></td></tr>
+    <tr><td><div class="blk"></div></td><td></td><td><div class="blk"></div></td><td></td></tr>
+  </table>
+
+  <!-- empty-cells: show (initial) — every cell keeps border + background -->
+  <table class="show">
+    <tr><td><div class="blk"></div></td><td></td><td><div class="blk"></div></td><td></td></tr>
+    <tr><td></td><td><div class="blk"></div></td><td></td><td><div class="blk"></div></td></tr>
+    <tr><td><div class="blk"></div></td><td></td><td><div class="blk"></div></td><td></td></tr>
+  </table>
+</div>
+</body>
+</html>

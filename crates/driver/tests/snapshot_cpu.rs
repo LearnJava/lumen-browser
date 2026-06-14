@@ -183,6 +183,23 @@ const PAGES: &[&str] = &[
     "107-shadow-radius-overflow",
     "108-nested-transforms",
     "109-clippath-transform",
+    // CSS Box Sizing L4 §5 — contain-intrinsic-size: size-contained boxes take the
+    // declared placeholder size, ignoring an oversized child. Pure FillRect geometry;
+    // a GUI-independent gate for geometry the Edge/gdigrab pipeline can't capture
+    // headlessly (the gdigrab capture is blank without a foreground window).
+    "114-contain-intrinsic-size",
+    // CSS Images L4 §3.1 — gradient color-interpolation-method (`in <space>`).
+    // Dense gradient stops (color-mix maths) rendered as linear gradients; a
+    // GUI-independent gate since the Edge/gdigrab pipeline can't capture
+    // headlessly. Polar oklch/lch excluded pending BUG-154.
+    "116-gradient-interpolation",
+    // CSS Generated Content L3 §3.2 — quotes + content open-quote/close-quote.
+    // Nesting depth computed in document order via the counters pre-pass.
+    "117-quotes",
+    // Media Queries L4 §5.3-5.6 — hover/any-hover/pointer/any-pointer. Desktop
+    // (mouse) context: matched swatches green, no-match swatches red. A GUI-
+    // independent gate; run.py's Edge pipeline can't capture interaction MQs.
+    "118-media-hover-pointer",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

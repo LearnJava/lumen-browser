@@ -945,6 +945,15 @@ pub enum MediaFeature {
     PrefersReducedMotion(bool),
     // CSS Forced Colors Mode (Forced Colors L1) — опубликована (active/none)
     ForcedColors(bool),
+    // Interaction media features (Media Queries L4 §5.3-5.6)
+    /// `(hover: none | hover)` — hover-способность основного указателя.
+    Hover(MediaHover),
+    /// `(any-hover: none | hover)` — hover-способность любого указателя.
+    AnyHover(MediaHover),
+    /// `(pointer: none | coarse | fine)` — точность основного указателя.
+    Pointer(MediaPointer),
+    /// `(any-pointer: none | coarse | fine)` — точность любого указателя.
+    AnyPointer(MediaPointer),
 }
 
 impl Eq for MediaFeature {}
@@ -953,6 +962,26 @@ impl Eq for MediaFeature {}
 pub enum MediaOrientation {
     Portrait,
     Landscape,
+}
+
+/// Media Queries L4 §5.3/§5.5 — hover-способность указателя.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaHover {
+    /// Указатель не может наводиться без активации (тач-экран).
+    None,
+    /// Указатель может удобно наводиться (мышь).
+    Hover,
+}
+
+/// Media Queries L4 §5.4/§5.6 — точность указателя.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaPointer {
+    /// Указывающего устройства нет.
+    None,
+    /// Грубый указатель (палец на тач-экране).
+    Coarse,
+    /// Точный указатель (мышь, стилус).
+    Fine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -975,10 +1004,19 @@ pub struct MediaContext {
     pub prefers_reduced_motion: bool,
     /// CSS Forced Colors: соответствует `(forced-colors: active)` media feature.
     pub forced_colors: bool,
+    /// hover-способность основного указателя (`hover` media feature).
+    pub hover: MediaHover,
+    /// hover-способность любого указателя (`any-hover` media feature).
+    pub any_hover: MediaHover,
+    /// Точность основного указателя (`pointer` media feature).
+    pub pointer: MediaPointer,
+    /// Точность любого указателя (`any-pointer` media feature).
+    pub any_pointer: MediaPointer,
 }
 
 impl Default for MediaContext {
     fn default() -> Self {
+        // Desktop-дефолты: есть мышь → hover-способность и точный указатель.
         Self {
             media_type: "screen".into(),
             width: 0.0,
@@ -986,6 +1024,10 @@ impl Default for MediaContext {
             prefers_dark: false,
             prefers_reduced_motion: false,
             forced_colors: false,
+            hover: MediaHover::Hover,
+            any_hover: MediaHover::Hover,
+            pointer: MediaPointer::Fine,
+            any_pointer: MediaPointer::Fine,
         }
     }
 }
@@ -1069,6 +1111,10 @@ impl MediaFeature {
             },
             Self::PrefersReducedMotion(reduce) => ctx.prefers_reduced_motion == *reduce,
             Self::ForcedColors(active) => ctx.forced_colors == *active,
+            Self::Hover(h) => ctx.hover == *h,
+            Self::AnyHover(h) => ctx.any_hover == *h,
+            Self::Pointer(p) => ctx.pointer == *p,
+            Self::AnyPointer(p) => ctx.any_pointer == *p,
         }
     }
 }
@@ -1620,6 +1666,31 @@ fn parse_media_feature(s: &str) -> MediaCondition {
             "none" => MediaCondition::Feature(MediaFeature::ForcedColors(false)),
             _ => MediaCondition::Unsupported,
         },
+        "hover" | "any-hover" => {
+            let h = match val.to_ascii_lowercase().as_str() {
+                "none" => MediaHover::None,
+                "hover" => MediaHover::Hover,
+                _ => return MediaCondition::Unsupported,
+            };
+            MediaCondition::Feature(if key == "hover" {
+                MediaFeature::Hover(h)
+            } else {
+                MediaFeature::AnyHover(h)
+            })
+        }
+        "pointer" | "any-pointer" => {
+            let p = match val.to_ascii_lowercase().as_str() {
+                "none" => MediaPointer::None,
+                "coarse" => MediaPointer::Coarse,
+                "fine" => MediaPointer::Fine,
+                _ => return MediaCondition::Unsupported,
+            };
+            MediaCondition::Feature(if key == "pointer" {
+                MediaFeature::Pointer(p)
+            } else {
+                MediaFeature::AnyPointer(p)
+            })
+        }
         _ => MediaCondition::Unsupported,
     }
 }
@@ -6046,6 +6117,7 @@ mod tests {
             prefers_dark: false,
             prefers_reduced_motion: false,
             forced_colors: false,
+            ..Default::default()
         }
     }
 
@@ -6298,6 +6370,79 @@ mod tests {
         assert!(q.matches(&ctx));
     }
 
+    // ── MQ: hover / any-hover / pointer / any-pointer (Media Queries L4 §5.3-5.6) ──
+
+    #[test]
+    fn media_query_hover_hover_matches_desktop() {
+        // screen_ctx наследует desktop-дефолты (hover: Hover).
+        let q = parse_media_query("(hover: hover)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut touch = screen_ctx(1024.0);
+        touch.hover = MediaHover::None;
+        assert!(!q.matches(&touch));
+    }
+
+    #[test]
+    fn media_query_hover_none() {
+        let q = parse_media_query("(hover: none)");
+        assert!(!q.matches(&screen_ctx(1024.0)));
+        let mut touch = screen_ctx(1024.0);
+        touch.hover = MediaHover::None;
+        assert!(q.matches(&touch));
+    }
+
+    #[test]
+    fn media_query_any_hover() {
+        let q = parse_media_query("(any-hover: hover)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut touch = screen_ctx(1024.0);
+        touch.any_hover = MediaHover::None;
+        assert!(!q.matches(&touch));
+    }
+
+    #[test]
+    fn media_query_pointer_fine_matches_desktop() {
+        let q = parse_media_query("(pointer: fine)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut coarse = screen_ctx(1024.0);
+        coarse.pointer = MediaPointer::Coarse;
+        assert!(!q.matches(&coarse));
+    }
+
+    #[test]
+    fn media_query_pointer_coarse_and_none() {
+        let coarse_q = parse_media_query("(pointer: coarse)");
+        let none_q = parse_media_query("(pointer: none)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.pointer = MediaPointer::Coarse;
+        assert!(coarse_q.matches(&ctx));
+        assert!(!none_q.matches(&ctx));
+        ctx.pointer = MediaPointer::None;
+        assert!(none_q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_any_pointer() {
+        let q = parse_media_query("(any-pointer: fine)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut coarse = screen_ctx(1024.0);
+        coarse.any_pointer = MediaPointer::Coarse;
+        assert!(!q.matches(&coarse));
+    }
+
+    #[test]
+    fn media_query_hover_pointer_case_insensitive() {
+        let q = parse_media_query("(POINTER: FINE)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_pointer_invalid_value_unsupported() {
+        // Невалидное значение → Unsupported → clause никогда не матчит.
+        let q = parse_media_query("(pointer: medium)");
+        assert!(!q.matches(&screen_ctx(1024.0)));
+    }
+
     // ── Стиль: @media с новыми фичами применяется в каскаде ──
 
     #[test]
@@ -6312,6 +6457,7 @@ mod tests {
             prefers_dark: false,
             prefers_reduced_motion: false,
             forced_colors: false,
+            ..Default::default()
         };
         assert!(s.media_rules[0].query.matches(&ctx));
         let ctx_narrow = MediaContext { width: 600.0, ..ctx.clone() };

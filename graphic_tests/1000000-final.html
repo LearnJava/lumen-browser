@@ -188,6 +188,30 @@
     <div class="pe-box"></div>
   </div>
 
+  <!-- ── quotes / open-quote demo (CSS Generated Content L3 §3.2) ───────────── -->
+  <style>
+    .q-row { margin-top: 10px; margin-left: 24px; font-size: 20px; color: #102a43; }
+    .q-row q::before { content: open-quote; }
+    .q-row q::after  { content: close-quote; }
+    .q-fr { quotes: "\00ab" "\00bb" "\2039" "\203a"; }
+  </style>
+  <div class="q-row"><q>outer <q>inner</q></q></div>
+  <div class="q-row q-fr"><q>guillemets</q></div>
+
+  <!-- ── hover / pointer media features demo (Media Queries L4 §5.3-5.6) ──────── -->
+  <style>
+    .mq-row { margin-top: 10px; margin-left: 24px; }
+    .mq-sw { display: inline-block; width: 56px; height: 40px; background: #d64545; margin-right: 8px; }
+    @media (hover: hover)      { .mq-h { background: #2f855a; } }
+    @media (pointer: fine)     { .mq-p { background: #2f855a; } }
+    @media (any-pointer: fine) { .mq-ap { background: #2f855a; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw mq-h"></div>
+    <div class="mq-sw mq-p"></div>
+    <div class="mq-sw mq-ap"></div>
+  </div>
+
   <!-- ── vertical-align demo ───────────────────────────────────────────────── -->
   <style>
     .va-row { margin-top: 12px; margin-left: 24px; white-space: nowrap; }
@@ -237,6 +261,20 @@
     </tr>
   </table>
 
+  <!-- empty-cells: hide — empty <td> in the right column drops border + bg -->
+  <table style="border-collapse:separate;border-spacing:5px;empty-cells:hide;background:#444;margin-top:6px;margin-left:24px">
+    <tr>
+      <td style="width:40px;height:20px;background:#4a90d9;border:2px solid #9ecbff"></td>
+      <td style="width:40px;height:20px;background:#5cb85c;border:2px solid #9ecbff"></td>
+      <td style="width:40px;height:20px;border:2px solid #9ecbff"></td>
+    </tr>
+    <tr>
+      <td style="width:40px;height:20px;background:#e87d2e;border:2px solid #9ecbff"></td>
+      <td style="width:40px;height:20px;border:2px solid #9ecbff"></td>
+      <td style="width:40px;height:20px;background:#9b59b6;border:2px solid #9ecbff"></td>
+    </tr>
+  </table>
+
   <!-- mask-image / PushMaskLayer demo: gradient masks + mask-mode -->
   <div style="margin-top:8px;display:flex;gap:8px">
     <div style="width:60px;height:30px;background:#e63946;mask-image:linear-gradient(to right,black,transparent)"></div>
@@ -263,6 +301,17 @@
     </div>
     <div style="contain:paint;width:70px;height:30px;background:#238636;border:1px solid #2ea043;overflow:visible">
       <div style="background:#3fb950;height:20px;width:90px;margin-top:5px"></div>
+    </div>
+  </div>
+
+  <!-- contain-intrinsic-size: size-contained boxes take the declared placeholder
+       size, ignoring the oversized child (CSS Box Sizing L4 §5). -->
+  <div style="margin-top:8px;display:flex;gap:6px;align-items:flex-start">
+    <div style="display:inline-block;contain:size;contain-intrinsic-size:90px 40px;background:#7e3ff2;overflow:hidden">
+      <div style="width:300px;height:300px;background:#b794f6"></div>
+    </div>
+    <div style="display:inline-block;contain:size;contain-intrinsic-size:50px 60px;background:#c0501a;overflow:hidden">
+      <div style="width:300px;height:300px;background:#f6ad55"></div>
     </div>
   </div>
 
@@ -317,6 +366,10 @@
     <div style="width:50px;height:50px;background:#457b9d;clip-path:circle(20px);"></div>
     <div style="width:60px;height:40px;background:#2a9d8f;clip-path:ellipse(25px 15px);"></div>
     <div style="width:50px;height:50px;background:#e9c46a;clip-path:polygon(25px 0px,50px 50px,0px 50px);"></div>
+    <div style="width:50px;height:50px;background:#c77dff;clip-path:path('M 25 0 L 50 50 L 0 50 Z');"></div>
+    <!-- fill-rule: evenodd — полая середина self-intersecting пентаграммы -->
+    <div style="width:50px;height:50px;background:#f4a261;clip-path:path(evenodd,'M 25 2 L 10 45 L 49 17 L 1 17 L 40 45 Z');"></div>
+    <div style="width:50px;height:50px;background:#90be6d;clip-path:polygon(evenodd,25px 2px,10px 45px,49px 17px,1px 17px,40px 45px);"></div>
   </div>
 
   <!-- list markers -->
@@ -392,6 +445,13 @@
     <div style="clear:both;  height:14px; background:#fc8181;"></div>
   </div>
 
+  <!-- shape-outside: path() — inline squares wrap around a triangular float -->
+  <div style="margin-top:8px; font-size:10px; color:#888;">shape-outside: path():</div>
+  <div style="width:200px; height:100px; overflow:hidden; background:#16213e;">
+    <div style="float:left; width:100px; height:100px; background:#e63946; shape-outside:path('M 0 0 L 100 0 L 0 100 Z'); clip-path:path('M 0 0 L 100 0 L 0 100 Z');"></div>
+    <span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span>
+  </div>
+
   <!-- z-index stacking: red(z3) > blue(z2) > green(z1) -->
   <div style="position:relative; width:120px; height:80px; margin-top:8px;">
     <div style="position:absolute; width:80px; height:60px; background:#00cc44; top:10px; left:0; z-index:1;"></div>
@@ -416,6 +476,15 @@
     <div style="width:60px; height:60px;background:conic-gradient(at 25% 25%,#fb5607,#ffbe0b,#8338ec,#fb5607);"></div>
     <div style="width:60px; height:60px;background:conic-gradient(red 0deg,red 90deg,yellow 90deg,yellow 180deg,green 180deg,green 270deg,blue 270deg,blue 360deg);"></div>
     <div style="width:60px; height:60px;background:repeating-conic-gradient(#1a1a2e 0deg,#1a1a2e 45deg,#f1faee 45deg,#f1faee 90deg);"></div>
+  </div>
+
+  <!-- gradient color-interpolation-method (CSS Images L4 §3.1) -->
+  <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
+    <div style="width:120px;height:30px;background:linear-gradient(to right in srgb,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in srgb-linear,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in oklab,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in lab,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in hsl,red,blue);"></div>
   </div>
 
 
@@ -1301,6 +1370,25 @@
     <div style="height:24px;margin-bottom:6px;background:#ffd23f;"></div>
     <div style="height:24px;background:#ffd23f;"></div>
   </div>
+</div>
+
+<!-- ── accent-color (CSS UI L4 §6.1) ─────────────────────────────────────────── -->
+<!-- Tints the checked checkbox/radio indicator, range fill+thumb and progress bar. -->
+<div style="margin-top:24px;padding:12px;background:#f0f0f0;border-radius:8px;display:flex;gap:18px;align-items:center;">
+  <input type="checkbox" checked style="accent-color:#d12f2f;width:18px;height:18px;">
+  <input type="radio" checked style="accent-color:#1f9d3a;width:18px;height:18px;">
+  <input type="range" value="70" min="0" max="100" style="accent-color:#e8820c;width:140px;">
+  <progress value="0.6" max="1" style="accent-color:#7a2fd1;width:140px;height:16px;"></progress>
+</div>
+
+<!-- ── appearance: none (CSS Basic UI L4 §4.2) ────────────────────────────────── -->
+<!-- Strips native control UI: the checkbox/radio/range/progress render as blank
+     boxes inside the light wrappers — no native tick or bar is painted. -->
+<div style="margin-top:24px;padding:12px;background:#f0f0f0;border-radius:8px;display:flex;gap:18px;align-items:center;">
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="checkbox" checked style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="radio" checked style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="range" value="50" min="0" max="100" style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><progress value="0.6" max="1" style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:12px;margin:14px 8px;"></progress></span>
 </div>
 
 </body>

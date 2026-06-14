@@ -27,7 +27,7 @@ use crate::style::{
     TextWrapMode, TextWrapStyle,
     VerticalAlign, WordBreak,
 };
-use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
+use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry, QuoteSlot,
                       build_counter_style_registry, format_counter_with_registry,
                       build_list_marker_text};
 use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
@@ -2659,7 +2659,7 @@ fn collect_inline_segments(
                         | Display::InlineBlock
                 )
             {
-                push_pseudo_inline_segs(&ps, doc, id, viewport, counters, registry, out);
+                push_pseudo_inline_segs(&ps, doc, id, QuoteSlot::Before, viewport, counters, registry, out);
             }
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
@@ -2676,7 +2676,7 @@ fn collect_inline_segments(
                         | Display::InlineBlock
                 )
             {
-                push_pseudo_inline_segs(&ps, doc, id, viewport, counters, registry, out);
+                push_pseudo_inline_segs(&ps, doc, id, QuoteSlot::After, viewport, counters, registry, out);
             }
             let added = out.len() - start;
             // Mark all segments from this element (including pseudo-element content)
@@ -2708,12 +2708,13 @@ fn inject_pseudo(
     registry: &CounterStyleRegistry,
 ) {
     let Some(ps) = ps else { return };
+    let slot = if is_before { QuoteSlot::Before } else { QuoteSlot::After };
     match ps.display {
         Display::Inline
         | Display::InlineFlex
         | Display::InlineGrid
         | Display::InlineBlock => {
-            let segs = content_to_inline_segments(&ps, doc, parent_id, counters, registry);
+            let segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
             if segs.is_empty() {
                 return;
             }
@@ -2737,7 +2738,7 @@ fn inject_pseudo(
         }
         _ => {
             // Block-level pseudo-element.
-            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, counters, registry);
+            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
             let inner = if inner_segs.is_empty() {
                 vec![]
             } else {
@@ -2764,20 +2765,25 @@ fn inject_pseudo(
 /// Extracts text from `Content::Items` and returns it as a single `InlineSegment`.
 ///
 /// Resolves `ContentItem::String`, `ContentItem::Counter`, `ContentItem::Counters`,
-/// and `ContentItem::Attr` using the per-element `CounterMap` snapshot and DOM lookup.
-/// `owner_id` is the element whose `::before`/`::after` pseudo-element we're generating.
+/// `ContentItem::Attr` and `open-quote`/`close-quote` using the per-element
+/// `CounterMap` snapshot and DOM lookup. `owner_id` is the element whose
+/// `::before`/`::after` pseudo-element we're generating; `slot` selects which
+/// precomputed quote-depth list to consume (CSS Generated Content L3 §3.2).
 /// Custom `@counter-style` names are resolved via `registry`.
 fn content_to_inline_segments(
     style: &ComputedStyle,
     doc: &Document,
     owner_id: NodeId,
+    slot: QuoteSlot,
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
 ) -> Vec<InlineSegment> {
     let Content::Items(items) = &style.content else {
         return vec![];
     };
-    let snap = counters.get(&owner_id);
+    let snap = counters.counters(owner_id);
+    let qdepths = counters.quote_depths(owner_id, slot);
+    let mut qi = 0usize;
     let text: String = items
         .iter()
         .filter_map(|item| match item {
@@ -2806,6 +2812,20 @@ fn content_to_inline_segments(
             ContentItem::Attr(attr) => {
                 doc.get(owner_id).get_attr(attr).map(|s| s.to_string())
             }
+            // CSS Generated Content L3 §3.2 — open-quote / close-quote pick a
+            // (open, close) pair from `quotes` at the precomputed nesting depth.
+            ContentItem::OpenQuote => {
+                let depth = qdepths.get(qi).copied().unwrap_or(0);
+                qi += 1;
+                style.quotes.pair_for_depth(depth).map(|(o, _)| o.to_string())
+            }
+            ContentItem::CloseQuote => {
+                let depth = qdepths.get(qi).copied().unwrap_or(0);
+                qi += 1;
+                style.quotes.pair_for_depth(depth).map(|(_, c)| c.to_string())
+            }
+            // no-open-quote / no-close-quote only advance depth (handled in the
+            // precompute pass) and emit nothing.
             _ => None,
         })
         .collect();
@@ -2830,16 +2850,18 @@ fn content_to_inline_segments(
 /// Builds inline segments for a pseudo-element and applies its own box model
 /// spacing (margin + border + padding) as `pre_space` / `post_space`.
 /// Used by `collect_inline_segments` to inject `::before` / `::after` content.
+#[allow(clippy::too_many_arguments)]
 fn push_pseudo_inline_segs(
     ps: &ComputedStyle,
     doc: &Document,
     owner_id: NodeId,
+    slot: QuoteSlot,
     viewport: Size,
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
     out: &mut Vec<InlineSegment>,
 ) {
-    let mut segs = content_to_inline_segments(ps, doc, owner_id, counters, registry);
+    let mut segs = content_to_inline_segments(ps, doc, owner_id, slot, counters, registry);
     if segs.is_empty() {
         return;
     }
@@ -2933,7 +2955,7 @@ fn marker_content_text(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
 ) -> String {
-    let snap = counters.get(&owner_id);
+    let snap = counters.counters(owner_id);
     items.iter().filter_map(|item| match item {
         ContentItem::String(s) => Some(s.clone()),
         ContentItem::Counter { name, style: list_style } => {
@@ -3787,6 +3809,44 @@ pub(crate) fn parse_shape_inset_px(s: &str) -> Option<(f32, f32, f32, f32, f32)>
     Some((t, r, b, l, radius))
 }
 
+/// CSS Shapes L1 §4 — parse `path([<fill-rule>,]? "<svg-path>")`.
+/// Flattens the SVG path `d` string into a vertex list in float-local
+/// (reference-box-relative) px coordinates via [`crate::motion_path::flatten_path_to_polygon`].
+/// The optional `<fill-rule>` (nonzero | evenodd) is accepted but ignored — float
+/// wrapping uses the filled outline regardless. The `d` string must be quoted
+/// (`"…"` or `'…'`); its letter case is preserved (SVG commands are case-sensitive).
+/// `path()` coordinates are always px (no percentages per spec). Returns `None`
+/// for any unknown syntax or a degenerate (< 3 vertices) outline.
+pub(crate) fn parse_shape_path_px(s: &str) -> Option<Vec<(f32, f32)>> {
+    let s = s.trim();
+    let open = s.find('(')?;
+    let close = s.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    // Only the function name is case-folded; the inner `d` string keeps its case.
+    if !s[..open].trim().eq_ignore_ascii_case("path") {
+        return None;
+    }
+    let inner = s[open + 1..close].trim();
+    // Strip an optional leading `<fill-rule>,` (ignored for wrapping geometry).
+    let inner = match inner.split_once(',') {
+        Some((head, rest))
+            if head.trim().eq_ignore_ascii_case("nonzero")
+                || head.trim().eq_ignore_ascii_case("evenodd") =>
+        {
+            rest.trim()
+        }
+        _ => inner,
+    };
+    let path_str = inner
+        .strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .or_else(|| inner.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')))?;
+    let pts = crate::motion_path::flatten_path_to_polygon(path_str);
+    if pts.len() >= 3 { Some(pts) } else { None }
+}
+
 /// CSS Shapes L1 §5.2 — polygon shape for `shape-outside` on a float.
 /// Points are stored in content-area coordinates (same as FloatContext).
 struct ShapePolygon {
@@ -4152,6 +4212,29 @@ fn collapsed_top_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
     }
 }
 
+/// CSS Box Sizing L4 §5 — content block-size contribution under size containment.
+/// When `size_contained` is true the box ignores its children for auto sizing and
+/// uses the resolved `contain-intrinsic-height` (content-box px, clamped ≥ 0), or
+/// `0.0` when the value is `none`/unset. Otherwise returns the measured
+/// `content_height` unchanged.
+fn contained_content_height(
+    size_contained: bool,
+    style: &ComputedStyle,
+    em: f32,
+    viewport: Size,
+    content_height: f32,
+) -> f32 {
+    if size_contained {
+        style
+            .contain_intrinsic_height
+            .as_ref()
+            .and_then(|l| l.resolve(em, None, viewport))
+            .map_or(0.0, |v| v.max(0.0))
+    } else {
+        content_height
+    }
+}
+
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
 ///
@@ -4184,15 +4267,16 @@ fn lay_out(
     // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
     // flow position starts below the expanded viewport and the shell hasn't
     // ratcheted the node relevant, drop the children for this pass: the element
-    // keeps its own box (explicit width/height still apply below; auto height
-    // collapses — no contain-intrinsic-size yet) and paint emits nothing for
-    // the subtree. The shell drains `take_cv_skipped()` after layout and emits
+    // keeps its own box and paint emits nothing for the subtree. While skipped,
+    // the element is size-contained, so its auto block-size collapses to the
+    // `contain-intrinsic-height` placeholder (see `size_contained` below). The
+    // shell drains `take_cv_skipped()` after layout and emits
     // ContentVisibilityChange events / triggers relayout on scroll.
     // CSS: content-visibility — parsing + ComputedStyle field already wired.
-    if b.style.content_visibility == crate::style::ContentVisibility::Auto
+    let cv_auto_skipped = b.style.content_visibility == crate::style::ContentVisibility::Auto
         && !b.children.is_empty()
-        && crate::content_visibility::cv_should_skip(b.node, start_y, viewport.height)
-    {
+        && crate::content_visibility::cv_should_skip(b.node, start_y, viewport.height);
+    if cv_auto_skipped {
         b.children.clear();
     }
 
@@ -4228,6 +4312,16 @@ fn lay_out(
     let s = b.style.clone();
     let em = s.font_size;
     let cb = available_width;
+
+    // CSS Box Sizing L4 §5 — the box is subject to size containment (its size is
+    // computed as if it had no contents) when `contain: size` is set, when
+    // `content-visibility: hidden` (always skips/contains its subtree), or when
+    // `content-visibility: auto` skipped the subtree this pass. Under size
+    // containment, auto width/height come from `contain-intrinsic-*` (or 0 when
+    // the value is `none`) instead of the content.
+    let size_contained = s.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
+        || s.content_visibility == crate::style::ContentVisibility::Hidden
+        || cv_auto_skipped;
 
     // Резолвим typed Length-поля с known containing block.
     let margin_left = s.margin_left.resolve_or_zero(em, cb, viewport);
@@ -4353,10 +4447,22 @@ fn lay_out(
     // Phase 0 shrink-to-fit для inline-block без явной CSS width.
     // Полный алгоритм (CSS 2.1 §10.3.9) требует двух проходов; здесь —
     // упрощение: ищем максимальную explicit-width среди потомков.
-    if s.width.is_none() && s.display == Display::InlineBlock
-        && let Some(pref_w) = preferred_inline_block_width(b, measurer, viewport)
-    {
-        b.rect.width = pref_w.min(b.rect.width);
+    // CSS Box Sizing L4 §5: a size-contained inline-block ignores its content
+    // for auto inline-size and uses contain-intrinsic-width (content-box → +pad/
+    // border), or 0 when `none`/unset — exactly as if it had no contents.
+    if s.width.is_none() && s.display == Display::InlineBlock {
+        if size_contained {
+            let cw = s
+                .contain_intrinsic_width
+                .as_ref()
+                .and_then(|l| l.resolve(em, None, viewport))
+                .map_or(0.0, |v| v.max(0.0));
+            b.rect.width = (cw + padding_left + padding_right
+                + s.border_left_width + s.border_right_width)
+                .min(b.rect.width);
+        } else if let Some(pref_w) = preferred_inline_block_width(b, measurer, viewport) {
+            b.rect.width = pref_w.min(b.rect.width);
+        }
     }
 
     // CSS 2.1 §10.3.3 — auto horizontal-margin centering for block-level
@@ -4597,7 +4703,7 @@ fn lay_out(
                 {
                     (b.rect.width * ah / aw).max(0.0)
                 } else {
-                    let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                    let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                     ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
                 return;
@@ -4626,7 +4732,7 @@ fn lay_out(
                 {
                     (b.rect.width * ah / aw).max(0.0)
                 } else {
-                    let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                    let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                     ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
                 return;
@@ -4832,7 +4938,9 @@ fn lay_out(
                                         let cx = child.rect.x + fw / 2.0;
                                         let cy = top_y + fh / 2.0;
                                         fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
-                                    } else if let Some(local_pts) = parse_shape_polygon_px(sv) {
+                                    } else if let Some(local_pts) = parse_shape_path_px(sv)
+                                        .or_else(|| parse_shape_polygon_px(sv))
+                                    {
                                         let pts = local_pts.into_iter()
                                             .map(|(px, py)| (px + lx, py + child_y))
                                             .collect();
@@ -4873,7 +4981,9 @@ fn lay_out(
                                         let cx = child.rect.x + fw / 2.0;
                                         let cy = top_y + fh / 2.0;
                                         fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
-                                    } else if let Some(local_pts) = parse_shape_polygon_px(sv) {
+                                    } else if let Some(local_pts) = parse_shape_path_px(sv)
+                                        .or_else(|| parse_shape_polygon_px(sv))
+                                    {
                                         let pts = local_pts.into_iter()
                                             .map(|(px, py)| (px + left_edge, py + child_y))
                                             .collect();
@@ -5025,9 +5135,10 @@ fn lay_out(
                 // Phase 0: ratio applied in border-box space.
                 (b.rect.width * ah / aw).max(0.0)
             } else {
-                // CSS Containment L3 §3.3: contain:size suppresses children contribution
-                // to auto height — intrinsic height = 0.
-                let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                // CSS Containment L3 §3.3 / CSS Box Sizing L4 §5: size containment
+                // suppresses children's contribution to auto height — the box uses
+                // contain-intrinsic-height (or 0 when `none`/unset) instead.
+                let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                 ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
             };
             // CSS Basic UI L4 §4.4 — field-sizing: content height override.
@@ -5180,7 +5291,7 @@ fn lay_out(
             // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
             // col_widths=None → per-row auto-distribution (standalone <tr> outside <table>).
             let row_h = lay_out_table_row(
-                b, content_x, content_y, content_width, None, None, 0.0, measurer, viewport, children_pcb, hp,
+                b, content_x, content_y, content_width, None, None, 0.0, None, measurer, viewport, children_pcb, hp,
             );
             b.rect.height = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -5214,21 +5325,23 @@ fn lay_out(
             let content_height = lay_out_table(
                 b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
             );
-            b.rect.height = if let Some(h_len) = &s.height
+            if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
             {
-                match s.box_sizing {
+                b.rect.height = match s.box_sizing {
                     BoxSizing::ContentBox => (h + padding_top + padding_bottom
                         + s.border_top_width + s.border_bottom_width).max(0.0),
                     BoxSizing::BorderBox => h.max(
                         padding_top + padding_bottom
                             + s.border_top_width + s.border_bottom_width,
                     ),
-                }
-            } else {
-                content_height + padding_top + padding_bottom
-                    + s.border_top_width + s.border_bottom_width
-            };
+                };
+            } else if !matches!(s.border_collapse, BorderCollapse::Collapse) {
+                // Collapse mode sets b.rect.height directly in lay_out_table (the table border-box
+                // coincides with the outer cells' collapsed borders).
+                b.rect.height = content_height + padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width;
+            }
         }
         BoxKind::TableRowGroup => {
             // CSS 2.1 §17 — row group standalone (outside a <table>): block-flow of rows.
@@ -5323,6 +5436,10 @@ fn lay_out_table_row(
     rowspan_map: Option<&mut Vec<u32>>,
     // Horizontal gap between adjacent cells (from table's border-spacing-h). 0.0 for standalone rows.
     h_spacing: f32,
+    // CSS 2.1 §17.6.2 collapsed border model: absolute x of each column's cell border-box left
+    // edge (length = n_cols). When present, cells are positioned here so adjacent borders overlap
+    // by the collapsed grid-line width instead of being spaced by `h_spacing`.
+    collapse_col_x: Option<&[f32]>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -5408,7 +5525,11 @@ fn lay_out_table_row(
     let use_global = col_widths.is_some();
     for (j, &i) in cell_idxs.iter().enumerate() {
         let (col_start, avail) = cell_cols[j];
-        let cell_x = if use_global {
+        let cell_x = if let Some(cx) = collapse_col_x {
+            // Collapsed border model: each column has a precomputed absolute x at which its
+            // cells' border-box starts; adjacent cells overlap by the shared grid-line border.
+            cx.get(col_start).copied().unwrap_or(content_x)
+        } else if use_global {
             // Exact x from column positions, accounting for h_spacing slots.
             // Cell at col_start k: content_x + (k+1)*h_spacing + sum(col_widths[0..k]).
             content_x
@@ -5483,6 +5604,73 @@ fn lay_out_table_row(
     row_h
 }
 
+/// CSS 2.1 §17.6.2 — collapsed vertical border width at each column grid line for a table.
+///
+/// Returns a `Vec<f32>` of length `n_cols + 1`. Index `k` (1..n_cols) is the shared border
+/// width between column `k-1` and column `k`: the maximum, over every row, of the right border
+/// of the cell in column `k-1` and the left border of the cell in column `k`. Indices `0` and
+/// `n_cols` (the outer edges) are left at `0.0` — outer cells are snapped onto the table border
+/// by the caller, so their grid-line width is handled there. Cells are mapped to columns by
+/// sequential order (colspan/rowspan are not accounted for; collapse overlap is exact only for
+/// simple uniform grids, which is the common case).
+fn collapse_v_edges(b: &LayoutBox, n_cols: usize) -> Vec<f32> {
+    let mut edges = vec![0.0_f32; n_cols + 1];
+    let mut visit = |row: &LayoutBox| {
+        let cells: Vec<&LayoutBox> = row
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        for col in 1..cells.len().min(n_cols) {
+            let edge = cells[col].style.border_left_width.max(cells[col - 1].style.border_right_width);
+            edges[col] = edges[col].max(edge);
+        }
+    };
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => visit(child),
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        visit(row);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    edges
+}
+
+/// CSS 2.1 §17.6.2 — representative collapsed horizontal (row-to-row) border width.
+///
+/// Returns the maximum top/bottom border width across all cells in the table. Used as a uniform
+/// row overlap in collapse mode: consecutive rows are pulled together by this amount so their
+/// shared horizontal grid line renders as one border instead of two stacked ones. Uniform (rather
+/// than per-row-pair) is exact when row borders are consistent — the common case.
+fn collapse_max_cross_border(b: &LayoutBox) -> f32 {
+    let mut max_b = 0.0_f32;
+    let mut visit = |row: &LayoutBox| {
+        for cell in row.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)) {
+            max_b = max_b.max(cell.style.border_top_width).max(cell.style.border_bottom_width);
+        }
+    };
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => visit(child),
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        visit(row);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    max_b
+}
+
 /// CSS 2.1 §17 — table layout with colspan/rowspan support.
 ///
 /// Pass 1: compute column widths (span-aware), lay out rows top-to-bottom while tracking
@@ -5503,6 +5691,7 @@ fn lay_out_table(
     hp: &dyn HyphenationProvider,
 ) -> f32 {
     // CSS Tables L2 §17.6: collapse mode zeroes out border-spacing.
+    let collapse = matches!(b.style.border_collapse, BorderCollapse::Collapse);
     let (h_spacing, v_spacing) = match b.style.border_collapse {
         BorderCollapse::Collapse => (0.0, 0.0),
         BorderCollapse::Separate => (b.style.border_spacing_h, b.style.border_spacing_v),
@@ -5510,8 +5699,33 @@ fn lay_out_table(
 
     let col_widths = compute_table_col_widths(b, content_width, viewport, measurer);
 
-    // First row starts after the top outer v_spacing slot.
-    let mut cur_y = content_y + v_spacing;
+    // CSS 2.1 §17.6.2 — collapsing border model. Adjacent cell borders (and the table's own
+    // border with the outer cells) share a single grid line whose width is the larger of the
+    // two meeting borders. We model this by positioning columns so neighbouring cells overlap
+    // by that collapsed width, and by snapping the outer cells onto the table border (so a 2px
+    // table border + 2px cell border render as one 2px line, not 4px). Width/colour conflict
+    // resolution is approximated by max-width (sufficient for same-style same-colour grids).
+    let n_cols = col_widths.len();
+    let (collapse_col_x, collapse_v_overlap, collapse_width) = if collapse && n_cols > 0 {
+        let v_edges = collapse_v_edges(b, n_cols);
+        // base_x = table border-box left edge: outer cell borders coincide with the table border.
+        let base_x = b.rect.x;
+        let mut col_x = Vec::with_capacity(n_cols);
+        col_x.push(base_x);
+        for k in 1..n_cols {
+            let prev = col_x[k - 1] + col_widths[k - 1] - v_edges[k];
+            col_x.push(prev);
+        }
+        let total_w = (col_x[n_cols - 1] + col_widths[n_cols - 1] - base_x).max(0.0);
+        (Some(col_x), collapse_max_cross_border(b), total_w)
+    } else {
+        (None, 0.0, 0.0)
+    };
+    let collapse_col_x_ref = collapse_col_x.as_deref();
+
+    // First row starts after the top outer v_spacing slot; in collapse mode the first row's top
+    // border coincides with the table's top border (start at the table border-box top edge).
+    let mut cur_y = if collapse { b.rect.y } else { content_y + v_spacing };
     let mut rowspan_map: Vec<u32> = Vec::new();
 
     // flat_row_rects[k] = (y, height) for the k-th row in DOM order (across all groups).
@@ -5538,6 +5752,7 @@ fn lay_out_table(
                     Some(&col_widths),
                     Some(&mut rowspan_map),
                     h_spacing,
+                    collapse_col_x_ref,
                     measurer, viewport, pcb, hp,
                 );
                 let row_style_h = {
@@ -5566,9 +5781,10 @@ fn lay_out_table(
                     }
                 }
                 let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
-                // Add v_spacing gap after each row (outer bottom slot included).
+                // Add v_spacing gap after each row (outer bottom slot included); in collapse mode
+                // pull the next row up by the shared horizontal grid-line border instead.
                 // CSS: border-spacing
-                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb + v_spacing;
+                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb + v_spacing - collapse_v_overlap;
                 decrement_rowspan_map(&mut rowspan_map);
             }
             BoxKind::TableRowGroup => {
@@ -5596,6 +5812,7 @@ fn lay_out_table(
                         Some(&col_widths),
                         Some(&mut rowspan_map),
                         h_spacing,
+                        collapse_col_x_ref,
                         measurer, viewport, pcb, hp,
                     );
                     let r_pt = b.children[i].children[r].style.padding_top.resolve_or_zero(r_em, content_width, viewport);
@@ -5611,8 +5828,8 @@ fn lay_out_table(
                         }
                     }
                     let r_mb = b.children[i].children[r].style.margin_bottom.resolve_or_zero(r_em, content_width, viewport);
-                    // CSS: border-spacing
-                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb + v_spacing;
+                    // CSS: border-spacing — collapse mode pulls rows together by the shared border.
+                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb + v_spacing - collapse_v_overlap;
                     decrement_rowspan_map(&mut rowspan_map);
                 }
                 let g_pt = b.children[i].style.padding_top.resolve_or_zero(group_em, content_width, viewport);
@@ -5641,6 +5858,23 @@ fn lay_out_table(
         };
         let new_h = (target_bottom - cell.rect.y).max(cell.rect.height);
         cell.rect.height = new_h;
+    }
+
+    // CSS 2.1 §17.6.2 — collapsing model: the table border-box coincides with the outer cells'
+    // shared borders. Snap the table width to the overlapped grid and the height to the bottom
+    // edge of the last row (which already includes the collapsed top/bottom borders). The caller
+    // skips its own height computation in collapse mode, so set it here for every collapse table
+    // (an empty table with no rows collapses to a zero-height border-box).
+    if collapse {
+        if b.style.width.is_none() && n_cols > 0 {
+            b.rect.width = collapse_width;
+        }
+        if b.style.height.is_none() {
+            b.rect.height = flat_row_rects
+                .last()
+                .map(|&(last_y, last_h)| (last_y + last_h - b.rect.y).max(0.0))
+                .unwrap_or(0.0);
+        }
     }
 
     (cur_y - content_y).max(0.0)
@@ -10495,6 +10729,65 @@ mod tests {
         for c in &b.children { find_markers(c, out); }
     }
 
+    // ── CSS Generated Content L3 §3.2 — open-quote / close-quote ─────────────
+
+    fn collect_seg_text(b: &super::LayoutBox, out: &mut String) {
+        if let super::BoxKind::InlineRun { segments, .. } = &b.kind {
+            for s in segments { out.push_str(&s.text); }
+        }
+        for c in &b.children { collect_seg_text(c, out); }
+    }
+
+    #[test]
+    fn quotes_nested_q_uses_primary_then_secondary() {
+        // Nested <q> → outer uses primary “ ”, inner uses secondary ‘ ’.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><q>outer <q>inner</q> end</q></p>"),
+            &lumen_css_parser::parse(
+                "q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        let po = text.find('\u{201C}').expect("primary open quote");
+        let so = text.find('\u{2018}').expect("secondary open quote");
+        let sc = text.find('\u{2019}').expect("secondary close quote");
+        let pc = text.find('\u{201D}').expect("primary close quote");
+        assert!(po < so && so < sc && sc < pc, "quote nesting order wrong: {text:?}");
+    }
+
+    #[test]
+    fn quotes_custom_pairs_applied() {
+        let root = super::layout(
+            &lumen_html_parser::parse("<q>hi</q>"),
+            &lumen_css_parser::parse(
+                "q{quotes:\"\u{ab}\" \"\u{bb}\"} q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        assert!(text.contains('\u{ab}') && text.contains('\u{bb}'), "custom quotes: {text:?}");
+    }
+
+    #[test]
+    fn quotes_none_suppresses_marks() {
+        let root = super::layout(
+            &lumen_html_parser::parse("<q>hi</q>"),
+            &lumen_css_parser::parse(
+                "q{quotes:none} q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        assert!(
+            !text.contains('\u{201C}') && !text.contains('\u{201D}'),
+            "quotes:none must emit no marks: {text:?}",
+        );
+    }
+
     #[test]
     fn marker_default_inherits_parent_color() {
         // No ::marker rule → marker inherits color from li parent.
@@ -10764,6 +11057,54 @@ mod tests {
         assert_eq!(super::parse_shape_polygon_px("none"), None);
     }
 
+    // ── CSS Shapes L1 — shape-outside path() ──────────────────────────────────
+
+    #[test]
+    fn parse_shape_path_triangle() {
+        // Straight-line triangle: M 0 0 L 100 0 L 50 100 Z → 3 distinct vertices.
+        let pts = super::parse_shape_path_px(r#"path("M 0 0 L 100 0 L 50 100 Z")"#)
+            .expect("triangle path should parse");
+        assert_eq!(pts[0], (0.0, 0.0));
+        assert_eq!(pts[1], (100.0, 0.0));
+        assert_eq!(pts[2], (50.0, 100.0));
+        // Close returns to the sub-path start.
+        assert_eq!(*pts.last().unwrap(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn parse_shape_path_fill_rule_and_quotes() {
+        // Leading fill-rule is accepted and ignored; single quotes work too.
+        let pts = super::parse_shape_path_px(r#"path(evenodd, 'M 0 0 L 10 0 L 10 10 Z')"#)
+            .expect("path with fill-rule + single quotes should parse");
+        assert_eq!(pts[0], (0.0, 0.0));
+        assert_eq!(pts[1], (10.0, 0.0));
+        assert_eq!(pts[2], (10.0, 10.0));
+    }
+
+    #[test]
+    fn parse_shape_path_invalid() {
+        // Not a path() function.
+        assert_eq!(super::parse_shape_path_px("polygon(0 0, 10 0, 10 10)"), None);
+        assert_eq!(super::parse_shape_path_px("none"), None);
+        // Missing quotes around the d-string.
+        assert_eq!(super::parse_shape_path_px("path(M 0 0 L 10 0 L 10 10 Z)"), None);
+        // Degenerate (< 3 vertices).
+        assert_eq!(super::parse_shape_path_px(r#"path("M 0 0 L 10 10")"#), None);
+    }
+
+    #[test]
+    fn float_context_path_left_float() {
+        // path() flattened to the same right-triangle as the polygon case:
+        // M 0 0 L 100 0 L 0 100 Z. At y=50 the hypotenuse right edge = 50.
+        let pts = super::parse_shape_path_px(r#"path("M 0 0 L 100 0 L 0 100 Z")"#)
+            .expect("triangle path should parse");
+        let mut fc = super::FloatContext::new();
+        fc.shape_polygons.push(super::ShapePolygon {
+            top_y: 0.0, bottom_y: 100.0, is_left: true, points: pts,
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+    }
+
     #[test]
     fn polygon_edge_at_y_triangle() {
         // Right-triangle: (0,0)→(100,0)→(0,100)→(0,0).
@@ -10991,6 +11332,60 @@ mod tests {
         assert_eq!(skipped.len(), 1, "exactly one node recorded as skipped");
         assert_eq!(skipped[0].0, cv.node);
         assert!(skipped[0].1 >= 2000.0, "recorded top is the collapsed flow position");
+    }
+
+    // ── contain-intrinsic-size under size containment (CSS Box Sizing L4 §5) ──
+
+    /// Find the first box that is size-contained via `contain: size`.
+    fn find_size_contained(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if b.style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0 {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_size_contained)
+    }
+
+    #[test]
+    fn contain_intrinsic_size_sets_block_height() {
+        // Size-contained block ignores its tall child and uses the
+        // contain-intrinsic-height placeholder (content-box → 100px border-box,
+        // no padding/border here).
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { contain: size; contain-intrinsic-size: 200px 100px; } .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!((c.rect.height - 100.0).abs() < 0.5, "height should be 100px, got {}", c.rect.height);
+    }
+
+    #[test]
+    fn contain_intrinsic_size_none_collapses_block_height() {
+        // Size containment with no contain-intrinsic-size → auto height collapses to 0
+        // (plus padding/border, which are 0 here).
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { contain: size; } .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!(c.rect.height.abs() < 0.5, "height should collapse to 0, got {}", c.rect.height);
+    }
+
+    #[test]
+    fn contain_intrinsic_size_sets_inline_block_width() {
+        // Size-contained inline-block uses contain-intrinsic-width for shrink-to-fit.
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { display: inline-block; contain: size; contain-intrinsic-size: 200px 100px; } \
+             .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!((c.rect.width - 200.0).abs() < 0.5, "width should be 200px, got {}", c.rect.width);
+        assert!((c.rect.height - 100.0).abs() < 0.5, "height should be 100px, got {}", c.rect.height);
     }
 
     #[test]
@@ -12441,6 +12836,84 @@ mod tests {
         // Vertical gap between rows should be 20px.
         let v_gap = rows[1].rect.y - (rows[0].rect.y + rows[0].rect.height);
         assert!((v_gap - 20.0).abs() < 1.0, "expected v_gap=20, got {v_gap}");
+    }
+
+    // ─── border-collapse: collapse (CSS 2.1 §17.6.2) — BUG-129 ─────────────────
+
+    #[test]
+    fn collapse_overlaps_adjacent_cell_borders() {
+        // collapse: adjacent cells share one border. Each 100px border-box cell with a 2px
+        // border should overlap its neighbour by 2px, so cell[1].x = cell[0].right - 2.
+        let t = layout_table(
+            "table { border-collapse: collapse; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert_eq!(cells.len(), 3, "expected 3 cells");
+        // border-box width = 96 + 2*2 = 100.
+        assert!((cells[0].rect.width - 100.0).abs() < 0.5, "cell border-box = 100, got {}", cells[0].rect.width);
+        let overlap0 = (cells[0].rect.x + cells[0].rect.width) - cells[1].rect.x;
+        let overlap1 = (cells[1].rect.x + cells[1].rect.width) - cells[2].rect.x;
+        assert!((overlap0 - 2.0).abs() < 0.5, "cells overlap by collapsed 2px border, got {overlap0}");
+        assert!((overlap1 - 2.0).abs() < 0.5, "cells overlap by collapsed 2px border, got {overlap1}");
+    }
+
+    #[test]
+    fn collapse_outer_cells_snap_to_table_border() {
+        // collapse: the first cell's left border coincides with the table's own border edge
+        // (table.x == cell[0].x), and the table border-box width = overlapped grid width.
+        let t = layout_table(
+            "table { border-collapse: collapse; border: 2px solid #000; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert!((cells[0].rect.x - t.rect.x).abs() < 0.5,
+            "first cell left coincides with table border: table.x={}, cell.x={}", t.rect.x, cells[0].rect.x);
+        // 3 cells of 100px overlapping by 2px at 2 internal grid lines → 300 - 2*2 = 296.
+        assert!((t.rect.width - 296.0).abs() < 0.5, "collapsed table width = 296, got {}", t.rect.width);
+    }
+
+    #[test]
+    fn collapse_overlaps_rows_vertically() {
+        // collapse: consecutive rows share their horizontal border. Two 30px-tall rows with a
+        // 2px border collapse the inter-row line, so row[1].y = row[0].bottom - 2.
+        let t = layout_table(
+            "table { border-collapse: collapse; } td { width: 50px; height: 26px; border: 2px solid #000; }",
+            "<table><tr><td></td></tr><tr><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let rows = collect_rows(&t);
+        assert!(rows.len() >= 2, "expected >= 2 rows");
+        let overlap = (rows[0].rect.y + rows[0].rect.height) - rows[1].rect.y;
+        assert!((overlap - 2.0).abs() < 0.5, "rows overlap by collapsed 2px border, got {overlap}");
+        // Top of first row coincides with the table top edge.
+        assert!((rows[0].rect.y - t.rect.y).abs() < 0.5,
+            "first row top coincides with table top: table.y={}, row.y={}", t.rect.y, rows[0].rect.y);
+    }
+
+    #[test]
+    fn separate_mode_keeps_full_cell_borders() {
+        // Regression guard: border-collapse: separate (default) must NOT overlap cells.
+        let t = layout_table(
+            "table { border-collapse: separate; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        // No spacing, no overlap: cell[1].x == cell[0].right exactly.
+        let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
+        assert!(gap.abs() < 0.5, "separate mode: no overlap, gap should be 0, got {gap}");
     }
 
     // ─── object-fit / object-position ────────────────────────────────────────

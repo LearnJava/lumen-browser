@@ -520,6 +520,77 @@ fn line_length(x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     (dx * dx + dy * dy).sqrt()
 }
 
+/// Subdivisions used when flattening a single Bézier segment into line points.
+/// Fixed (non-adaptive) count is enough for `clip-path: path(...)` outlines at
+/// typical element sizes — the resulting polygon is the clip mask, not a stroke.
+const FLATTEN_STEPS: usize = 24;
+
+/// Flattens an SVG path `d` string into a polygon (CSS Shapes L1 §4 `path()`).
+///
+/// Returns the outline as a list of points in the path's own user coordinate
+/// system (px, origin at the reference-box top-left — the caller offsets by the
+/// box position). Cubic/quadratic curves are subdivided into [`FLATTEN_STEPS`]
+/// line segments each. All sub-paths are concatenated into a single ring;
+/// `Z`/`z` returns to the current sub-path start. Returns an empty vector for an
+/// empty or unparseable path.
+pub fn flatten_path_to_polygon(d: &str) -> Vec<(f32, f32)> {
+    let segs = parse_svg_path(d);
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    let mut cur = (0.0_f32, 0.0_f32);
+    let mut sub_start = (0.0_f32, 0.0_f32);
+    let push = |pts: &mut Vec<(f32, f32)>, p: (f32, f32)| {
+        if pts.last().is_none_or(|&l| l != p) {
+            pts.push(p);
+        }
+    };
+    for seg in &segs {
+        match *seg {
+            PathSeg::MoveTo { x, y } => {
+                cur = (x, y);
+                sub_start = cur;
+                push(&mut pts, cur);
+            }
+            PathSeg::LineTo { x, y } => {
+                cur = (x, y);
+                push(&mut pts, cur);
+            }
+            PathSeg::CubicTo { cx1, cy1, cx2, cy2, x, y } => {
+                let (x0, y0) = cur;
+                for i in 1..=FLATTEN_STEPS {
+                    let t = i as f32 / FLATTEN_STEPS as f32;
+                    let mt = 1.0 - t;
+                    let bx = mt * mt * mt * x0
+                        + 3.0 * mt * mt * t * cx1
+                        + 3.0 * mt * t * t * cx2
+                        + t * t * t * x;
+                    let by = mt * mt * mt * y0
+                        + 3.0 * mt * mt * t * cy1
+                        + 3.0 * mt * t * t * cy2
+                        + t * t * t * y;
+                    push(&mut pts, (bx, by));
+                }
+                cur = (x, y);
+            }
+            PathSeg::QuadTo { cx, cy, x, y } => {
+                let (x0, y0) = cur;
+                for i in 1..=FLATTEN_STEPS {
+                    let t = i as f32 / FLATTEN_STEPS as f32;
+                    let mt = 1.0 - t;
+                    let bx = mt * mt * x0 + 2.0 * mt * t * cx + t * t * x;
+                    let by = mt * mt * y0 + 2.0 * mt * t * cy + t * t * y;
+                    push(&mut pts, (bx, by));
+                }
+                cur = (x, y);
+            }
+            PathSeg::Close => {
+                cur = sub_start;
+                push(&mut pts, cur);
+            }
+        }
+    }
+    pts
+}
+
 /// Walk a cubic Bézier; return `(x, y, angle_deg)` at `target` distance along it,
 /// or `None` if `target` exceeds the segment length.
 fn walk_cubic(
@@ -696,6 +767,39 @@ mod tests {
     fn parse_close_path() {
         let segs = parse_svg_path("M 0 0 L 100 0 L 100 100 Z");
         assert!(matches!(segs.last(), Some(PathSeg::Close)));
+    }
+
+    #[test]
+    fn flatten_polygon_straight_segments() {
+        // M/L/Z дают точные вершины без вставки лишних точек на прямых.
+        let pts = flatten_path_to_polygon("M 0 0 L 100 0 L 50 80 Z");
+        assert!(pts.contains(&(0.0, 0.0)));
+        assert!(pts.contains(&(100.0, 0.0)));
+        assert!(pts.contains(&(50.0, 80.0)));
+        // Z возвращает к старту — последняя точка совпадает с (0,0).
+        assert_eq!(pts.last(), Some(&(0.0, 0.0)));
+    }
+
+    #[test]
+    fn flatten_polygon_curve_subdivided() {
+        // Кубическая кривая разбивается на множество отрезков; конечная
+        // точка совпадает с заданной.
+        let pts = flatten_path_to_polygon("M 0 0 C 25 50 75 50 100 0");
+        assert!(pts.len() > 10, "curve must be subdivided, got {}", pts.len());
+        assert_eq!(pts.last(), Some(&(100.0, 0.0)));
+        // Все промежуточные точки внутри bounding box кривой.
+        for (x, y) in &pts {
+            assert!((0.0..=100.0).contains(x), "x out of range: {x}");
+            assert!((0.0..=40.0).contains(y), "y out of range: {y}");
+        }
+    }
+
+    #[test]
+    fn flatten_polygon_empty_path() {
+        assert!(flatten_path_to_polygon("").is_empty());
+        // Один MoveTo без сегментов — одна точка (отвергается вызывающим как
+        // < 3 вершин, но сам флэттенер её возвращает).
+        assert_eq!(flatten_path_to_polygon("M 5 5"), vec![(5.0, 5.0)]);
     }
 
     #[test]
