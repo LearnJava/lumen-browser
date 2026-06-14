@@ -438,6 +438,7 @@ fn run_window_mode(
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         ai_panel: panels::ai_panel::AiPanel::new(),
+        note_viewer: panels::note_viewer::NoteViewerPanel::new(),
         ai_backend: Box::new(lumen_core::NullAiBackend),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
@@ -4171,6 +4172,12 @@ struct Lumen {
     /// subtracts [`panels::ai_panel::PANEL_WIDTH`] and `relayout()` fires.
     /// Queries are dispatched to [`Self::ai_backend`] synchronously (Phase 0).
     ai_panel: panels::ai_panel::AiPanel,
+    /// Floating overlay showing a single user annotation (§12.2, GG-2).
+    ///
+    /// Opened when the user selects a `@notes`-search result from the omnibox
+    /// dropdown and presses Enter. The committed value (`note-viewer:<id>`)
+    /// is intercepted in `handle_omnibox_commit`. `Escape` closes the overlay.
+    note_viewer: panels::note_viewer::NoteViewerPanel,
     /// AI inference backend for the AI sidebar (§12.8).
     ///
     /// Defaults to [`lumen_core::NullAiBackend`] (returns a stub message).
@@ -7019,6 +7026,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // Note viewer overlay (§12.2, GG-2): click [×] to close.
+                    if self.note_viewer.visible {
+                        let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                            let s = w.inner_size();
+                            (s.width, s.height)
+                        });
+                        if let Some(hit) = self.note_viewer.hit_test(x_css, y_css, win_size) {
+                            match hit {
+                                panels::note_viewer::NoteHit::Close => {
+                                    self.note_viewer.close();
+                                    self.request_redraw();
+                                }
+                                panels::note_viewer::NoteHit::Body => {}
+                            }
+                            return;
+                        }
+                    }
+
                     // AI sidebar panel (§12.8): right-docked AI assistant.
                     if self.ai_panel.visible {
                         let win_w = self.viewport_width_css();
@@ -7977,6 +8002,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         tab_h,
                     );
                     overlay_buf.append(&mut perm_cmds);
+                }
+
+                // Note viewer overlay (§12.2, GG-2): floating annotation panel.
+                if self.note_viewer.visible {
+                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size);
+                    overlay_buf.append(&mut nv_cmds);
                 }
 
                 // AI sidebar panel (§12.8, GG-1): right-docked AI assistant.
@@ -9079,6 +9114,13 @@ impl Lumen {
             return;
         }
 
+        // Note viewer overlay: Escape closes it.
+        if self.note_viewer.visible && code == KeyCode::Escape && !key_event.repeat {
+            self.note_viewer.close();
+            self.request_redraw();
+            return;
+        }
+
         // AI panel input: printable text, Backspace, Enter. Ctrl/Meta fall through.
         if self.ai_panel.visible && self.handle_ai_panel_key(code, key_event) {
             return;
@@ -9960,6 +10002,17 @@ impl Lumen {
             return;
         }
 
+        // `note-viewer:<id>` — open the note viewer overlay (§12.2, GG-2).
+        if let Some(id_str) = value.trim().strip_prefix("note-viewer:") {
+            if let Ok(id) = id_str.parse::<i64>()
+                && let Ok(Some(note)) = self.notes_store.get(id)
+            {
+                self.note_viewer.open(id, &note.url, &note.selection, &note.comment);
+                self.request_redraw();
+            }
+            return;
+        }
+
         // `about:settings` — open the browser settings overlay (task D-7).
         if value.trim() == "about:settings" {
             let snap = self.settings_store.snapshot();
@@ -10085,13 +10138,15 @@ impl Lumen {
                 }
             }
             OmniboxPrefix::Notes => {
-                // @notes <query> — FTS5-поиск по заметкам §12.2.
-                if !query.is_empty() && let Ok(hits) = self.notes_store.search(query, 7) {
+                // @notes <query> — FTS5-поиск по заметкам §12.2 (до 5 результатов).
+                if !query.is_empty() && let Ok(hits) = self.notes_store.search(query, 5) {
                     for hit in hits {
+                        let viewer_url = format!("note-viewer:{}", hit.note.id);
                         suggestions.push(OmniboxSuggestion::Note {
                             url: hit.note.url,
                             selection: hit.note.selection,
                             snippet: hit.snippet,
+                            viewer_url,
                         });
                     }
                 }

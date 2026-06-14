@@ -93,13 +93,21 @@ pub enum OmniboxSuggestion {
         snippet: String,
     },
     /// Результат FTS5-поиска по заметкам (§12.2, `@notes <query>`).
+    ///
+    /// При выборе пользователем `commit_value()` возвращает `viewer_url`
+    /// (`note-viewer:<id>`), который перехватывается в `handle_omnibox_commit`
+    /// для открытия `NoteViewerPanel`. Данные заметки (comment и проч.)
+    /// запрашиваются напрямую из `notes_store` по id, поэтому хранить их
+    /// здесь не нужно.
     Note {
-        /// URL, к которому привязана заметка.
+        /// URL, к которому привязана заметка (отображается в dropdown label).
         url: String,
         /// Выделенный текст (selection) заметки.
         selection: String,
         /// BM25 сниппет вокруг совпадения.
         snippet: String,
+        /// `note-viewer:<id>` — committed value, opens the note viewer.
+        viewer_url: String,
     },
     /// Ранее введённый поисковый запрос (`SearchHistory::prefix_match`).
     SearchQuery {
@@ -112,11 +120,12 @@ pub enum OmniboxSuggestion {
 
 impl OmniboxSuggestion {
     /// Строка, которая будет зафиксирована при выборе этой подсказки.
-    /// HistoryFts / Note → URL. SearchQuery → текст запроса.
+    /// HistoryFts → URL навигации. Note → `note-viewer:<id>` (перехват в shell).
+    /// SearchQuery → текст запроса.
     pub fn commit_value(&self) -> &str {
         match self {
             OmniboxSuggestion::HistoryFts { url, .. } => url,
-            OmniboxSuggestion::Note { url, .. } => url,
+            OmniboxSuggestion::Note { viewer_url, .. } => viewer_url,
             OmniboxSuggestion::SearchQuery { query, .. } => query,
         }
     }
@@ -134,14 +143,16 @@ impl OmniboxSuggestion {
 
     /// Дополнительный текст под основным label.
     /// HistoryFts: сниппет если непуст, иначе URL.
-    /// Note: сниппет вокруг совпадения.
+    /// Note: сниппет вокруг совпадения (или URL если сниппет пуст).
     /// SearchQuery: пустая строка (вся информация в label).
     pub fn sub_label(&self) -> &str {
         match self {
             OmniboxSuggestion::HistoryFts { snippet, url, .. } => {
                 if !snippet.is_empty() { snippet } else { url }
             }
-            OmniboxSuggestion::Note { snippet, .. } => snippet,
+            OmniboxSuggestion::Note { snippet, url, .. } => {
+                if !snippet.is_empty() { snippet } else { url }
+            }
             OmniboxSuggestion::SearchQuery { .. } => "",
         }
     }
@@ -770,33 +781,41 @@ mod tests {
         assert_eq!(prefix, OmniboxPrefix::Plain);
     }
 
-    #[test]
-    fn note_suggestion_commit_value_is_url() {
-        let s = OmniboxSuggestion::Note {
+    fn make_note_suggestion(note_id: i64) -> OmniboxSuggestion {
+        OmniboxSuggestion::Note {
             url: "https://example.com/".into(),
             selection: "interesting text".into(),
             snippet: "interesting **text** here".into(),
-        };
-        assert_eq!(s.commit_value(), "https://example.com/");
+            viewer_url: format!("note-viewer:{note_id}"),
+        }
+    }
+
+    #[test]
+    fn note_suggestion_commit_value_is_viewer_url() {
+        let s = make_note_suggestion(7);
+        assert_eq!(s.commit_value(), "note-viewer:7");
     }
 
     #[test]
     fn note_suggestion_label_is_selection() {
-        let s = OmniboxSuggestion::Note {
-            url: "https://example.com/".into(),
-            selection: "my selection".into(),
-            snippet: "".into(),
-        };
-        assert_eq!(s.label(), "my selection");
+        let s = make_note_suggestion(1);
+        assert_eq!(s.label(), "interesting text");
     }
 
     #[test]
     fn note_suggestion_sub_label_is_snippet() {
+        let s = make_note_suggestion(2);
+        assert_eq!(s.sub_label(), "interesting **text** here");
+    }
+
+    #[test]
+    fn note_suggestion_sub_label_falls_back_to_url_when_snippet_empty() {
         let s = OmniboxSuggestion::Note {
             url: "https://example.com/".into(),
             selection: "sel".into(),
-            snippet: "snip text".into(),
+            snippet: String::new(),
+            viewer_url: "note-viewer:3".into(),
         };
-        assert_eq!(s.sub_label(), "snip text");
+        assert_eq!(s.sub_label(), "https://example.com/");
     }
 }

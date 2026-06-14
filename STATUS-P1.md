@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+GG-2 @notes omnibox Phase 1  branch: p1-gg2-notes-omnibox
+Next step: tests running, then commit  crates/shell/src/panels/note_viewer.rs
 
 ---
 
