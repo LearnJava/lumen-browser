@@ -6,8 +6,7 @@
 
 ## In progress
 
-GG-1: AI sidebar Phase 0  branch: p1-gg1-ai-sidebar
-Next step: Add AiBackend trait to lumen-core/src/ext.rs, then ai_panel.rs in lumen-shell
+_(нет)_
 
 ---
 
@@ -86,7 +85,7 @@ Next step: Add AiBackend trait to lumen-core/src/ext.rs, then ai_panel.rs in lum
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| GG-1 | **AI sidebar Phase 0** — `AiBackend` trait в `lumen-core::ext` (`query(prompt) -> impl Future<Output=String>`); `NullAiBackend` заглушка; sidebar панель Ctrl+Shift+A (200px), `TextInput` + response area; `// UNIQUE: §12.8 AI assistant`; 6 unit-тестов | M | `lumen-core`, `lumen-shell` |
+| ~~GG-1~~ | ~~**AI sidebar Phase 0**~~ — **выполнено** (p1-gg1-ai-sidebar, 2026-06-14): `AiBackend` trait в `lumen-core::ext` (query sync Phase 0) + `NullAiBackend`; `ai_panel.rs` 200px right-docked (header + response area + input row); `Ctrl+Shift+A` → `ToggleAiPanel`; `handle_ai_panel_key` (Esc/Backspace/Enter/printable); `// UNIQUE: §12.8 AI assistant`; 14 тестов (12 panel + 2 core) | M | `lumen-core`, `lumen-shell` |
 | GG-2 | **@notes omnibox Phase 1** — поиск `KnowledgeStore` при вводе с `@`-префиксом; `search_notes(q)` → `Vec<NoteResult>`; dropdown до 5 результатов в omnibox; Enter → открыть note viewer; 6 unit-тестов | S | `lumen-shell`, `lumen-knowledge` |
 | GG-3 | **Privacy shields Phase 1** — парсить EasyList формат (`||domain^`, `##.selector`, `/regex/`); `EasyListParser::load(text)`; `FilterListSource` impl (`DefaultFilterList`); интеграция в `fetch_with_redirect`: блокировать запрос если url matches; 10 unit-тестов | M | `lumen-network`, `lumen-core` |
 | GG-4 | **Vertical tabs layout mode** — `TabLayout::Vertical` (200px left sidebar); тоггл кнопка в title bar; `build_tab_bar_vertical()` — список табов по вертикали с scroll; persist `tab_layout` в `BrowserSettings`; 8 unit-тестов | M | `lumen-shell` |
@@ -282,6 +281,7 @@ Next step: Add AiBackend trait to lumen-core/src/ext.rs, then ai_panel.rs in lum
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-14 | GG-1: AI sidebar Phase 0 | `AiBackend` trait (`query(prompt)->String`) + `NullAiBackend` в `lumen-core::ext`; `panels::ai_panel::AiPanel` — 200px right-docked panel с header/response area/input row; `Ctrl+Shift+A` → `ToggleAiPanel`; `handle_ai_panel_key` (Esc close, Backspace, Enter submit, printable → input); `page_content_width_css` вычитает PANEL_WIDTH; hit-test (Close/Header/Response/Input); 14 тестов; `// UNIQUE: §12.8`. |
 | 2026-06-14 | FF-5: Fetch keepalive + priority | `fetch(url, { keepalive: true })`: принимается, Phase 0 синхронный путь без изменений (handoff `// network: keepalive — Phase 2`). `fetch(url, { priority: 'high'|'low'|'auto' })`: парсится и нормализуется в JS шиме (невалидное → 'auto'; handoff `// network: priority queue — lumen-network Phase 2`). 4 unit-теста. Только `lumen-js`, нет новых зависимостей. |
 | 2026-06-14 | FF-4: Cache API Phase 1 | `CacheBackend` trait в `lumen-core::ext`; `impl CacheBackend for CacheStorage` в `lumen-storage` (SQLite: cache_put/match/match_any/delete/keys/has/delete_cache/names); dispatch в `lumen-js` dom.rs (11 нативных биндингов проверяют `Option<Arc<dyn CacheBackend>>`); `MockCacheBackend` в тестовом модуле; 12 unit-тестов `sqlite_backend_*`. Все 17 вызовов `install_dom` обновлены (новый 9-й аргумент). |
 | 2026-06-14 | DD-2+DD-3: dialog confirmed + selectlist Phase 0 | DD-2 (<dialog>): аудит показал полную реализацию уже на main (JS: show/showModal/close/returnValue/open/cancel/close events/Escape handler; layout: UA stylesheet display:none; shell: collect_modal_dialogs/build_dialog_overlay/main.rs overlay; 12 тестов). DD-3 (<selectlist> Phase 0): collect_selectlist_label (direct <option> + <listbox> children), is_selectlist(), FormControlKind::Select для тега, расширен is_form_control_element; JS: _lumen_selectlist_options/_lumen_selectlist_listbox + HTMLSelectListElement API (value/selectedIndex/length/options/add/remove/item/namedItem) в _lumen_make_element; // CSS: appearance: base-select handoff для P4; 5 тестов. |
