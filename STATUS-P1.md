@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH1-7: Compositor thread + Property Trees  branch: p1-ph1-7-compositor
-Next step: wire PropertyTrees::build() + InProcessCompositor into driver/session.rs  crates/driver/src/session.rs:190
+—
 
 ---
 
@@ -17,7 +16,6 @@ Next step: wire PropertyTrees::build() + InProcessCompositor into driver/session
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PH1-7 | **Compositor thread + Property Trees** — `TransformTree/ScrollTree/EffectTree/ClipTree` на отдельном thread, off-main-thread scroll; P1 строит property trees от style/layout, P2 compositor pipeline + GPU | L | `lumen-layout`, `lumen-paint` |
 | PH1-8 | **Preload scanner** (HTML LS §13.2.6.4.7) — отдельный pre-parser стартует fetch до DOM construction; P1 — отдельный mode tokenizer-а поверх существующего `scan_preload_hints` | M | `lumen-html-parser`, `lumen-shell` |
 | PH1-9 | **lumen-mcp-server крейт** — Model Context Protocol over stdio/UNIX socket; Resources: screenshot, a11y_tree, layout, console, network; Tools: click, type, scroll, navigate, wait, eval; `lumen --mcp` / `lumen --mcp-port N` | L | `lumen-shell` |
 | PH1-10 | **Auto-wait внутри движка** — `wait_for(Cond::Visible/Stable/NetworkIdle/JsIdle)` на тиках layout/network/JS, не retry-loop в SDK | M | `lumen-driver`, `lumen-shell` |
@@ -54,6 +52,7 @@ Next step: wire PropertyTrees::build() + InProcessCompositor into driver/session
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH1-7: Compositor thread + Property Trees | `InProcessCompositor` + `ThreadedCompositor` подключены в `session.rs` / `winit_session.rs`. `PropertyTrees::build()` вызывается после layout при каждой навигации и коммитируется в compositor. `scroll_page_by(dx, dy)` — off-main-thread scroll без relayout (обновляет `ScrollNode.offset`, recommit). 15 тестов в `test_compositor.rs`. |
 | 2026-06-15 | PH1-6: Stacking contexts + CSS Painting Order | Подключён `build_display_list_ordered` (StackingTree + PaintOrder) к 4 точкам driver: `InProcessSession.screenshot()`, `screenshot_cpu_rgba()`, `display_list_for_compare()`, `WinitSession.screenshot()`. 3 новых теста в `test_stacking_order.rs` верифицируют CSS 2.1 Appendix E порядок по FillRect-цвету. |
 | 2026-06-15 | PH1-5: Packages для Linux / macOS / Windows | `.github/workflows/ci.yml` — кросс-платформенная проверка (Linux/macOS/Windows) + unit-тесты 12 non-GUI крейтов; `.github/workflows/release.yml` — 4 бинарных пакета (linux-x86_64/macos-aarch64/macos-x86_64/windows-x86_64) → GitHub Release на тег v*.*.*. |
 | 2026-06-15 | PH1-4: Network service в отдельном процессе | `lumen-ipc` крейт (IpcChannel/IpcServer/IpcClient, 4 теста); `RemoteNetworkTransport`; `lumen-network-service` бинарник; shell `--network-service` флаг + `NetworkServiceHandle::spawn()`. |
