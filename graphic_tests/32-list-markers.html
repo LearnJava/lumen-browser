@@ -65,6 +65,11 @@
   }
   ol.custom-bracket { list-style-type: bracket; padding-left: 52px; }
   ol.custom-hashnum { list-style-type: hashnum; padding-left: 52px; }
+  /* CSS Lists L3 §2.3 — list-style-image (image replaces the bullet) */
+  ul.img-marker {
+    list-style-image: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHklEQVR42mP8z8BQz0AEYBxVSIqKYdQ6UkBqHSmgJgCzR8/HfUkLvQAAAABJRU5ErkJggg==);
+    padding-left: 32px;
+  }
 </style>
 </head>
 <body>
@@ -167,6 +172,14 @@
         <li>Two</li>
         <li>Three</li>
       </ol>
+    </div>
+    <div class="col">
+      <div class="label">list-style-image: url(...)</div>
+      <ul class="img-marker">
+        <li>Image A</li>
+        <li>Image B</li>
+        <li>Image C</li>
+      </ul>
     </div>
   </div>
 </div>

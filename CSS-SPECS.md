@@ -375,7 +375,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `list-style` / `list-style-type` | 🟡 | disc/circle/square/decimal/roman parsed; marker render ⬜ |
 | `list-style-position` | 🟡 | inside/outside; positioning ⬜ |
-| `list-style-image` | 🟡 | url(); image marker ⬜ |
+| `list-style-image` | ✅ | url() parsed; image marker rendered (DrawImage replaces bullet, CSS Lists L3 §2.3) |
 | `counter-reset` / `counter-increment` | 🟡 | Vec<(name,val)>; resolution ⬜ |
 | `counter-set` | ✅ | CSS Lists L3 §4; Vec<(name,val)>; apply_set после reset/increment; тест 97 2026-06-13 |
 | `@counter-style` | ⬜ | |

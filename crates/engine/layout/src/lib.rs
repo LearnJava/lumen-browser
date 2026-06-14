@@ -14582,12 +14582,46 @@ mod tests {
         let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
         let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. }));
         assert!(marker.is_some(), "list-item must have a ::marker child");
-        if let BoxKind::Marker { text, position, list_style_type } = &marker.unwrap().kind {
+        if let BoxKind::Marker { text, position, list_style_type, .. } = &marker.unwrap().kind {
             // Disc renders geometrically — marker_text returns "" for bullet types.
             assert!(text.is_empty(), "disc marker text must be empty (geometric rendering)");
             assert_eq!(*list_style_type, ListStyleType::Disc, "default list-style-type is disc");
             assert_eq!(*position, ListStylePosition::Outside);
         }
+    }
+
+    #[test]
+    fn list_style_image_marker_carries_url() {
+        // CSS Lists L3 §2.3 — `list-style-image` populates the Marker box's
+        // `image` field and the URL is collected for fetching.
+        let root = lay(
+            "<ul><li>item</li></ul>",
+            "li { list-style-image: url(\"bullet.png\"); }",
+        );
+        let ul = first_element_child(&root);
+        let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+        if let BoxKind::Marker { image, .. } = &marker.kind {
+            assert_eq!(image.as_deref(), Some("bullet.png"));
+        } else {
+            panic!("expected Marker box");
+        }
+        let urls = collect_background_image_requests(&root);
+        assert!(urls.iter().any(|u| u == "bullet.png"), "marker image must be fetched");
+    }
+
+    #[test]
+    fn list_style_image_marker_shown_with_type_none() {
+        // CSS Lists L3 §2.3 — an explicit image still produces a marker even when
+        // `list-style-type: none`.
+        let root = lay(
+            "<ul><li>item</li></ul>",
+            "li { list-style-type: none; list-style-image: url(\"b.png\"); }",
+        );
+        let ul = first_element_child(&root);
+        let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. }));
+        assert!(marker.is_some(), "list-style-image must generate a marker despite type:none");
     }
 
     #[test]

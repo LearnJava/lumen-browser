@@ -4087,11 +4087,27 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<Displ
 /// relying on specific Unicode glyphs in the bundled font.
 /// Counter types (decimal/roman/alpha/greek) are rendered as text.
 fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
-    let BoxKind::Marker { ref text, ref list_style_type, .. } = b.kind else { return };
+    let BoxKind::Marker { ref text, ref list_style_type, ref image, .. } = b.kind else { return };
     if !is_paint_visible(b) {
         return;
     }
     let s = &b.style;
+    // CSS Lists L3 §2.3 — `list-style-image` takes precedence over the marker
+    // type/text: the bullet is replaced by the image. Drawn `contain`-fitted
+    // inside the marker box; if the URL is not registered the DrawImage is a no-op.
+    if let Some(src) = image
+        && !src.is_empty()
+    {
+        out.push(DisplayCommand::DrawImage {
+            rect: b.rect,
+            src: src.clone(),
+            alt: String::new(),
+            object_fit: ObjectFit::Contain,
+            object_position: ObjectPosition::default(),
+            image_rendering: s.image_rendering,
+        });
+        return;
+    }
     let color = s.color;
     let em = s.font_size;
     let cx = b.rect.x + b.rect.width * 0.5;

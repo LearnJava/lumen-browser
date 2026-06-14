@@ -1266,6 +1266,14 @@ fn collect_bg_image_inner(b: &LayoutBox, out: &mut Vec<String>) {
             out.push(src.clone());
         }
     }
+    // CSS Lists L3 §2.3: a `list-style-image` marker also needs its URL fetched
+    // and registered, same as a background image.
+    if let BoxKind::Marker { image: Some(src), .. } = &b.kind
+        && !src.is_empty()
+        && !out.iter().any(|u| u == src)
+    {
+        out.push(src.clone());
+    }
     for child in &b.children {
         collect_bg_image_inner(child, out);
     }
@@ -1570,10 +1578,15 @@ pub enum BoxKind {
     /// `position` — inside/outside flow. `list_style_type` — used by the display-list
     /// emitter to choose geometric (disc/circle/square) vs text rendering.
     /// For `outside` (default) positioned left of the principal block, out of flow.
+    /// `image` — CSS Lists L3 §2.3 `list-style-image`: resolved URL when set. When
+    /// present it replaces the `list_style_type`/`text` marker (the painter emits a
+    /// `DrawImage` instead of a bullet/counter). Same URL key used by
+    /// `collect_background_image_requests`, so the shell fetches and registers it.
     Marker {
         text: String,
         position: ListStylePosition,
         list_style_type: ListStyleType,
+        image: Option<String>,
     },
     /// CSS Display L3 §8 — `display: flow-root`. Establishes a Block Formatting
     /// Context: contains floats, prevents margin escape. Laid out identically to
@@ -2858,7 +2871,10 @@ fn inject_marker(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
 ) {
-    if matches!(style.list_style_type, ListStyleType::None) {
+    // CSS Lists L3 §2.3: an explicit `list-style-image` shows even when
+    // `list-style-type: none` — the image takes precedence over the type, so a
+    // marker is still generated. Only suppress when both are absent.
+    if matches!(style.list_style_type, ListStyleType::None) && style.list_style_image.is_none() {
         return;
     }
     // CSS Pseudo-elements L4 §14.2 — compute ::marker style.
@@ -2883,6 +2899,7 @@ fn inject_marker(
             text,
             position:        style.list_style_position,
             list_style_type: style.list_style_type.clone(),
+            image:           style.list_style_image.clone(),
         },
         children: vec![],
         col_span: 1,
