@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-In progress: gradient color-interpolation-method (`in <space>`)  branch: p4-gradient-interpolation
-Next step: merge — clippy+tests green, graphic test 116 + CPU snapshot готовы
+_(none)_ — p4-gradient-interpolation влит 2026-06-14
 
 ## Workflow
 
