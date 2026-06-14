@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH1-15: T1 (paused) — JS event loop pause/unpause при hide/show вкладки  branch: p1-t1-paused
-Next step: DONE — pause_event_loop/unpause_event_loop в PersistentJs + QuickPersistentJs; вызов в switch_tab; 6 тестов
+—
 
 ---
 
@@ -57,6 +56,7 @@ Next step: DONE — pause_event_loop/unpause_event_loop в PersistentJs + QuickP
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH1-15: T1 (paused) | `pause_event_loop()`/`unpause_event_loop()` в `PersistentJs`; `QuickPersistentJs` делегирует `set_document_visibility()`; вызовы в `switch_tab` (T0→T1 и T1→T0); 6 тестов. |
 | 2026-06-15 | PH1-2: Progressive / streaming rendering pipeline | 60 Hz throttle (16 мс); `LoadEvent::CssLoaded`; `load_css_for_streaming()`; параллельная загрузка CSS из EarlyPreloadHints; `stream_sheet` накапливает CSS для промежуточных кадров; 3 unit-теста. |
 | 2026-06-14 | JJ-phase5: Modern HTML5 APIs Phase 5 | `checkVisibility(opts?)` (W3C Viewport API §4.1), `setHTMLUnsafe(html)`, `getHTML(opts?)` (WHATWG HTML LS §14.5), `moveBefore(node, child?)` (DOM LS / Chrome 133+); 11 тестов; 2014 всего в lumen-js. |
 | 2026-06-14 | PH1-1: Font fallback / matcher | `resolve_font_chain` в FemtovgBackend: CSS font-family list → FontProvider → femtovg FontId цепочка; eager preload CURATED_FALLBACK_FAMILIES; DrawText подключает font_family/weight/style. |
