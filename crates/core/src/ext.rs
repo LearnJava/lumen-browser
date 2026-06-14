@@ -1386,6 +1386,8 @@ pub enum JsSseEvent {
         /// Last event ID from the `id:` field, if the server set one.
         id: Option<String>,
     },
+    /// Server requested a specific reconnect delay via `retry:` field (milliseconds).
+    Retry(u64),
     /// Connection closed (server closed the stream or reconnect exhausted).
     Close,
     /// Network or protocol error; the connection will not recover.

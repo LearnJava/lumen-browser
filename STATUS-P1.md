@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+FF-2: EventSource (Server-Sent Events)  branch: p1-ff2-event-source
+Next step: JsSseEvent::Retry + auto-reconnect  crates/core/src/ext.rs:1377
 
 ---
 

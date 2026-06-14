@@ -2717,7 +2717,11 @@ impl JsSseSessionImpl {
                 }
                 match session.next_event() {
                     Ok(Some(ev)) => {
-                        q2.lock().unwrap().push_back(JsSseEvent::Message {
+                        let mut q = q2.lock().unwrap();
+                        if let Some(ms) = ev.retry_ms {
+                            q.push_back(JsSseEvent::Retry(ms));
+                        }
+                        q.push_back(JsSseEvent::Message {
                             event_type: ev.event_type,
                             data: ev.data,
                             id: ev.id,
