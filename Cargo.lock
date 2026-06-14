@@ -1904,6 +1904,7 @@ dependencies = [
  "lru",
  "lumen-core",
  "p256",
+ "regex",
  "rusqlite",
  "rustls",
  "sha2",
