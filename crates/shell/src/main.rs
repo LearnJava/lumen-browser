@@ -106,6 +106,9 @@ enum LoadEvent {
     /// `IncrementalTreeBuilder::feed_bytes` буферизует незавершённые
     /// code-point-ы внутри.
     HtmlChunk(Vec<u8>),
+    /// CSS загружен параллельным потоком для промежуточных streaming-кадров.
+    /// Мёрджится в `Lumen::stream_sheet` и применяется в `paint_partial_dom`.
+    CssLoaded(Box<lumen_css_parser::Stylesheet>),
     /// Все байты получены — для финального полного pipeline.
     LoadDone(RawPage),
     /// Ошибка при загрузке страницы.
@@ -114,8 +117,8 @@ enum LoadEvent {
 
 /// Размер одного HTML-chunk при разбивке для инкрементального парсинга.
 const STREAM_CHUNK_BYTES: usize = 8 * 1024;
-/// Минимальный интервал между промежуточными кадрами при streaming (мс).
-const STREAM_PAINT_INTERVAL_MS: u128 = 150;
+/// Минимальный интервал между промежуточными кадрами при streaming (мс) — ~60 Гц.
+const STREAM_PAINT_INTERVAL_MS: u128 = 16;
 /// Minimum interval between rAF batches (ms) — vsync gate at 60 Hz.
 ///
 /// Prevents `requestAnimationFrame` from firing more than once per display frame
@@ -373,6 +376,7 @@ fn run_window_mode(
         load_proxy,
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
+        stream_sheet: lumen_css_parser::Stylesheet::default(),
         preload_dispatched: std::collections::HashSet::new(),
         ime_composing: None,
         bfcache: BfCache::new(16),
@@ -2282,6 +2286,24 @@ enum ResolvedResource {
 
 // ── Загрузка внешних CSS ─────────────────────────────────────────────────────
 
+/// Загрузить текст CSS по уже разрешённому абсолютному URL или пути файла.
+/// Используется параллельными CSS-потоками в PH1-2 streaming pipeline.
+/// Ошибки не критичны — промежуточный кадр рисуется без CSS-файла.
+fn load_css_for_streaming(resolved: &str) -> Option<String> {
+    if resolved.starts_with("http://") || resolved.starts_with("https://") {
+        use lumen_core::ext::NetworkTransport;
+        use lumen_core::url::Url;
+        use lumen_network::{BrotliContentDecoder, HttpClient};
+        let url = Url::parse(resolved).ok()?;
+        let client = HttpClient::new()
+            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+        let bytes = client.fetch(&url).ok()?;
+        String::from_utf8(bytes).ok()
+    } else {
+        std::fs::read_to_string(resolved).ok()
+    }
+}
+
 fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>) -> String {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs);
@@ -2603,6 +2625,8 @@ struct PageSnapshot {
     pending_js_navigate: Option<JsNavigateRequest>,
     stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
     stream_last_paint: std::time::Instant,
+    /// CSS accumulated from parallel CSS-loader threads during streaming; applied to intermediate frames.
+    stream_sheet: lumen_css_parser::Stylesheet,
     preload_dispatched: std::collections::HashSet<String>,
     ime_composing: Option<String>,
     bfcache: BfCache,
@@ -3968,6 +3992,10 @@ struct Lumen {
     stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
     /// Момент последнего промежуточного кадра при streaming — для throttling.
     stream_last_paint: std::time::Instant,
+    /// CSS-таблица из параллельных потоков загрузки CSS (PH1-2). Применяется
+    /// в `paint_partial_dom` вместо пустой таблицы. Сбрасывается на каждый
+    /// новый страничный load.
+    stream_sheet: lumen_css_parser::Stylesheet,
     /// URL subresource-хинтов, уже отправленных в sink во время streaming
     /// (`EarlyPreloadHints`). Финальный `dispatch_preload_hints` в `LoadDone`
     /// пропускает URL из этого набора — без дублей в stderr и без повторных
@@ -5084,7 +5112,23 @@ impl Lumen {
             let partial = String::from_utf8_lossy(&raw.bytes[..scan_end]);
             let early = lumen_html_parser::scan_preload_hints(&partial);
             if !early.is_empty() {
-                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early, raw.base.clone()));
+                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), raw.base.clone()));
+            }
+
+            // PH1-2: параллельная загрузка CSS для промежуточных кадров.
+            // Каждый <link rel=stylesheet> из ранних хинтов загружается в
+            // отдельном потоке и присылает CssLoaded ещё до LoadDone.
+            for hint in &early {
+                if let lumen_html_parser::PreloadHint::Stylesheet { url } = hint {
+                    let css_url = raw.base.resolve_str(url);
+                    let proxy2 = proxy.clone();
+                    std::thread::spawn(move || {
+                        if let Some(text) = load_css_for_streaming(&css_url) {
+                            let sheet = lumen_css_parser::parse(&text);
+                            let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet)));
+                        }
+                    });
+                }
             }
 
             // Разбить сырые байты на chunk-и. Выравнивание по UTF-8 не нужно:
@@ -5102,8 +5146,8 @@ impl Lumen {
         });
     }
 
-    /// Обновить display list на основе снапшота частичного DOM (без CSS).
-    /// Используется для промежуточных кадров во время streaming.
+    /// Обновить display list на основе снапшота частичного DOM.
+    /// Применяет `stream_sheet` — CSS, загруженный параллельными потоками (PH1-2).
     fn paint_partial_dom(&mut self, doc: &lumen_dom::Document) {
         let Some(renderer) = self.renderer.as_ref() else { return };
         let vp_size = renderer.viewport_size();
@@ -5118,8 +5162,7 @@ impl Lumen {
             Err(_) => return,
         };
 
-        let empty_sheet = lumen_css_parser::Stylesheet::default();
-        let layout = lumen_layout::layout_measured(doc, &empty_sheet, viewport, &measurer);
+        let layout = lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer);
         let dl = paint_ordered(&layout);
 
         self.content_height = content_height_of(&dl);
@@ -5384,8 +5427,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // Запустить background-загрузку сразу после создания окна —
         // первый кадр (пустой) уже виден, пока идёт fetch/parse.
-        // Сбрасываем набор уже отправленных preload-хинтов — новая страница.
+        // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
         self.preload_dispatched.clear();
+        self.stream_sheet = lumen_css_parser::Stylesheet::default();
         // Record navigation start for the initial streaming load.
         self.nav_start = Some(std::time::Instant::now());
         self.start_streaming_load();
@@ -5410,9 +5454,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.stream_last_paint = std::time::Instant::now();
                 }
             }
+            LoadEvent::CssLoaded(boxed) => {
+                // PH1-2: CSS загружен параллельным потоком — мёрджим в stream_sheet.
+                // Применится в следующем paint_partial_dom (16 мс throttle).
+                let sheet = *boxed;
+                let s = &mut self.stream_sheet;
+                s.rules.extend(sheet.rules);
+                s.properties.extend(sheet.properties);
+                s.media_rules.extend(sheet.media_rules);
+                s.imports.extend(sheet.imports);
+                s.font_faces.extend(sheet.font_faces);
+                s.layer_order.extend(sheet.layer_order);
+                s.layers.extend(sheet.layers);
+                s.supports_rules.extend(sheet.supports_rules);
+                s.keyframes.extend(sheet.keyframes);
+                s.counter_styles.extend(sheet.counter_styles);
+                s.page_rules.extend(sheet.page_rules);
+                s.scope_rules.extend(sheet.scope_rules);
+                s.starting_style_rules.extend(sheet.starting_style_rules);
+                s.container_rules.extend(sheet.container_rules);
+                s.font_palette_values.extend(sheet.font_palette_values);
+            }
             LoadEvent::LoadDone(raw) => {
                 eprintln!("Streaming завершён, финальный pipeline");
                 self.stream_builder = None;
+                self.stream_sheet = lumen_css_parser::Stylesheet::default();
                 let viewport = self.renderer.as_ref().map_or_else(
                     || Size::new(1024.0, 720.0),
                     |r| {
@@ -5451,6 +5517,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 click_log::log_load_err(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
                 self.stream_builder = None;
+                self.stream_sheet = lumen_css_parser::Stylesheet::default();
             }
         }
     }
@@ -12320,6 +12387,7 @@ impl Lumen {
             pending_js_navigate: self.pending_js_navigate.take(),
             stream_builder: self.stream_builder.take(),
             stream_last_paint: self.stream_last_paint,
+            stream_sheet: std::mem::take(&mut self.stream_sheet),
             preload_dispatched: std::mem::take(&mut self.preload_dispatched),
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
@@ -12386,6 +12454,7 @@ impl Lumen {
         self.pending_js_navigate = snap.pending_js_navigate;
         self.stream_builder = snap.stream_builder;
         self.stream_last_paint = snap.stream_last_paint;
+        self.stream_sheet = snap.stream_sheet;
         self.preload_dispatched = snap.preload_dispatched;
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
@@ -12443,6 +12512,7 @@ impl Lumen {
         self.pending_js_navigate = None;
         self.stream_builder = None;
         self.stream_last_paint = std::time::Instant::now();
+        self.stream_sheet = lumen_css_parser::Stylesheet::default();
         self.preload_dispatched = std::collections::HashSet::new();
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);
@@ -14252,5 +14322,35 @@ mod tests {
             r#"<html><body><iframe srcdoc="<script>x=1;</script>"></iframe></body></html>"#,
         );
         assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
+    }
+
+    // ── PH1-2: Progressive streaming pipeline ──────────────────────────────────
+
+    // Compile-time: streaming throttle must be ≤16 ms (~60 Hz).
+    // Prevents accidental reversion to the old 150 ms value.
+    const _: () = assert!(STREAM_PAINT_INTERVAL_MS <= 16);
+    const _: () = assert!(STREAM_PAINT_INTERVAL_MS >= 14);
+
+    #[test]
+    fn load_css_for_streaming_reads_file() {
+        let tmp = std::env::temp_dir().join("lumen_ph1_2_test.css");
+        std::fs::write(&tmp, "body { color: red; }").unwrap();
+        let path = tmp.to_string_lossy().into_owned();
+        let result = load_css_for_streaming(&path);
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(result.as_deref(), Some("body { color: red; }"));
+    }
+
+    #[test]
+    fn load_css_for_streaming_missing_file_returns_none() {
+        let result = load_css_for_streaming("/nonexistent/path/style.css");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_css_for_streaming_http_bad_url_returns_none() {
+        // Malformed URL — should return None without panicking.
+        let result = load_css_for_streaming("http://");
+        assert!(result.is_none());
     }
 }
