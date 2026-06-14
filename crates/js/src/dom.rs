@@ -8333,8 +8333,8 @@ function _perf_entries_by_name(name, type) {
     });
 }
 
-// ── PerformanceObserver (Performance Timeline L2 §5) ──────────────────────────
-// observe({entryTypes}) → registers callback for future entries of those types.
+// ── PerformanceObserver (Performance Timeline L2 §5–6) ───────────────────────
+// observe({entryTypes}) or observe({type, buffered}) per §6.2.2.
 // disconnect() → stops observing. Callback: fn(list, observer).
 var _perf_observers = [];
 
@@ -8344,20 +8344,43 @@ function PerformanceObserver(callback) {
     this._types   = [];
     this._buffered = false;
 }
+// Performance Timeline L2 §6.2.2: supportedEntryTypes static accessor.
+Object.defineProperty(PerformanceObserver, 'supportedEntryTypes', {
+    get: function() {
+        return ['element', 'event', 'first-input', 'largest-contentful-paint',
+                'layout-shift', 'longtask', 'mark', 'measure', 'navigation',
+                'paint', 'resource', 'soft-navigation'];
+    },
+    configurable: true,
+});
 PerformanceObserver.prototype.observe = function(opts) {
-    var types = (opts && Array.isArray(opts.entryTypes)) ? opts.entryTypes : [];
-    this._types = types;
-    this._buffered = !!(opts && opts.buffered);
+    var types;
+    var buffered;
+    if (opts && typeof opts.type === 'string') {
+        // §6.2.2 single-type form: observe({type, buffered})
+        types   = [opts.type];
+        buffered = !!(opts.buffered);
+    } else {
+        // §6.2.2 multi-type form: observe({entryTypes[, buffered]})
+        // Spec disallows buffered here, but we accept it for compatibility.
+        types   = (opts && Array.isArray(opts.entryTypes)) ? opts.entryTypes : [];
+        buffered = !!(opts && opts.buffered);
+    }
+    // Merge into existing subscribed types so repeated observe() calls accumulate.
+    for (var i = 0; i < types.length; i++) {
+        if (this._types.indexOf(types[i]) === -1) this._types.push(types[i]);
+    }
+    if (buffered) this._buffered = true;
     // De-duplicate in global list.
     var idx = _perf_observers.indexOf(this);
     if (idx === -1) _perf_observers.push(this);
     // If buffered: deliver already-existing matching entries immediately.
-    if (this._buffered && types.length > 0) {
-        var buffered = _perf_entries.filter(function(e) {
+    if (buffered && types.length > 0) {
+        var buf = _perf_entries.filter(function(e) {
             return types.indexOf(e.entryType) !== -1;
         });
-        if (buffered.length > 0) {
-            _perf_deliver_to_observer(this, buffered);
+        if (buf.length > 0) {
+            _perf_deliver_to_observer(this, buf);
         }
     }
 };
@@ -14364,6 +14387,63 @@ mod tests {
             po.observe({entryTypes:['paint'], buffered: true});\
             got.length === 1\
         ").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── PerformanceObserver single-type form (Performance Timeline L2 §6.2.2) ──
+
+    #[test]
+    fn performance_observer_single_type_receives_entry() {
+        // observe({type: 'mark'}) — single-type form should work like entryTypes:['mark']
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(r#"
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });
+            po.observe({type: 'mark'});
+            performance.mark('single_type_test');
+            got.length === 1 && got[0].name === 'single_type_test'
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_observer_single_type_with_buffered() {
+        // observe({type: 'navigation', buffered: true}) — must replay existing entries
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(r#"
+            _lumen_deliver_perf_entry('navigation', 'https://buf.test/', 0.0, 300.0, null);
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });
+            po.observe({type: 'navigation', buffered: true});
+            got.length === 1 && got[0].name === 'https://buf.test/'
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_observer_repeated_observe_accumulates_types() {
+        // Multiple observe() calls accumulate subscribed types.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(r#"
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });
+            po.observe({type: 'mark'});
+            po.observe({type: 'measure'});
+            performance.mark('m1');
+            performance.measure('ms1', 'm1');
+            got.length === 2
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_observer_supported_entry_types() {
+        // PerformanceObserver.supportedEntryTypes is an array including 'navigation'.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(r#"
+            var types = PerformanceObserver.supportedEntryTypes;
+            Array.isArray(types) && types.indexOf('navigation') !== -1 && types.indexOf('mark') !== -1
+        "#).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
