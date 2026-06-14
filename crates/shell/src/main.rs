@@ -438,6 +438,8 @@ fn run_window_mode(
         command_palette: panels::command_palette::CommandPalette::new(),
         focus: panels::focus_panel::FocusModePanel::new(),
         pip: panels::pip_window::PipWindow::new(),
+        pip_controller: panels::pip_os_window::PipController::new(),
+        pip_os: None,
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
@@ -4178,6 +4180,16 @@ struct Lumen {
     /// convention) — a true second OS window awaits multi-window support. The
     /// card can be dragged by its title bar.
     pip: panels::pip_window::PipWindow,
+    /// CC-7 enter/exit state machine for the real OS-level PiP window, driven by
+    /// the JS `_lumen_pip_enter` / `_lumen_pip_exit` requests. Pure data; the
+    /// live window + backend it tracks live in [`Self::pip_os`].
+    pip_controller: panels::pip_os_window::PipController,
+    /// The live always-on-top OS window backing video Picture-in-Picture
+    /// (CC-7), with its own render backend, or `None` when no `<video>` is in
+    /// OS PiP. Created on `_lumen_pip_enter`; dropped on exit / close button.
+    /// Falls back to the in-window [`Self::pip`] overlay when a second GPU
+    /// surface cannot be created.
+    pip_os: Option<PipOsWindow>,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -5204,6 +5216,25 @@ impl Lumen {
     }
 }
 
+/// The live OS-level picture-in-picture window (CC-7): a separate always-on-top
+/// `winit::Window` with its own [`RenderBackend`] surface, floating above every
+/// application and showing a tab's `<video>` (poster placeholder) frame.
+///
+/// Owned by [`Lumen::pip_os`]; created from a `_lumen_pip_enter` request and
+/// dropped on exit. The drop closes the OS window (winit destroys the window
+/// when the last `Arc<Window>` is released) and frees the GPU surface.
+struct PipOsWindow {
+    /// The floating OS window. Identified against `WindowEvent`s by its id.
+    window: Arc<Window>,
+    /// Dedicated render backend drawing the forwarded `<video>` content.
+    renderer: Box<dyn RenderBackend>,
+    /// Poster image URL drawn (object-fit: contain) into the window; empty → grey.
+    poster_url: String,
+    /// Source `<video>` border-box (page coords); only its aspect ratio is used
+    /// to letterbox the poster as the user resizes the floating window.
+    video_rect: Rect,
+}
+
 impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let (win_w, win_h) = if self.deterministic {
@@ -5537,6 +5568,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // CC-7: Video Picture-in-Picture — open/close the real OS floating window.
+        // Drained from the process-global queue fed by `_lumen_pip_enter` /
+        // `_lumen_pip_exit` (see `lumen_js::pip_bindings`).
+        for req in lumen_js::pip_bindings::take_pip_requests() {
+            use lumen_js::pip_bindings::PipRequest;
+            use panels::pip_os_window::PipAction;
+            let action = match req {
+                PipRequest::Enter { nid } => self.pip_controller.on_enter(nid),
+                PipRequest::Exit { .. } => self.pip_controller.on_exit(),
+            };
+            match action {
+                PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
+                PipAction::Close => self.close_pip_os(),
+                PipAction::None => {}
+            }
+        }
+
         // Print API: window.print() exports current document as PDF (W-2).
         #[cfg(feature = "quickjs")]
         if let Some(js) = &self.js_ctx {
@@ -5716,9 +5764,51 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        // CC-7: events for the separate OS PiP window are handled here and never
+        // fall through to the main-window logic below (which assumes the single
+        // page window and ignores the id). Close button exits PiP; resize keeps
+        // the floating surface in sync; redraw re-letterboxes the poster.
+        if self.pip_os.as_ref().is_some_and(|p| p.window.id() == window_id) {
+            match event {
+                WindowEvent::CloseRequested => {
+                    self.close_pip_os();
+                    self.pip_controller.on_exit();
+                    // Mirror the close into JS so `leavepictureinpicture` fires
+                    // and `document.pictureInPictureElement` clears.
+                    #[cfg(feature = "quickjs")]
+                    if let Some(js) = &self.js_ctx {
+                        js.eval_js(
+                            "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
+                             {try{document.exitPictureInPicture();}catch(e){}}",
+                        );
+                    }
+                }
+                WindowEvent::Resized(size) => {
+                    if size.width == 0 || size.height == 0 {
+                        return;
+                    }
+                    if let Some(p) = self.pip_os.as_mut() {
+                        p.renderer.resize(size.width, size.height);
+                    }
+                    self.render_pip_os();
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    if let Some(p) = self.pip_os.as_mut() {
+                        p.renderer.set_scale_factor(scale_factor);
+                    }
+                    self.render_pip_os();
+                }
+                WindowEvent::RedrawRequested => {
+                    self.render_pip_os();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match event {
             WindowEvent::CloseRequested => {
                 self.save_session_on_close();
@@ -9298,6 +9388,114 @@ impl Lumen {
             .unwrap_or_default();
         let title = self.title.clone().unwrap_or_default();
         self.pip.open(src, poster, title, win_w, win_h);
+    }
+
+    /// Open the in-window overlay PiP card (the [`Self::pip`] panel) from current
+    /// page state. Used as the fallback when a real OS PiP window cannot be
+    /// created (no GPU surface, window-creation failure).
+    fn open_pip_overlay(&mut self) {
+        let win_w = self.viewport_width_css();
+        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+        let (src, poster) = self
+            .layout_box
+            .as_ref()
+            .and_then(find_video_source)
+            .unwrap_or_default();
+        let title = self.title.clone().unwrap_or_default();
+        self.pip.open(src, poster, title, win_w, win_h);
+    }
+
+    /// CC-7: open (or re-target) the real OS-level PiP window for `<video>` node
+    /// `nid`. Resolves the element's border-box (for aspect ratio) and poster,
+    /// then creates a separate always-on-top winit window with its own render
+    /// backend. On any window/backend failure, falls back to [`Self::pip`] so the
+    /// feature still works without multi-surface support.
+    fn open_pip_os(&mut self, event_loop: &ActiveEventLoop, nid: u32) {
+        use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
+
+        let (video_rect, poster_url) = self
+            .layout_box
+            .as_ref()
+            .and_then(|root| forms::find_layout_box(root, NodeId::from_index(nid as usize)))
+            .map(|lb| {
+                let poster = match &lb.kind {
+                    lumen_layout::BoxKind::Video { poster, .. } => poster.clone(),
+                    _ => String::new(),
+                };
+                (lb.rect, poster)
+            })
+            .or_else(|| {
+                // Node id has no box yet — fall back to the first <video>'s poster.
+                self.layout_box.as_ref().and_then(|root| {
+                    find_video_source(root)
+                        .map(|(_, poster)| (Rect::new(0.0, 0.0, 16.0, 9.0), poster))
+                })
+            })
+            .unwrap_or((Rect::new(0.0, 0.0, 16.0, 9.0), String::new()));
+
+        let title = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Picture-in-Picture".to_owned());
+        let attrs = pip_window_attributes(&title, PipOsConfig::DEFAULT);
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(err) => {
+                eprintln!("PiP: не удалось создать OS-окно ({err}); fallback на overlay");
+                self.open_pip_overlay();
+                return;
+            }
+        };
+        let renderer = match backend_factory::create_backend(window.clone(), INTER_FONT.to_vec()) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("PiP: не удалось создать рендер OS-окна ({err}); fallback на overlay");
+                self.open_pip_overlay();
+                return;
+            }
+        };
+
+        self.pip_os = Some(PipOsWindow {
+            window,
+            renderer,
+            poster_url,
+            video_rect,
+        });
+        self.render_pip_os();
+    }
+
+    /// CC-7: tear down the OS PiP window. Releasing the last `Arc<Window>` makes
+    /// winit destroy the OS window and free its GPU surface; the overlay fallback
+    /// (if it was used instead) is cleared too.
+    fn close_pip_os(&mut self) {
+        self.pip_os = None;
+        self.pip.close();
+    }
+
+    /// CC-7: redraw the OS PiP window with the forwarded `<video>` content —
+    /// the poster letterboxed (`object-fit: contain`) into the floating window's
+    /// current client area. No-op when no OS PiP window is open.
+    fn render_pip_os(&mut self) {
+        let Some(pip) = self.pip_os.as_mut() else {
+            return;
+        };
+        let size = pip.window.inner_size();
+        let scale = pip.window.scale_factor() as f32;
+        let (win_w, win_h) = if scale > 0.0 {
+            (size.width as f32 / scale, size.height as f32 / scale)
+        } else {
+            (size.width as f32, size.height as f32)
+        };
+        let content = panels::pip_os_window::build_pip_content(
+            pip.video_rect,
+            &pip.poster_url,
+            win_w,
+            win_h,
+        );
+        if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
+            eprintln!("PiP OS render error: {err:?}");
+        }
     }
 
     /// Сохранить текущую страницу в bfcache и стек навигации,

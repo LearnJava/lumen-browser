@@ -11,6 +11,7 @@ pub mod shortcuts_panel;
 pub mod history_panel;
 pub mod focus_panel;
 pub mod permission_panel;
+pub mod pip_os_window;
 pub mod pip_window;
 pub mod privacy_panel;
 pub mod read_later_panel;
