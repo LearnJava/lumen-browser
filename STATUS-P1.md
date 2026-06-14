@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+DD-4 `loading="lazy"` image lazy loading  branch: p1-dd4-lazy-loading
+Next step: добавить LazyImageSlot в display_list.rs + is_lazy в BoxKind::Image  crates/engine/layout/src/box_tree.rs:3075
 
 ---
 
