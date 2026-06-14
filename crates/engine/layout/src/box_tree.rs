@@ -5026,7 +5026,22 @@ fn lay_out(
                     let is_first_inflow = !seen_inflow_child;
                     let own_mt = child.style.margin_top
                         .resolve_or_zero(child.style.font_size, eff_w, viewport);
-                    let collapsed_mt = collapsed_top_margin(child, eff_w, viewport);
+                    // CSS 2.1 §8.3.1: the margins of the root element's box do not collapse.
+                    // When this container is the document box (`NodeId` index 0), its first
+                    // in-flow block child IS the root element, so the parent↔first-child collapse
+                    // chain must terminate there: a descendant's escaping top margin must not
+                    // shift the root element (and the propagated canvas background it backs) off
+                    // the viewport origin. Laying it out with `in_block_flow == false` also stops
+                    // it from flush-collapsing its own first child, so that child's collapsed
+                    // margin stays inside the root box (BUG-153 — restores the 1px magenta frame
+                    // top edge that BUG-151's collapse-through regressed).
+                    let child_is_root_element =
+                        b.node.index() == 0 && is_first_inflow && is_block;
+                    let collapsed_mt = if child_is_root_element {
+                        own_mt
+                    } else {
+                        collapsed_top_margin(child, eff_w, viewport)
+                    };
                     let start_y = if let Some(pre_clear_y) = clearance_pre {
                         // CSS 2.1 §9.5.2: a cleared block's border edge sits at the larger of
                         // its natural flow position (margin included) and the cleared float
@@ -5054,7 +5069,8 @@ fn lay_out(
                     };
 
                     lay_out(child, eff_left, start_y, eff_w,
-                            children_available_height, measurer, viewport, children_pcb, hp, true);
+                            children_available_height, measurer, viewport, children_pcb, hp,
+                            !child_is_root_element);
                     if matches!(child.kind, BoxKind::Skip) {
                         // Zero-height; does not break the collapsing chain.
                         continue;

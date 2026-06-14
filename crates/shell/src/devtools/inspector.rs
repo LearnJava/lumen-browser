@@ -34,6 +34,8 @@ use lumen_dom::{Document, NodeData, NodeId};
 use lumen_layout::{Color, FontStyle, FontWeight, LayoutBox};
 use lumen_paint::{DisplayCommand, DisplayList};
 
+use super::network_panel::NetworkEntry;
+
 // ── Colours ───────────────────────────────────────────────────────────────────
 
 const PANEL_BG: Color = Color { r: 24, g: 24, b: 28, a: 244 };
@@ -62,8 +64,39 @@ const H_PAD: f32 = 10.0;
 const TAB_ELEMENTS_W: f32 = 82.0;
 /// Width of the "Computed" tab button.
 const TAB_COMPUTED_W: f32 = 90.0;
+/// Width of the "Network" tab button.
+const TAB_NETWORK_W: f32 = 80.0;
 /// Maximum number of property rows visible without scrolling.
 const MAX_VISIBLE_ROWS: usize = 22;
+/// Maximum number of request rows visible on the Network tab without scrolling.
+/// Larger than [`MAX_VISIBLE_ROWS`] because the Network tab has no per-element
+/// label / NodeId header, only a single column-title row.
+const NET_MAX_VISIBLE_ROWS: usize = 24;
+
+// ── Network tab colours / columns ─────────────────────────────────────────────
+
+/// Method column colour (Network tab).
+const NET_FG_METHOD: Color = Color { r: 130, g: 180, b: 240, a: 255 };
+/// URL column colour (Network tab).
+const NET_FG_URL: Color = Color { r: 210, g: 212, b: 218, a: 255 };
+/// Timing column colour (Network tab).
+const NET_FG_TIME: Color = Color { r: 160, g: 162, b: 170, a: 255 };
+/// 2xx success status colour.
+const NET_STATUS_OK: Color = Color { r: 90, g: 200, b: 120, a: 255 };
+/// 3xx redirect status colour.
+const NET_STATUS_REDIRECT: Color = Color { r: 220, g: 190, b: 90, a: 255 };
+/// 4xx/5xx error, blocked and failed status colour.
+const NET_STATUS_ERROR: Color = Color { r: 237, g: 90, b: 90, a: 255 };
+/// Pending (no status yet) colour.
+const NET_STATUS_PENDING: Color = Color { r: 140, g: 142, b: 150, a: 255 };
+/// Method column X offset within the side panel.
+const NET_COL_METHOD: f32 = H_PAD;
+/// Status column X offset.
+const NET_COL_STATUS: f32 = 52.0;
+/// Timing column X offset.
+const NET_COL_TIME: f32 = 92.0;
+/// URL column X offset.
+const NET_COL_URL: f32 = 140.0;
 
 // ── Types ───────────────────────────────────────────────────────────────────────
 
@@ -75,6 +108,8 @@ pub enum InspectorTab {
     Elements,
     /// Computed tab — full CSS computed-style map (~55 properties, §7E.2).
     Computed,
+    /// Network tab — request log table: method / status / time / URL (§7E.4, CC-9).
+    Network,
 }
 
 /// A node currently pinned by the inspector, with its computed-style snapshot.
@@ -109,6 +144,17 @@ pub struct DomInspectorPanel {
     pub selected: Option<SelectedNode>,
     /// Which tab is currently shown.
     pub active_tab: InspectorTab,
+    /// Snapshot of network-request entries for the Network tab, oldest first.
+    /// Refreshed from the shared `NetworkLog` before each redraw via
+    /// [`set_network_entries`]. Independent of [`selected`] — the Network tab is
+    /// page-wide, not per-element.
+    ///
+    /// [`set_network_entries`]: DomInspectorPanel::set_network_entries
+    /// [`selected`]: DomInspectorPanel::selected
+    pub network_entries: Vec<NetworkEntry>,
+    /// How many request rows to skip from the bottom on the Network tab
+    /// (0 = show the newest tail; scrolling up grows it towards older rows).
+    pub network_scroll_offset: usize,
 }
 
 impl DomInspectorPanel {
@@ -162,6 +208,15 @@ impl DomInspectorPanel {
         self.active_tab = tab;
     }
 
+    /// Replace the Network-tab snapshot with `entries` (oldest first). Clamps the
+    /// scroll offset so it never points past the available rows. Call before
+    /// building the panel on each redraw.
+    pub fn set_network_entries(&mut self, entries: Vec<NetworkEntry>) {
+        let max = entries.len().saturating_sub(NET_MAX_VISIBLE_ROWS);
+        self.network_scroll_offset = self.network_scroll_offset.min(max);
+        self.network_entries = entries;
+    }
+
     /// Returns `true` if `x` is inside the right-docked panel, given window CSS width.
     ///
     /// Used by the shell click handler to distinguish panel UI interactions from
@@ -187,11 +242,23 @@ impl DomInspectorPanel {
             self.switch_tab(InspectorTab::Computed);
             return true;
         }
+        if local_x < TAB_ELEMENTS_W + TAB_COMPUTED_W + TAB_NETWORK_W {
+            self.switch_tab(InspectorTab::Network);
+            return true;
+        }
         false
     }
 
-    /// Scroll the active tab's property list up (towards the top).
+    /// Scroll the active tab's list up.
+    ///
+    /// For the Elements/Computed tabs "up" means towards the top of the property
+    /// list; for the Network tab it means towards older requests.
     pub fn scroll_up(&mut self, n: usize) {
+        if self.active_tab == InspectorTab::Network {
+            let max = self.network_entries.len().saturating_sub(NET_MAX_VISIBLE_ROWS);
+            self.network_scroll_offset = (self.network_scroll_offset + n).min(max);
+            return;
+        }
         let Some(sel) = self.selected.as_mut() else { return };
         match self.active_tab {
             InspectorTab::Elements => {
@@ -200,12 +267,19 @@ impl DomInspectorPanel {
             InspectorTab::Computed => {
                 sel.computed_scroll_offset = sel.computed_scroll_offset.saturating_sub(n);
             }
+            InspectorTab::Network => {}
         }
     }
 
-    /// Scroll the active tab's property list down (towards the bottom), clamped
-    /// so the last page of rows stays visible.
+    /// Scroll the active tab's list down, clamped so the last page stays visible.
+    ///
+    /// For the Elements/Computed tabs "down" means towards the bottom of the
+    /// property list; for the Network tab it means towards newer requests.
     pub fn scroll_down(&mut self, n: usize) {
+        if self.active_tab == InspectorTab::Network {
+            self.network_scroll_offset = self.network_scroll_offset.saturating_sub(n);
+            return;
+        }
         let Some(sel) = self.selected.as_mut() else { return };
         match self.active_tab {
             InspectorTab::Elements => {
@@ -216,6 +290,7 @@ impl DomInspectorPanel {
                 let max = sel.computed_props.len().saturating_sub(MAX_VISIBLE_ROWS);
                 sel.computed_scroll_offset = (sel.computed_scroll_offset + n).min(max);
             }
+            InspectorTab::Network => {}
         }
     }
 }
@@ -519,8 +594,23 @@ pub fn build_inspector_panel(
         TAB_COMPUTED_W,
         panel.active_tab == InspectorTab::Computed,
     );
+    draw_tab(
+        &mut out,
+        "Network",
+        panel_x + TAB_ELEMENTS_W + TAB_COMPUTED_W,
+        tab_y,
+        TAB_NETWORK_W,
+        panel.active_tab == InspectorTab::Network,
+    );
 
     let content_top = tab_y + TAB_ROW_H;
+
+    // Network tab is page-wide and needs no pinned element: render the request
+    // table directly and return.
+    if panel.active_tab == InspectorTab::Network {
+        build_network_table(&mut out, panel, panel_x, content_top, win_h as f32);
+        return out;
+    }
 
     let Some(sel) = panel.selected.as_ref() else {
         out.push(make_text(
@@ -555,10 +645,12 @@ pub fn build_inspector_panel(
     ));
     y += LINE_H + 4.0;
 
-    // Property rows for the active tab.
+    // Property rows for the active tab. The Network tab returns early above, so
+    // only the two per-element tabs reach here.
     let (props, scroll_offset) = match panel.active_tab {
         InspectorTab::Elements => (&sel.props, sel.scroll_offset),
         InspectorTab::Computed => (&sel.computed_props, sel.computed_scroll_offset),
+        InspectorTab::Network => unreachable!("Network tab is rendered before this point"),
     };
 
     let total = props.len();
@@ -596,6 +688,156 @@ pub fn build_inspector_panel(
     }
 
     out
+}
+
+// ── Rendering: Network tab ──────────────────────────────────────────────────────
+
+/// Render the Network-tab request table into `out`.
+///
+/// Four columns — method / status / time / URL — with a single column-title row
+/// at `content_top`, then up to [`NET_MAX_VISIBLE_ROWS`] request rows. Rows are
+/// shown newest-last (the tail), honouring `panel.network_scroll_offset`.
+/// `win_h` is the window height in CSS px (used to bound the visible row count).
+fn build_network_table(
+    out: &mut DisplayList,
+    panel: &DomInspectorPanel,
+    panel_x: f32,
+    content_top: f32,
+    win_h: f32,
+) {
+    // Column-title row.
+    let title_y = content_top + 4.0;
+    out.push(make_text("Method".into(), panel_x + NET_COL_METHOD, title_y, NET_COL_STATUS - NET_COL_METHOD, FONT_SIZE, FG_DIM));
+    out.push(make_text("Status".into(), panel_x + NET_COL_STATUS, title_y, NET_COL_TIME - NET_COL_STATUS, FONT_SIZE, FG_DIM));
+    out.push(make_text("Time".into(), panel_x + NET_COL_TIME, title_y, NET_COL_URL - NET_COL_TIME, FONT_SIZE, FG_DIM));
+    out.push(make_text("URL".into(), panel_x + NET_COL_URL, title_y, PANEL_WIDTH - NET_COL_URL - H_PAD, FONT_SIZE, FG_DIM));
+
+    let rows_top = title_y + LINE_H + 2.0;
+
+    if panel.network_entries.is_empty() {
+        out.push(make_text(
+            "(no requests yet)".into(),
+            panel_x + H_PAD,
+            rows_top,
+            PANEL_WIDTH - H_PAD * 2.0,
+            FONT_SIZE,
+            FG_DIM,
+        ));
+        return;
+    }
+
+    // How many rows fit in the remaining height, capped at NET_MAX_VISIBLE_ROWS.
+    let avail = (win_h - rows_top).max(0.0);
+    let fit = (avail / LINE_H).floor() as usize;
+    let visible = fit.clamp(1, NET_MAX_VISIBLE_ROWS);
+
+    // Show the tail: newest rows, scrolled by network_scroll_offset.
+    let total = panel.network_entries.len();
+    let end = total.saturating_sub(panel.network_scroll_offset);
+    let start = end.saturating_sub(visible);
+
+    for (i, entry) in panel.network_entries[start..end].iter().enumerate() {
+        let y = rows_top + i as f32 * LINE_H;
+        out.push(make_text(
+            entry.method.clone(),
+            panel_x + NET_COL_METHOD,
+            y,
+            NET_COL_STATUS - NET_COL_METHOD,
+            FONT_SIZE,
+            NET_FG_METHOD,
+        ));
+        out.push(make_text(
+            net_status_label(entry),
+            panel_x + NET_COL_STATUS,
+            y,
+            NET_COL_TIME - NET_COL_STATUS,
+            FONT_SIZE,
+            net_status_color(entry),
+        ));
+        out.push(make_text(
+            net_timing_label(entry),
+            panel_x + NET_COL_TIME,
+            y,
+            NET_COL_URL - NET_COL_TIME,
+            FONT_SIZE,
+            NET_FG_TIME,
+        ));
+        out.push(make_text(
+            net_truncate_url(&entry.url, PANEL_WIDTH - NET_COL_URL - H_PAD),
+            panel_x + NET_COL_URL,
+            y,
+            PANEL_WIDTH - NET_COL_URL - H_PAD,
+            FONT_SIZE,
+            NET_FG_URL,
+        ));
+    }
+
+    // Scroll indicator when rows overflow.
+    if total > visible {
+        out.push(make_text(
+            format!("{end}/{total}"),
+            panel_x + PANEL_WIDTH - 60.0,
+            content_top - HEADER_H - TAB_ROW_H + (HEADER_H - FONT_SIZE) / 2.0,
+            54.0,
+            FONT_SIZE,
+            FG_DIM,
+        ));
+    }
+}
+
+/// Status text for a Network-tab row: `"blocked"`, failure stage, numeric code,
+/// or `"…"` while pending.
+fn net_status_label(entry: &NetworkEntry) -> String {
+    if entry.blocked {
+        "blocked".to_string()
+    } else if entry.failed {
+        entry
+            .reason
+            .as_deref()
+            .and_then(|r| r.split(':').next())
+            .unwrap_or("err")
+            .to_string()
+    } else if let Some(code) = entry.status {
+        code.to_string()
+    } else {
+        "…".to_string()
+    }
+}
+
+/// Status colour: green 2xx, amber 3xx, red 4xx/5xx & blocked & failed, grey pending.
+fn net_status_color(entry: &NetworkEntry) -> Color {
+    if entry.blocked || entry.failed {
+        return NET_STATUS_ERROR;
+    }
+    match entry.status {
+        Some(c) if (200..300).contains(&c) => NET_STATUS_OK,
+        Some(c) if (300..400).contains(&c) => NET_STATUS_REDIRECT,
+        Some(_) => NET_STATUS_ERROR,
+        None => NET_STATUS_PENDING,
+    }
+}
+
+/// Timing text: `"123 ms"` once completed, `"…"` pending, `"—"` blocked/failed.
+fn net_timing_label(entry: &NetworkEntry) -> String {
+    if entry.blocked || entry.failed {
+        "—".to_string()
+    } else if let Some(ms) = entry.duration_ms {
+        format!("{ms} ms")
+    } else {
+        "…".to_string()
+    }
+}
+
+/// Truncate a URL to roughly fit `width` CSS px (~6.5 px/char), keeping the tail.
+fn net_truncate_url(url: &str, width: f32) -> String {
+    let max_chars = (width / 6.5).floor().max(8.0) as usize;
+    let count = url.chars().count();
+    if count <= max_chars {
+        return url.to_owned();
+    }
+    let skip = count - (max_chars - 1);
+    let tail: String = url.chars().skip(skip).collect();
+    format!("…{tail}")
 }
 
 /// Emit a single tab button into `out`.
@@ -938,5 +1180,174 @@ mod tests {
         assert!(dl.iter().any(|c| matches!(
             c, DisplayCommand::DrawText { text, .. } if text.contains("color")
         )));
+    }
+
+    // ── Network tab (CC-9) ────────────────────────────────────────────────────
+
+    /// Build a `Vec<NetworkEntry>` for the Network tab by recording into a real
+    /// [`NetworkLog`] (its fields are private, so this is the only construction
+    /// path). Each `(method, url, status)` becomes one completed entry.
+    fn net_entries(rows: &[(&str, &str, u16)]) -> Vec<NetworkEntry> {
+        use super::super::network_panel::NetworkLog;
+        let mut log = NetworkLog::default();
+        for (m, u, s) in rows {
+            log.record_js(m, u, Some(*s), Some(7));
+        }
+        log.entries.clone()
+    }
+
+    #[test]
+    fn network_is_third_tab_variant() {
+        // The enum carries a third, page-wide tab distinct from the per-element ones.
+        let mut p = DomInspectorPanel::new();
+        p.switch_tab(InspectorTab::Network);
+        assert_eq!(p.active_tab, InspectorTab::Network);
+        assert_ne!(InspectorTab::Network, InspectorTab::default());
+    }
+
+    #[test]
+    fn click_third_tab_selects_network() {
+        let mut p = DomInspectorPanel::new();
+        let win_w = 1280.0_f32;
+        let top = 36.0_f32;
+        let panel_x = win_w - PANEL_WIDTH;
+        let tab_y = top + HEADER_H + TAB_ROW_H / 2.0;
+        // Click within the third (Network) tab slot.
+        let net_x = panel_x + TAB_ELEMENTS_W + TAB_COMPUTED_W + 5.0;
+        assert!(p.click_tab_at(net_x, tab_y, win_w, top));
+        assert_eq!(p.active_tab, InspectorTab::Network);
+        // A click past all three tab buttons is not consumed.
+        let beyond = panel_x + TAB_ELEMENTS_W + TAB_COMPUTED_W + TAB_NETWORK_W + 5.0;
+        assert!(!p.click_tab_at(beyond, tab_y, win_w, top));
+    }
+
+    #[test]
+    fn set_network_entries_clamps_scroll_offset() {
+        let mut p = DomInspectorPanel::new();
+        p.network_scroll_offset = 999;
+        // Few entries → nothing to scroll → offset clamps to 0.
+        p.set_network_entries(net_entries(&[("GET", "https://a/", 200)]));
+        assert_eq!(p.network_scroll_offset, 0);
+        assert_eq!(p.network_entries.len(), 1);
+    }
+
+    #[test]
+    fn network_panel_shows_three_tab_buttons() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
+        for label in ["Elements", "Computed", "Network"] {
+            assert!(
+                dl.iter().any(|c| matches!(
+                    c, DisplayCommand::DrawText { text, .. } if text == label
+                )),
+                "tab button {label} must be drawn"
+            );
+        }
+    }
+
+    #[test]
+    fn network_tab_renders_without_selection() {
+        // The Network tab is page-wide: it must render even with no pinned node.
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        p.switch_tab(InspectorTab::Network);
+        assert!(p.selected.is_none());
+        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
+        // Column titles are present; the "hover a box" hint is not.
+        assert!(dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text == "URL"
+        )));
+        assert!(!dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text.contains("Hover a box")
+        )));
+    }
+
+    #[test]
+    fn network_tab_has_four_column_titles() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        p.switch_tab(InspectorTab::Network);
+        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
+        for col in ["Method", "Status", "Time", "URL"] {
+            assert!(
+                dl.iter().any(|c| matches!(
+                    c, DisplayCommand::DrawText { text, .. } if text == col
+                )),
+                "column title {col} must be drawn"
+            );
+        }
+    }
+
+    #[test]
+    fn network_tab_empty_shows_hint() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        p.switch_tab(InspectorTab::Network);
+        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
+        assert!(dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text.contains("no requests")
+        )));
+    }
+
+    #[test]
+    fn network_tab_renders_request_row() {
+        let mut p = DomInspectorPanel::new();
+        p.toggle();
+        p.switch_tab(InspectorTab::Network);
+        p.set_network_entries(net_entries(&[("POST", "https://example.com/api", 201)]));
+        let dl = build_inspector_panel(&p, (1280, 800), 36.0);
+        assert!(dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text == "POST"
+        )));
+        assert!(dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text == "201"
+        )));
+        assert!(dl.iter().any(|c| matches!(
+            c, DisplayCommand::DrawText { text, .. } if text.contains("example.com")
+        )));
+    }
+
+    #[test]
+    fn network_scroll_clamps_to_entry_count() {
+        let mut p = DomInspectorPanel::new();
+        p.switch_tab(InspectorTab::Network);
+        let rows: Vec<(&str, &str, u16)> =
+            (0..NET_MAX_VISIBLE_ROWS + 10).map(|_| ("GET", "https://a/x", 200)).collect();
+        p.set_network_entries(net_entries(&rows));
+        // Scroll up (towards older) is clamped to (total - visible cap).
+        p.scroll_up(9999);
+        assert_eq!(p.network_scroll_offset, (NET_MAX_VISIBLE_ROWS + 10) - NET_MAX_VISIBLE_ROWS);
+        // Scroll down (towards newest) returns to the tail.
+        p.scroll_down(9999);
+        assert_eq!(p.network_scroll_offset, 0);
+    }
+
+    #[test]
+    fn network_scroll_does_not_touch_element_selection() {
+        // Scrolling the Network tab must not move the Elements/Computed offsets.
+        let mut p = DomInspectorPanel::new();
+        let many: Vec<(String, String)> =
+            (0..MAX_VISIBLE_ROWS + 5).map(|i| (format!("k{i}"), "v".into())).collect();
+        p.select(NodeId::from_index(1), "div".into(), many.clone(), many);
+        p.switch_tab(InspectorTab::Network);
+        let rows: Vec<(&str, &str, u16)> =
+            (0..NET_MAX_VISIBLE_ROWS + 3).map(|_| ("GET", "https://a/x", 200)).collect();
+        p.set_network_entries(net_entries(&rows));
+        p.scroll_up(2);
+        assert_eq!(p.network_scroll_offset, 2);
+        let sel = p.selected.as_ref().unwrap();
+        assert_eq!(sel.scroll_offset, 0);
+        assert_eq!(sel.computed_scroll_offset, 0);
+    }
+
+    #[test]
+    fn net_truncate_url_keeps_tail() {
+        let long = "https://example.com/very/long/path/to/resource.js";
+        let t = net_truncate_url(long, 100.0);
+        assert!(t.starts_with('…'));
+        assert!(t.ends_with("resource.js"));
+        // A short URL is left untouched.
+        assert_eq!(net_truncate_url("https://a/", 400.0), "https://a/");
     }
 }
