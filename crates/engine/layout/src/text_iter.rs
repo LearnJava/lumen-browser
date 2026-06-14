@@ -148,7 +148,7 @@ mod tests {
             kind: BoxKind::InlineRun { segments: vec![], lines, first_line_style: None },
             children: vec![],
             col_span: 1,
-            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
         }
     }
 
@@ -160,7 +160,7 @@ mod tests {
             kind: BoxKind::Block,
             children,
             col_span: 1,
-            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
         }
     }
 
@@ -316,7 +316,7 @@ mod tests {
             kind: BoxKind::Skip,
             children: vec![],
             col_span: 1,
-            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
         };
         assert!(collect_visible_text(&b).is_empty());
     }

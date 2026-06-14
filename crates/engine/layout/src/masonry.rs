@@ -92,6 +92,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         }
     }
 

@@ -522,6 +522,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
         let reg = collect_anchors(&root);
         assert!(reg.is_empty());
@@ -543,6 +544,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
         child.style.anchor_name = Some("--tooltip".into());
 
@@ -557,6 +559,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
 
         let reg = collect_anchors(&root);
@@ -581,6 +584,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
         anchor_deep.style.anchor_name = Some("--deep".into());
 
@@ -595,6 +599,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
 
         let root = LayoutBox {
@@ -608,6 +613,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
 
         let reg = collect_anchors(&root);
@@ -632,6 +638,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
         child1.style.anchor_name = Some("--left".into());
 
@@ -646,6 +653,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
         child2.style.anchor_name = Some("--right".into());
 
@@ -660,6 +668,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
 
         let reg = collect_anchors(&root);
