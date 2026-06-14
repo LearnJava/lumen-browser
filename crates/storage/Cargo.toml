@@ -23,6 +23,9 @@ sha2 = "0.10"
 # Pure-Rust miniz_oxide backend, cross-OS bit-stable, no C toolchain. Graduation
 # criterion: replace with a higher-ratio pure-Rust zstd when one matures.
 flate2.workspace = true
+# Provisional (§5): LZ4 frame compression for T2 sleeping-tab JS heap blobs (GG-5).
+# Faster compress/decompress than zlib at comparable ratio for binary/mixed data.
+lz4_flex.workspace = true
 
 [dev-dependencies]
 # Integration test only: serialise a real parsed `Document` to verify the
