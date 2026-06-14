@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+JJ-phase5: Modern HTML5 APIs Phase 5 — branch: p1-jj-phase5
+Next step: cargo check + tests → commit  crates/js/src/dom.rs:4296
 
 ---
 

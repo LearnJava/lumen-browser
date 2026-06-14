@@ -4293,6 +4293,63 @@ function _lumen_make_element(nid) {
         // assignedSlot — the <slot> element this node is slotted into, or null.
         // Phase 0 stub: full implementation requires composed tree traversal.
         get assignedSlot() { return null; },
+        // ── checkVisibility (W3C Viewport API §4.1) ──────────────────────────────
+        // Returns false if this element or any ancestor has display:none, is
+        // disconnected, or (if options say so) has opacity:0 / visibility:hidden.
+        checkVisibility: function(opts) {
+            var options = opts || {};
+            var checkOpacity     = !!options.checkOpacity;
+            var checkVisibilityCss = !!options.checkVisibilityCSS;
+            var checkContentVisibility = !!options.checkContentVisibility;
+            var cur = nid;
+            while (cur !== null && cur !== undefined) {
+                var disp = _lumen_get_computed_style(cur, 'display');
+                if (disp === '' || disp === 'none') return false;
+                if (checkOpacity) {
+                    var op = _lumen_get_computed_style(cur, 'opacity');
+                    if (op !== null && op !== '' && parseFloat(op) === 0) return false;
+                }
+                if (checkVisibilityCss) {
+                    var vis = _lumen_get_computed_style(cur, 'visibility');
+                    if (vis === 'hidden' || vis === 'collapse') return false;
+                }
+                if (checkContentVisibility) {
+                    var cv = _lumen_get_computed_style(cur, 'content-visibility');
+                    if (cv === 'hidden') return false;
+                }
+                cur = _lumen_u2n(_lumen_get_parent(cur));
+            }
+            return true;
+        },
+        // ── setHTMLUnsafe (WHATWG HTML LS §14.5) ─────────────────────────────────
+        // Parses html as a markup fragment and replaces element children.
+        // Unsafe: no sanitization (unlike Sanitizer API).
+        setHTMLUnsafe: function(html) {
+            _lumen_set_inner_html(nid, String(html));
+        },
+        // ── getHTML (WHATWG HTML LS §14.5) ───────────────────────────────────────
+        // Serialises element's subtree as an HTML string.
+        // Phase 0: serializableShadowRoots option deferred (Shadow DOM Phase 2).
+        getHTML: function(opts) {
+            return _lumen_get_inner_html(nid);
+        },
+        // ── moveBefore (DOM LS, Chrome 133+) ─────────────────────────────────────
+        // Moves `node` to be the previous sibling of `child` within this element,
+        // preserving the node's CSS transition / animation state.
+        // Phase 0: state preservation is a no-op (animations reset on DOM move).
+        moveBefore: function(node, child) {
+            if (!node || !node.__nid__) throw new TypeError('moveBefore: node required');
+            var nodeNid = node.__nid__;
+            var oldParent = _lumen_u2n(_lumen_get_parent(nodeNid));
+            if (oldParent !== null) {
+                _lumen_remove_child(oldParent, nodeNid);
+            }
+            if (child !== null && child !== undefined) {
+                _lumen_insert_before(nid, nodeNid, child.__nid__);
+            } else {
+                _lumen_append_child(nid, nodeNid);
+            }
+        },
     };
     Object.defineProperty(_obj, 'shadowRoot', {
         get: function() {
@@ -23045,5 +23102,155 @@ mod tests {
         rt.eval("window.print()").unwrap();
         let reqs = rt.take_print_requests();
         assert_eq!(reqs.len(), 2);
+    }
+
+    // ── JJ Phase 5: Modern HTML5 APIs ────────────────────────────────────────
+
+    #[test]
+    fn set_html_unsafe_sets_content() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 document.body.appendChild(d);\
+                 d.setHTMLUnsafe('<p>hello</p>');\
+                 d.innerHTML === '<p>hello</p>'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn get_html_returns_inner_html() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 document.body.appendChild(d);\
+                 d.innerHTML = '<span>world</span>';\
+                 d.getHTML() === '<span>world</span>'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn get_html_with_options_phase0() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 document.body.appendChild(d);\
+                 d.innerHTML = 'test';\
+                 d.getHTML({serializableShadowRoots: true}) === 'test'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn move_before_rearranges_children() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var parent = document.createElement('div');\
+                 document.body.appendChild(parent);\
+                 var a = document.createElement('span'); a.id = 'a';\
+                 var b = document.createElement('span'); b.id = 'b';\
+                 var c = document.createElement('span'); c.id = 'c';\
+                 parent.appendChild(a); parent.appendChild(b); parent.appendChild(c);\
+                 parent.moveBefore(c, b);\
+                 var kids = parent.children;\
+                 kids[0].id === 'a' && kids[1].id === 'c' && kids[2].id === 'b'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn move_before_null_appends_to_end() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var parent = document.createElement('div');\
+                 document.body.appendChild(parent);\
+                 var a = document.createElement('span'); a.id = 'a';\
+                 var b = document.createElement('span'); b.id = 'b';\
+                 parent.appendChild(a); parent.appendChild(b);\
+                 parent.moveBefore(a, null);\
+                 var kids = parent.children;\
+                 kids[0].id === 'b' && kids[1].id === 'a'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn check_visibility_disconnected_returns_false() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval("var d = document.createElement('div'); d.checkVisibility() === false")
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn check_visibility_accepts_options_without_throw() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 typeof d.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) === 'boolean'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_html_unsafe_method_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 typeof d.setHTMLUnsafe === 'function'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn get_html_method_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 typeof d.getHTML === 'function'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn move_before_method_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 typeof d.moveBefore === 'function'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn check_visibility_method_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var d = document.createElement('div');\
+                 typeof d.checkVisibility === 'function'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
     }
 }
