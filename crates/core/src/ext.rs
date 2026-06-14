@@ -1784,6 +1784,44 @@ pub trait SwBackend: Send + Sync {
     fn save(&self, snapshot: &str);
 }
 
+/// Per-origin Cache API persistence (W3C Service Worker spec §cache-objects).
+///
+/// All methods are best-effort: errors are silently discarded so a storage
+/// failure never aborts a JS `cache.put()` / `cache.match()` call.
+///
+/// `meta_json` carries the full response metadata as the JS shim serialises it:
+/// `{"method":"GET","status":200,"statusText":"OK","headers":{…}}`.
+/// Implementations store it opaquely and return it verbatim on reads.
+///
+/// Implemented in `lumen-storage::CacheStorage`; `lumen-js` references only
+/// this trait, keeping the dependency graph acyclic.
+pub trait CacheBackend: Send + Sync {
+    /// Insert or replace a cache entry. `meta_json` is stored opaquely.
+    fn cache_put(&self, origin: &str, name: &str, url: &str, meta_json: &str, body: &[u8]);
+
+    /// Look up a single entry by URL (method defaults to GET).
+    /// Returns `(meta_json, body)` or `None` when not found.
+    fn cache_match(&self, origin: &str, name: &str, url: &str) -> Option<(String, Vec<u8>)>;
+
+    /// Look up an entry across all caches for the origin (first match wins).
+    fn cache_match_any(&self, origin: &str, url: &str) -> Option<(String, Vec<u8>)>;
+
+    /// Remove one entry by URL (method defaults to GET). Returns `true` if removed.
+    fn cache_delete(&self, origin: &str, name: &str, url: &str) -> bool;
+
+    /// All `(url, method)` pairs in a named cache, ordered by insertion time.
+    fn cache_keys(&self, origin: &str, name: &str) -> Vec<(String, String)>;
+
+    /// `true` if the named cache exists (has at least one entry) for this origin.
+    fn cache_has(&self, origin: &str, name: &str) -> bool;
+
+    /// Remove an entire named cache. Returns `true` if the cache existed.
+    fn cache_delete_cache(&self, origin: &str, name: &str) -> bool;
+
+    /// Names of all caches for this origin, in insertion order.
+    fn cache_names(&self, origin: &str) -> Vec<String>;
+}
+
 // ============================================================================
 // ADR-006: Automation API — first-class engine surface
 // ============================================================================

@@ -5,14 +5,14 @@
 //! (request_url, response). Поддерживаются: open/put/match/delete/keys
 //! на уровне cache, и `keys()` для перечисления имён кэшей origin-а.
 //!
-//! Phase 0: SQLite-таблица + методы. Реальная интеграция с fetch event
-//! (ServiceWorker `event.respondWith(caches.match(...))`) — задача
-//! отдельно (Phase 3+ с SW runtime).
+//! Phase 1: SQLite-таблица + `CacheBackend` impl для lumen-js.
+//! `response_headers` хранит полный `meta_json` от JS-шима (method/status/headers).
+//! Реальная интеграция с fetch event (SW `respondWith`) — Phase 3+.
 
 use std::path::Path;
 use std::sync::Mutex;
 
-use lumen_core::{Error, Result};
+use lumen_core::{Error, Result, ext::CacheBackend};
 use rusqlite::{params, Connection, OptionalExtension};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +250,150 @@ impl CacheStorage {
             .query_row("SELECT COUNT(*) FROM cache_entries", [], |r| r.get(0))
             .map_err(|e| Error::Storage(format!("cache_storage count: {e}")))?;
         Ok(n)
+    }
+
+    /// `cache.match(url)` without knowing the method — returns first match by URL.
+    pub fn match_by_url(
+        &self,
+        origin: &str,
+        cache_name: &str,
+        request_url: &str,
+    ) -> Result<Option<CachedEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("cache_storage mutex poisoned".into()))?;
+        conn.query_row(
+            "SELECT origin, cache_name, request_url, request_method, response_status,
+                    response_headers, response_body, cached_at
+             FROM cache_entries
+             WHERE origin = ?1 AND cache_name = ?2 AND request_url = ?3
+             LIMIT 1",
+            params![origin, cache_name, request_url],
+            row_to_entry,
+        )
+        .optional()
+        .map_err(|e| Error::Storage(format!("cache_storage match_by_url: {e}")))
+    }
+
+    /// `caches.match(url)` — search across all caches for the origin.
+    pub fn match_any(
+        &self,
+        origin: &str,
+        request_url: &str,
+    ) -> Result<Option<CachedEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("cache_storage mutex poisoned".into()))?;
+        conn.query_row(
+            "SELECT origin, cache_name, request_url, request_method, response_status,
+                    response_headers, response_body, cached_at
+             FROM cache_entries
+             WHERE origin = ?1 AND request_url = ?2
+             LIMIT 1",
+            params![origin, request_url],
+            row_to_entry,
+        )
+        .optional()
+        .map_err(|e| Error::Storage(format!("cache_storage match_any: {e}")))
+    }
+
+    /// `caches.has(name)` — true if the named cache has at least one entry.
+    pub fn has_cache(&self, origin: &str, cache_name: &str) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("cache_storage mutex poisoned".into()))?;
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM cache_entries
+                 WHERE origin = ?1 AND cache_name = ?2 LIMIT 1",
+                params![origin, cache_name],
+                |r| r.get(0),
+            )
+            .map_err(|e| Error::Storage(format!("cache_storage has_cache: {e}")))?;
+        Ok(n > 0)
+    }
+}
+
+// ── CacheBackend impl ─────────────────────────────────────────────────────────
+
+/// Parse HTTP method from the JS-side `meta_json`.
+fn meta_method(meta_json: &str) -> &str {
+    if let Some(start) = meta_json.find("\"method\":\"") {
+        let rest = &meta_json[start + 10..];
+        if let Some(end) = rest.find('"') {
+            return &rest[..end];
+        }
+    }
+    "GET"
+}
+
+/// Parse HTTP status from the JS-side `meta_json`.
+fn meta_status(meta_json: &str) -> u16 {
+    if let Some(start) = meta_json.find("\"status\":") {
+        let rest = meta_json[start + 9..].trim_start_matches(' ');
+        let end = rest.find([',', '}', ' ']).unwrap_or(rest.len());
+        if let Ok(n) = rest[..end].parse::<u16>() {
+            return n;
+        }
+    }
+    200
+}
+
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+impl CacheBackend for CacheStorage {
+    fn cache_put(&self, origin: &str, name: &str, url: &str, meta_json: &str, body: &[u8]) {
+        let method = meta_method(meta_json);
+        let status = meta_status(meta_json);
+        // meta_json is stored in response_headers column — opaque round-trip.
+        let _ = self.put(origin, name, url, method, status, meta_json, body, now_unix_secs());
+    }
+
+    fn cache_match(&self, origin: &str, name: &str, url: &str) -> Option<(String, Vec<u8>)> {
+        self.match_by_url(origin, name, url)
+            .ok()
+            .flatten()
+            .map(|e| (e.response_headers, e.response_body))
+    }
+
+    fn cache_match_any(&self, origin: &str, url: &str) -> Option<(String, Vec<u8>)> {
+        self.match_any(origin, url)
+            .ok()
+            .flatten()
+            .map(|e| (e.response_headers, e.response_body))
+    }
+
+    fn cache_delete(&self, origin: &str, name: &str, url: &str) -> bool {
+        // Default to GET when method unknown (most common case per spec).
+        self.delete(origin, name, url, "GET").unwrap_or(false)
+    }
+
+    fn cache_keys(&self, origin: &str, name: &str) -> Vec<(String, String)> {
+        self.keys(origin, name)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| (e.request_url, e.request_method))
+            .collect()
+    }
+
+    fn cache_has(&self, origin: &str, name: &str) -> bool {
+        self.has_cache(origin, name).unwrap_or(false)
+    }
+
+    fn cache_delete_cache(&self, origin: &str, name: &str) -> bool {
+        self.delete_cache(origin, name).unwrap_or(0) > 0
+    }
+
+    fn cache_names(&self, origin: &str) -> Vec<String> {
+        self.list_cache_names(origin).unwrap_or_default()
     }
 }
 
