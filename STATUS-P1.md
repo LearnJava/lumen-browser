@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+FF-5: Fetch keepalive + priority  branch: p1-ff5-fetch-priority
+Next step: add priority/keepalive parsing to fetch() JS shim + 4 unit-tests  crates/js/src/dom.rs:6733
 
 ---
 
