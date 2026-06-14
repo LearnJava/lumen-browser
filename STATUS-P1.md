@@ -6,8 +6,7 @@
 
 ## In progress
 
-P0-1: DOM arena audit  branch: p1-dom-arena-audit
-Next step: добавить compile-time Send+Sync assertion для Document  crates/engine/dom/src/lib.rs:10
+—
 
 ---
 
@@ -17,7 +16,7 @@ Next step: добавить compile-time Send+Sync assertion для Document  cr
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| P0-1 | **DOM arena audit** — убедиться что node graph на `NodeId(u32)` без `Rc<RefCell>`; добавить `bincode::serialize` для DOM snapshot; clippy lint запрещает `Rc<RefCell>` в node-модулях (ADR-008 §11.4 трек 10B) | M | `lumen-dom` |
+| P0-2 | **Pure layout + paint audit** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D) | S | `lumen-layout`, `lumen-paint` |
 | P0-2 | **Pure layout + paint audit** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D) | S | `lumen-layout`, `lumen-paint` |
 
 ### PH1 — Phase 1: v0.1 «Reader»
@@ -67,6 +66,7 @@ Next step: добавить compile-time Send+Sync assertion для Document  cr
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-14 | P0-1: DOM arena audit | Аудит подтвердил: NodeId(u32) арена без Rc<RefCell>, to_bytes/from_bytes с 214 тестами. Добавлен compile-time Send+Sync gate (ADR-008 §11.4). |
 | 2026-06-14 | II-2: WebAuthn platform HID enumeration Phase 1 | `platform_enumerate_ctap2_devices()` + `win_hid::enumerate()` (SetupDi + HidP_GetCaps фильтр FIDO_USAGE_PAGE) + `linux_hid::enumerate()` (hidraw0..31 + sysfs HID-дескриптор); inline FFI без новых зависимостей; 10 unit-тестов |
 | 2026-06-14 | GG-5: Tab hibernation Phase 2 (LZ4) | `lz4_flex` compress/decompress для `js_heap_blob`; `compressed INTEGER` колонка + ALTER TABLE миграция; 5 unit-тестов; 582 итого в lumen-storage |
 | 2026-06-14 | GG-4: Vertical tabs layout mode | `TabLayout::Horizontal/Vertical` enum; `VerticalTabsPanel`; `BrowserSettings.tab_layout` persist; 8 тестов |
