@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH1-7: Compositor thread + Property Trees  branch: p1-ph1-7-compositor
+Next step: wire PropertyTrees::build() + InProcessCompositor into driver/session.rs  crates/driver/src/session.rs:190
 
 ---
 

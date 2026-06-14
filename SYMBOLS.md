@@ -622,7 +622,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:2889` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
 `crates/engine/dom/src/lib.rs:2901` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 
-## lumen-driver  (84 symbols)
+## lumen-driver  (88 symbols)
 
 `crates/driver/src/context.rs:22` **struct** `SessionContext` — Isolated context for a single BrowserSession
 `crates/driver/src/context.rs:45` **fn** `new` — Create a new context with default (Standard) fingerprint profile and real system clock
@@ -678,18 +678,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/isolation.rs:166` **fn** `cookie_jar` — Shared `Arc<CookieJar>` for this origin group
 `crates/driver/src/isolation.rs:171` **fn** `same_group` — Check whether two origins belong to the same origin group (same eTLD+1)
 `crates/driver/src/lib.rs:62` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
-`crates/driver/src/session.rs:52` **struct** `InProcessSession` — Headless in-process сессия браузера
-`crates/driver/src/session.rs:83` **fn** `new` — Создать сессию с viewport 1024×720
-`crates/driver/src/session.rs:98` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
-`crates/driver/src/session.rs:129` **fn** `with_origin_isolation` — Create a session with per-origin-group isolation (Phase 1: 8E)
-`crates/driver/src/session.rs:147` **fn** `isolation_context` — Access the per-origin-group isolation context, if this session was
-`crates/driver/src/session.rs:152` **fn** `isolation_context_mut` — Mutable access to the per-origin-group isolation context
-`crates/driver/src/session.rs:162` **fn** `set_pending_js_tasks` — Установить количество pending JS microtask/callback для условия `JsIdle`
-`crates/driver/src/session.rs:184` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
-`crates/driver/src/session.rs:243` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
-`crates/driver/src/session.rs:259` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
-`crates/driver/src/session.rs:273` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
-`crates/driver/src/session.rs:1046` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
+`crates/driver/src/session.rs:53` **struct** `InProcessSession` — Headless in-process сессия браузера
+`crates/driver/src/session.rs:91` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/session.rs:107` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/session.rs:139` **fn** `with_origin_isolation` — Create a session with per-origin-group isolation (Phase 1: 8E)
+`crates/driver/src/session.rs:158` **fn** `isolation_context` — Access the per-origin-group isolation context, if this session was
+`crates/driver/src/session.rs:163` **fn** `isolation_context_mut` — Mutable access to the per-origin-group isolation context
+`crates/driver/src/session.rs:173` **fn** `set_pending_js_tasks` — Установить количество pending JS microtask/callback для условия `JsIdle`
+`crates/driver/src/session.rs:202` **fn** `active_property_trees` — Active property trees snapshot from the compositor (PH1-7)
+`crates/driver/src/session.rs:214` **fn** `scroll_page_by` — Off-main-thread page scroll (PH1-7)
+`crates/driver/src/session.rs:234` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
+`crates/driver/src/session.rs:310` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
+`crates/driver/src/session.rs:328` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
+`crates/driver/src/session.rs:342` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
+`crates/driver/src/session.rs:1120` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
 `crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
 `crates/driver/src/types.rs:30` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 `crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
@@ -705,9 +707,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/types.rs:239` **enum** `AxQuery` — Запрос к accessibility-дереву для [`BrowserSession::query_a11y`] и [`query_a11y_all`](BrowserSession::query_a11y_all)
 `crates/driver/src/types.rs:275` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
 `crates/driver/src/types.rs:297` **fn** `to_http_profile` — Map this session-level profile to the network [`HttpProfile`] that drives
-`crates/driver/src/winit_session.rs:65` **struct** `WinitSession` — Оконная сессия браузера
-`crates/driver/src/winit_session.rs:86` **fn** `new` — Создать сессию с viewport 1024×720
-`crates/driver/src/winit_session.rs:100` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/winit_session.rs:66` **struct** `WinitSession` — Оконная сессия браузера
+`crates/driver/src/winit_session.rs:93` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/winit_session.rs:108` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/winit_session.rs:134` **fn** `active_property_trees` — Active property trees snapshot from the threaded compositor (PH1-7)
+`crates/driver/src/winit_session.rs:142` **fn** `scroll_page_by` — Off-main-thread page scroll via the threaded compositor (PH1-7)
 
 ## lumen-encoding  (13 symbols)
 
@@ -3888,4 +3892,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3820 symbols in 21 crates*
+*Total: 3824 symbols in 21 crates*

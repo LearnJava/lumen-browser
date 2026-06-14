@@ -13,7 +13,8 @@ use serde_json;
 use lumen_dom::Document;
 use lumen_dom::NodeData;
 use lumen_dom::NodeId;
-use lumen_layout::{computed_style_by_selector, LayoutBox, PaintOrder, StackingTree};
+use lumen_layout::{computed_style_by_selector, LayoutBox, PaintOrder, PropertyTrees, StackingTree};
+use lumen_paint::compositor::{BasicLayerTree, Compositor, InProcessCompositor};
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
@@ -76,6 +77,13 @@ pub struct InProcessSession {
     /// В headless-режиме без JS-движка всегда 0.
     /// Shell-интеграция: вызывать `set_pending_js_tasks()` при изменении очереди.
     pending_js_microtasks: usize,
+    /// In-process compositor: two-buffer (pending/active) model for property trees.
+    ///
+    /// `run_pipeline()` commits new `PropertyTrees` + `BasicLayerTree` after each
+    /// layout. `active_property_trees()` returns the active snapshot. Off-main-thread
+    /// scroll mutates only the scroll offsets in a cloned `PropertyTrees` and
+    /// recommits — no relayout.
+    compositor: InProcessCompositor,
 }
 
 impl InProcessSession {
@@ -91,6 +99,7 @@ impl InProcessSession {
             isolation: None,
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            compositor: InProcessCompositor::new(),
         }
     }
 
@@ -106,6 +115,7 @@ impl InProcessSession {
             isolation: None,
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            compositor: InProcessCompositor::new(),
         }
     }
 
@@ -137,6 +147,7 @@ impl InProcessSession {
             isolation: Some(OriginIsolationContext::new(origin)),
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            compositor: InProcessCompositor::new(),
         }
     }
 
@@ -180,6 +191,45 @@ impl InProcessSession {
             .with_fingerprint_profile(self.context.fingerprint_profile().to_http_profile())
     }
 
+    /// Active property trees snapshot from the compositor (PH1-7).
+    ///
+    /// Returns the four-tree snapshot (Transform / Scroll / Effect / Clip) that
+    /// the compositor promoted from pending in the last `flush_pending()`. Before
+    /// the first navigation this returns `None`.
+    ///
+    /// Callers can read scroll offsets, transform matrices, and effect flags from
+    /// the active trees without holding any layout lock.
+    pub fn active_property_trees(&self) -> Option<Arc<PropertyTrees>> {
+        self.compositor.active_trees()
+    }
+
+    /// Off-main-thread page scroll (PH1-7).
+    ///
+    /// Clones the current active `PropertyTrees`, updates the root `ScrollNode`
+    /// offsets by `(delta_x, delta_y)` CSS-px, and recommits to the compositor —
+    /// **no relayout**. The next call to `active_property_trees()` or `screenshot*()`
+    /// will see the updated offsets.
+    ///
+    /// Returns `false` if no page has been loaded yet.
+    pub fn scroll_page_by(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        let Some(active_trees) = self.compositor.active_trees() else {
+            return false;
+        };
+        let Some(active_layer_tree) = self.compositor.active_tree() else {
+            return false;
+        };
+        let mut new_trees = (*active_trees).clone();
+        // Root scroll node is always nodes[0] (guaranteed by PropertyTrees::empty()).
+        if let Some(root_scroll) = new_trees.scroll.nodes.first_mut() {
+            root_scroll.offset_x = (root_scroll.offset_x + delta_x).max(0.0);
+            root_scroll.offset_y = (root_scroll.offset_y + delta_y).max(0.0);
+        }
+        self.compositor.commit(Arc::new(new_trees), active_layer_tree);
+        // Promote immediately in the single-thread model (no separate compositor tick).
+        self.compositor.flush_pending();
+        true
+    }
+
     /// Загрузить HTML-строку без навигации по URL. Используется для тестов.
     pub fn navigate_html(&mut self, html: &str) -> Result<()> {
         self.run_pipeline(html.as_bytes(), Some("text/html"), "about:blank".to_owned())
@@ -207,6 +257,23 @@ impl InProcessSession {
 
         let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
         let flat_tree = lumen_dom::build_flat_tree(&doc);
+
+        // Build property trees (PH1-7): four parallel trees (Transform / Scroll /
+        // Effect / Clip) from the completed layout root. Committed to the in-process
+        // compositor so that off-main-thread scroll can update offsets without relayout.
+        let property_trees = PropertyTrees::build(&layout_root);
+
+        // Build the page display list and commit it together with the property trees
+        // to the compositor (two-buffer model: pending → active on flush_pending).
+        let stacking_tree = StackingTree::build(&layout_root);
+        let paint_order = PaintOrder::from_tree(&stacking_tree);
+        let commands = lumen_paint::build_display_list_ordered(&layout_root, &stacking_tree, &paint_order);
+        let viewport_rect = lumen_core::geom::Rect::new(0.0, 0.0, self.viewport.width, self.viewport.height);
+        let layer_tree = BasicLayerTree::single_layer(viewport_rect, commands);
+        self.compositor.commit(Arc::new(property_trees.clone()), Arc::new(layer_tree));
+        // Flush immediately in the single-thread model so active trees are always
+        // current after navigation (no separate compositor tick needed).
+        self.compositor.flush_pending();
 
         self.current_url = url;
         self.state = Some(SessionState { doc, layout_root, flat_tree });
@@ -631,10 +698,12 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
     }
 
     fn scroll_by(&mut self, delta: f32) -> Result<f32> {
-        // Phase 1: прокрутка документа (требует persistent window state).
-        // Пока что заглушка — возвращаем текущую позицию (всегда 0).
-        let _ = delta;
-        Ok(0.0)
+        // PH1-7: off-main-thread page scroll via compositor (no relayout).
+        self.scroll_page_by(0.0, delta);
+        let offset_y = self.compositor.active_trees()
+            .and_then(|t| t.scroll.nodes.first().map(|n| n.offset_y))
+            .unwrap_or(0.0);
+        Ok(offset_y)
     }
 
     fn wait_for_navigation(&mut self) -> Result<String> {
