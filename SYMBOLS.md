@@ -909,14 +909,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/woff2.rs:688` **fn** `decode_woff1` — Decode WOFF1 bytes into a raw sfnt byte vector
 `crates/engine/font/src/woff2.rs:753` **fn** `maybe_decode_font` — If `data` is WOFF2 or WOFF1, decode it and return the raw sfnt bytes
 
-## lumen-html-parser  (43 symbols)
+## lumen-html-parser  (47 symbols)
 
 `crates/engine/html-parser/src/picture.rs:56` **struct** `PickedSource` — Финальный URL выбранного источника плюс author-объявленные
 `crates/engine/html-parser/src/picture.rs:64` **struct** `PictureParams` — Параметры picker-а
 `crates/engine/html-parser/src/picture.rs:90` **fn** `pick_picture_source` — Выбрать источник для `<picture>` элемента. См. модульный заголовок
 `crates/engine/html-parser/src/picture.rs:136` **fn** `pick_img_source` — Выбрать источник для одиночного `<img>` элемента (`srcset` + `sizes` +
-`crates/engine/html-parser/src/preload_scanner.rs:55` **enum** `PreloadHint` — Один speculative-fetch hint, извлечённый preload-сканером
-`crates/engine/html-parser/src/preload_scanner.rs:105` **fn** `scan_preload_hints` — Пробежать по HTML и вернуть все subresource-hint-ы, найденные в
+`crates/engine/html-parser/src/preload_scanner.rs:56` **enum** `PreloadHint` — Один speculative-fetch hint, извлечённый preload-сканером
+`crates/engine/html-parser/src/preload_scanner.rs:108` **fn** `scan_preload_hints` — Пробежать по HTML и вернуть все subresource-hint-ы, найденные в
+`crates/engine/html-parser/src/preload_scanner.rs:224` **struct** `PreloadScanner` — Инкрементальный preload-сканер (HTML LS §13.2.6.4.7)
+`crates/engine/html-parser/src/preload_scanner.rs:230` **fn** `new` — Создаёт новый инкрементальный сканер
+`crates/engine/html-parser/src/preload_scanner.rs:239` **fn** `feed_bytes` — Скармливает очередной chunk сырых байт и возвращает все hint-ы,
+`crates/engine/html-parser/src/preload_scanner.rs:247` **fn** `end` — Завершает ввод и возвращает hint-ы из буферизованного хвоста
 `crates/engine/html-parser/src/push_tokenizer.rs:32` **struct** `PushTokenizer` — Push-режим HTML5 токенизатора. См. module-level docs
 `crates/engine/html-parser/src/push_tokenizer.rs:51` **fn** `new` — Создаёт новый `PushTokenizer` в исходном состоянии
 `crates/engine/html-parser/src/push_tokenizer.rs:66` **fn** `feed` — Скармливает chunk токенизатору и возвращает токены, ставшие
@@ -3892,4 +3896,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3824 symbols in 21 crates*
+*Total: 3828 symbols in 21 crates*

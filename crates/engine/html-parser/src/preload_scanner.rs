@@ -43,6 +43,7 @@
 //! токена обрабатывается независимо. Дубликаты по URL — на совести
 //! caller-а (shell может дедуплицировать через свой fetch-кэш).
 
+use crate::push_tokenizer::PushTokenizer;
 use crate::tokenizer::{Token, Tokenizer};
 
 /// Один speculative-fetch hint, извлечённый preload-сканером.
@@ -102,21 +103,11 @@ pub enum PreloadHint {
 /// scanner делает то же самое.
 ///
 /// End-теги, текст, комментарии, doctype — игнорируются.
+///
+/// Для streaming-обработки используйте [`PreloadScanner`].
 pub fn scan_preload_hints(input: &str) -> Vec<PreloadHint> {
-    let mut out = Vec::new();
-    for tok in Tokenizer::new(input) {
-        let Token::StartTag { name, attrs, .. } = tok else {
-            continue;
-        };
-        match name.as_str() {
-            "link" => collect_link_hints(&attrs, &mut out),
-            "script" => collect_script_hint(&attrs, &mut out),
-            "img" => collect_img_hint(&attrs, &mut out),
-            "source" => collect_source_hint(&attrs, &mut out),
-            _ => {}
-        }
-    }
-    out
+    let tokens: Vec<Token> = Tokenizer::new(input).collect();
+    collect_hints_from_tokens(&tokens)
 }
 
 fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
@@ -202,6 +193,89 @@ fn collect_source_hint(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
         srcset: srcset.to_string(),
         sizes,
     });
+}
+
+/// Инкрементальный preload-сканер (HTML LS §13.2.6.4.7).
+///
+/// В отличие от [`scan_preload_hints`], которая принимает полную HTML-строку,
+/// `PreloadScanner` обрабатывает HTML **chunk-ами** — по мере прихода байт
+/// из сети. Hint-ы эмитятся немедленно при обнаружении, ещё до того как
+/// tree-builder получил и разобрал полный документ.
+///
+/// Это даёт реальный выигрыш: stylesheet/шрифты после первых 8 КБ HTML
+/// (за пределами окна `STREAM_CHUNK_BYTES`) не теряются — каждый `HtmlChunk`
+/// сканируется отдельно, а shell аккумулирует хинты по всем chunk-ам.
+///
+/// # Использование
+///
+/// ```rust,no_run
+/// use lumen_html_parser::preload_scanner::PreloadScanner;
+///
+/// let html_chunks: &[&[u8]] = &[];
+/// let mut scanner = PreloadScanner::new();
+/// for chunk in html_chunks {
+///     for hint in scanner.feed_bytes(chunk) {
+///         // ранний fetch
+///         let _ = hint;
+///     }
+/// }
+/// for hint in scanner.end() {
+///     // финальные hint-ы из незавершённого хвоста
+///     let _ = hint;
+/// }
+/// ```
+pub struct PreloadScanner {
+    push: PushTokenizer,
+}
+
+impl PreloadScanner {
+    /// Создаёт новый инкрементальный сканер.
+    pub fn new() -> Self {
+        Self { push: PushTokenizer::new() }
+    }
+
+    /// Скармливает очередной chunk сырых байт и возвращает все hint-ы,
+    /// найденные в полностью разобранных токенах этого chunk-а.
+    ///
+    /// Незавершённые теги на границе chunk-а автоматически буферизуются
+    /// и обрабатываются при следующем `feed_bytes` или `end`.
+    pub fn feed_bytes(&mut self, chunk: &[u8]) -> Vec<PreloadHint> {
+        let tokens = self.push.feed_bytes(chunk);
+        collect_hints_from_tokens(&tokens)
+    }
+
+    /// Завершает ввод и возвращает hint-ы из буферизованного хвоста.
+    ///
+    /// После вызова `end` объект нельзя использовать для дальнейшего `feed_bytes`.
+    pub fn end(&mut self) -> Vec<PreloadHint> {
+        let tokens = self.push.end();
+        collect_hints_from_tokens(&tokens)
+    }
+}
+
+impl Default for PreloadScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Извлечь hint-ы из готовых токенов (общая логика для `scan_preload_hints`
+/// и `PreloadScanner`).
+fn collect_hints_from_tokens(tokens: &[Token]) -> Vec<PreloadHint> {
+    let mut out = Vec::new();
+    for tok in tokens {
+        let Token::StartTag { name, attrs, .. } = tok else {
+            continue;
+        };
+        match name.as_str() {
+            "link" => collect_link_hints(attrs, &mut out),
+            "script" => collect_script_hint(attrs, &mut out),
+            "img" => collect_img_hint(attrs, &mut out),
+            "source" => collect_source_hint(attrs, &mut out),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// ASCII case-insensitive lookup атрибута. Имена в нашем tokenizer-е
@@ -574,5 +648,148 @@ mod tests {
                 as_kind: None,
             }]
         );
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+
+    /// Вспомогательная функция: скармливает HTML по одному байту через
+    /// `PreloadScanner::feed_bytes`. Результат — все hint-ы в source-order.
+    fn scan_byte_by_byte(input: &str) -> Vec<PreloadHint> {
+        let mut scanner = PreloadScanner::new();
+        let mut out = Vec::new();
+        for byte in input.as_bytes() {
+            out.extend(scanner.feed_bytes(std::slice::from_ref(byte)));
+        }
+        out.extend(scanner.end());
+        out
+    }
+
+    /// Скармливает чанками фиксированного размера.
+    fn scan_chunked(input: &str, chunk_size: usize) -> Vec<PreloadHint> {
+        let mut scanner = PreloadScanner::new();
+        let mut out = Vec::new();
+        let bytes = input.as_bytes();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let end = (pos + chunk_size).min(bytes.len());
+            out.extend(scanner.feed_bytes(&bytes[pos..end]));
+            pos = end;
+        }
+        out.extend(scanner.end());
+        out
+    }
+
+    #[test]
+    fn streaming_matches_batch_simple() {
+        let html = r#"<link rel="stylesheet" href="theme.css"><img src="hero.png">"#;
+        let batch = scan_preload_hints(html);
+        let streaming = scan_byte_by_byte(html);
+        assert_eq!(batch, streaming);
+    }
+
+    #[test]
+    fn streaming_matches_batch_full_page() {
+        let html = r#"<!DOCTYPE html>
+<html><head>
+  <link rel="preconnect" href="https://cdn.example/">
+  <link rel="stylesheet" href="reset.css">
+  <link rel="preload" href="font.woff2" as="font">
+  <script src="lib.js"></script>
+</head><body>
+  <img src="hero.png">
+  <picture>
+    <source srcset="hi.webp" type="image/webp">
+    <img src="hi.jpg">
+  </picture>
+</body></html>"#;
+        let batch = scan_preload_hints(html);
+        let streaming_1 = scan_byte_by_byte(html);
+        let streaming_8 = scan_chunked(html, 8);
+        let streaming_64 = scan_chunked(html, 64);
+        assert_eq!(batch, streaming_1, "byte-by-byte != batch");
+        assert_eq!(batch, streaming_8, "chunk-8 != batch");
+        assert_eq!(batch, streaming_64, "chunk-64 != batch");
+    }
+
+    #[test]
+    fn stylesheet_tag_split_across_chunks() {
+        // Атрибут href разрезан на границе chunk-а — hint всё равно выдаётся корректно.
+        let html = r#"<link rel="stylesheet" href="styles.css">"#;
+        // Разрезаем посредине `href="sty|les.css"`.
+        let split_at = html.find("sty").unwrap() + 3;
+        let mut scanner = PreloadScanner::new();
+        let mut hints: Vec<PreloadHint> = scanner.feed_bytes(&html.as_bytes()[..split_at]);
+        hints.extend(scanner.feed_bytes(&html.as_bytes()[split_at..]));
+        hints.extend(scanner.end());
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Stylesheet { url: "styles.css".into() }]
+        );
+    }
+
+    #[test]
+    fn hints_beyond_first_chunk_window() {
+        // Stylesheet встречается ПОСЛЕ первых 8192 байт — это именно то,
+        // что PH1-8 исправляет: batch-scan первого chunk-а его не видел.
+        let padding = "<!-- ".to_string() + &"x".repeat(8200) + " -->";
+        let html = format!(r#"{padding}<link rel="stylesheet" href="late.css">"#);
+        let batch = scan_preload_hints(&html);
+        let streaming = scan_chunked(&html, 8192);
+        assert_eq!(batch, streaming);
+        assert_eq!(
+            streaming,
+            vec![PreloadHint::Stylesheet { url: "late.css".into() }]
+        );
+    }
+
+    #[test]
+    fn empty_stream_yields_no_hints() {
+        let mut scanner = PreloadScanner::new();
+        assert!(scanner.feed_bytes(b"").is_empty());
+        assert!(scanner.end().is_empty());
+    }
+
+    #[test]
+    fn cyrillic_url_preserved_in_streaming() {
+        let html = r#"<link rel="stylesheet" href="/тема.css">"#;
+        let hints = scan_byte_by_byte(html);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Stylesheet { url: "/тема.css".into() }]
+        );
+    }
+
+    #[test]
+    fn rawtext_in_streaming_does_not_leak_inner_tags() {
+        // `<img>` внутри `<script>` не должен давать hint — токенайзер
+        // трактует тело <script> как RAWTEXT.
+        let html = r#"<script>var s = '<img src="fake.png">';</script><img src="real.png">"#;
+        let hints = scan_chunked(html, 8);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Image {
+                url: Some("real.png".into()),
+                srcset: None,
+                sizes: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn source_order_preserved_across_chunks() {
+        // Порядок hint-ов должен совпадать с source-order независимо от chunk-границ.
+        let html = r#"<link rel="preconnect" href="https://cdn.example/">
+<link rel="stylesheet" href="a.css">
+<link rel="stylesheet" href="b.css">
+<script src="main.js"></script>"#;
+        let batch = scan_preload_hints(html);
+        // Проверяем разные chunk-размеры.
+        for chunk_size in [1usize, 4, 16, 64, 256] {
+            let streaming = scan_chunked(html, chunk_size);
+            assert_eq!(batch, streaming, "source-order mismatch at chunk_size={chunk_size}");
+        }
     }
 }

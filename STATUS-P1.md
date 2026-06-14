@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH1-8: Preload scanner  branch: p1-ph1-8-preload-scanner
+Next step: done — commit + merge
 
 ---
 
