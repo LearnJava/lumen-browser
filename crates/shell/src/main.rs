@@ -1411,6 +1411,22 @@ pub(crate) trait PersistentJs {
     /// Per WHATWG HTML §8.1.6.2.
     #[allow(dead_code)]
     fn fire_window_scroll(&self);
+
+    /// Pause the JS event loop (T0 → T1 lifecycle transition).
+    ///
+    /// Sets `document.visibilityState = "hidden"`, fires `visibilitychange`.
+    /// Called when a tab is sent to background in `switch_tab`.
+    /// No-op default for runtimes that don't support it.
+    #[allow(dead_code)]
+    fn pause_event_loop(&self) {}
+
+    /// Resume the JS event loop (T1 → T0 lifecycle transition).
+    ///
+    /// Sets `document.visibilityState = "visible"`, fires `visibilitychange`.
+    /// Called when a background tab is brought to foreground in `switch_tab`.
+    /// No-op default for runtimes that don't support it.
+    #[allow(dead_code)]
+    fn unpause_event_loop(&self) {}
 }
 
 #[cfg(feature = "quickjs")]
@@ -1640,6 +1656,16 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn fire_window_scroll(&self) {
         self.rt.fire_window_scroll();
+    }
+    fn pause_event_loop(&self) {
+        // T0 → T1: mark document hidden, fire visibilitychange.
+        // Timer/rAF ticking is halted structurally: background tabs' js_ctx
+        // is moved into bg_tabs and the shell only ticks self.js_ctx (active tab).
+        self.rt.set_document_visibility(true);
+    }
+    fn unpause_event_loop(&self) {
+        // T1 → T0: mark document visible again, fire visibilitychange.
+        self.rt.set_document_visibility(false);
     }
 }
 
@@ -12838,6 +12864,10 @@ impl Lumen {
         let old_active = self.tab_strip.active;
         let old_id = self.tab_strip.tabs[old_active].id;
         self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
+        // T0 → T1: fire visibilitychange(hidden=true) before parking.
+        if let Some(js) = &self.js_ctx {
+            js.pause_event_loop();
+        }
         let snap = self.save_page_snapshot();
         self.bg_tabs.insert(old_id, snap);
         // GC tuning (10L): run one moderate collection on the tab that just
@@ -12861,9 +12891,11 @@ impl Lumen {
         if let Some(snap) = self.bg_tabs.remove(&new_id) {
             // T1/T2: fast in-memory restore.
             self.restore_page_snapshot(snap);
-            // GC tuning (10L): reset threshold to active level so the heap
-            // can grow freely now that this tab is in the foreground.
+            // T1 → T0: fire visibilitychange(hidden=false) after restore.
             if let Some(js) = &self.js_ctx {
+                js.unpause_event_loop();
+                // GC tuning (10L): reset threshold to active level so the heap
+                // can grow freely now that this tab is in the foreground.
                 js.run_gc_pass(0);
             }
         } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
