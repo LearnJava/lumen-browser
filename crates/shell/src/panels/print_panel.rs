@@ -21,8 +21,8 @@ use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 /// Panel width in CSS px.
 pub const PANEL_W: f32 = 560.0;
-/// Panel height in CSS px (expanded for W-2b scale field).
-pub const PANEL_H: f32 = 420.0;
+/// Panel height in CSS px (expanded for W-2b scale field + CC-8 background row).
+pub const PANEL_H: f32 = 462.0;
 /// Header bar height.
 const HEADER_H: f32 = 36.0;
 /// Content row height.
@@ -143,6 +143,10 @@ pub struct PrintPanel {
     pub page_range: String,
     /// Output colour mode.
     pub color_mode: ColorMode,
+    /// Whether CSS background graphics are printed (CC-8). When `false`, the
+    /// print pipeline strips background fills / images / gradients before
+    /// rasterising each page.
+    pub print_backgrounds: bool,
     /// Destination file path (relative or absolute).
     pub output_path: String,
     /// Which text field is currently focused, if any.
@@ -160,6 +164,7 @@ impl PrintPanel {
             scale: 100,
             page_range: "all".to_owned(),
             color_mode: ColorMode::Color,
+            print_backgrounds: true,
             output_path: "output.pdf".to_owned(),
             editing_field: None,
         }
@@ -236,6 +241,8 @@ pub enum PrintHit {
     PageRangeField,
     /// A colour-mode pill was clicked.
     ColorMode(ColorMode),
+    /// A background-graphics toggle pill was clicked (CC-8); payload = new value.
+    Backgrounds(bool),
     /// The output-path text field was clicked.
     OutputPathField,
     /// The **Print** button was clicked.
@@ -391,6 +398,21 @@ pub fn hit_test(panel: &PrintPanel, x: f32, y: f32, win_w: f32, win_h: f32) -> P
         return PrintHit::Inside;
     }
 
+    // Row 7: Background graphics toggle (CC-8).
+    let r7 = row_y(7);
+    if ly >= r7 && ly < r7 + ROW_H {
+        const VALUES: [bool; 2] = [true, false];
+        let pill_w = avail_w / 2.0;
+        let pills_x = PAD_H + LABEL_W;
+        for (i, on) in VALUES.iter().enumerate() {
+            let bx = pills_x + i as f32 * pill_w;
+            if lx >= bx && lx < bx + pill_w - 2.0 {
+                return PrintHit::Backgrounds(*on);
+            }
+        }
+        return PrintHit::Inside;
+    }
+
     PrintHit::Inside
 }
 
@@ -455,9 +477,10 @@ pub fn build_panel(panel: &PrintPanel, px: f32, py: f32) -> DisplayList {
     emit_page_range_row(&mut out, panel, px, py);
     emit_color_row(&mut out, panel, px, py);
     emit_output_path_row(&mut out, panel, px, py);
+    emit_backgrounds_row(&mut out, panel, px, py);
 
     // Separator before buttons.
-    let sep_y = row_y(7);
+    let sep_y = row_y(8);
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + PAD_H, py + sep_y, PANEL_W - PAD_H * 2.0, 1.0),
         color: SEPARATOR,
@@ -593,6 +616,14 @@ fn emit_output_path_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: 
     let field_y = ry + (ROW_H - FIELD_H) / 2.0;
     let focused = panel.editing_field == Some(PrintField::OutputPath);
     emit_text_field(out, &panel.output_path, field_x, field_y, field_w, focused);
+}
+
+fn emit_backgrounds_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+    let ry = py + row_y(7);
+    emit_row_bg(out, px, ry, 1);
+    emit_label(out, "Фон", px, ry);
+    const VALUES: [(bool, &str); 2] = [(true, "Вкл"), (false, "Выкл")];
+    emit_pills_2(out, &VALUES, panel.print_backgrounds, px, ry, |a, b| a == b);
 }
 
 fn emit_buttons(out: &mut DisplayList, px: f32, py: f32) {
@@ -851,6 +882,37 @@ mod tests {
     fn scale_default_100_percent() {
         let p = make_panel();
         assert_eq!(p.scale, 100);
+    }
+
+    #[test]
+    fn print_backgrounds_default_on() {
+        let p = make_panel();
+        assert!(p.print_backgrounds);
+    }
+
+    #[test]
+    fn hit_backgrounds_off_pill() {
+        let mut p = make_panel();
+        p.visible = true;
+        let (px, py) = panel_origin(800.0, 600.0);
+        let avail_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
+        let pill_w = avail_w / 2.0;
+        let pills_x = px + PAD_H + LABEL_W;
+        let row_abs_y = py + row_y(7) + ROW_H / 2.0;
+        // Second pill = Off (false).
+        let hit = hit_test(&p, pills_x + pill_w * 1.5, row_abs_y, 800.0, 600.0);
+        assert_eq!(hit, PrintHit::Backgrounds(false));
+    }
+
+    #[test]
+    fn build_visible_has_background_row_label() {
+        let mut p = make_panel();
+        p.visible = true;
+        let dl = build_panel(&p, 0.0, 0.0);
+        let has_label = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == "Фон")
+        });
+        assert!(has_label, "must show 'Фон' background row label");
     }
 
     #[test]
