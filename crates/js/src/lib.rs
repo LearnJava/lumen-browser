@@ -15,6 +15,7 @@ pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
 pub mod download_bindings;
+pub mod pip_bindings;
 pub mod clipboard;
 pub mod contacts;
 pub mod cookie_banner;
@@ -676,6 +677,13 @@ impl QuickJsRuntime {
             // Shell integration (P3) connects _lumen_pip_enter/_lumen_pip_exit to OS float window.
             if let Err(e) = video_pip::install_video_pip_api(&ctx) {
                 eprintln!("Video Picture-in-Picture API init failed: {}", e);
+            }
+
+            // Wire the native PiP hooks (`_lumen_pip_enter` / `_lumen_pip_exit`)
+            // the shim above calls — shell drains them to open/close the real
+            // OS-level floating window (CC-7). After video_pip so the shim exists.
+            if let Err(e) = pip_bindings::install_pip_bindings(&ctx) {
+                eprintln!("PiP bindings init failed: {}", e);
             }
 
             // Install HTMLAudioElement stubs (HTML spec §4.8.10) — after DOM/video.
