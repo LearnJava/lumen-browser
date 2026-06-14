@@ -16422,8 +16422,13 @@ fn parse_single_bg_layer(
             continue;
         }
 
-        // color — пробуем последним, чтобы не спутать с keywords
-        if let Some(c) = parse_css_color_legacy(t, is_quirks) {
+        // color — пробуем последним, чтобы не спутать с keywords.
+        // BUG-079: hashless-hex quirk (Quirks Mode §3.4) применяется ТОЛЬКО к
+        // лонгхендам `background-color` / `color` / `border-*-color`, но НЕ к
+        // шортхенду `background`. Поэтому здесь quirks-флаг всегда `false`:
+        // `background: ff4444` в quirks-mode невалиден (Edge не красит), хотя
+        // `background-color: ff4444` — валиден.
+        if let Some(c) = parse_css_color_legacy(t, false) {
             color = Some(c);
             idx += 1;
             continue;
@@ -19133,6 +19138,32 @@ mod tests {
         // Quirks НЕ должна попытаться повторно добавить `#`.
         // (4-digit с `#` валиден; без `#` — длина 4 не в списке 3/6/8 → None.)
         assert_eq!(parse_color_legacy("ffff", true), None);
+    }
+
+    #[test]
+    fn quirks_hashless_hex_not_applied_in_background_shorthand() {
+        // BUG-079: hashless-hex quirk применяется только к лонгхендам
+        // (`background-color` / `color` / `border-*-color`), но НЕ к шортхенду
+        // `background`. Edge в quirks-mode сбрасывает `background: ff4444` как
+        // невалидный → фон отсутствует.
+        let vp = Size { width: 1024.0, height: 768.0 };
+        let (_, color) = parse_single_bg_layer("ff4444", 16.0, vp, true);
+        assert_eq!(color, None, "hashless hex недопустим в шортхенде background");
+        // Контроль: валидные формы цвета по-прежнему работают в шортхенде.
+        let (_, named) = parse_single_bg_layer("red", 16.0, vp, true);
+        assert_eq!(named, Some(CssColor::Rgba(rgba(255, 0, 0, 255))));
+        let (_, hexed) = parse_single_bg_layer("#3366cc", 16.0, vp, true);
+        assert_eq!(hexed, Some(CssColor::Rgba(rgba(0x33, 0x66, 0xcc, 255))));
+    }
+
+    #[test]
+    fn quirks_hashless_hex_still_applied_in_background_color_longhand() {
+        // Контроль обратной стороны BUG-079: лонгхенд `background-color`
+        // ДОЛЖЕН принимать hashless hex в quirks-mode.
+        assert_eq!(
+            parse_css_color_legacy("ff4444", true),
+            Some(CssColor::Rgba(rgba(0xff, 0x44, 0x44, 255)))
+        );
     }
 
     #[test]
