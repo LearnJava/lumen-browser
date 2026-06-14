@@ -17006,6 +17006,7 @@ fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
 /// `dark_mode` отражает OS-предпочтение `prefers-color-scheme: dark`,
 /// прокинутое shell-ом через `layout_measured_hyp`.
 fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext {
+    // hover/pointer берут desktop-дефолты (мышь) из `MediaContext::default()`.
     MediaContext {
         media_type: "screen".into(),
         width: viewport.width,
@@ -17013,6 +17014,7 @@ fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext 
         prefers_dark: dark_mode,
         prefers_reduced_motion: false,
         forced_colors: false,
+        ..Default::default()
     }
 }
 

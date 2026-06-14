@@ -1584,6 +1584,7 @@ fn install_primitives(
                 prefers_dark: dark,
                 prefers_reduced_motion: reduced_motion,
                 forced_colors: false,
+                ..Default::default()
             };
             mq.matches(&ctx)
         }

@@ -198,6 +198,20 @@
   <div class="q-row"><q>outer <q>inner</q></q></div>
   <div class="q-row q-fr"><q>guillemets</q></div>
 
+  <!-- ── hover / pointer media features demo (Media Queries L4 §5.3-5.6) ──────── -->
+  <style>
+    .mq-row { margin-top: 10px; margin-left: 24px; }
+    .mq-sw { display: inline-block; width: 56px; height: 40px; background: #d64545; margin-right: 8px; }
+    @media (hover: hover)      { .mq-h { background: #2f855a; } }
+    @media (pointer: fine)     { .mq-p { background: #2f855a; } }
+    @media (any-pointer: fine) { .mq-ap { background: #2f855a; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw mq-h"></div>
+    <div class="mq-sw mq-p"></div>
+    <div class="mq-sw mq-ap"></div>
+  </div>
+
   <!-- ── vertical-align demo ───────────────────────────────────────────────── -->
   <style>
     .va-row { margin-top: 12px; margin-left: 24px; white-space: nowrap; }
