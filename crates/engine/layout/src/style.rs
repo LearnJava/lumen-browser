@@ -1226,6 +1226,83 @@ pub enum StrokeLinejoin {
     Bevel,
 }
 
+/// CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — one component of `paint-order`.
+/// Identifies which of fill, stroke or markers occupies a given paint slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintOrderSlot {
+    /// The element's fill.
+    Fill,
+    /// The element's stroke.
+    Stroke,
+    /// SVG markers. Lumen does not yet render markers; the slot is preserved so
+    /// that fill/stroke ordering around it stays spec-correct.
+    Markers,
+}
+
+/// CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — `paint-order`. Inherited.
+/// Resolved order in which the three components are painted, first slot drawn
+/// first (so the last slot ends up on top). Initial value `normal` resolves to
+/// `[Fill, Stroke, Markers]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SvgPaintOrder(pub [PaintOrderSlot; 3]);
+
+impl Default for SvgPaintOrder {
+    fn default() -> Self {
+        Self([PaintOrderSlot::Fill, PaintOrderSlot::Stroke, PaintOrderSlot::Markers])
+    }
+}
+
+impl SvgPaintOrder {
+    /// Parses `normal | [ fill || stroke || markers ]` (CSS Fill & Stroke L3 §6).
+    /// Returns `None` for an unknown token or a repeated component. Components
+    /// omitted from an otherwise-valid list are appended in the canonical
+    /// `fill, stroke, markers` order, as the spec requires.
+    pub fn parse(value: &str) -> Option<Self> {
+        use PaintOrderSlot::{Fill, Markers, Stroke};
+        let v = value.trim();
+        if v.eq_ignore_ascii_case("normal") {
+            return Some(Self::default());
+        }
+        let mut order: Vec<PaintOrderSlot> = Vec::with_capacity(3);
+        for tok in v.split_whitespace() {
+            let slot = if tok.eq_ignore_ascii_case("fill") {
+                Fill
+            } else if tok.eq_ignore_ascii_case("stroke") {
+                Stroke
+            } else if tok.eq_ignore_ascii_case("markers") {
+                Markers
+            } else {
+                return None;
+            };
+            if order.contains(&slot) {
+                return None; // repeated component — invalid per grammar
+            }
+            order.push(slot);
+        }
+        if order.is_empty() {
+            return None;
+        }
+        for slot in [Fill, Stroke, Markers] {
+            if !order.contains(&slot) {
+                order.push(slot);
+            }
+        }
+        Some(Self([order[0], order[1], order[2]]))
+    }
+
+    /// True when fill is painted before stroke (so the stroke is drawn on top).
+    /// Markers are ignored — Lumen does not render them. Default `normal`
+    /// (fill, stroke, markers) returns `true`; `paint-order: stroke` → `false`.
+    pub fn fill_before_stroke(&self) -> bool {
+        let fill_idx = self.0.iter().position(|s| *s == PaintOrderSlot::Fill);
+        let stroke_idx = self.0.iter().position(|s| *s == PaintOrderSlot::Stroke);
+        match (fill_idx, stroke_idx) {
+            (Some(f), Some(s)) => f <= s,
+            _ => true,
+        }
+    }
+}
+
 /// Стиль линии CSS border. None = рамка не отображается (как `display: none`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BorderStyle {
@@ -2796,6 +2873,10 @@ pub struct ComputedStyle {
     pub svg_stroke_dasharray: Vec<f32>,
     /// SVG §11.4 — `stroke-dashoffset`. Inherited. In resolved px. Initial: 0.0.
     pub svg_stroke_dashoffset: f32,
+    /// CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — `paint-order`. Inherited.
+    /// Order fill/stroke/markers are painted; initial `normal` = fill, stroke,
+    /// markers (fill drawn first, markers on top).
+    pub paint_order: SvgPaintOrder,
     // CSS Logical Properties L1 §2 — temporary storage for logical properties.
     // These are resolved to physical properties in resolve_logical_properties().
     /// CSS Logical Properties L1 — `inline-size`. `None` = auto.
@@ -5097,6 +5178,7 @@ impl ComputedStyle {
             svg_stroke_miterlimit: 4.0,
             svg_stroke_dasharray: Vec::new(),
             svg_stroke_dashoffset: 0.0,
+            paint_order: SvgPaintOrder::default(),
             // CSS Logical Properties L1 — initial values.
             inline_size: None,
             block_size: None,
@@ -5432,6 +5514,7 @@ pub fn compute_style(
         svg_stroke_miterlimit: inherited.svg_stroke_miterlimit,
         svg_stroke_dasharray: inherited.svg_stroke_dasharray.clone(),
         svg_stroke_dashoffset: inherited.svg_stroke_dashoffset,
+        paint_order: inherited.paint_order,
         // CSS Logical Properties L1 — not inherited. Initial values.
         inline_size: None,
         block_size: None,
@@ -12938,6 +13021,12 @@ fn apply_declaration(
                 style.svg_stroke_dashoffset = v;
             }
         }
+        "paint-order" => {
+            // CSS Fill & Stroke L3 §6 / SVG 2 §13.7.
+            if let Some(o) = SvgPaintOrder::parse(val) {
+                style.paint_order = o;
+            }
+        }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
             // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
@@ -14559,6 +14648,10 @@ fn apply_css_wide_keyword(
         }
         "stroke-dashoffset" => {
             style.svg_stroke_dashoffset = if inh_only_inherit { inherited.svg_stroke_dashoffset } else { init.svg_stroke_dashoffset };
+        }
+        // CSS Fill & Stroke L3 §6 — paint-order is inherited: unset/revert → inherited.
+        "paint-order" => {
+            style.paint_order = if inh { inherited.paint_order } else { init.paint_order };
         }
         "overflow" => {
             let (x, y) = if inh_only_inherit {
@@ -22843,6 +22936,69 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), false, false);
         s
+    }
+
+    // === paint-order parsing (CSS Fill & Stroke L3 §6 / SVG 2 §13.7) ===
+
+    #[test]
+    fn paint_order_normal_is_default() {
+        use PaintOrderSlot::{Fill, Markers, Stroke};
+        assert_eq!(ts_prop("paint-order", "normal").paint_order.0, [Fill, Stroke, Markers]);
+        // Root initial value is also normal.
+        assert_eq!(ComputedStyle::root().paint_order, SvgPaintOrder::default());
+    }
+
+    #[test]
+    fn paint_order_stroke_first_then_canonical_rest() {
+        use PaintOrderSlot::{Fill, Markers, Stroke};
+        // Single component → remaining appended in canonical fill, stroke, markers order.
+        assert_eq!(ts_prop("paint-order", "stroke").paint_order.0, [Stroke, Fill, Markers]);
+        assert_eq!(ts_prop("paint-order", "markers").paint_order.0, [Markers, Fill, Stroke]);
+    }
+
+    #[test]
+    fn paint_order_two_components_keep_order() {
+        use PaintOrderSlot::{Fill, Markers, Stroke};
+        assert_eq!(
+            ts_prop("paint-order", "stroke markers").paint_order.0,
+            [Stroke, Markers, Fill]
+        );
+    }
+
+    #[test]
+    fn paint_order_invalid_rejected() {
+        // Unknown token and repeated component are invalid → keep current value.
+        assert!(SvgPaintOrder::parse("bogus").is_none());
+        assert!(SvgPaintOrder::parse("fill fill").is_none());
+        assert!(SvgPaintOrder::parse("").is_none());
+        // apply_declaration leaves the (default) value unchanged on invalid input.
+        assert_eq!(ts_prop("paint-order", "bogus").paint_order, SvgPaintOrder::default());
+    }
+
+    #[test]
+    fn paint_order_fill_before_stroke_decision() {
+        assert!(SvgPaintOrder::parse("normal").unwrap().fill_before_stroke());
+        assert!(SvgPaintOrder::parse("fill stroke").unwrap().fill_before_stroke());
+        assert!(!SvgPaintOrder::parse("stroke").unwrap().fill_before_stroke());
+        assert!(!SvgPaintOrder::parse("stroke fill").unwrap().fill_before_stroke());
+        // markers-first but fill still before stroke.
+        assert!(SvgPaintOrder::parse("markers fill stroke").unwrap().fill_before_stroke());
+    }
+
+    #[test]
+    fn paint_order_inherited_via_unset() {
+        // paint-order is inherited: `unset` resolves to the inherited value.
+        let mut parent = ComputedStyle::root();
+        parent.paint_order = SvgPaintOrder::parse("stroke").unwrap();
+        let mut s = ComputedStyle::root();
+        let decl = Declaration {
+            property: "paint-order".to_string(),
+            value: "unset".to_string(),
+            important: false,
+        };
+        let vp = Size::new(800.0, 600.0);
+        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &parent, false, false);
+        assert_eq!(s.paint_order, parent.paint_order);
     }
 
     // === quotes parsing (CSS Generated Content L3 §3.2) ===

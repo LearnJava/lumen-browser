@@ -258,6 +258,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "padding-left",
     "padding-right",
     "padding-top",
+    "paint-order",
     "perspective",
     "perspective-origin",
     "place-content",

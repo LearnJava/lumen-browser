@@ -666,6 +666,20 @@
   </svg>
 </div>
 
+<!-- ─── paint-order: normal vs stroke ────────────────────────── -->
+<div style="margin-top:4px;">
+  <svg width="500" height="60" style="display:block;">
+    <!-- normal: stroke painted over fill (full band visible) -->
+    <path d="M 20 8 L 110 8 L 110 52 L 20 52 Z" fill="#ffd400" stroke="#101010" stroke-width="18"/>
+    <!-- paint-order: stroke — fill over stroke (visible stroke ~half as thick) -->
+    <path d="M 150 8 L 240 8 L 240 52 L 150 52 Z" fill="#ffd400" stroke="#101010" stroke-width="18"
+          style="paint-order: stroke"/>
+    <path d="M 280 8 L 370 8 L 370 52 L 280 52 Z" fill="#0e8f8f" stroke="#c81e3a" stroke-width="18"/>
+    <path d="M 400 8 L 490 8 L 490 52 L 400 52 Z" fill="#0e8f8f" stroke="#c81e3a" stroke-width="18"
+          style="paint-order: stroke"/>
+  </svg>
+</div>
+
 <!-- ─── SVG <use> element ────────────────────────────────────── -->
 <div style="margin-top:4px;">
   <svg width="500" height="55" style="display:block;">

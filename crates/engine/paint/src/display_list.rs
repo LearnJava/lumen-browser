@@ -5371,6 +5371,13 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
         .map(|c| apply_opacity_to_color(c, b.style.svg_stroke_opacity));
     let stroke_w = b.style.svg_stroke_width;
 
+    // CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — `paint-order`. Fill and stroke
+    // commands are collected separately so they can be emitted fill-first
+    // (default) or stroke-first per the resolved order. Markers are not yet
+    // rendered, so only fill↔stroke ordering matters.
+    let mut fill_cmds: DisplayList = Vec::new();
+    let mut stroke_cmds: DisplayList = Vec::new();
+
     match shape {
         SvgShapeKind::Rect { rx, ry, .. } => {
             let has_radius = *rx > 0.0 || *ry > 0.0;
@@ -5379,14 +5386,14 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             let radii = CornerRadii { tl: r, tl_y: r_y, tr: r, tr_y: r_y, br: r, br_y: r_y, bl: r, bl_y: r_y };
             if let Some(fc) = fill_color {
                 if has_radius {
-                    out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
+                    fill_cmds.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
                 } else {
-                    out.push(DisplayCommand::FillRect { rect: b.rect, color: fc });
+                    fill_cmds.push(DisplayCommand::FillRect { rect: b.rect, color: fc });
                 }
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
-                out.push(DisplayCommand::DrawBorder {
+                stroke_cmds.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
                     widths: [w, w, w, w],
                     colors: [sc, sc, sc, sc],
@@ -5400,11 +5407,11 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             let ry_px = b.rect.height / 2.0;
             let radii = CornerRadii { tl: rx_px, tl_y: ry_px, tr: rx_px, tr_y: ry_px, br: rx_px, br_y: ry_px, bl: rx_px, bl_y: ry_px };
             if let Some(fc) = fill_color {
-                out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
+                fill_cmds.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
-                out.push(DisplayCommand::DrawBorder {
+                stroke_cmds.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
                     widths: [w, w, w, w],
                     colors: [sc, sc, sc, sc],
@@ -5414,7 +5421,8 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             }
         }
         SvgShapeKind::Line { .. } => {
-            // SVG <line> has no fill; rendered as a stroke-width rect.
+            // SVG <line> has no fill; rendered as a stroke-width rect. paint-order
+            // is irrelevant (single component), so emit directly.
             let color = stroke_color.or(fill_color).unwrap_or(Color::BLACK);
             out.push(DisplayCommand::FillRect { rect: b.rect, color });
         }
@@ -5436,7 +5444,7 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                             .iter()
                             .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
                             .collect();
-                        out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
+                        fill_cmds.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
                     }
                 }
                 if let Some(sc) = stroke_color
@@ -5464,11 +5472,20 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                             .iter()
                             .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
                             .collect();
-                        out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
+                        stroke_cmds.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
                     }
                 }
             }
         }
+    }
+
+    // Emit fill and stroke in the order dictated by `paint-order`.
+    if b.style.paint_order.fill_before_stroke() {
+        out.append(&mut fill_cmds);
+        out.append(&mut stroke_cmds);
+    } else {
+        out.append(&mut stroke_cmds);
+        out.append(&mut fill_cmds);
     }
 }
 
@@ -11837,6 +11854,48 @@ mod tests {
             svg_paths.iter().all(|c| c.r == 233 && c.g == 69 && c.b == 96),
             "path must paint in stroke colour #e94560, not a default black fill; got {svg_paths:?}",
         );
+    }
+
+    #[test]
+    fn paint_order_default_paints_fill_then_stroke() {
+        // CSS Fill & Stroke L3 §6 — default `normal` order: fill first, stroke on top.
+        // fill=red (#ff0000), stroke=blue (#0000ff) on a closed triangle path.
+        let dl = build(
+            "<svg width='200' height='160'>\
+                <path d='M 20 140 L 180 20 L 180 140 Z' fill='#ff0000' stroke='#0000ff' stroke-width='10'/>\
+             </svg>",
+            "",
+        );
+        let colors: Vec<&Color> = dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 2, "fill + stroke → two DrawSvgPath, got {dl:?}");
+        assert_eq!((colors[0].r, colors[0].b), (255, 0), "fill (red) painted first");
+        assert_eq!((colors[1].r, colors[1].b), (0, 255), "stroke (blue) painted on top");
+    }
+
+    #[test]
+    fn paint_order_stroke_reverses_fill_and_stroke() {
+        // `paint-order: stroke` paints stroke first (under the fill).
+        let dl = build(
+            "<svg width='200' height='160'>\
+                <path d='M 20 140 L 180 20 L 180 140 Z' fill='#ff0000' stroke='#0000ff' \
+                 stroke-width='10' style='paint-order: stroke'/>\
+             </svg>",
+            "",
+        );
+        let colors: Vec<&Color> = dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 2, "fill + stroke → two DrawSvgPath, got {dl:?}");
+        assert_eq!((colors[0].r, colors[0].b), (0, 255), "stroke (blue) painted first, under fill");
+        assert_eq!((colors[1].r, colors[1].b), (255, 0), "fill (red) painted on top");
     }
 
     #[test]

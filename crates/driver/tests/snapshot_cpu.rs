@@ -200,6 +200,11 @@ const PAGES: &[&str] = &[
     // (mouse) context: matched swatches green, no-match swatches red. A GUI-
     // independent gate; run.py's Edge pipeline can't capture interaction MQs.
     "118-media-hover-pointer",
+    // CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — paint-order. Thick-stroked <path>
+    // squares: `normal` (fill then stroke on top) vs `paint-order: stroke` (fill
+    // over stroke, hiding its inner half). A GUI-independent gate for the
+    // fill/stroke emission order in emit_svg_shape.
+    "119-paint-order",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.
