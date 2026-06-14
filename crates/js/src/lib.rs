@@ -15,6 +15,7 @@ pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
 pub mod download_bindings;
+pub mod network_log_bindings;
 pub mod pip_bindings;
 pub mod clipboard;
 pub mod contacts;
@@ -813,6 +814,12 @@ impl QuickJsRuntime {
             // and <a download> ask the shell to start a background download.
             if let Err(e) = download_bindings::install_download_bindings(&ctx) {
                 eprintln!("Download bindings init failed: {}", e);
+            }
+
+            // Install _lumen_log_network_request(method, url, status, duration_ms)
+            // — lets page scripts record requests in the DevTools Network panel.
+            if let Err(e) = network_log_bindings::install_network_log_bindings(&ctx) {
+                eprintln!("Network-log bindings init failed: {}", e);
             }
 
             // Install navigator.credentials (WebAuthn / passkeys) — after DOM so

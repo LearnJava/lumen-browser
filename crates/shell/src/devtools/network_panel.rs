@@ -154,6 +154,32 @@ impl NetworkLog {
         }
     }
 
+    /// Record a fully-formed request logged by page JS via
+    /// `_lumen_log_network_request`. Unlike [`record_completed`], the method,
+    /// status and duration are all supplied by the caller (the engine's network
+    /// thread never saw this request), so a single complete entry is appended.
+    ///
+    /// [`record_completed`]: NetworkLog::record_completed
+    pub fn record_js(
+        &mut self,
+        method: &str,
+        url: &str,
+        status: Option<u16>,
+        duration_ms: Option<u64>,
+    ) {
+        self.entries.push(NetworkEntry {
+            method: method.to_owned(),
+            url: url.to_owned(),
+            status,
+            blocked: false,
+            failed: false,
+            reason: None,
+            start: Instant::now(),
+            duration_ms,
+        });
+        self.trim();
+    }
+
     /// Record a request blocked by the content filter. `reason` is the matched
     /// filter rule / block source (surfaced by the privacy panel).
     pub fn record_blocked(&mut self, url: &str, reason: &str) {
@@ -317,6 +343,32 @@ impl NetworkPanel {
         }
         self.entries.clear();
         self.scroll_offset = 0;
+    }
+
+    /// Pull a fresh clone of the shared log's entries.
+    ///
+    /// Used by other consumers (e.g. the inspector's Network tab) that render
+    /// from the same request stream without owning the [`NetworkPanel`]'s own
+    /// snapshot. Returns an empty vec if the lock is poisoned.
+    pub fn entries_clone(&self) -> Vec<NetworkEntry> {
+        self.log
+            .lock()
+            .map(|g| g.entries.clone())
+            .unwrap_or_default()
+    }
+
+    /// Append a JS-logged request to the shared log (drained from
+    /// `_lumen_log_network_request`). See [`NetworkLog::record_js`].
+    pub fn record_js_request(
+        &self,
+        method: &str,
+        url: &str,
+        status: Option<u16>,
+        duration_ms: Option<u64>,
+    ) {
+        if let Ok(mut g) = self.log.lock() {
+            g.record_js(method, url, status, duration_ms);
+        }
     }
 
     /// Number of entries in the current snapshot.

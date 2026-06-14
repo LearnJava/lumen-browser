@@ -5521,6 +5521,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // _lumen_log_network_request(method, url, status, duration_ms): fold
+        // JS-logged requests into the shared NetworkLog so they appear in the
+        // DevTools Network panel / inspector Network tab (CC-9).
+        {
+            let recs = lumen_js::network_log_bindings::take_network_log_records();
+            if !recs.is_empty() {
+                for r in recs {
+                    self.network_panel
+                        .record_js_request(&r.method, &r.url, r.status, r.duration_ms);
+                }
+                self.request_redraw();
+            }
+        }
+
         // §12.3 Read-later: drain completed background page fetches and persist.
         while let Ok((url, title, html)) = self.read_later_rx.try_recv() {
             let now = std::time::SystemTime::now()
@@ -7147,8 +7161,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 // DevTools inspector intercepts the wheel while visible (§7E.2):
-                // scroll the active tab's property list.
-                if self.dom_inspector.visible && self.dom_inspector.selected.is_some() {
+                // scroll the active tab's property list. The Network tab is
+                // page-wide and scrolls even without a pinned element.
+                if self.dom_inspector.visible
+                    && (self.dom_inspector.selected.is_some()
+                        || self.dom_inspector.active_tab
+                            == devtools::inspector::InspectorTab::Network)
+                {
                     let lines = match delta {
                         MouseScrollDelta::LineDelta(_, l) => l,
                         MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
@@ -7812,6 +7831,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         (pw as f32 / dpr) as u32,
                         (ph as f32 / dpr) as u32,
                     );
+                    // Feed the inspector's Network tab a fresh request snapshot
+                    // from the shared NetworkLog (CC-9).
+                    let net_entries = self.network_panel.entries_clone();
+                    self.dom_inspector.set_network_entries(net_entries);
                     let mut insp_cmds = devtools::inspector::build_inspector_panel(
                         &self.dom_inspector,
                         win_css,

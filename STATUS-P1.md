@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(нет)_
+CC-9 DevTools Network panel  branch: p1-cc9-devtools-network
 
 ---
 

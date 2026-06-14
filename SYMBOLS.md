@@ -1014,7 +1014,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-js  (256 symbols)
+## lumen-js  (260 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1118,49 +1118,49 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/inert.rs:22` **fn** `install_inert_api` — Install `HTMLElement.prototype.inert` getter/setter into the JS context
 `crates/js/src/intl_bindings.rs:42` **fn** `install_intl_bindings` — Install the `Intl` shim into the JS context
 `crates/js/src/launch_handler.rs:14` **fn** `install_launch_handler_api` — Install Launch Handler API bindings into the JS context
-`crates/js/src/lib.rs:135` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:149` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:299` **fn** `new`
-`crates/js/src/lib.rs:373` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
-`crates/js/src/lib.rs:389` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
-`crates/js/src/lib.rs:399` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
-`crates/js/src/lib.rs:465` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:1208` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:1217` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:1234` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
-`crates/js/src/lib.rs:1277` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:1302` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
-`crates/js/src/lib.rs:1316` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:1341` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:1360` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:1370` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:1381` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
-`crates/js/src/lib.rs:1389` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
-`crates/js/src/lib.rs:1397` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:1406` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:1415` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:1424` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:1432` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:1441` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:1453` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:1462` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:1469` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
-`crates/js/src/lib.rs:1475` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
-`crates/js/src/lib.rs:1484` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:1495` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:1504` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
-`crates/js/src/lib.rs:1513` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:1522` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:1532` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:1550` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:1562` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
-`crates/js/src/lib.rs:1575` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
-`crates/js/src/lib.rs:1593` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
-`crates/js/src/lib.rs:1608` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
-`crates/js/src/lib.rs:1629` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
-`crates/js/src/lib.rs:1639` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
-`crates/js/src/lib.rs:1674` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
-`crates/js/src/lib.rs:1711` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
+`crates/js/src/lib.rs:136` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:150` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:300` **fn** `new`
+`crates/js/src/lib.rs:374` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
+`crates/js/src/lib.rs:390` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
+`crates/js/src/lib.rs:400` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
+`crates/js/src/lib.rs:466` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:1215` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:1224` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:1241` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
+`crates/js/src/lib.rs:1284` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:1309` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
+`crates/js/src/lib.rs:1323` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:1348` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:1367` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:1377` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:1388` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
+`crates/js/src/lib.rs:1396` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
+`crates/js/src/lib.rs:1404` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:1413` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:1422` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:1431` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:1439` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:1448` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:1460` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:1469` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:1476` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
+`crates/js/src/lib.rs:1482` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
+`crates/js/src/lib.rs:1491` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:1502` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:1511` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
+`crates/js/src/lib.rs:1520` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:1529` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:1539` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:1557` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:1569` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:1582` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
+`crates/js/src/lib.rs:1600` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
+`crates/js/src/lib.rs:1615` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
+`crates/js/src/lib.rs:1636` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
+`crates/js/src/lib.rs:1646` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
+`crates/js/src/lib.rs:1681` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
+`crates/js/src/lib.rs:1718` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
 `crates/js/src/local_font_access.rs:19` **fn** `install_local_font_access_api` — Install Local Font Access API shim into the JS context
 `crates/js/src/long_animation_frames.rs:24` **fn** `install_long_animation_frames_bindings` — Install Long Animation Frames API into the QuickJS context
 `crates/js/src/media_capabilities.rs:8` **fn** `install_media_capabilities_bindings` — Install Media Capabilities API bindings into the JS context
@@ -1173,6 +1173,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/navigator_bindings.rs:93` **fn** `current_navigator_profile` — Return the currently configured profile, or the default if none was set
 `crates/js/src/navigator_bindings.rs:111` **fn** `install_navigator_bindings` — Install navigator/screen/timezone normalization shim into the JS context,
 `crates/js/src/navigator_bindings.rs:117` **fn** `install_navigator_bindings_with` — Install the navigator shim using an explicit [`NavigatorProfile`], ignoring
+`crates/js/src/network_log_bindings.rs:28` **struct** `NetworkLogRecord` — A single network request logged by JS, awaiting the shell's drain
+`crates/js/src/network_log_bindings.rs:51` **fn** `enqueue` — Enqueue a network-log record. Public so non-JS engine paths can reuse the
+`crates/js/src/network_log_bindings.rs:63` **fn** `take_network_log_records` — Drain and return all pending network-log records
+`crates/js/src/network_log_bindings.rs:72` **fn** `install_network_log_bindings` — Install the `_lumen_log_network_request(method, url, status, duration_ms)`
 `crates/js/src/notifications_bindings.rs:21` **struct** `NotificationRequest` — A notification request queued by `new Notification(...)` in JS
 `crates/js/src/notifications_bindings.rs:34` **type** `NotificationQueue` — Shared queue of pending notification requests
 `crates/js/src/notifications_bindings.rs:52` **fn** `install_notifications_bindings` — Install Web Notifications API globals into the JS context
@@ -2495,7 +2499,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (808 symbols)
+## lumen-shell  (812 symbols)
 
 `crates/shell/src/address_bar.rs:56` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:70` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2587,44 +2591,48 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/devtools/console_panel.rs:177` **fn** `scroll_up` — Scroll up by `n` lines (towards older messages)
 `crates/shell/src/devtools/console_panel.rs:184` **fn** `scroll_down` — Scroll down by `n` lines (towards newer messages)
 `crates/shell/src/devtools/console_panel.rs:196` **fn** `build_console_panel` — Build the viewport-locked console panel overlay
-`crates/shell/src/devtools/inspector.rs:72` **enum** `InspectorTab` — Which tab of the DevTools inspector panel is currently active
-`crates/shell/src/devtools/inspector.rs:82` **struct** `SelectedNode` — A node currently pinned by the inspector, with its computed-style snapshot
-`crates/shell/src/devtools/inspector.rs:102` **struct** `DomInspectorPanel` — DevTools DOM inspector panel state
-`crates/shell/src/devtools/inspector.rs:116` **fn** `new` — Create a hidden inspector with no hover or selection
-`crates/shell/src/devtools/inspector.rs:122` **fn** `toggle` — Toggle inspector activity. Clears hover (but keeps the last selection)
-`crates/shell/src/devtools/inspector.rs:131` **fn** `set_hovered` — Update the node under the cursor. Returns `true` when the value changed
-`crates/shell/src/devtools/inspector.rs:143` **fn** `select` — Pin a node as the current selection
-`crates/shell/src/devtools/inspector.rs:161` **fn** `switch_tab` — Switch the active tab to `tab`
-`crates/shell/src/devtools/inspector.rs:169` **fn** `is_panel_click` — Returns `true` if `x` is inside the right-docked panel, given window CSS width
-`crates/shell/src/devtools/inspector.rs:175` **fn** `click_tab_at` — Handle a click that is inside the panel. Switches tab when the click lands
-`crates/shell/src/devtools/inspector.rs:194` **fn** `scroll_up` — Scroll the active tab's property list up (towards the top)
-`crates/shell/src/devtools/inspector.rs:208` **fn** `scroll_down` — Scroll the active tab's property list down (towards the bottom), clamped
-`crates/shell/src/devtools/inspector.rs:227` **fn** `find_box` — Find the [`LayoutBox`] for `node` in document order. Returns `None` when the
-`crates/shell/src/devtools/inspector.rs:246` **fn** `box_model_rects` — Compute the four box-model rectangles for `lb` in document (page) coordinates
-`crates/shell/src/devtools/inspector.rs:301` **fn** `build_box_overlay` — Build the box-model overlay for the hovered box, translated from page
-`crates/shell/src/devtools/inspector.rs:334` **fn** `element_label` — Build a human-readable DOM label for `node`, e.g. `div#main.card`, `#text`,
-`crates/shell/src/devtools/inspector.rs:366` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
-`crates/shell/src/devtools/inspector.rs:463` **fn** `build_inspector_panel` — Build the right-docked inspector side panel
+`crates/shell/src/devtools/inspector.rs:105` **enum** `InspectorTab` — Which tab of the DevTools inspector panel is currently active
+`crates/shell/src/devtools/inspector.rs:117` **struct** `SelectedNode` — A node currently pinned by the inspector, with its computed-style snapshot
+`crates/shell/src/devtools/inspector.rs:137` **struct** `DomInspectorPanel` — DevTools DOM inspector panel state
+`crates/shell/src/devtools/inspector.rs:162` **fn** `new` — Create a hidden inspector with no hover or selection
+`crates/shell/src/devtools/inspector.rs:168` **fn** `toggle` — Toggle inspector activity. Clears hover (but keeps the last selection)
+`crates/shell/src/devtools/inspector.rs:177` **fn** `set_hovered` — Update the node under the cursor. Returns `true` when the value changed
+`crates/shell/src/devtools/inspector.rs:189` **fn** `select` — Pin a node as the current selection
+`crates/shell/src/devtools/inspector.rs:207` **fn** `switch_tab` — Switch the active tab to `tab`
+`crates/shell/src/devtools/inspector.rs:214` **fn** `set_network_entries` — Replace the Network-tab snapshot with `entries` (oldest first). Clamps the
+`crates/shell/src/devtools/inspector.rs:224` **fn** `is_panel_click` — Returns `true` if `x` is inside the right-docked panel, given window CSS width
+`crates/shell/src/devtools/inspector.rs:230` **fn** `click_tab_at` — Handle a click that is inside the panel. Switches tab when the click lands
+`crates/shell/src/devtools/inspector.rs:256` **fn** `scroll_up` — Scroll the active tab's list up
+`crates/shell/src/devtools/inspector.rs:278` **fn** `scroll_down` — Scroll the active tab's list down, clamped so the last page stays visible
+`crates/shell/src/devtools/inspector.rs:302` **fn** `find_box` — Find the [`LayoutBox`] for `node` in document order. Returns `None` when the
+`crates/shell/src/devtools/inspector.rs:321` **fn** `box_model_rects` — Compute the four box-model rectangles for `lb` in document (page) coordinates
+`crates/shell/src/devtools/inspector.rs:376` **fn** `build_box_overlay` — Build the box-model overlay for the hovered box, translated from page
+`crates/shell/src/devtools/inspector.rs:409` **fn** `element_label` — Build a human-readable DOM label for `node`, e.g. `div#main.card`, `#text`,
+`crates/shell/src/devtools/inspector.rs:441` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
+`crates/shell/src/devtools/inspector.rs:538` **fn** `build_inspector_panel` — Build the right-docked inspector side panel
 `crates/shell/src/devtools/network_panel.rs:76` **struct** `NetworkEntry` — A single recorded HTTP request and its lifecycle state
 `crates/shell/src/devtools/network_panel.rs:109` **struct** `NetworkLog` — Shared, append-only log of HTTP requests for the network panel
 `crates/shell/src/devtools/network_panel.rs:116` **fn** `record_started` — Record a newly started request: appends a pending entry
 `crates/shell/src/devtools/network_panel.rs:133` **fn** `record_completed` — Record a completed request: fills the most recent matching pending entry
-`crates/shell/src/devtools/network_panel.rs:159` **fn** `record_blocked` — Record a request blocked by the content filter. `reason` is the matched
-`crates/shell/src/devtools/network_panel.rs:179` **fn** `record_failed` — Record a network-level failure for a previously started request
-`crates/shell/src/devtools/network_panel.rs:206` **fn** `clear` — Clear all recorded requests (call on every top-level navigation)
-`crates/shell/src/devtools/network_panel.rs:212` **fn** `len` — Number of recorded requests
-`crates/shell/src/devtools/network_panel.rs:218` **fn** `is_empty` — `true` when no requests have been recorded
-`crates/shell/src/devtools/network_panel.rs:239` **struct** `NetworkLogSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND records
-`crates/shell/src/devtools/network_panel.rs:276` **struct** `NetworkPanel` — DevTools network log panel (§7E.4)
-`crates/shell/src/devtools/network_panel.rs:291` **fn** `new` — Create a new hidden panel backed by the given shared `log`
-`crates/shell/src/devtools/network_panel.rs:301` **fn** `toggle` — Toggle panel visibility
-`crates/shell/src/devtools/network_panel.rs:307` **fn** `refresh` — Pull the latest entries from the shared [`NetworkLog`] into the panel
-`crates/shell/src/devtools/network_panel.rs:314` **fn** `clear_log` — Clear the shared log (call on every top-level navigation)
-`crates/shell/src/devtools/network_panel.rs:324` **fn** `len` — Number of entries in the current snapshot
-`crates/shell/src/devtools/network_panel.rs:330` **fn** `is_empty` — `true` when the current snapshot has no entries
-`crates/shell/src/devtools/network_panel.rs:335` **fn** `scroll_up` — Scroll up by `n` rows (towards older requests)
-`crates/shell/src/devtools/network_panel.rs:341` **fn** `scroll_down` — Scroll down by `n` rows (towards newer requests)
-`crates/shell/src/devtools/network_panel.rs:353` **fn** `build_network_panel` — Build the viewport-locked network panel overlay
+`crates/shell/src/devtools/network_panel.rs:163` **fn** `record_js` — Record a fully-formed request logged by page JS via
+`crates/shell/src/devtools/network_panel.rs:185` **fn** `record_blocked` — Record a request blocked by the content filter. `reason` is the matched
+`crates/shell/src/devtools/network_panel.rs:205` **fn** `record_failed` — Record a network-level failure for a previously started request
+`crates/shell/src/devtools/network_panel.rs:232` **fn** `clear` — Clear all recorded requests (call on every top-level navigation)
+`crates/shell/src/devtools/network_panel.rs:238` **fn** `len` — Number of recorded requests
+`crates/shell/src/devtools/network_panel.rs:244` **fn** `is_empty` — `true` when no requests have been recorded
+`crates/shell/src/devtools/network_panel.rs:265` **struct** `NetworkLogSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND records
+`crates/shell/src/devtools/network_panel.rs:302` **struct** `NetworkPanel` — DevTools network log panel (§7E.4)
+`crates/shell/src/devtools/network_panel.rs:317` **fn** `new` — Create a new hidden panel backed by the given shared `log`
+`crates/shell/src/devtools/network_panel.rs:327` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/devtools/network_panel.rs:333` **fn** `refresh` — Pull the latest entries from the shared [`NetworkLog`] into the panel
+`crates/shell/src/devtools/network_panel.rs:340` **fn** `clear_log` — Clear the shared log (call on every top-level navigation)
+`crates/shell/src/devtools/network_panel.rs:353` **fn** `entries_clone` — Pull a fresh clone of the shared log's entries
+`crates/shell/src/devtools/network_panel.rs:362` **fn** `record_js_request` — Append a JS-logged request to the shared log (drained from
+`crates/shell/src/devtools/network_panel.rs:376` **fn** `len` — Number of entries in the current snapshot
+`crates/shell/src/devtools/network_panel.rs:382` **fn** `is_empty` — `true` when the current snapshot has no entries
+`crates/shell/src/devtools/network_panel.rs:387` **fn** `scroll_up` — Scroll up by `n` rows (towards older requests)
+`crates/shell/src/devtools/network_panel.rs:393` **fn** `scroll_down` — Scroll down by `n` rows (towards newer requests)
+`crates/shell/src/devtools/network_panel.rs:405` **fn** `build_network_panel` — Build the viewport-locked network panel overlay
 `crates/shell/src/download.rs:45` **struct** `DownloadId` — Opaque identifier for a single download entry
 `crates/shell/src/download.rs:50` **enum** `DownloadStatus` — Current state of a download entry
 `crates/shell/src/download.rs:71` **struct** `DownloadEntry` — A single download: source URL, destination path, and current status
@@ -3788,4 +3796,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3723 symbols in 20 crates*
+*Total: 3731 symbols in 20 crates*
