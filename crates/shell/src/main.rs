@@ -322,6 +322,7 @@ fn run_window_mode(
     let mut app = Lumen {
         display_list: Vec::new(),
         tile_grid: lumen_paint::TileGrid::default_size(),
+        display_list_cache: lumen_paint::DisplayListCache::new(),
         title: None,
         pending_images: Vec::new(),
         source,
@@ -1895,6 +1896,7 @@ impl LoadedPage {
                 col_span: 1,
                 row_span: 1,
                 svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                dirty: lumen_layout::DirtyBits::CLEAN,
             },
             font_registry: Arc::new(lumen_font::SystemFontIndex::new()),
             js_navigate: None,
@@ -3759,6 +3761,11 @@ struct Lumen {
     /// [`lumen_paint::TileGrid::update_from_diff`]. Dirty tiles are re-rendered
     /// on the next frame; clean tiles reuse the previous output (Phase 2).
     tile_grid: lumen_paint::TileGrid,
+    /// Per-subtree display-list cache. Keyed by stacking-context root `NodeId`.
+    /// Hit on a matching `content_hash` → skip re-traversing the layout tree for
+    /// that subtree. Registered with `cache_registry` so OS memory-pressure
+    /// events evict it via `EvictableCache::on_memory_pressure` (EE-4).
+    display_list_cache: lumen_paint::DisplayListCache,
     title: Option<String>,
     /// Декодированные `<img>` ресурсы. До создания Renderer-а — хранятся
     /// в Vec и заливаются в GPU в `resumed`; после — register_image идёт
@@ -4511,6 +4518,9 @@ impl Lumen {
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+        // Cache display list directly (avoid &mut self while layout_source is borrowed).
+        let _dl_hash = lumen_paint::hash_commands(&new_dl);
+        self.display_list_cache.insert(lb.node.index() as u32, new_dl.clone(), _dl_hash, None);
         self.display_list = new_dl;
         // Sync transitions: compare prev styles with new layout before replacing.
         let now_s = self.epoch.elapsed().as_secs_f32();
@@ -5680,7 +5690,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if changed {
                     // Rebuild display list with the updated scroll offsets.
                     let new_dl = paint_ordered(lb);
+                    let root_id = lb.node.index() as u32;
                     self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+                    // Cache directly — lb mutably borrows self.layout_box; only self.display_list_cache is touched here.
+                    let dl_hash = lumen_paint::hash_commands(&new_dl);
+                    self.display_list_cache.insert(root_id, new_dl.clone(), dl_hash, None);
                     self.display_list = new_dl;
                     // Sync JS cache so scrollTop/scrollLeft reads are accurate.
                     let states = collect_scroll_containers(lb)
@@ -5746,6 +5760,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Memory pressure: poll OS every 5 s; evict caches on Medium+ pressure.
         if let Some(level) = self.memory_poll.tick(&mut self.cache_registry) {
             self.image_cache.on_memory_pressure(level);
+            self.display_list_cache.on_memory_pressure(level);
             if let Some(renderer) = &mut self.renderer {
                 renderer.on_layer_memory_pressure(level);
                 renderer.on_atlas_memory_pressure(level);
