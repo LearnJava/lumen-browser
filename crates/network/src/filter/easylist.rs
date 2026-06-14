@@ -134,17 +134,12 @@ impl EasyListFilter {
 
         // Regex rule: `/pattern/` — matches full URL against the regex.
         if let Some(inner) = pattern.strip_prefix('/').and_then(|s| s.strip_suffix('/')) {
-            if !inner.is_empty() {
-                if let Ok(re) = Regex::new(inner) {
-                    let entry = FilterEntry { kind: MatchKind::Regex(re), reason: "easylist".into() };
-                    if is_exception {
-                        // Regex exceptions are stored in global_block as deny; for simplicity we
-                        // skip regex exception support in Phase 1 (rare in real lists).
-                    } else {
-                        self.global_block.push(entry);
-                        self.rule_count += 1;
-                    }
-                }
+            if !inner.is_empty()
+                && let Ok(re) = Regex::new(inner)
+                && !is_exception  // Regex exceptions skipped in Phase 1 (rare in real lists)
+            {
+                self.global_block.push(FilterEntry { kind: MatchKind::Regex(re), reason: "easylist".into() });
+                self.rule_count += 1;
             }
             return;
         }
