@@ -3,6 +3,7 @@
 
 pub mod a11y_panel;
 pub mod ai_panel;
+pub mod note_viewer;
 pub mod cert_panel;
 pub mod print_panel;
 pub mod bookmark_panel;
