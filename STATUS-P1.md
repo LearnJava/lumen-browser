@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH1-6: Stacking contexts + CSS Painting Order  branch: p1-ph1-6-stacking
-Next step: подключить build_display_list_ordered в driver/session.rs  crates/driver/src/session.rs:245
+—
 
 ---
 
@@ -17,7 +16,6 @@ Next step: подключить build_display_list_ordered в driver/session.rs 
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PH1-6 | **Stacking contexts + CSS Painting Order** (CSS 2.1 Appendix E) — модель stacking-ов в layout; z-index детерминированный; сейчас paint в порядке DOM-обхода | L | `lumen-layout` |
 | PH1-7 | **Compositor thread + Property Trees** — `TransformTree/ScrollTree/EffectTree/ClipTree` на отдельном thread, off-main-thread scroll; P1 строит property trees от style/layout, P2 compositor pipeline + GPU | L | `lumen-layout`, `lumen-paint` |
 | PH1-8 | **Preload scanner** (HTML LS §13.2.6.4.7) — отдельный pre-parser стартует fetch до DOM construction; P1 — отдельный mode tokenizer-а поверх существующего `scan_preload_hints` | M | `lumen-html-parser`, `lumen-shell` |
 | PH1-9 | **lumen-mcp-server крейт** — Model Context Protocol over stdio/UNIX socket; Resources: screenshot, a11y_tree, layout, console, network; Tools: click, type, scroll, navigate, wait, eval; `lumen --mcp` / `lumen --mcp-port N` | L | `lumen-shell` |
@@ -55,6 +53,7 @@ Next step: подключить build_display_list_ordered в driver/session.rs 
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH1-6: Stacking contexts + CSS Painting Order | Подключён `build_display_list_ordered` (StackingTree + PaintOrder) к 4 точкам driver: `InProcessSession.screenshot()`, `screenshot_cpu_rgba()`, `display_list_for_compare()`, `WinitSession.screenshot()`. 3 новых теста в `test_stacking_order.rs` верифицируют CSS 2.1 Appendix E порядок по FillRect-цвету. |
 | 2026-06-15 | PH1-5: Packages для Linux / macOS / Windows | `.github/workflows/ci.yml` — кросс-платформенная проверка (Linux/macOS/Windows) + unit-тесты 12 non-GUI крейтов; `.github/workflows/release.yml` — 4 бинарных пакета (linux-x86_64/macos-aarch64/macos-x86_64/windows-x86_64) → GitHub Release на тег v*.*.*. |
 | 2026-06-15 | PH1-4: Network service в отдельном процессе | `lumen-ipc` крейт (IpcChannel/IpcServer/IpcClient, 4 теста); `RemoteNetworkTransport`; `lumen-network-service` бинарник; shell `--network-service` флаг + `NetworkServiceHandle::spawn()`. |
 | 2026-06-15 | PH1-15: T1 (paused) | `pause_event_loop()`/`unpause_event_loop()` в `PersistentJs`; `QuickPersistentJs` делегирует `set_document_visibility()`; вызовы в `switch_tab` (T0→T1 и T1→T0); 6 тестов. |
