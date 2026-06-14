@@ -6746,6 +6746,17 @@ function fetch(input, init) {
         var method = (init && init.method) ? String(init.method).toUpperCase() :
                      (typeof input === 'object' && input.method ? input.method.toUpperCase() : 'GET');
 
+        // Fetch §5.4 keepalive flag: request survives page unload (Beacon semantics).
+        // Phase 0: accepted syntactically; detachment from page lifecycle is Phase 2.
+        // network: keepalive — Phase 2: spawn detached thread, skip response body
+        var keepalive = !!(init && init.keepalive);
+
+        // Fetch Priority Hints (WHATWG Fetch §2.2.6): 'high'|'low'|'auto'.
+        // Phase 0: parsed and normalised; network priority queue wiring is Phase 2.
+        // network: priority queue — lumen-network Phase 2
+        var _fetchPriority = (init && init.priority) ? String(init.priority) : 'auto';
+        if (_fetchPriority !== 'high' && _fetchPriority !== 'low') { _fetchPriority = 'auto'; }
+
         var reqBody = (init && init.body !== undefined && init.body !== null) ? init.body
                     : (typeof input === 'object' && input.body ? input.body : null);
 
@@ -18528,6 +18539,64 @@ mod tests {
         let rt = runtime_with_fetch(Arc::clone(&capture));
         let r = rt.eval("navigator.sendBeacon('https://example.com/ping', 'hit')").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ─── fetch keepalive + priority tests (FF-5) ─────────────────────────────
+
+    #[test]
+    fn fetch_keepalive_with_provider_fires_request() {
+        // keepalive=true in Phase 0 behaves like a normal fetch (synchronous path),
+        // so the provider is called and the response is resolved.
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        // Keepalive POST with body — should fire the request synchronously.
+        let r = rt.eval(
+            "var p = fetch('https://example.com/analytics', \
+               { method: 'POST', body: 'ping', keepalive: true }); \
+             p instanceof Promise"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+        let calls = capture.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "keepalive fetch must fire the network request");
+        assert_eq!(calls[0].0, "https://example.com/analytics");
+        assert_eq!(calls[0].1, "POST");
+    }
+
+    #[test]
+    fn fetch_keepalive_no_provider_returns_promise() {
+        // Without a provider, keepalive fetch behaves like a normal fetch:
+        // still returns a Promise (rejected), does not throw synchronously.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "fetch('https://example.com/ping', { keepalive: true }) instanceof Promise"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_priority_high_and_low_accepted() {
+        // Fetch Priority Hints §2.2.6: 'high' and 'low' are valid values.
+        // Both should be accepted without error; Phase 0 ignores them for scheduling.
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        rt.eval(
+            "fetch('https://example.com/h', { priority: 'high' }); \
+             fetch('https://example.com/l', { priority: 'low' })"
+        ).unwrap();
+        let calls = capture.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "both priority fetch calls must fire");
+    }
+
+    #[test]
+    fn fetch_priority_invalid_normalizes_to_auto() {
+        // Any value outside 'high'|'low' normalises to 'auto' — no error thrown,
+        // request still fires normally.
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        // 'urgent' is not a valid priority value; silently treated as 'auto'.
+        rt.eval("fetch('https://example.com/', { priority: 'urgent' })").unwrap();
+        let calls = capture.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "invalid priority must not prevent request from firing");
     }
 
     // ─── URL.createObjectURL tests ────────────────────────────────────────────
