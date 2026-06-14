@@ -66,6 +66,7 @@
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-14 | P0-2: Pure layout + paint audit | Аудит: нет static mut/lazy_static/OnceCell в hot path; thread_local корректно сброшены; GlyphAtlas+ImageDecodeCache per-renderer; исправлен layout() — добавлен invalidate_rule_idx_cache(). |
 | 2026-06-14 | P0-1: DOM arena audit | Аудит подтвердил: NodeId(u32) арена без Rc<RefCell>, to_bytes/from_bytes с 214 тестами. Добавлен compile-time Send+Sync gate (ADR-008 §11.4). |
 | 2026-06-14 | II-2: WebAuthn platform HID enumeration Phase 1 | `platform_enumerate_ctap2_devices()` + `win_hid::enumerate()` (SetupDi + HidP_GetCaps фильтр FIDO_USAGE_PAGE) + `linux_hid::enumerate()` (hidraw0..31 + sysfs HID-дескриптор); inline FFI без новых зависимостей; 10 unit-тестов |
 | 2026-06-14 | GG-5: Tab hibernation Phase 2 (LZ4) | `lz4_flex` compress/decompress для `js_heap_blob`; `compressed INTEGER` колонка + ALTER TABLE миграция; 5 unit-тестов; 582 итого в lumen-storage |
