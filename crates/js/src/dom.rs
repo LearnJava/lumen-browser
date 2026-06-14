@@ -18655,6 +18655,80 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Number(0.0));
     }
 
+    // ─── PH1-15: T1 pause/unpause via set_document_visibility ───────────────
+
+    #[test]
+    fn set_document_visibility_hidden_sets_document_hidden() {
+        let rt = runtime_with_dom(make_doc());
+        rt.set_document_visibility(true);
+        let r = rt.eval("document.hidden").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_document_visibility_visible_clears_document_hidden() {
+        let rt = runtime_with_dom(make_doc());
+        // Start hidden, then unpause.
+        rt.set_document_visibility(true);
+        rt.set_document_visibility(false);
+        let r = rt.eval("document.visibilityState === 'visible' && document.hidden === false").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_document_visibility_fires_visibilitychange_on_hide() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var fired = false; \
+             document.addEventListener('visibilitychange', function() { fired = true; }); \
+             true"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+        rt.set_document_visibility(true);
+        let fired = rt.eval("fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_document_visibility_fires_visibilitychange_on_show() {
+        let rt = runtime_with_dom(make_doc());
+        // Hide first.
+        rt.set_document_visibility(true);
+        // Register listener after hide.
+        rt.eval(
+            "var showFired = false; \
+             document.addEventListener('visibilitychange', function() { showFired = true; });"
+        ).unwrap();
+        rt.set_document_visibility(false);
+        let r = rt.eval("showFired").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_document_visibility_noop_on_same_state() {
+        let rt = runtime_with_dom(make_doc());
+        // Already visible — hiding fires event.
+        rt.eval(
+            "var count = 0; \
+             document.addEventListener('visibilitychange', function() { count++; });"
+        ).unwrap();
+        // Calling visible→visible: no event expected.
+        rt.set_document_visibility(false); // already visible
+        let r = rt.eval("count").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn set_document_visibility_heap_survives_pause_unpause() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("globalThis.__t1_val__ = 99;").unwrap();
+        // Simulate T0 → T1 → T0.
+        rt.set_document_visibility(true);
+        rt.set_document_visibility(false);
+        let v = rt.eval("globalThis.__t1_val__").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(99.0));
+    }
+
     // ─── document.readyState + lifecycle tests ───────────────────────────────
 
     #[test]

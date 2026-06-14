@@ -6,24 +6,17 @@
 
 ## In progress
 
-—
+PH1-15: T1 (paused) — JS event loop pause/unpause при hide/show вкладки  branch: p1-t1-paused
+Next step: DONE — pause_event_loop/unpause_event_loop в PersistentJs + QuickPersistentJs; вызов в switch_tab; 6 тестов
 
 ---
 
 ## Next
 
-### P0 — Phase 0: Архивные ⬜ (не закрыты в phases.md)
-
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| P0-2 | **Pure layout + paint audit** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D) | S | `lumen-layout`, `lumen-paint` |
-
 ### PH1 — Phase 1: v0.1 «Reader»
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PH1-2 | **Progressive / streaming rendering pipeline** — window создаётся первым до fetch; HTML fetch в фоновом потоке, chunks через channel; tokenizer переделать на push-based; subresources параллельно; relayout только грязного поддерева, throttling ~60 Гц | XL | `lumen-html-parser`, `lumen-shell`, `lumen-network`, `lumen-layout` |
-| PH1-3 | **Horizontal scroll + momentum** — горизонтальный скролл + trackpad free-flick (momentum physics); `scroll_x` + `clamp_scroll_x` | M | `lumen-shell` |
 | PH1-4 | **Network service в отдельном процессе** — IPC с shell-ом, fetch в отдельном process | L | `lumen-network`, `lumen-shell` |
 | PH1-5 | **Packages для Linux / macOS / Windows** — бинарные дистрибутивы; CI pipeline (GitHub Actions) | M | infrastructure |
 | PH1-6 | **Stacking contexts + CSS Painting Order** (CSS 2.1 Appendix E) — модель stacking-ов в layout; z-index детерминированный; сейчас paint в порядке DOM-обхода | L | `lumen-layout` |
