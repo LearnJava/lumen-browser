@@ -116,7 +116,7 @@ mod tests {
     fn make_rt() -> crate::QuickJsRuntime {
         let rt = crate::QuickJsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None)
+        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None)
             .unwrap();
         rt
     }

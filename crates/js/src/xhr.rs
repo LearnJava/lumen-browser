@@ -410,7 +410,7 @@ mod tests {
 
     fn rt() -> QuickJsRuntime {
         let r = QuickJsRuntime::new().unwrap();
-        r.install_dom(make_doc(), "", None, None, None, None, None, None)
+        r.install_dom(make_doc(), "", None, None, None, None, None, None, None)
             .unwrap();
         r
     }

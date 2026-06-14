@@ -3613,7 +3613,7 @@ fn run_scripts_with_dom(
                 if deterministic {
                     rt.set_deterministic_mode();
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, None) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 if let Some(map) = import_map {

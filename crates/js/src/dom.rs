@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
+use lumen_core::ext::{CacheBackend, CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
 use lumen_core::url::Url;
 use lumen_dom::{
     Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
@@ -249,6 +249,7 @@ pub fn install_dom_api(
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     idb_backend: Option<Arc<dyn IdbBackend>>,
     sw_backend: Option<Arc<dyn SwBackend>>,
+    cache_backend: Option<Arc<dyn CacheBackend>>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
@@ -261,7 +262,7 @@ pub fn install_dom_api(
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests, print_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests, print_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -359,6 +360,7 @@ fn install_primitives(
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     idb_backend: Option<Arc<dyn IdbBackend>>,
     sw_backend: Option<Arc<dyn SwBackend>>,
+    cache_backend: Option<Arc<dyn CacheBackend>>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
@@ -786,145 +788,199 @@ fn install_primitives(
             }
         );
 
+        // Dispatch helpers: use SQLite backend when provided, fall back to in-memory map.
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_put",
             // meta_json: {"method":"GET","status":200,"statusText":"OK","headers":{...}}
             // Grouped into one string to stay within rquickjs 5-arg IntoJsFunc limit.
             move |origin: String, cache_name: String, url: String, meta_json: String, body: Vec<u8>| {
-                let method = cache_meta_method(&meta_json);
-                cd.lock()
-                    .unwrap()
-                    .entry(origin)
-                    .or_default()
-                    .entry(cache_name)
-                    .or_default()
-                    .insert(url, (method, meta_json, body));
+                if let Some(ref be) = cbe {
+                    be.cache_put(&origin, &cache_name, &url, &meta_json, &body);
+                } else {
+                    let method = cache_meta_method(&meta_json);
+                    cd.lock()
+                        .unwrap()
+                        .entry(origin)
+                        .or_default()
+                        .entry(cache_name)
+                        .or_default()
+                        .insert(url, (method, meta_json, body));
+                }
             }
         );
 
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_match",
             move |origin: String, cache_name: String, url: String| -> Option<Vec<u8>> {
-                cd.lock()
-                    .unwrap()
-                    .get(&origin)
-                    .and_then(|caches| caches.get(&cache_name))
-                    .and_then(|cache| cache.get(&url))
-                    .map(|(_, _, body)| body.clone())
+                if let Some(ref be) = cbe {
+                    be.cache_match(&origin, &cache_name, &url).map(|(_, body)| body)
+                } else {
+                    cd.lock()
+                        .unwrap()
+                        .get(&origin)
+                        .and_then(|caches| caches.get(&cache_name))
+                        .and_then(|cache| cache.get(&url))
+                        .map(|(_, _, body)| body.clone())
+                }
             }
         );
 
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_match_info",
             // Returns the raw meta_json stored at put time (already JSON-encoded).
             move |origin: String, cache_name: String, url: String| -> Option<String> {
-                cd.lock()
-                    .unwrap()
-                    .get(&origin)
-                    .and_then(|caches| caches.get(&cache_name))
-                    .and_then(|cache| cache.get(&url))
-                    .map(|(_, meta, _)| meta.clone())
+                if let Some(ref be) = cbe {
+                    be.cache_match(&origin, &cache_name, &url).map(|(meta, _)| meta)
+                } else {
+                    cd.lock()
+                        .unwrap()
+                        .get(&origin)
+                        .and_then(|caches| caches.get(&cache_name))
+                        .and_then(|cache| cache.get(&url))
+                        .map(|(_, meta, _)| meta.clone())
+                }
             }
         );
 
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_match_any",
             move |origin: String, url: String| -> Option<Vec<u8>> {
-                let guard = cd.lock().unwrap();
-                let caches = guard.get(&origin)?;
-                for cache in caches.values() {
-                    if let Some((_, _, body)) = cache.get(&url) {
-                        return Some(body.clone());
+                if let Some(ref be) = cbe {
+                    be.cache_match_any(&origin, &url).map(|(_, body)| body)
+                } else {
+                    let guard = cd.lock().unwrap();
+                    let caches = guard.get(&origin)?;
+                    for cache in caches.values() {
+                        if let Some((_, _, body)) = cache.get(&url) {
+                            return Some(body.clone());
+                        }
                     }
+                    None
                 }
-                None
             }
         );
 
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_match_any_info",
             move |origin: String, url: String| -> Option<String> {
-                let guard = cd.lock().unwrap();
-                let caches = guard.get(&origin)?;
-                for cache in caches.values() {
-                    if let Some((_, meta, _)) = cache.get(&url) {
-                        return Some(meta.clone());
+                if let Some(ref be) = cbe {
+                    be.cache_match_any(&origin, &url).map(|(meta, _)| meta)
+                } else {
+                    let guard = cd.lock().unwrap();
+                    let caches = guard.get(&origin)?;
+                    for cache in caches.values() {
+                        if let Some((_, meta, _)) = cache.get(&url) {
+                            return Some(meta.clone());
+                        }
                     }
+                    None
                 }
-                None
             }
         );
 
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_delete",
             move |origin: String, cache_name: String, url: String| -> bool {
-                let mut guard = cd.lock().unwrap();
-                if let Some(caches) = guard.get_mut(&origin)
-                    && let Some(cache) = caches.get_mut(&cache_name)
-                {
-                    cache.remove(&url).is_some()
+                if let Some(ref be) = cbe {
+                    be.cache_delete(&origin, &cache_name, &url)
                 } else {
-                    false
-                }
-            }
-        );
-
-        let cd = Arc::clone(&cache_data);
-        reg!(
-            "_lumen_cache_keys",
-            move |origin: String, cache_name: String| -> Vec<String> {
-                cd.lock()
-                    .unwrap()
-                    .get(&origin)
-                    .and_then(|caches| caches.get(&cache_name))
-                    .map(|cache| cache.keys().cloned().collect())
-                    .unwrap_or_default()
-            }
-        );
-
-        let cd = Arc::clone(&cache_data);
-        reg!(
-            "_lumen_cache_keys_full",
-            move |origin: String, cache_name: String| -> String {
-                let guard = cd.lock().unwrap();
-                match guard.get(&origin).and_then(|c| c.get(&cache_name)) {
-                    None => "[]".to_string(),
-                    Some(cache) => {
-                        let items: Vec<String> = cache
-                            .iter()
-                            .map(|(url, (method, _, _))| {
-                                format!(r#"{{"url":"{url}","method":"{method}"}}"#)
-                            })
-                            .collect();
-                        format!("[{}]", items.join(","))
+                    let mut guard = cd.lock().unwrap();
+                    if let Some(caches) = guard.get_mut(&origin)
+                        && let Some(cache) = caches.get_mut(&cache_name)
+                    {
+                        cache.remove(&url).is_some()
+                    } else {
+                        false
                     }
                 }
             }
         );
 
+        let cbe = cache_backend.clone();
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_keys",
+            move |origin: String, cache_name: String| -> Vec<String> {
+                if let Some(ref be) = cbe {
+                    be.cache_keys(&origin, &cache_name).into_iter().map(|(u, _)| u).collect()
+                } else {
+                    cd.lock()
+                        .unwrap()
+                        .get(&origin)
+                        .and_then(|caches| caches.get(&cache_name))
+                        .map(|cache| cache.keys().cloned().collect())
+                        .unwrap_or_default()
+                }
+            }
+        );
+
+        let cbe = cache_backend.clone();
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_keys_full",
+            move |origin: String, cache_name: String| -> String {
+                if let Some(ref be) = cbe {
+                    let pairs = be.cache_keys(&origin, &cache_name);
+                    let items: Vec<String> = pairs
+                        .iter()
+                        .map(|(url, method)| format!(r#"{{"url":"{url}","method":"{method}"}}"#))
+                        .collect();
+                    format!("[{}]", items.join(","))
+                } else {
+                    let guard = cd.lock().unwrap();
+                    match guard.get(&origin).and_then(|c| c.get(&cache_name)) {
+                        None => "[]".to_string(),
+                        Some(cache) => {
+                            let items: Vec<String> = cache
+                                .iter()
+                                .map(|(url, (method, _, _))| {
+                                    format!(r#"{{"url":"{url}","method":"{method}"}}"#)
+                                })
+                                .collect();
+                            format!("[{}]", items.join(","))
+                        }
+                    }
+                }
+            }
+        );
+
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_has",
             move |origin: String, cache_name: String| -> bool {
-                cd.lock()
-                    .unwrap()
-                    .get(&origin)
-                    .map(|caches| caches.contains_key(&cache_name))
-                    .unwrap_or(false)
+                if let Some(ref be) = cbe {
+                    be.cache_has(&origin, &cache_name)
+                } else {
+                    cd.lock()
+                        .unwrap()
+                        .get(&origin)
+                        .map(|caches| caches.contains_key(&cache_name))
+                        .unwrap_or(false)
+                }
             }
         );
 
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_delete_cache",
             move |origin: String, cache_name: String| -> bool {
-                if let Some(caches) = cd.lock().unwrap().get_mut(&origin) {
+                if let Some(ref be) = cbe {
+                    be.cache_delete_cache(&origin, &cache_name)
+                } else if let Some(caches) = cd.lock().unwrap().get_mut(&origin) {
                     caches.remove(&cache_name).is_some()
                 } else {
                     false
@@ -932,15 +988,20 @@ fn install_primitives(
             }
         );
 
+        let cbe = cache_backend.clone();
         let cd = Arc::clone(&cache_data);
         reg!(
             "_lumen_cache_names",
             move |origin: String| -> Vec<String> {
-                cd.lock()
-                    .unwrap()
-                    .get(&origin)
-                    .map(|caches| caches.keys().cloned().collect())
-                    .unwrap_or_default()
+                if let Some(ref be) = cbe {
+                    be.cache_names(&origin)
+                } else {
+                    cd.lock()
+                        .unwrap()
+                        .get(&origin)
+                        .map(|caches| caches.keys().cloned().collect())
+                        .unwrap_or_default()
+                }
             }
         );
     }
@@ -11127,7 +11188,7 @@ mod tests {
         let rt = QuickJsRuntime::new().unwrap();
         // Enable extension API (chrome.runtime) for unit tests that verify its behaviour.
         rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-        rt.install_dom(doc, "", None, None, None, None, None, None).unwrap();
+        rt.install_dom(doc, "", None, None, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -12591,6 +12652,216 @@ mod tests {
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 
+    // ── Cache API — CacheBackend trait dispatch tests ─────────────────────────
+    //
+    // MockCacheBackend exercises the CacheBackend dispatch path in install_primitives
+    // without pulling in lumen-storage as a test dependency. The SQLite
+    // implementation is separately tested in lumen-storage::cache_storage.
+
+    type MockCacheEntry = (String, Vec<u8>);
+    type MockCacheMap = std::collections::HashMap<
+        String, // origin
+        std::collections::HashMap<
+            String, // cache_name
+            std::collections::HashMap<String, MockCacheEntry>, // url → (meta, body)
+        >,
+    >;
+
+    struct MockCacheBackend {
+        data: Mutex<MockCacheMap>,
+    }
+
+    impl MockCacheBackend {
+        fn new() -> Self {
+            Self { data: Mutex::new(std::collections::HashMap::new()) }
+        }
+    }
+
+    impl lumen_core::ext::CacheBackend for MockCacheBackend {
+        fn cache_put(&self, origin: &str, name: &str, url: &str, meta_json: &str, body: &[u8]) {
+            self.data.lock().unwrap()
+                .entry(origin.to_owned()).or_default()
+                .entry(name.to_owned()).or_default()
+                .insert(url.to_owned(), (meta_json.to_owned(), body.to_vec()));
+        }
+        fn cache_match(&self, origin: &str, name: &str, url: &str) -> Option<(String, Vec<u8>)> {
+            self.data.lock().unwrap()
+                .get(origin)?.get(name)?.get(url)
+                .map(|(m, b)| (m.clone(), b.clone()))
+        }
+        fn cache_match_any(&self, origin: &str, url: &str) -> Option<(String, Vec<u8>)> {
+            let g = self.data.lock().unwrap();
+            let caches = g.get(origin)?;
+            for c in caches.values() {
+                if let Some((m, b)) = c.get(url) { return Some((m.clone(), b.clone())); }
+            }
+            None
+        }
+        fn cache_delete(&self, origin: &str, name: &str, url: &str) -> bool {
+            self.data.lock().unwrap()
+                .get_mut(origin).and_then(|c| c.get_mut(name))
+                .and_then(|c| c.remove(url)).is_some()
+        }
+        fn cache_keys(&self, origin: &str, name: &str) -> Vec<(String, String)> {
+            self.data.lock().unwrap()
+                .get(origin).and_then(|c| c.get(name))
+                .map(|c| c.iter().map(|(u, (meta, _))| {
+                    let method = cache_meta_method(meta);
+                    (u.clone(), method)
+                }).collect())
+                .unwrap_or_default()
+        }
+        fn cache_has(&self, origin: &str, name: &str) -> bool {
+            self.data.lock().unwrap()
+                .get(origin).and_then(|c| c.get(name))
+                .map(|c| !c.is_empty()).unwrap_or(false)
+        }
+        fn cache_delete_cache(&self, origin: &str, name: &str) -> bool {
+            self.data.lock().unwrap()
+                .get_mut(origin).and_then(|c| c.remove(name)).is_some()
+        }
+        fn cache_names(&self, origin: &str) -> Vec<String> {
+            self.data.lock().unwrap()
+                .get(origin).map(|c| c.keys().cloned().collect()).unwrap_or_default()
+        }
+    }
+
+    fn runtime_with_cache_backend() -> QuickJsRuntime {
+        let be: Arc<dyn lumen_core::ext::CacheBackend> = Arc::new(MockCacheBackend::new());
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, Some(be))
+            .unwrap();
+        rt
+    }
+
+    fn sqlite_cache_put(rt: &QuickJsRuntime, cache: &str, url: &str) {
+        rt.eval(&format!(
+            r#"_lumen_cache_put('https://example.com/', '{cache}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72,101,108,108,111]);"#
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn sqlite_backend_put_and_has() {
+        let rt = runtime_with_cache_backend();
+        sqlite_cache_put(&rt, "v1", "https://example.com/main.js");
+        let r = rt.eval("_lumen_cache_has('https://example.com/', 'v1')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sqlite_backend_match_returns_body() {
+        let rt = runtime_with_cache_backend();
+        sqlite_cache_put(&rt, "v1", "https://example.com/style.css");
+        let len = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/style.css').length").unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(5.0)); // "Hello" = 5 bytes
+    }
+
+    #[test]
+    fn sqlite_backend_match_info_roundtrip() {
+        let rt = runtime_with_cache_backend();
+        rt.eval(r#"_lumen_cache_put('https://example.com/', 'v1', 'https://example.com/api',
+            '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"etag":"abc123"}}', []);"#)
+            .unwrap();
+        let meta = rt.eval("_lumen_cache_match_info('https://example.com/', 'v1', 'https://example.com/api')").unwrap();
+        if let lumen_core::JsValue::String(s) = meta {
+            assert!(s.contains("304"));
+            assert!(s.contains("etag"));
+        } else {
+            panic!("expected String from _lumen_cache_match_info (sqlite backend)");
+        }
+    }
+
+    #[test]
+    fn sqlite_backend_match_any_searches_all_caches() {
+        let rt = runtime_with_cache_backend();
+        sqlite_cache_put(&rt, "static", "https://example.com/logo.png");
+        let body = rt.eval("_lumen_cache_match_any('https://example.com/', 'https://example.com/logo.png') !== null && _lumen_cache_match_any('https://example.com/', 'https://example.com/logo.png') !== undefined").unwrap();
+        assert_eq!(body, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sqlite_backend_delete_entry() {
+        let rt = runtime_with_cache_backend();
+        sqlite_cache_put(&rt, "v1", "https://example.com/old");
+        let deleted = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/old')").unwrap();
+        assert_eq!(deleted, lumen_core::JsValue::Bool(true));
+        let after = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/old') === undefined").unwrap();
+        assert_eq!(after, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sqlite_backend_keys_lists_urls() {
+        let rt = runtime_with_cache_backend();
+        sqlite_cache_put(&rt, "v1", "https://example.com/a");
+        sqlite_cache_put(&rt, "v1", "https://example.com/b");
+        let keys = rt.eval("_lumen_cache_keys('https://example.com/', 'v1')").unwrap();
+        if let lumen_core::JsValue::Array(arr) = keys {
+            assert_eq!(arr.len(), 2);
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    #[test]
+    fn sqlite_backend_delete_cache() {
+        let rt = runtime_with_cache_backend();
+        sqlite_cache_put(&rt, "tmp", "https://example.com/x");
+        let del = rt.eval("_lumen_cache_delete_cache('https://example.com/', 'tmp')").unwrap();
+        assert_eq!(del, lumen_core::JsValue::Bool(true));
+        let has = rt.eval("_lumen_cache_has('https://example.com/', 'tmp')").unwrap();
+        assert_eq!(has, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn sqlite_backend_cache_names() {
+        let rt = runtime_with_cache_backend();
+        sqlite_cache_put(&rt, "alpha", "https://example.com/1");
+        sqlite_cache_put(&rt, "beta", "https://example.com/2");
+        let names = rt.eval("_lumen_cache_names('https://example.com/')").unwrap();
+        if let lumen_core::JsValue::Array(arr) = names {
+            let strs: Vec<String> = arr
+                .into_iter()
+                .filter_map(|v| if let lumen_core::JsValue::String(s) = v { Some(s) } else { None })
+                .collect();
+            assert!(strs.contains(&"alpha".to_string()));
+            assert!(strs.contains(&"beta".to_string()));
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    #[test]
+    fn sqlite_backend_match_miss_returns_none() {
+        let rt = runtime_with_cache_backend();
+        let r = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/missing') === undefined").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sqlite_backend_keys_full_includes_method() {
+        let rt = runtime_with_cache_backend();
+        rt.eval(r#"_lumen_cache_put('https://example.com/', 'v1', 'https://example.com/post',
+            '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
+            .unwrap();
+        let r = rt.eval("_lumen_cache_keys_full('https://example.com/', 'v1').indexOf('POST') >= 0").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sqlite_backend_has_false_when_empty() {
+        let rt = runtime_with_cache_backend();
+        let r = rt.eval("_lumen_cache_has('https://example.com/', 'nonexistent')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn sqlite_backend_delete_returns_false_on_miss() {
+        let rt = runtime_with_cache_backend();
+        let r = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/nosuchurl')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
     // ── IME composition API ───────────────────────────────────────────────────
 
     #[test]
@@ -12903,7 +13174,7 @@ mod tests {
     fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None).unwrap();
         rt
     }
 
@@ -12968,7 +13239,7 @@ mod tests {
     fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None).unwrap();
         rt
     }
 
@@ -13057,7 +13328,7 @@ mod tests {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsSseProvider> =
             Arc::new(MockSseProvider { events });
-        rt.install_dom(doc, "", None, None, Some(provider), None, None, None)
+        rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None)
             .unwrap();
         rt
     }
@@ -13403,7 +13674,7 @@ mod tests {
     fn runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None).unwrap();
         rt
     }
 
@@ -13460,7 +13731,7 @@ mod tests {
 
     fn runtime_with_url(url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), url, None, None, None, None, None, None).unwrap();
+        rt.install_dom(make_doc(), url, None, None, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -13641,7 +13912,7 @@ mod tests {
 
     fn runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, ls, None, None).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, ls, None, None, None).unwrap();
         rt
     }
 
@@ -16247,7 +16518,7 @@ mod tests {
 
     fn runtime_with_idb(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, Some(backend), None)
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, Some(backend), None, None)
             .unwrap();
         rt
     }
@@ -16645,7 +16916,7 @@ mod tests {
     fn runtime_with_fetch(provider: Arc<CaptureFetch>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None).unwrap();
         rt
     }
 
@@ -20352,7 +20623,7 @@ mod tests {
     fn runtime_deterministic(doc: Arc<Mutex<Document>>, url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         rt.set_deterministic_mode();
-        rt.install_dom(doc, url, None, None, None, None, None, None).unwrap();
+        rt.install_dom(doc, url, None, None, None, None, None, None, None).unwrap();
         rt
     }
 

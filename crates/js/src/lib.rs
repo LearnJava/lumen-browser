@@ -473,6 +473,7 @@ impl QuickJsRuntime {
         ls_store: Option<Arc<Mutex<WebStorage>>>,
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
+        cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     ) -> JsResult<()> {
         // Update the ESM resolver's base URL so relative imports from inline module
         // scripts resolve correctly against the page origin (HTML LS §8.1.3).
@@ -535,6 +536,7 @@ impl QuickJsRuntime {
                 None,
                 idb_backend,
                 sw_backend,
+                cache_backend,
                 Arc::clone(&self.scroll_states),
                 Arc::clone(&self.pending_scrolls),
                 Arc::clone(&self.pending_page_scrolls),
