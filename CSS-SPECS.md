@@ -546,7 +546,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `content` | 🟡 | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; url() ⬜ |
+| `content` | 🟡 | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; open-quote/close-quote ✅ 2026-06-14; url() ⬜ |
+| `quotes` | ✅ | CSS Generated Content L3 §3.2; auto/none/[<string> <string>]+; nesting depth tracked in document order via counters pre-pass; тест 117 2026-06-14 |
 
 ### [T3] Box Alignment (grid)
 

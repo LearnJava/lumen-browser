@@ -193,6 +193,9 @@ const PAGES: &[&str] = &[
     // GUI-independent gate since the Edge/gdigrab pipeline can't capture
     // headlessly. Polar oklch/lch excluded pending BUG-154.
     "116-gradient-interpolation",
+    // CSS Generated Content L3 §3.2 — quotes + content open-quote/close-quote.
+    // Nesting depth computed in document order via the counters pre-pass.
+    "117-quotes",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

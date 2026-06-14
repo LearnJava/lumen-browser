@@ -266,6 +266,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "pointer-events",
     "position",
     "print-color-adjust",
+    "quotes",
     "resize",
     "right",
     "rotate",

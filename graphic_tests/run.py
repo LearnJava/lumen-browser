@@ -179,6 +179,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('114', '114-contain-intrinsic-size.html', 0.5, 'CSS Box Sizing L4 §5: contain-intrinsic-size — боксы с contain: size берут размер из contain-intrinsic-size, игнорируя огромного ребёнка; inline-block боксы 200×120/120×200/200×100 (em), блок высотой 90px; зелёный ребёнок не должен вылезать'),
     ('115', '115-empty-cells.html', 0.5, 'CSS Tables L2 §17.6.1.1: empty-cells — в separate-модели hide прячет border+фон у пустых <td></td>; верхняя таблица (hide) показывает шахматку только из заполненных ячеек, нижняя (show) рисует рамки+фон всех ячеек'),
     ('116', '116-gradient-interpolation.html', 0.5, 'CSS Images L4 §3.1: gradient color-interpolation-method (`in <space>`) — одинаковый red→blue линейный градиент в srgb/srgb-linear/oklab/lab/hsl; Lumen дробит список стопов через color-mix-математику, рендерер лерпит плотные стопы в sRGB; середины полос заметно различаются по пространству'),
+    ('117', '117-quotes.html', 0.5, 'CSS Generated Content L3 §3.2: quotes + content open-quote/close-quote — auto curly quotes, вложенные <q> (primary “”→secondary ‘’), кастомные пары « » / ‹ ›, quotes:none без знаков; глубина вложенности считается в document order через counters pre-pass'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

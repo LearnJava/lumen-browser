@@ -50,7 +50,7 @@ pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
     build_counter_style_registry, build_list_marker_text, resolve_counter_value,
     CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
-    CounterSystem, CounterRange, RangeBound,
+    CounterSystem, CounterRange, QuoteSlot, RangeBound,
 };
 pub use color_mix::{MixColorSpace, mix_colors};
 pub use field_sizing::field_sizing_content_intrinsic;
@@ -127,7 +127,7 @@ pub use style::{
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
     PointerEvents,
-    Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
+    Position, PositionComponent, Quotes, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
     FillRule, ScrollbarWidth, ShapeValue, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextDecorationSkipInk, TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
