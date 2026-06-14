@@ -6,7 +6,10 @@
 
 ## In progress
 
-None. Previous session completed BUG-084 investigation (2026-06-12).
+**BUG-085 — Linear/radial gradient rendering deviation**  
+Branch: p2-bug085-gradient  
+Status: Investigation & fix (TEST-39: 12.05% deviation; repeating gradients not rendering)  
+Next: dump-layout analysis, identify missing gradient tiling logic in femtovg backend
 
 ---
 
