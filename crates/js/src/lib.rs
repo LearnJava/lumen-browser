@@ -15,6 +15,7 @@ pub mod highlight_api;
 pub mod iframe_element;
 pub mod broadcast_channel;
 pub mod canvas2d;
+pub mod close_watcher;
 pub mod download_bindings;
 pub mod network_log_bindings;
 pub mod pip_bindings;
@@ -911,6 +912,13 @@ impl QuickJsRuntime {
             // Provides window.navigation singleton with currentEntry, navigate(), back(), forward(), traverseTo().
             if let Err(e) = navigation_api::install_navigation_api(&ctx) {
                 eprintln!("Navigation API init failed: {}", e);
+            }
+
+            // Install CloseWatcher API (WICG) — after DOM so `document` and `Event` exist.
+            // Provides `new CloseWatcher()` with requestClose()/destroy()/close events and
+            // Escape-key intercept on the topmost watcher.
+            if let Err(e) = close_watcher::install_close_watcher(&ctx) {
+                eprintln!("CloseWatcher init failed: {}", e);
             }
 
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM

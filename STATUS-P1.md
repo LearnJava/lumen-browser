@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(нет)_
+(пусто)
 
 ---
 
@@ -105,7 +105,17 @@ _(нет)_
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| II-1 | **`import.meta.url` + `import.meta.resolve()`** — source-level preprocessor в `LumenLoader::load`; заменяет `import.meta` → `__$lumen_meta__` var (url + resolve + env-stub); 6 unit-тестов | S | `lumen-js` |
+| ~~II-1~~ | ~~**`import.meta.url` + `import.meta.resolve()`**~~ — **выполнено** (96a61267, Merge p1-hh-status): `import_meta.rs` source-level препроцессор; `.url` + `.resolve()` + `.env` stub; 8 тестов | S | `lumen-js` |
+
+### JJ — Modern HTML5 APIs Phase 4
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| ~~JJ-1~~ | ~~**`CloseWatcher` API Phase 0** (WICG)~~ — **выполнено** (p1-jj-modern-html-apis, 2026-06-14): `close_watcher.rs` — стек `_cwStack`, `requestClose()`/`close()`/`destroy()`, `cancel`/`close` events, Escape через capture-listener; 8 unit-тестов | XS | `lumen-js` |
+| ~~JJ-2~~ | ~~**`<details name>` exclusive accordion** (HTML LS §4.11.1)~~ — **выполнено** (p1-jj-modern-html-apis, 2026-06-14): при открытии `<details name=X>` закрываем siblings с тем же атрибутом `name`, каждому toggle-событие; включено в коммит JJ-1 | S | `lumen-js` |
+| ~~JJ-3~~ | ~~**`HTMLInputElement.showPicker()` Phase 0**~~ — **выполнено** (p1-jj-modern-html-apis, 2026-06-14): типы color/date/datetime-local/month/time/week/file; иначе NotSupportedError; disabled → InvalidStateError; эмитирует click-событие; 3 unit-теста | XS | `lumen-js` |
+| ~~JJ-4~~ | ~~**`popover="hint"` type** (Popover API Level 2)~~ — **выполнено** (p1-jj-modern-html-apis, 2026-06-14): `_lumen_hint_stack`; hint закрывает hint, не трогает auto; auto закрывает hint+auto; Escape hints-first; getter возвращает 'hint'; 3 unit-теста | S | `lumen-js` |
+| ~~JJ-5~~ | ~~**`document.caretPositionFromPoint(x, y)` Phase 0**~~ — **выполнено** (p1-jj-modern-html-apis, 2026-06-14): `_CaretPosition{offsetNode, offset, getClientRects()}` + `document.caretPositionFromPoint()`; Phase 0 — body@0 (без layout hit-test); 3 unit-теста | S | `lumen-js` |
 
 ---
 
