@@ -6,8 +6,7 @@
 
 ## In progress
 
-GG-5: Tab hibernation Phase 2 (LZ4 compression)  branch: p1-gg5-tab-lz4
-Next step: add lz4_flex dep, compress js_heap_blob in SleepingTabStore  crates/storage/src/tab_snapshot.rs:311
+_(нет)_
 
 ---
 
@@ -90,7 +89,7 @@ Next step: add lz4_flex dep, compress js_heap_blob in SleepingTabStore  crates/s
 | ~~GG-2~~ | ~~**@notes omnibox Phase 1**~~ — **выполнено** (p1-gg2-notes-omnibox, 2026-06-14): `OmniboxSuggestion::Note` с `viewer_url=note-viewer:<id>`; лимит снижен до 5; `NoteViewerPanel` (floating overlay 560px: header + URL + selection + comment + [×]); `handle_omnibox_commit` перехватывает `note-viewer:<id>` → `notes_store.get(id)` → `open()`; Escape/клик [×] закрывают; 9 тестов note_viewer + 4 address_bar = 13 тестов | S | `lumen-shell`, `lumen-knowledge` |
 | ~~GG-3~~ | ~~**Privacy shields Phase 1**~~ — **выполнено** (p1-gg3-privacy-shields, 2026-06-14): `/regex/` поддержка в `EasyListFilter` (`MatchKind::Regex` через крейт `regex`); `DefaultFilterList` impl `FilterListSource` — бандлед EasyList-subset (~30 правил: Google Analytics, DoubleClick, Facebook, Criteo, Hotjar и пр. + 2 regex-правила); экспорт из `lumen_network`; интеграция через `HttpClient::with_filter` уже была; 50 filter-тестов (было 41), из них 5 regex + 11 DefaultFilterList | M | `lumen-network`, `lumen-core` |
 | ~~GG-4~~ | ~~**Vertical tabs layout mode**~~ — **выполнено** (p1-gg4-vertical-tabs, 2026-06-14): `TabLayout::Horizontal/Vertical` enum; `LAYOUT_BTN_W=28px`, `hit_test_layout_btn`, `build_layout_toggle_btn` (☰); `VerticalTabsPanel` со `scroll_y` и `scroll_by`; `build_tab_bar_vertical` с viewport-clipping; `BrowserSettings.tab_layout` persist/restore; 8 unit-тестов | M | `lumen-shell` |
-| GG-5 | **Tab hibernation Phase 2 (LZ4 compression)** — сжимать JS heap blob через `lz4_flex::compress_prepend_size` перед записью в `SleepingTabStore`; `decompress_size_prepended` при restore; сохранять `compressed: bool` в таблице; 5 unit-тестов | S | `lumen-storage`, `lumen-shell` |
+| ~~GG-5~~ | ~~**Tab hibernation Phase 2 (LZ4 compression)**~~ — **выполнено** (p1-gg5-tab-lz4, 2026-06-14): `compress_sleep_blob`/`decompress_sleep_blob` через `lz4_flex`; `compressed INTEGER NOT NULL DEFAULT 0` в `tab_snapshots`; миграция ALTER TABLE; `store()` сжимает, `fetch()` декомпрессирует по флагу; поддержка legacy rows (compressed=0); 5 новых unit-тестов (582 итого в lumen-storage) | S | `lumen-storage` |
 
 ### HH — Worker & Module APIs
 
@@ -282,6 +281,7 @@ Next step: add lz4_flex dep, compress js_heap_blob in SleepingTabStore  crates/s
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-14 | GG-5: Tab hibernation Phase 2 (LZ4 compression) | `lz4_flex::compress_prepend_size`/`decompress_size_prepended` для `js_heap_blob` в `SleepingTabStore`; колонка `compressed INTEGER NOT NULL DEFAULT 0` в `tab_snapshots`; `ALTER TABLE ADD COLUMN` миграция для pre-GG-5 on-disk БД; `fetch()` пропускает legacy rows (compressed=0) без декомпрессии; 5 unit-тестов: lz4_compress_roundtrip, compressed_flag_set_in_db, heap_blob_shrinks_for_repetitive_data, empty_heap_blob_round_trips, legacy_uncompressed_row_readable. Итого 582 теста в lumen-storage. |
 | 2026-06-14 | GG-4: Vertical tabs layout mode | `TabLayout::Horizontal/Vertical` enum + `as_str`/`from_str`; `LAYOUT_BTN_W=28px`, `hit_test_layout_btn`, `build_layout_toggle_btn` (☰ кнопка между табами и архивом); `VerticalTabsPanel`: `scroll_y` + `scroll_by(delta, count, panel_h)` с clamp; `build_tab_bar_vertical(strip, tab_h, win_h, scroll_y)` с viewport-clipping; `hit_test` принимает `scroll_y`; `MouseWheel` → `scroll_by`; `BrowserSettings.tab_layout` (persist/restore при запуске); main.rs: клик toggle → `toggle()` + `set_tab_layout(as_str())`; `tab_area_w` вычитает `LAYOUT_BTN_W` в 4 местах; 8 новых unit-тестов (1373 всего). |
 | 2026-06-14 | GG-1: AI sidebar Phase 0 | `AiBackend` trait (`query(prompt)->String`) + `NullAiBackend` в `lumen-core::ext`; `panels::ai_panel::AiPanel` — 200px right-docked panel с header/response area/input row; `Ctrl+Shift+A` → `ToggleAiPanel`; `handle_ai_panel_key` (Esc close, Backspace, Enter submit, printable → input); `page_content_width_css` вычитает PANEL_WIDTH; hit-test (Close/Header/Response/Input); 14 тестов; `// UNIQUE: §12.8`. |
 | 2026-06-14 | FF-5: Fetch keepalive + priority | `fetch(url, { keepalive: true })`: принимается, Phase 0 синхронный путь без изменений (handoff `// network: keepalive — Phase 2`). `fetch(url, { priority: 'high'|'low'|'auto' })`: парсится и нормализуется в JS шиме (невалидное → 'auto'; handoff `// network: priority queue — lumen-network Phase 2`). 4 unit-теста. Только `lumen-js`, нет новых зависимостей. |
