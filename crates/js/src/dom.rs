@@ -4170,6 +4170,98 @@ function _lumen_make_element(nid) {
     _obj.getAnimations = function() {
         return _wa_get_animations_for(this);
     };
+    // ── HTMLSelectListElement API (Open UI Customizable Select §3) ────────────
+    // Phase 0: <selectlist> renders as a native <select> widget.
+    // Options may be direct children or inside a <listbox> child element.
+    // CSS: appearance: base-select  (P4 wires ::picker(select) styling)
+    if ((_lumen_get_tag_name(nid) || '').toUpperCase() === 'SELECTLIST') {
+        _obj.multiple = false;
+        _obj.size = 1;
+        Object.defineProperty(_obj, 'options', {
+            get: function() { return _lumen_selectlist_options(nid); },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(_obj, 'length', {
+            get: function() { return _lumen_selectlist_options(nid).length; },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(_obj, 'selectedIndex', {
+            get: function() {
+                var opts = _lumen_selectlist_options(nid);
+                for (var i = 0; i < opts.length; i++) {
+                    if (opts[i].hasAttribute('selected')) return i;
+                }
+                return opts.length > 0 ? 0 : -1;
+            },
+            set: function(idx) {
+                var opts = _lumen_selectlist_options(nid);
+                for (var i = 0; i < opts.length; i++) {
+                    if (i === idx) _lumen_set_attr(opts[i].__nid__, 'selected', '');
+                    else _lumen_remove_attr(opts[i].__nid__, 'selected');
+                }
+            },
+            enumerable: true, configurable: true,
+        });
+        Object.defineProperty(_obj, 'value', {
+            get: function() {
+                var opts = _lumen_selectlist_options(nid);
+                var sel = this.selectedIndex;
+                if (sel < 0 || sel >= opts.length) return '';
+                var v = _lumen_u2n(_lumen_get_attr(opts[sel].__nid__, 'value'));
+                return v !== null ? v : (opts[sel].textContent || '');
+            },
+            set: function(v) {
+                var sv = String(v);
+                var opts = _lumen_selectlist_options(nid);
+                for (var i = 0; i < opts.length; i++) {
+                    var ov = _lumen_u2n(_lumen_get_attr(opts[i].__nid__, 'value'));
+                    if (ov === null) ov = opts[i].textContent || '';
+                    if (ov === sv) {
+                        _lumen_set_attr(opts[i].__nid__, 'selected', '');
+                    } else {
+                        _lumen_remove_attr(opts[i].__nid__, 'selected');
+                    }
+                }
+            },
+            enumerable: true, configurable: true,
+        });
+        _obj.item = function(idx) {
+            var opts = _lumen_selectlist_options(nid);
+            return (idx >= 0 && idx < opts.length) ? opts[idx] : null;
+        };
+        _obj.namedItem = function(name) {
+            var opts = _lumen_selectlist_options(nid);
+            for (var i = 0; i < opts.length; i++) {
+                var id_ = _lumen_u2n(_lumen_get_attr(opts[i].__nid__, 'id'));
+                var nm  = _lumen_u2n(_lumen_get_attr(opts[i].__nid__, 'name'));
+                if (id_ === name || nm === name) return opts[i];
+            }
+            return null;
+        };
+        _obj.add = function(el, before) {
+            if (!el || el.__nid__ === undefined) return;
+            var listbox = _lumen_selectlist_listbox(nid);
+            var container = listbox !== null ? listbox : nid;
+            if (before === undefined || before === null) {
+                _lumen_append_child(container, el.__nid__);
+            } else if (typeof before === 'number') {
+                var opts = _lumen_selectlist_options(nid);
+                if (before >= 0 && before < opts.length) {
+                    _lumen_insert_before(container, el.__nid__, opts[before].__nid__);
+                } else {
+                    _lumen_append_child(container, el.__nid__);
+                }
+            } else if (before && before.__nid__ !== undefined) {
+                _lumen_insert_before(container, el.__nid__, before.__nid__);
+            }
+        };
+        _obj.remove = function(idx) {
+            var opts = _lumen_selectlist_options(nid);
+            if (idx >= 0 && idx < opts.length) {
+                _lumen_remove_child(_lumen_u2n(_lumen_get_parent(opts[idx].__nid__)), opts[idx].__nid__);
+            }
+        };
+    }
     return _obj;
 }
 
@@ -9856,6 +9948,37 @@ window._lumen_apply_visibility  = _lumen_apply_visibility;
 // Tracks nids of dialogs opened via showModal(), in open order.
 // Maintained by _lumen_make_element's showModal/close methods (see below).
 var _lumen_modal_dialog_nids = [];
+
+// ── <selectlist> helpers (Open UI Customizable Select §3) ─────────────────────
+// Returns the <listbox> child nid of a <selectlist>, or null if absent.
+function _lumen_selectlist_listbox(sl_nid) {
+    var kids = _lumen_get_children(sl_nid);
+    for (var i = 0; i < kids.length; i++) {
+        if ((_lumen_get_tag_name(kids[i]) || '').toLowerCase() === 'listbox') return kids[i];
+    }
+    return null;
+}
+
+// Returns an array of element objects for all <option> children of a
+// <selectlist> — either direct children or inside a <listbox> child.
+function _lumen_selectlist_options(sl_nid) {
+    var out = [];
+    var kids = _lumen_get_children(sl_nid);
+    for (var i = 0; i < kids.length; i++) {
+        var tag = (_lumen_get_tag_name(kids[i]) || '').toLowerCase();
+        if (tag === 'option') {
+            out.push(_lumen_make_element(kids[i]));
+        } else if (tag === 'listbox') {
+            var gkids = _lumen_get_children(kids[i]);
+            for (var j = 0; j < gkids.length; j++) {
+                if ((_lumen_get_tag_name(gkids[j]) || '').toLowerCase() === 'option') {
+                    out.push(_lumen_make_element(gkids[j]));
+                }
+            }
+        }
+    }
+    return out;
+}
 
 // ── <details>/<summary> toggle (HTML5 §4.11.1) ───────────────────────────────
 // A click anywhere within a <summary> element toggles the `open` attribute on
@@ -18640,6 +18763,83 @@ mod tests {
         // cancel was prevented, so dialog stays open
         assert!(bool_eval(&rt,
             "document.getElementById('dlg').hasAttribute('open')"));
+    }
+
+    // ── <selectlist> tests (Open UI Customizable Select §3, Phase 0) ─────────
+
+    fn make_selectlist_doc() -> Arc<Mutex<Document>> {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        let sl   = doc.create_element(QualName::html("selectlist"));
+        let o1   = doc.create_element(QualName::html("option"));
+        let o2   = doc.create_element(QualName::html("option"));
+        let o3   = doc.create_element(QualName::html("option"));
+        fn set_attr(doc: &mut Document, nid: lumen_dom::NodeId, k: &str, v: &str) {
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(nid).data {
+                attrs.push(lumen_dom::Attribute { name: QualName::html(k), value: v.into() });
+            }
+        }
+        fn set_text(doc: &mut Document, nid: lumen_dom::NodeId, text: &str) {
+            let t = doc.create_text(text.to_owned());
+            doc.append_child(nid, t);
+        }
+        set_attr(&mut doc, sl, "id", "sl");
+        set_attr(&mut doc, o1, "value", "a");
+        set_text(&mut doc, o1, "Apple");
+        set_attr(&mut doc, o2, "value", "b");
+        set_attr(&mut doc, o2, "selected", "");
+        set_text(&mut doc, o2, "Banana");
+        set_attr(&mut doc, o3, "value", "c");
+        set_text(&mut doc, o3, "Cherry");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, sl);
+        doc.append_child(sl, o1);
+        doc.append_child(sl, o2);
+        doc.append_child(sl, o3);
+        Arc::new(Mutex::new(doc))
+    }
+
+    #[test]
+    fn selectlist_options_length() {
+        let rt = runtime_with_dom(make_selectlist_doc());
+        assert!(bool_eval(&rt,
+            "document.getElementById('sl').options.length === 3 && \
+             document.getElementById('sl').length === 3"));
+    }
+
+    #[test]
+    fn selectlist_selected_index_from_attr() {
+        let rt = runtime_with_dom(make_selectlist_doc());
+        // o2 has `selected` attr → index 1
+        assert!(bool_eval(&rt,
+            "document.getElementById('sl').selectedIndex === 1"));
+    }
+
+    #[test]
+    fn selectlist_value_from_selected_option() {
+        let rt = runtime_with_dom(make_selectlist_doc());
+        assert!(bool_eval(&rt,
+            "document.getElementById('sl').value === 'b'"));
+    }
+
+    #[test]
+    fn selectlist_set_value_changes_selected() {
+        let rt = runtime_with_dom(make_selectlist_doc());
+        assert!(bool_eval(&rt,
+            "var sl = document.getElementById('sl'); \
+             sl.value = 'c'; \
+             sl.value === 'c' && sl.selectedIndex === 2"));
+    }
+
+    #[test]
+    fn selectlist_item_by_index() {
+        let rt = runtime_with_dom(make_selectlist_doc());
+        assert!(bool_eval(&rt,
+            "var sl = document.getElementById('sl'); \
+             sl.item(0) !== null && sl.item(0).getAttribute('value') === 'a' && \
+             sl.item(99) === null"));
     }
 
     // ── HTML Popover API tests (WHATWG HTML §6.12) ────────────────────────────

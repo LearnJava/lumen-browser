@@ -390,6 +390,60 @@ fn collect_select_label(doc: &Document, select_id: NodeId) -> String {
     first_label.unwrap_or_default()
 }
 
+/// Collect the selected `<option>` label from a `<selectlist>` element.
+///
+/// `<selectlist>` may contain `<option>` elements directly or nested inside a
+/// `<listbox>` child (Customizable Select §3.1). Searches both levels.
+/// Returns the first `<option selected>` text, falling back to the first
+/// `<option>` text, or an empty string if no options are present.
+///
+/// Phase 0 layout stub — renders like a native `<select>` widget.
+/// `// CSS: appearance: base-select` — P4 wires ::picker(select) styling.
+pub fn collect_selectlist_label(doc: &Document, sl_id: NodeId) -> String {
+    // Gather direct <option> children and <option> children inside <listbox>.
+    let mut option_ids: Vec<NodeId> = Vec::new();
+    for &child_id in &doc.get(sl_id).children.clone() {
+        let child = doc.get(child_id);
+        let NodeData::Element { name, .. } = &child.data else { continue };
+        if name.local.as_str() == "option" {
+            option_ids.push(child_id);
+        } else if name.local.as_str() == "listbox" {
+            for &gc_id in &child.children.clone() {
+                let gc = doc.get(gc_id);
+                let NodeData::Element { name: gcn, .. } = &gc.data else { continue };
+                if gcn.local.as_str() == "option" {
+                    option_ids.push(gc_id);
+                }
+            }
+        }
+    }
+    let mut first_label: Option<String> = None;
+    for opt_id in option_ids {
+        let opt = doc.get(opt_id);
+        let NodeData::Element { attrs, .. } = &opt.data else { continue };
+        let label = option_text(doc, opt_id);
+        let is_selected = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("selected"));
+        if is_selected {
+            return label;
+        }
+        if first_label.is_none() {
+            first_label = Some(label);
+        }
+    }
+    first_label.unwrap_or_default()
+}
+
+/// Returns `true` when `node` is a `<selectlist>` element (Customizable Select).
+///
+/// Used by layout to render `<selectlist>` as a form control widget (Phase 0
+/// fallback — same appearance as `<select>`).
+pub fn is_selectlist(doc: &Document, node: NodeId) -> bool {
+    matches!(
+        &doc.get(node).data,
+        NodeData::Element { name, .. } if name.local.as_str() == "selectlist"
+    )
+}
+
 /// Returns the display text for an `<option>` element: `label` attribute if
 /// present, otherwise the concatenated text content of its child text nodes.
 fn option_text(doc: &Document, option_id: NodeId) -> String {
@@ -416,7 +470,7 @@ fn is_form_control_element(doc: &Document, id: NodeId) -> bool {
     matches!(
         &doc.get(id).data,
         NodeData::Element { name, .. }
-            if matches!(name.local.as_str(), "input" | "button" | "select" | "textarea" | "meter" | "progress")
+            if matches!(name.local.as_str(), "input" | "button" | "select" | "selectlist" | "textarea" | "meter" | "progress")
     )
 }
 
@@ -3094,6 +3148,13 @@ fn build_box(
                         "button"   => FormControlKind::Button,
                         "select"   => {
                             let selected_text = collect_select_label(doc, id);
+                            FormControlKind::Select { selected_text }
+                        }
+                        // <selectlist> (Customizable Select, Phase 0) renders as a
+                        // native-select widget. P4 wires ::picker(select) appearance.
+                        // CSS: appearance: base-select
+                        "selectlist" => {
+                            let selected_text = collect_selectlist_label(doc, id);
                             FormControlKind::Select { selected_text }
                         }
                         "textarea" => {
