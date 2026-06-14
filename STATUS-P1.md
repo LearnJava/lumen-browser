@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH1-1: Font fallback / matcher  branch: p1-font-fallback
-Next step: commit + merge  crates/engine/paint/src/backends/femtovg_backend.rs
+—
 
 ---
 
@@ -24,7 +23,6 @@ Next step: commit + merge  crates/engine/paint/src/backends/femtovg_backend.rs
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PH1-1 | **Font fallback / matcher** — системный font-loader (Win32 GDI / fontconfig / CoreText — без сторонних crate-ов); cascade «Inter → системный по unicode-блоку»; парсер `font-family` уже есть, не используется в paint | L | `lumen-font`, `lumen-paint`, `lumen-shell` |
 | PH1-2 | **Progressive / streaming rendering pipeline** — window создаётся первым до fetch; HTML fetch в фоновом потоке, chunks через channel; tokenizer переделать на push-based; subresources параллельно; relayout только грязного поддерева, throttling ~60 Гц | XL | `lumen-html-parser`, `lumen-shell`, `lumen-network`, `lumen-layout` |
 | PH1-3 | **Horizontal scroll + momentum** — горизонтальный скролл + trackpad free-flick (momentum physics); `scroll_x` + `clamp_scroll_x` | M | `lumen-shell` |
 | PH1-4 | **Network service в отдельном процессе** — IPC с shell-ом, fetch в отдельном process | L | `lumen-network`, `lumen-shell` |
@@ -67,6 +65,7 @@ Next step: commit + merge  crates/engine/paint/src/backends/femtovg_backend.rs
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-14 | PH1-1: Font fallback / matcher | `resolve_font_chain` в FemtovgBackend: CSS font-family list → FontProvider → femtovg FontId цепочка; eager preload CURATED_FALLBACK_FAMILIES; DrawText подключает font_family/weight/style. |
 | 2026-06-14 | P0-2: Pure layout + paint audit | Аудит: нет static mut/lazy_static/OnceCell в hot path; thread_local корректно сброшены; GlyphAtlas+ImageDecodeCache per-renderer; исправлен layout() — добавлен invalidate_rule_idx_cache(). |
 | 2026-06-14 | P0-1: DOM arena audit | Аудит подтвердил: NodeId(u32) арена без Rc<RefCell>, to_bytes/from_bytes с 214 тестами. Добавлен compile-time Send+Sync gate (ADR-008 §11.4). |
 | 2026-06-14 | II-2: WebAuthn platform HID enumeration Phase 1 | `platform_enumerate_ctap2_devices()` + `win_hid::enumerate()` (SetupDi + HidP_GetCaps фильтр FIDO_USAGE_PAGE) + `linux_hid::enumerate()` (hidraw0..31 + sysfs HID-дескриптор); inline FFI без новых зависимостей; 10 unit-тестов |
