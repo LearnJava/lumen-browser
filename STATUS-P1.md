@@ -6,8 +6,7 @@
 
 ## In progress
 
-II-1: `import.meta.url` + `import.meta.resolve()`  branch: p1-hh-status
-Next step: реализовать `inject_import_meta()` в `crates/js/src/import_meta.rs`, подключить в `LumenLoader::load` (esm.rs)
+_(нет)_
 
 ---
 
@@ -288,6 +287,7 @@ Next step: реализовать `inject_import_meta()` в `crates/js/src/impor
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-14 | II-1: import.meta.url + import.meta.resolve() + import.meta.env | `crates/js/src/import_meta.rs` — source-level препроцессор: находит `import.meta` вне строк/комментов через минимальный лексер → заменяет на `__$lumen_meta__` + вставляет преамбулу с `.url` (resolved specifier), `.resolve()` (relative join), `.env` (Vite-compat stub). Wiring: `LumenLoader::load()` в `esm.rs` + `eval_module()` в `lib.rs` (page_url). 5 unit + 3 integration тестов; 1979 lumen-js тестов зелёных. |
 | 2026-06-12 | HH-5: Compression Streams API Phase 1 | (d8f53ccc) `CompressionStream`/`DecompressionStream` через `miniz_oxide`; deflate/gzip/deflate-raw; `TransformStream`-based API; `ReadableStream` pipe; 8 unit-тестов |
 | 2026-06-12 | HH-4: BroadcastChannel API | (d5a630b7) `new BroadcastChannel(name)`, `postMessage/onmessage`; `_lumen_broadcast_post/subscribe`; multi-instance dispatch; 14 unit-тестов |
 | 2026-06-12 | HH-3: Web Locks API | (0ade949e + 06739425) `navigator.locks.request(name, opts, cb)`: exclusive/shared; in-memory LockManager + очередь; `query()`; AbortSignal; 6+6 unit-тестов |
