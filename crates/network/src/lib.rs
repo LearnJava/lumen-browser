@@ -65,7 +65,7 @@ pub use ctap2::{CompositeCredentialProvider, CtapRoamingTransport};
 pub use socks5::Socks5Proxy;
 pub use webauthn::VirtualAuthenticator;
 pub use brotli::BrotliContentDecoder;
-pub use filter::{EasyListFilter, HostsFilter, CompositeFilter};
+pub use filter::{DefaultFilterList, EasyListFilter, HostsFilter, CompositeFilter};
 pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;

@@ -35,3 +35,6 @@ rusqlite = { workspace = true }
 # Trait-anchor: none (internal WebSocket compression). Same crate used by lumen-image for
 # PNG ICC profiles. Graduation criterion: would need no-std DEFLATE for WASM target (not planned).
 flate2 = { workspace = true }
+# Exception #6 (§5): regex — EasyList /regex/ pattern matching; same workspace entry used
+# by find-in-page. Trait-anchor: RequestFilter (easylist.rs /regex/ rule variant).
+regex = { workspace = true }
