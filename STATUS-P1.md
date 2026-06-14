@@ -6,7 +6,7 @@
 
 ## In progress
 
-CC-9 DevTools Network panel  branch: p1-cc9-devtools-network
+_(нет)_
 
 ---
 
@@ -48,7 +48,7 @@ CC-9 DevTools Network panel  branch: p1-cc9-devtools-network
 | ~~CC-6~~ | ~~**Tab groups**~~ — **выполнено** (p1-cc6-tab-groups, 2026-06-14): `tabs/groups.rs` (`GroupColor` 8-цветовая палитра + `index`/`from_index` для persist; `TabGroup { id, label, color, collapsed }`) + `TabStrip.groups`/`group_id` на `TabEntry` + методы create_group/assign_to_group/ungroup/toggle_collapse/group_members/remove_group/`visible_indices` (свёрнутая группа прячет всех кроме chip); `build_tab_bar`/`hit_test` работают по visible-слотам + group-accent bar внизу таба + collapse-chip; `lumen_storage::TabGroups` SQLite (label/color/collapsed/position, 11 тестов); провязка через tab context menu (В новую группу / Свернуть·Развернуть / Убрать из группы). 18 strip + 11 storage + 2 menu тестов | M | `lumen-shell`, `lumen-storage` |
 | ~~CC-7~~ | ~~**PiP window shell integration** (Win32)~~ — **выполнено** (p1-cc7-pip-os-window, 2026-06-14): `panels/pip_os_window.rs` (тестируемое ядро — `PipOsConfig`/`pip_window_attributes` [`WindowLevel::AlwaysOnTop`→WS_EX_TOPMOST + `decorations(false)`→WS_POPUP], `build_pip_content` letterbox `object-fit: contain`, `PipController` enter/exit-машина) + `PipOsWindow` в main.rs (отдельный `Arc<Window>` + собственный `RenderBackend` через `backend_factory`); JS-провязка `lumen_js::pip_bindings` (`_lumen_pip_enter`/`_lumen_pip_exit` → process-global очередь, дренаж в `about_to_wait`); `window_event` маршрутизирует по `WindowId` (close→exit+JS notify, resize/scale/redraw→render); fallback на overlay при недоступности 2-й GPU-поверхности. 12 shell + 4 js теста | M | `lumen-shell`, `lumen-js` |
 | ~~CC-8~~ | ~~**Print background graphics**~~ — **выполнено** (p1-cc8-print-backgrounds, 2026-06-14): `print_backgrounds: bool` в `PrintPrefsSnapshot` (SQLite key, default `true`) + в `PrintPanel` (строка-тоггл «Фон» Вкл/Выкл, `PrintHit::Backgrounds`); `lumen_paint::strip_background_graphics(pages, print_backgrounds)` вырезает background-paint семейство (`FillRect`/`FillRoundedRect`/`DrawBackgroundImage`/linear·radial·conic-градиенты), сохраняя текст/border/`<img>`; провязка через `do_print_to_pdf_with_opts`. 5 paint + 2 storage + 3 shell теста | S | `lumen-shell`, `lumen-paint` |
-| CC-9 | **DevTools Network panel** — третья вкладка инспектора "Network"; `NetworkLog { method, url, status, duration_ms }`; `_lumen_log_network_request` биндинг; таблица 4 колонки; wheel scroll; 10 unit-тестов | M | `lumen-shell` |
+| ~~CC-9~~ | ~~**DevTools Network panel**~~ — **выполнено** (p1-cc9-devtools-network, 2026-06-14): `InspectorTab::Network` — третья вкладка инспектора (рядом с Elements/Computed); `NetworkEntry` feed через `set_network_entries()` + scroll; `build_network_table()` 4 колонки (Method/Status/Time/URL), цветовая индикация статуса (2xx/3xx/4xx/pending); `crates/js/src/network_log_bindings.rs` — `_lumen_log_network_request(method,url,status,ms)` native binding + `_lumen_net_log` JS-шим; process-global очередь дренируется в shell каждый тик → `NetworkPanel.record_js_request()` → `set_network_entries()` перед redraw; 8 JS-тестов + 11 shell-тестов | M | `lumen-shell`, `lumen-js` |
 | CC-10 | **Omnibox autocomplete Phase 1** — history-based suggestions при вводе: `HistoryFts::search_prefix(q)`; dropdown до 5 результатов (URL + title); ↑/↓ навигация; Enter = открыть; 6 unit-тестов | S | `lumen-shell`, `lumen-storage` |
 
 ### DD — HTML interactive elements Phase 2
