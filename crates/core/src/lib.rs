@@ -34,6 +34,7 @@ pub use ext::{
     JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime, SuspendedHeap,
     MemoryPressureLevel, MemoryPressureSource, NullMemoryPressureSource,
     CacheRegistry, EvictableCache,
+    AiBackend, NullAiBackend,
 };
 pub use form::{
     decode_form_value, encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue,

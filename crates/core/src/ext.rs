@@ -2836,3 +2836,56 @@ mod knowledge_store_tests {
         s.delete_note(id).unwrap();
     }
 }
+
+// ── AI backend (§12.8) ────────────────────────────────────────────────────────
+
+/// Synchronous AI inference backend for the sidebar AI assistant (§12.8).
+///
+/// Called from the shell when the user submits a prompt in the AI sidebar.
+/// Phase 0: synchronous, no streaming.  Phase 1 will add streaming via
+/// `query_stream(prompt) -> impl Iterator<Item = String>`.
+///
+/// Implementations must be `Send + Sync` (called from the main event loop).
+/// Response time should be under 100 ms on local hardware; remote backends
+/// should be wrapped with a timeout.
+pub trait AiBackend: Send + Sync {
+    /// Send `prompt` to the AI model and return the full response text.
+    ///
+    /// Returns an empty string on error rather than `Result` so the caller
+    /// can display it inline ("(no response)") without error-handling boiler.
+    fn query(&self, prompt: &str) -> String;
+}
+
+/// Null AI backend — always returns an informational stub.
+///
+/// Used when no real AI model is configured.  The shell installs this by
+/// default so the AI sidebar compiles and renders without any AI dependency.
+pub struct NullAiBackend;
+
+impl AiBackend for NullAiBackend {
+    fn query(&self, _prompt: &str) -> String {
+        "AI backend is not configured. \
+         Set up an AiBackend implementation to enable the assistant."
+            .to_owned()
+    }
+}
+
+#[cfg(test)]
+mod ai_backend_tests {
+    use super::*;
+
+    #[test]
+    fn null_backend_is_object_safe() {
+        let b: Box<dyn AiBackend> = Box::new(NullAiBackend);
+        let r = b.query("hello");
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn null_backend_returns_stub_for_any_prompt() {
+        let b = NullAiBackend;
+        let r1 = b.query("what is 2+2?");
+        let r2 = b.query("");
+        assert_eq!(r1, r2, "NullAiBackend should return same stub regardless of input");
+    }
+}

@@ -90,6 +90,7 @@ impl SidebarPanel {
     }
 
     /// Toggle panel visibility.  No-op when no URL has been set.
+    #[allow(dead_code)]
     pub fn toggle(&mut self) {
         if self.url.is_some() {
             self.visible = !self.visible;
