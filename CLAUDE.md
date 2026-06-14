@@ -430,7 +430,9 @@ Dependency graph and crate scope — in [lumen-plan.md](lumen-plan.md). Directio
 
 **Defined (Phase 2):** `KnowledgeStore` (`core/src/ext.rs`, impl `lumen-knowledge::DefaultKnowledgeStore` — §12.1–12.4; shell @notes omnibox wiring).
 
-**Planned:** `WindowingBackend`, `RenderBackend`, `TlsBackend`, `AiBackend`.
+**Defined (GG-1):** `AiBackend` (`core/src/ext.rs`; `query(prompt) -> String`; `NullAiBackend` stub; shell AI sidebar panel at `Ctrl+Shift+A`, `panels/ai_panel.rs`).
+
+**Planned:** `WindowingBackend`, `RenderBackend`, `TlsBackend`.
 
 ---
 

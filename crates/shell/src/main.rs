@@ -437,6 +437,8 @@ fn run_window_mode(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
+        ai_panel: panels::ai_panel::AiPanel::new(),
+        ai_backend: Box::new(lumen_core::NullAiBackend),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
         tab_groups: lumen_storage::TabGroups::open_in_memory().expect("tab_groups in-memory"),
@@ -1977,8 +1979,8 @@ enum KeyCommand {
     TogglePermissions,
     /// Включить/выключить авто-закрытие cookie-баннеров (Ctrl+Shift+K, 7C.3).
     ToggleCookieBannerDismiss,
-    /// Показать/скрыть правую боковую панель (Ctrl+Shift+A, 7D.3).
-    ToggleSidebar,
+    /// Показать/скрыть AI-панель (Ctrl+Shift+A, §12.8).
+    ToggleAiPanel,
     /// Открыть/закрыть панель настроек доступности (Ctrl+Shift+Q, E-2).
     ToggleA11y,
     /// Показать/скрыть менеджер закладок (Ctrl+Shift+O, task #22).
@@ -2109,9 +2111,9 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyK if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleCookieBannerDismiss)
         }
-        // Ctrl+Shift+A — toggle right sidebar web panel (7D.3)
+        // Ctrl+Shift+A — toggle AI sidebar panel (§12.8)
         KeyCode::KeyA if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
-            Some(KeyCommand::ToggleSidebar)
+            Some(KeyCommand::ToggleAiPanel)
         }
         // Ctrl+Shift+O — toggle bookmark manager panel (task #22)
         KeyCode::KeyO if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
@@ -4158,10 +4160,22 @@ struct Lumen {
     /// Right-docked sidebar web panel state (7D.3).
     ///
     /// Shows a secondary web viewport in a 300 CSS px slot at the right edge.
-    /// `Ctrl+Shift+A` toggles visibility; `Lumen::open_sidebar_page` supplies
-    /// the page display list.  When visible, `page_content_width_css()`
-    /// subtracts [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
+    /// `Lumen::open_sidebar_page` supplies the page display list.
+    /// When visible, `page_content_width_css()` subtracts
+    /// [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
     sidebar: panels::sidebar_panel::SidebarPanel,
+    /// AI assistant sidebar panel (§12.8, GG-1).
+    ///
+    /// Right-docked 200 CSS px panel with a prompt input field and response area.
+    /// `Ctrl+Shift+A` toggles visibility. When visible, `page_content_width_css()`
+    /// subtracts [`panels::ai_panel::PANEL_WIDTH`] and `relayout()` fires.
+    /// Queries are dispatched to [`Self::ai_backend`] synchronously (Phase 0).
+    ai_panel: panels::ai_panel::AiPanel,
+    /// AI inference backend for the AI sidebar (§12.8).
+    ///
+    /// Defaults to [`lumen_core::NullAiBackend`] (returns a stub message).
+    /// Replace with a real implementation to enable AI functionality.
+    ai_backend: Box<dyn lumen_core::AiBackend>,
     /// SQLite-backed bookmark store (in-memory for the session).
     ///
     /// Backs the bookmark manager panel. `@read-later <url>` omnibox commands and
@@ -7005,6 +7019,33 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
+                    // AI sidebar panel (§12.8): right-docked AI assistant.
+                    if self.ai_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let win_h = self.viewport_height_css() + tab_h;
+                        if let Some(hit) = panels::ai_panel::hit_test(
+                            &self.ai_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            tab_h,
+                            win_h,
+                        ) {
+                            match hit {
+                                panels::ai_panel::AiHit::Close => {
+                                    self.ai_panel.close();
+                                    self.relayout();
+                                    self.request_redraw();
+                                }
+                                panels::ai_panel::AiHit::Input
+                                | panels::ai_panel::AiHit::Response
+                                | panels::ai_panel::AiHit::Header => {}
+                            }
+                            return;
+                        }
+                    }
+
                     // Sidebar web panel (7D.3): right-docked panel.
                     if self.sidebar.visible {
                         let win_w = self.viewport_width_css();
@@ -7936,6 +7977,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         tab_h,
                     );
                     overlay_buf.append(&mut perm_cmds);
+                }
+
+                // AI sidebar panel (§12.8, GG-1): right-docked AI assistant.
+                if self.ai_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + tab_h;
+                    let mut ai_cmds = panels::ai_panel::build_panel(
+                        &self.ai_panel,
+                        win_w,
+                        tab_h,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut ai_cmds);
                 }
 
                 // Sidebar web panel (7D.3): right-docked secondary viewport.
@@ -9024,6 +9079,11 @@ impl Lumen {
             return;
         }
 
+        // AI panel input: printable text, Backspace, Enter. Ctrl/Meta fall through.
+        if self.ai_panel.visible && self.handle_ai_panel_key(code, key_event) {
+            return;
+        }
+
         // Settings panel text inputs + Esc. Modified keys fall through for global shortcuts.
         if self.print_panel.visible && self.handle_print_key(code, key_event) {
             return;
@@ -9299,10 +9359,10 @@ impl Lumen {
                 self.cookie_banner_dismiss = !self.cookie_banner_dismiss;
                 // Preference takes effect on the next page load.
             }
-            KeyCommand::ToggleSidebar => {
-                self.sidebar.toggle();
-                // Sidebar occupies right PANEL_WIDTH — relayout so main page
-                // content width adjusts accordingly.
+            KeyCommand::ToggleAiPanel => {
+                self.ai_panel.toggle();
+                // AI panel occupies right PANEL_WIDTH — relayout so main content
+                // width adjusts accordingly.
                 self.relayout();
                 self.request_redraw();
             }
@@ -10231,6 +10291,56 @@ impl Lumen {
     ///
     /// Printable chars go to the focused text field. Escape closes the dialog.
     /// Returns `true` if the key was consumed.
+    /// Handle keyboard input while the AI panel is visible.
+    ///
+    /// Returns `true` if the event was consumed (swallowed from the global
+    /// keybinding table).  Modified keys (Ctrl, Meta) fall through so that
+    /// `Ctrl+Shift+A` (toggle AI panel) still works.
+    fn handle_ai_panel_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.ai_panel.close();
+                self.relayout();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace => {
+                self.ai_panel.backspace();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                // Split borrows: inline the submit logic to let Rust prove
+                // ai_panel and ai_backend are disjoint fields.
+                let prompt = self.ai_panel.input.clone();
+                if !prompt.trim().is_empty() {
+                    let response = self.ai_backend.query(&prompt);
+                    self.ai_panel.response = response;
+                    self.ai_panel.input.clear();
+                    self.ai_panel.scroll_y = 0.0;
+                }
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if let Some(text) = key_event.text.as_ref()
+                    && !text.is_empty()
+                    && !text.chars().any(char::is_control)
+                {
+                    for ch in text.chars() {
+                        self.ai_panel.push_char(ch);
+                    }
+                    self.request_redraw();
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
     fn handle_print_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
         if self.modifiers.control_key() || self.modifiers.super_key() {
             return false;
@@ -10620,7 +10730,9 @@ impl Lumen {
         } else {
             0.0
         };
-        let right_offset = if self.sidebar.visible {
+        let right_offset = if self.ai_panel.visible {
+            panels::ai_panel::PANEL_WIDTH
+        } else if self.sidebar.visible {
             panels::sidebar_panel::PANEL_WIDTH
         } else {
             0.0
