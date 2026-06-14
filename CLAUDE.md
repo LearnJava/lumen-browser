@@ -22,7 +22,8 @@ Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it 
 | `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
 | `STATUS-P4.md` | P4 sprint: CSS spec compliance. Read at session start if you are P4. |
 | `STATUS-P5.md` | P5 maintenance: code-health aliases + sweep workflow. Read at session start if you are P5. |
-| `lumen-plan.md` | Full design doc (~2400 lines, 22 chapters): principles, scope, architecture, phases, roadmap, implementation history. Read for architecture/history; for daily status use `STATUS-PN.md` instead. |
+| `lumen-plan.md` | TOC index: links to 14 section files in `docs/plan/`. Read for architecture/history; for daily status use `STATUS-PN.md` instead. |
+| `docs/plan/` | Design doc split into 14 files: status, roadmap, history, architecture, tech-stack, engine, web-apis-shell, privacy, features, knowledge, security-performance, testing, phases, meta. |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `docs/decisions/` | Formal ADR files (one per architectural decision). See README.md + TEMPLATE.md inside. |
@@ -225,9 +226,9 @@ cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "mar
 cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A2 "FillRect\|Text"
 ```
 
-**lumen-plan.md reading rule:**
-- **DO read if you need:** Principles (§1, 8 items), Dependency policy (§5, tables), Unique features (§12), Architecture decisions (docs/decisions/ADR-*.md)
-- **DON'T read:** Detailed roadmap tables (use `STATUS-PN.md` instead) · Implementation history (use `git log` instead) · Task queue (use `STATUS-PN.md`)
+**docs/plan/ reading rule:**
+- **DO read if you need:** `docs/plan/architecture.md` (§1 Principles, §5 Dependency policy), `docs/plan/knowledge.md` (§12 Unique features), `docs/decisions/ADR-*.md`
+- **DON'T read:** `docs/plan/roadmap.md` (use `STATUS-PN.md` instead) · `docs/plan/history.md` (use `git log` instead) · `docs/plan/status.md` (use `STATUS-PN.md`)
 
 **Grep instead of reading whole files.** Use targeted grep before opening large files:
 
@@ -262,7 +263,7 @@ Regenerate after adding/moving/renaming any public symbol: `python scripts/gen_s
 **Session start protocol.** At the beginning of each session:
 1. Read `STATUS-PN.md` (your developer number) — current "In progress" task
 2. Run `git branch` — verify you're on main
-3. If you need architecture context: read `lumen-plan.md` §1 (Principles) and §5 (Dependency policy)
+3. If you need architecture context: read `docs/plan/architecture.md` (§1 Principles) and `docs/plan/tech-stack.md` (§5 Dependency policy)
 4. If you need architectural decisions: read `docs/decisions/README.md` index
 
 ### Cargo output rules
@@ -438,13 +439,13 @@ Dependency graph and crate scope — in [lumen-plan.md](lumen-plan.md). Directio
 
 ## Principles
 
-Full list (8 items) — [lumen-plan.md](lumen-plan.md) §1.
+Full list (8 items) — [docs/plan/architecture.md](docs/plan/architecture.md) §1.
 
 ---
 
 ## Dependency policy
 
-Full tables (permanent + provisional + Lumen core) — [lumen-plan.md](lumen-plan.md) §5.
+Full tables (permanent + provisional + Lumen core) — [docs/plan/tech-stack.md](docs/plan/tech-stack.md) §5.
 
 ### No new dep without justification
 
@@ -674,7 +675,7 @@ Per-crate state (scope, done, deferred, invariants) — [SUBSYSTEMS.md](SUBSYSTE
 
 ## Unique features (§12)
 
-Full list with phases — [lumen-plan.md](lumen-plan.md) §12.
+Full list with phases — [docs/plan/knowledge.md](docs/plan/knowledge.md) §12.
 
 ---
 
