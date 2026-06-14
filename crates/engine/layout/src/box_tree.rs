@@ -763,56 +763,6 @@ fn parse_dominant_baseline(attr: Option<&str>) -> SvgDominantBaseline {
     }
 }
 
-/// Calculates SVG viewBox scaling and offset for aspect-ratio preservation.
-/// Returns `(scale_x, scale_y, offset_x, offset_y)` to transform viewBox → CSS px.
-fn compute_viewbox_transform(
-    view_box: &ViewBox,
-    svg_width: f32,
-    svg_height: f32,
-    preserve: &PreserveAspectRatio,
-) -> (f32, f32, f32, f32) {
-    let vb_width = view_box.width.max(0.001);
-    let vb_height = view_box.height.max(0.001);
-
-    // Base scale: how many CSS px per SVG user unit.
-    let scale_x = svg_width / vb_width;
-    let scale_y = svg_height / vb_height;
-
-    // Determine final scale based on meet-or-slice mode.
-    let (final_scale, scale_x_adj, scale_y_adj) = match preserve.meet_or_slice {
-        SvgMeetOrSlice::Meet => {
-            // Uniform scale that fits inside: use minimum scale.
-            let s = scale_x.min(scale_y);
-            (s, s, s)
-        }
-        SvgMeetOrSlice::Slice => {
-            // Uniform scale that covers: use maximum scale.
-            let s = scale_x.max(scale_y);
-            (s, s, s)
-        }
-    };
-
-    // Calculate scaled viewBox dimensions.
-    let scaled_vb_width = vb_width * final_scale;
-    let scaled_vb_height = vb_height * final_scale;
-
-    // Determine alignment offsets within the SVG's CSS rect.
-    let offset_x = match preserve.align_x {
-        SvgAlignX::Min => 0.0,
-        SvgAlignX::Mid => (svg_width - scaled_vb_width) / 2.0,
-        SvgAlignX::Max => svg_width - scaled_vb_width,
-    };
-
-    let offset_y = match preserve.align_y {
-        SvgAlignY::Min => 0.0,
-        SvgAlignY::Mid => (svg_height - scaled_vb_height) / 2.0,
-        SvgAlignY::Max => svg_height - scaled_vb_height,
-    };
-
-    // Return scale and origin offset due to viewBox min_x/min_y.
-    (scale_x_adj, scale_y_adj, offset_x - view_box.min_x * final_scale, offset_y - view_box.min_y * final_scale)
-}
-
 /// Computes viewBox-to-CSS-px transform using CSS Images L3 §5.5 `object-fit` /
 /// `object-position` semantics. Returns `(scale_x, scale_y, offset_x, offset_y)` where
 /// offsets are relative to the SVG box's top-left corner (viewBox min_x/min_y included).
@@ -1109,14 +1059,10 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.x = start_x + margin_left;
     b.rect.y = start_y + margin_top;
 
-    let (view_box, preserve_aspect_ratio) = if let BoxKind::SvgRoot { view_box, preserve_aspect_ratio } = &b.kind {
-        (view_box.clone(), preserve_aspect_ratio.clone())
+    let view_box = if let BoxKind::SvgRoot { view_box, .. } = &b.kind {
+        view_box.clone()
     } else {
-        (None, PreserveAspectRatio {
-            align_x: SvgAlignX::Mid,
-            align_y: SvgAlignY::Mid,
-            meet_or_slice: SvgMeetOrSlice::Meet,
-        })
+        None
     };
 
     // SVG intrinsic size: CSS width/height wins, then viewBox dimensions, then SVG defaults.
@@ -1133,17 +1079,15 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.width  = svg_w;
     b.rect.height = svg_h;
 
-    // viewBox → CSS-px transform: scale + origin offset with aspect-ratio preservation.
-    // CSS Images L3 §5.5 — object-fit / object-position override SVG preserveAspectRatio
-    // when explicitly set. Default `Fill` preserves the SVG attribute behavior so existing
-    // inline SVG content (xMidYMid meet) continues to render correctly.
+    // viewBox → CSS-px transform via CSS Images L3 §5.5 `object-fit` / `object-position`.
+    // For inline SVG painted as a replaced element, browsers map the viewBox into the
+    // viewport according to object-fit, overriding the SVG `preserveAspectRatio` attribute
+    // (Edge ground truth, TEST-70). The initial value `fill` therefore stretches the viewBox
+    // non-uniformly to fill the box; `contain`/`cover`/`none`/`scale-down` follow §5.5. BUG-110.
     let (scale_x, scale_y, origin_x, origin_y) = match &view_box {
         Some(vb) if vb.width > 0.0 && vb.height > 0.0 => {
-            let (sx, sy, ox_delta, oy_delta) = if b.style.object_fit == crate::style::ObjectFit::Fill {
-                compute_viewbox_transform(vb, svg_w, svg_h, &preserve_aspect_ratio)
-            } else {
-                compute_object_fit_transform(vb, svg_w, svg_h, b.style.object_fit, &b.style.object_position)
-            };
+            let (sx, sy, ox_delta, oy_delta) =
+                compute_object_fit_transform(vb, svg_w, svg_h, b.style.object_fit, &b.style.object_position);
             (sx, sy, b.rect.x + ox_delta, b.rect.y + oy_delta)
         }
         _ => (1.0, 1.0, b.rect.x, b.rect.y),
@@ -12672,6 +12616,44 @@ mod tests {
         assert!((sy - 2.0).abs() < 1e-4, "cover sy expected 2.0, got {sy}");
         // scaled_vb_width = 100*2 = 200 → free_x = 0; offset = 0.
         assert!(ox.abs() < 1e-4, "cover: no horizontal free space, ox should be 0, got {ox}");
+    }
+
+    #[test]
+    fn object_fit_fill_stretches_non_uniformly() {
+        // BUG-110: object-fit: fill on an SVG viewBox must stretch the viewBox to fill the
+        // box (non-uniform scale), overriding the SVG `preserveAspectRatio` attribute — not
+        // letterbox like contain. viewBox="0 0 200 80" into 160×120 box → sx=0.8, sy=1.5.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 200.0, height: 80.0 };
+        let pos = crate::style::ObjectPosition::default(); // 50% 50%
+        let (sx, sy, ox, oy) = super::compute_object_fit_transform(
+            &vb, 160.0, 120.0, crate::style::ObjectFit::Fill, &pos,
+        );
+        assert!((sx - 0.8).abs() < 1e-4, "fill sx expected 0.8, got {sx}");
+        assert!((sy - 1.5).abs() < 1e-4, "fill sy expected 1.5, got {sy}");
+        assert!((sx - sy).abs() > 0.1, "fill must NOT use uniform scale (would be contain)");
+        // Stretched content exactly fills the box → no free space, no offset.
+        assert!(ox.abs() < 1e-4, "fill ox should be 0, got {ox}");
+        assert!(oy.abs() < 1e-4, "fill oy should be 0, got {oy}");
+    }
+
+    #[test]
+    fn svg_root_fill_viewbox_stretches_to_box() {
+        // BUG-110 end-to-end: an inline SVG with object-fit: fill and a wide viewBox should
+        // produce a background <rect> stretched to the full SVG box (160×120), not letterboxed.
+        let html = r#"<svg viewBox="0 0 200 80" style="width:160px;height:120px;object-fit:fill;"><rect x="0" y="0" width="200" height="80"/></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // Walk the tree to the first SVG shape box (root → html → body → svg → rect).
+        fn find_shape(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::SvgShape { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_shape)
+        }
+        let rect = find_shape(&root).expect("rect shape");
+        assert!((rect.rect.width - 160.0).abs() < 1e-3, "fill rect width expected 160, got {}", rect.rect.width);
+        assert!((rect.rect.height - 120.0).abs() < 1e-3, "fill rect height expected 120 (stretched), got {}", rect.rect.height);
     }
 
     #[test]
