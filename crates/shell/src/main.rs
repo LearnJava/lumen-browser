@@ -5145,10 +5145,12 @@ impl Lumen {
     ///
     /// Поток fetches байты, затем:
     ///
-    /// 1. Отправляет `EarlyPreloadHints` из первого STREAM_CHUNK_BYTES байт —
-    ///    это даёт sink возможность начать загружать CSS/шрифты ещё до того,
-    ///    как main parser дойдёт до `<head>` (HTML LS §13.2.6.4.7).
-    /// 2. Разбивает на STREAM_CHUNK_BYTES-кусочки и шлёт `HtmlChunk` через proxy.
+    /// 1. Для каждого STREAM_CHUNK_BYTES-chunk: прогоняет через `PreloadScanner`
+    ///    (PH1-8, HTML LS §13.2.6.4.7), отправляет `EarlyPreloadHints`, затем
+    ///    `HtmlChunk`. Hint-ы эмитятся из **каждого** chunk-а, не только первого —
+    ///    это даёт реальный выигрыш для stylesheet/шрифтов, стоящих за первыми 8 КБ.
+    /// 2. PH1-2: для каждого `Stylesheet`-hint запускает параллельный CSS-загрузчик,
+    ///    который присылает `CssLoaded` ещё до `LoadDone`.
     /// 3. По завершении — `LoadDone(raw)` для финального pipeline.
     ///
     /// При ошибке — `LoadError`.
@@ -5170,43 +5172,50 @@ impl Lumen {
                 }
             };
 
-            // Ранний preload-скан первого chunk-а (обычно содержит весь <head>).
-            // Отправляем ДО первого HtmlChunk, чтобы sink начал prefetch
-            // сразу, пока парсер ещё не стартовал (real streaming win).
-            let scan_end = STREAM_CHUNK_BYTES.min(raw.bytes.len());
-            let partial = String::from_utf8_lossy(&raw.bytes[..scan_end]);
-            let early = lumen_html_parser::scan_preload_hints(&partial);
-            if !early.is_empty() {
-                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), raw.base.clone()));
-            }
+            // PH1-8: инкрементальный preload-сканер — обрабатывает каждый chunk.
+            // Hint-ы отправляются ДО соответствующего HtmlChunk, чтобы fetch
+            // начался параллельно с DOM-парсингом (spec §13.2.6.4.7).
+            let mut preload_scanner = lumen_html_parser::PreloadScanner::new();
 
-            // PH1-2: параллельная загрузка CSS для промежуточных кадров.
-            // Каждый <link rel=stylesheet> из ранних хинтов загружается в
-            // отдельном потоке и присылает CssLoaded ещё до LoadDone.
-            for hint in &early {
-                if let lumen_html_parser::PreloadHint::Stylesheet { url } = hint {
-                    let css_url = raw.base.resolve_str(url);
-                    let proxy2 = proxy.clone();
-                    std::thread::spawn(move || {
-                        if let Some(text) = load_css_for_streaming(&css_url) {
-                            let sheet = lumen_css_parser::parse(&text);
-                            let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet)));
-                        }
-                    });
-                }
-            }
-
-            // Разбить сырые байты на chunk-и. Выравнивание по UTF-8 не нужно:
-            // feed_bytes буферизует незавершённые code-point-ы на границах chunk-ов.
             let mut pos = 0;
             while pos < raw.bytes.len() {
                 let end = (pos + STREAM_CHUNK_BYTES).min(raw.bytes.len());
                 let chunk = raw.bytes[pos..end].to_vec();
+
+                // Сканируем chunk на hint-ы перед отправкой DOM-парсеру.
+                let early = preload_scanner.feed_bytes(&chunk);
+                if !early.is_empty() {
+                    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(
+                        early.clone(),
+                        raw.base.clone(),
+                    ));
+                    // PH1-2: параллельная загрузка CSS для промежуточных кадров.
+                    for hint in &early {
+                        if let lumen_html_parser::PreloadHint::Stylesheet { url } = hint {
+                            let css_url = raw.base.resolve_str(url);
+                            let proxy2 = proxy.clone();
+                            std::thread::spawn(move || {
+                                if let Some(text) = load_css_for_streaming(&css_url) {
+                                    let sheet = lumen_css_parser::parse(&text);
+                                    let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet)));
+                                }
+                            });
+                        }
+                    }
+                }
+
                 if proxy.send_event(LoadEvent::HtmlChunk(chunk)).is_err() {
                     return; // event loop завершён
                 }
                 pos = end;
             }
+
+            // Финальные hint-ы из буферизованного хвоста сканера.
+            let tail = preload_scanner.end();
+            if !tail.is_empty() {
+                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone()));
+            }
+
             let _ = proxy.send_event(LoadEvent::LoadDone(raw));
         });
     }
