@@ -8,6 +8,7 @@ pub mod battery_bindings;
 pub mod css_properties_values_api;
 pub mod esm;
 pub mod import_attributes;
+pub mod import_meta;
 pub mod paint_worklet;
 pub mod gamepad;
 pub mod highlight_api;
@@ -410,7 +411,8 @@ impl QuickJsRuntime {
         let source = self
             .preprocess_import_attributes("", &source)
             .unwrap_or(source);
-        // Unique sequential inline specifier
+        // Unique sequential inline specifier; use page URL as import.meta.url.
+        let page_url = self.module_page_url.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let specifier = {
             let mut reg = self.module_registry.lock().unwrap_or_else(|e| e.into_inner());
             let n = reg.len();
@@ -418,6 +420,9 @@ impl QuickJsRuntime {
             reg.insert(key.clone(), source.clone());
             key
         };
+        // Transform import.meta → preamble var using the page URL for .url.
+        let meta_url = if page_url.is_empty() { specifier.as_str() } else { page_url.as_str() };
+        let source = import_meta::transform_import_meta(&source, meta_url).unwrap_or(source);
         guard.ctx.with(|ctx: Ctx<'_>| -> JsResult<()> {
             rquickjs::Module::evaluate(ctx.clone(), specifier.as_str(), source.as_bytes())
                 .map_err(|e| JsError::Runtime(format!("module eval: {e}")))?;

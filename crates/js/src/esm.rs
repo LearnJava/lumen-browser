@@ -10,6 +10,7 @@
 //! - Bare specifiers (`lodash`) kept as-is (caller must pre-register them by canonical name).
 
 use crate::import_attributes::{new_type_registry, ModuleType, ModuleTypeRegistry};
+use crate::import_meta::transform_import_meta;
 use rquickjs::{loader::{Loader, Resolver}, Ctx, Error, Module, Result as QjsResult};
 use std::{
     collections::HashMap,
@@ -272,7 +273,11 @@ impl Loader for LumenLoader {
                 specifier,
                 format!("unsupported import attribute type '{ty}'"),
             )),
-            (Some(src), None) => Module::declare(ctx.clone(), specifier, src.as_bytes()),
+            (Some(src), None) => {
+                let src = transform_import_meta(&src, specifier)
+                    .unwrap_or(src);
+                Module::declare(ctx.clone(), specifier, src.as_bytes())
+            }
             (None, _) => Err(Error::new_loading(specifier)),
         }
     }

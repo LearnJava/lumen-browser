@@ -95,11 +95,17 @@ _(нет)_
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| HH-1 | **SharedWorker Phase 0** — `new SharedWorker(url)`: реестр воркеров по URL; `worker.port.postMessage/onmessage`; `MessageChannel` inter-port; `connect` event в воркере; in-process (same-thread Phase 0); 8 unit-тестов | M | `lumen-js` |
-| HH-2 | **CSS Houdini Paint Worklet Phase 0** — `CSS.paintWorklet.addModule(url)` → Promise; `registerPaint(name, class)` хранит класс в registry; `paint()` callback stub (получает ctx, geom, props); `background: paint(myPainter)` → placeholder rect; `// CSS: paint()` для P4; 6 unit-тестов | M | `lumen-js` |
-| HH-3 | **Web Locks API** — `navigator.locks.request(name, opts, callback)`: exclusive/shared режимы; in-memory `LockManager` с очередью; `query()` → состояние; `abort` через AbortSignal; 8 unit-тестов | S | `lumen-js` |
-| HH-4 | **BroadcastChannel API** — `new BroadcastChannel(name)`, `postMessage(data)`/`onmessage`; multi-tab broadcast через shell `BroadcastHub`; `_lumen_broadcast_post(name, data_json)` + `_lumen_broadcast_subscribe(name)`; 6 unit-тестов | S | `lumen-js`, `lumen-shell` |
-| HH-5 | **Compression Streams API Phase 1** — `new DecompressionStream('gzip'|'deflate'|'deflate-raw')` через `miniz_oxide`; `CompressionStream` deflate/gzip; `TransformStream`-based API; pipe через `ReadableStream`; 8 unit-тестов | S | `lumen-js` |
+| ~~HH-1~~ | ~~**SharedWorker Phase 0**~~ — **выполнено** (949df770, Merge p1-shared-worker) | M | `lumen-js` |
+| ~~HH-2~~ | ~~**CSS Houdini Paint Worklet Phase 0**~~ — **выполнено** (afac817d, Merge p2-j3-paint-worklet, реализовано P2 как J-3) | M | `lumen-js` |
+| ~~HH-3~~ | ~~**Web Locks API**~~ — **выполнено** (06739425, Merge p2-i1-web-locks + 0ade949e p1-web-locks, дополнено P2) | S | `lumen-js` |
+| ~~HH-4~~ | ~~**BroadcastChannel API**~~ — **выполнено** (d5a630b7, Merge p1-broadcast-channel) | S | `lumen-js`, `lumen-shell` |
+| ~~HH-5~~ | ~~**Compression Streams API Phase 1**~~ — **выполнено** (d8f53ccc, Merge p1-compression-stream) | S | `lumen-js` |
+
+### II — ESM & Module Metadata
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| II-1 | **`import.meta.url` + `import.meta.resolve()`** — source-level preprocessor в `LumenLoader::load`; заменяет `import.meta` → `__$lumen_meta__` var (url + resolve + env-stub); 6 unit-тестов | S | `lumen-js` |
 
 ---
 
@@ -281,6 +287,12 @@ _(нет)_
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-14 | II-1: import.meta.url + import.meta.resolve() + import.meta.env | `crates/js/src/import_meta.rs` — source-level препроцессор: находит `import.meta` вне строк/комментов через минимальный лексер → заменяет на `__$lumen_meta__` + вставляет преамбулу с `.url` (resolved specifier), `.resolve()` (relative join), `.env` (Vite-compat stub). Wiring: `LumenLoader::load()` в `esm.rs` + `eval_module()` в `lib.rs` (page_url). 5 unit + 3 integration тестов; 1979 lumen-js тестов зелёных. |
+| 2026-06-12 | HH-5: Compression Streams API Phase 1 | (d8f53ccc) `CompressionStream`/`DecompressionStream` через `miniz_oxide`; deflate/gzip/deflate-raw; `TransformStream`-based API; `ReadableStream` pipe; 8 unit-тестов |
+| 2026-06-12 | HH-4: BroadcastChannel API | (d5a630b7) `new BroadcastChannel(name)`, `postMessage/onmessage`; `_lumen_broadcast_post/subscribe`; multi-instance dispatch; 14 unit-тестов |
+| 2026-06-12 | HH-3: Web Locks API | (0ade949e + 06739425) `navigator.locks.request(name, opts, cb)`: exclusive/shared; in-memory LockManager + очередь; `query()`; AbortSignal; 6+6 unit-тестов |
+| 2026-06-12 | HH-2: CSS Houdini Paint Worklet Phase 0 | (afac817d, P2 J-3) `CSS.paintWorklet.addModule(url)` → Promise; `registerPaint`; `paint()` callback stub; 8 unit-тестов |
+| 2026-06-12 | HH-1: SharedWorker Phase 0 | (949df770) `new SharedWorker(url)`; HUB реестр по key (name+origin); PORT_COUNTER; `connect` event; `port.postMessage/onmessage`; 6 unit-тестов |
 | 2026-06-14 | GG-5: Tab hibernation Phase 2 (LZ4 compression) | `lz4_flex::compress_prepend_size`/`decompress_size_prepended` для `js_heap_blob` в `SleepingTabStore`; колонка `compressed INTEGER NOT NULL DEFAULT 0` в `tab_snapshots`; `ALTER TABLE ADD COLUMN` миграция для pre-GG-5 on-disk БД; `fetch()` пропускает legacy rows (compressed=0) без декомпрессии; 5 unit-тестов: lz4_compress_roundtrip, compressed_flag_set_in_db, heap_blob_shrinks_for_repetitive_data, empty_heap_blob_round_trips, legacy_uncompressed_row_readable. Итого 582 теста в lumen-storage. |
 | 2026-06-14 | GG-4: Vertical tabs layout mode | `TabLayout::Horizontal/Vertical` enum + `as_str`/`from_str`; `LAYOUT_BTN_W=28px`, `hit_test_layout_btn`, `build_layout_toggle_btn` (☰ кнопка между табами и архивом); `VerticalTabsPanel`: `scroll_y` + `scroll_by(delta, count, panel_h)` с clamp; `build_tab_bar_vertical(strip, tab_h, win_h, scroll_y)` с viewport-clipping; `hit_test` принимает `scroll_y`; `MouseWheel` → `scroll_by`; `BrowserSettings.tab_layout` (persist/restore при запуске); main.rs: клик toggle → `toggle()` + `set_tab_layout(as_str())`; `tab_area_w` вычитает `LAYOUT_BTN_W` в 4 местах; 8 новых unit-тестов (1373 всего). |
 | 2026-06-14 | GG-1: AI sidebar Phase 0 | `AiBackend` trait (`query(prompt)->String`) + `NullAiBackend` в `lumen-core::ext`; `panels::ai_panel::AiPanel` — 200px right-docked panel с header/response area/input row; `Ctrl+Shift+A` → `ToggleAiPanel`; `handle_ai_panel_key` (Esc close, Backspace, Enter submit, printable → input); `page_content_width_css` вычитает PANEL_WIDTH; hit-test (Close/Header/Response/Input); 14 тестов; `// UNIQUE: §12.8`. |
