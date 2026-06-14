@@ -6,8 +6,7 @@
 
 ## In progress
 
-GG-4: Vertical tabs layout mode  branch: p1-gg4-vertical-tabs
-Next step: TabLayout enum + toggle button in strip.rs + scroll in vertical_tabs.rs + BrowserSettings persist  strip.rs:577
+_(нет)_
 
 ---
 
@@ -282,6 +281,7 @@ Next step: TabLayout enum + toggle button in strip.rs + scroll in vertical_tabs.
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-14 | GG-4: Vertical tabs layout mode | `TabLayout::Horizontal/Vertical` enum + `as_str`/`from_str`; `LAYOUT_BTN_W=28px`, `hit_test_layout_btn`, `build_layout_toggle_btn` (☰ кнопка между табами и архивом); `VerticalTabsPanel`: `scroll_y` + `scroll_by(delta, count, panel_h)` с clamp; `build_tab_bar_vertical(strip, tab_h, win_h, scroll_y)` с viewport-clipping; `hit_test` принимает `scroll_y`; `MouseWheel` → `scroll_by`; `BrowserSettings.tab_layout` (persist/restore при запуске); main.rs: клик toggle → `toggle()` + `set_tab_layout(as_str())`; `tab_area_w` вычитает `LAYOUT_BTN_W` в 4 местах; 8 новых unit-тестов (1373 всего). |
 | 2026-06-14 | GG-1: AI sidebar Phase 0 | `AiBackend` trait (`query(prompt)->String`) + `NullAiBackend` в `lumen-core::ext`; `panels::ai_panel::AiPanel` — 200px right-docked panel с header/response area/input row; `Ctrl+Shift+A` → `ToggleAiPanel`; `handle_ai_panel_key` (Esc close, Backspace, Enter submit, printable → input); `page_content_width_css` вычитает PANEL_WIDTH; hit-test (Close/Header/Response/Input); 14 тестов; `// UNIQUE: §12.8`. |
 | 2026-06-14 | FF-5: Fetch keepalive + priority | `fetch(url, { keepalive: true })`: принимается, Phase 0 синхронный путь без изменений (handoff `// network: keepalive — Phase 2`). `fetch(url, { priority: 'high'|'low'|'auto' })`: парсится и нормализуется в JS шиме (невалидное → 'auto'; handoff `// network: priority queue — lumen-network Phase 2`). 4 unit-теста. Только `lumen-js`, нет новых зависимостей. |
 | 2026-06-14 | FF-4: Cache API Phase 1 | `CacheBackend` trait в `lumen-core::ext`; `impl CacheBackend for CacheStorage` в `lumen-storage` (SQLite: cache_put/match/match_any/delete/keys/has/delete_cache/names); dispatch в `lumen-js` dom.rs (11 нативных биндингов проверяют `Option<Arc<dyn CacheBackend>>`); `MockCacheBackend` в тестовом модуле; 12 unit-тестов `sqlite_backend_*`. Все 17 вызовов `install_dom` обновлены (новый 9-й аргумент). |
