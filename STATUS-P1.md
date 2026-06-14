@@ -6,6 +6,9 @@
 
 ## In progress
 
+II-1: PerformanceObserver single-type form + supportedEntryTypes  branch: p1-ii1-perf-observer
+Next step: observe({type, buffered}) §6.2.2 + supportedEntryTypes  crates/js/src/dom.rs:8347
+
 ---
 
 ## Next
