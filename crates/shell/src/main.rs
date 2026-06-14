@@ -1431,7 +1431,7 @@ impl PersistentJs for QuickPersistentJs {
         self.rt.update_viewport_size(width, height);
     }
     fn deliver_layout_observers(&self) {
-        self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();");
+        self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");
     }
     fn register_lazy_images(&self, pairs: &[(u32, &str)]) {
         if pairs.is_empty() {

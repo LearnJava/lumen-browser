@@ -7030,6 +7030,40 @@ function _lumen_deliver_resize_observers() {
     }
 }
 
+// ── Canvas CSS resize tracking ────────────────────────────────────────────────
+// When a canvas element's CSS layout dimensions change (detected after each
+// relayout), the backing bitmap is scaled to the new size and a `resize` event
+// is fired on the element (HTML LS §4.12.4 / Resize Observer integration).
+//
+// The shell calls _lumen_deliver_canvas_css_resize() after update_layout_rects,
+// alongside _lumen_deliver_resize_observers and _lumen_deliver_intersection_observers.
+
+// last CSS dimensions per canvas nid (as a string key), set on first observation.
+var _canvas_css_dims = {};
+
+function _lumen_deliver_canvas_css_resize() {
+    for (var nid_str in _canvas2d_ctxs) {
+        var nid = +nid_str;
+        var rect = _lumen_get_bounding_rect(nid);
+        if (!rect) continue;
+        var w = (rect[2] + 0.5) | 0;  // round to integer CSS px
+        var h = (rect[3] + 0.5) | 0;
+        if (w < 1) w = 1;
+        if (h < 1) h = 1;
+        var prev = _canvas_css_dims[nid_str];
+        if (!prev) {
+            // first observation — record dims without firing event
+            _canvas_css_dims[nid_str] = [w, h];
+            continue;
+        }
+        if (prev[0] === w && prev[1] === h) continue;
+        // CSS dimensions changed: scale pixel buffer and fire event
+        _canvas_css_dims[nid_str] = [w, h];
+        _lumen_canvas2d_scale_resize(nid, w, h);
+        _lumen_dispatch(nid, new Event('resize'));
+    }
+}
+
 // ── IntersectionObserver (WICG Intersection Observer §4) ─────────────────────
 // Delivers intersection entries after layout; the shell calls
 // _lumen_deliver_intersection_observers() after each relayout.
@@ -11095,6 +11129,106 @@ mod tests {
             )
             .unwrap();
         assert_eq!(is_null, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Canvas CSS resize tests ───────────────────────────────────────────────
+
+    #[test]
+    fn canvas_css_resize_scales_pixels() {
+        // After a CSS-driven resize, scale_resize is called and pixels are preserved.
+        let rt = runtime_with_dom(make_doc());
+        // Create canvas, draw a red fill, then trigger CSS resize.
+        rt.eval(r#"
+            var c = document.createElement('canvas');
+            c.width = 4; c.height = 4;
+            var ctx = c.getContext('2d');
+            ctx.fillStyle = '#ff0000';
+            ctx.fillRect(0, 0, 4, 4);
+            window.__test_canvas_nid = c.__nid__;
+        "#).unwrap();
+        let nid_val = rt.eval("window.__test_canvas_nid").unwrap();
+        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+        // First delivery at 4×4 — records baseline.
+        rt.update_layout_rects([(nid, [0.0, 0.0, 4.0, 4.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+        // Drain dirty list so next flush only sees scale_resize changes.
+        let _ = crate::canvas2d::flush_dirty();
+        // Change CSS dims to 8×8 — triggers scale_resize + marks dirty.
+        rt.update_layout_rects([(nid, [0.0, 0.0, 8.0, 8.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+        // Canvas backing buffer should now be 8×8.
+        let dirty = crate::canvas2d::flush_dirty();
+        let resized = dirty.iter().any(|(id, w, h, _)| *id == nid && *w == 8 && *h == 8);
+        assert!(resized, "canvas should have been scaled to 8×8");
+    }
+
+    #[test]
+    fn canvas_css_resize_fires_resize_event() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var c2 = document.createElement('canvas');
+            c2.width = 10; c2.height = 10;
+            c2.getContext('2d');
+            var _css_resize_fired = false;
+            c2.addEventListener('resize', function() { _css_resize_fired = true; });
+            window.__test_c2_nid = c2.__nid__;
+        "#).unwrap();
+        let nid_val = rt.eval("window.__test_c2_nid").unwrap();
+        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+        // First delivery at 10×10 — records baseline, no event.
+        rt.update_layout_rects([(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+        let fired_before = rt.eval("_css_resize_fired").unwrap();
+        assert_eq!(fired_before, lumen_core::JsValue::Bool(false));
+        // Change CSS dims — event should fire.
+        rt.update_layout_rects([(nid, [0.0, 0.0, 20.0, 20.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+        let fired = rt.eval("_css_resize_fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_css_resize_no_event_when_size_unchanged() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var c3 = document.createElement('canvas');
+            c3.width = 10; c3.height = 10;
+            c3.getContext('2d');
+            var _css_cnt = 0;
+            c3.addEventListener('resize', function() { _css_cnt++; });
+            window.__test_c3_nid = c3.__nid__;
+        "#).unwrap();
+        let nid_val = rt.eval("window.__test_c3_nid").unwrap();
+        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+        let rect = [(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect();
+        rt.update_layout_rects(rect);
+        // First delivery — baseline.
+        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+        // Second delivery — same size, no event.
+        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+        let cnt = rt.eval("_css_cnt").unwrap();
+        assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn canvas_css_resize_not_triggered_without_context() {
+        // A canvas without a 2D context is not tracked by _lumen_deliver_canvas_css_resize.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var c4 = document.createElement('canvas');
+            // intentionally no getContext('2d')
+            var _no_ctx_fired = false;
+            c4.addEventListener('resize', function() { _no_ctx_fired = true; });
+            window.__test_c4_nid = c4.__nid__;
+        "#).unwrap();
+        let nid_val = rt.eval("window.__test_c4_nid").unwrap();
+        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 50.0, 50.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+        rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+        let fired = rt.eval("_no_ctx_fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(false));
     }
 
     #[test]

@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+DD-5: `<canvas>` resize event  branch: p1-dd5-canvas-resize
+Next step: commit + finish  crates/js/src/dom.rs, crates/js/src/canvas2d.rs, crates/engine/canvas/src/lib.rs
 
 ---
 

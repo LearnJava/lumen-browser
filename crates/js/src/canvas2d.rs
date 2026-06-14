@@ -299,6 +299,18 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         }),
     )?;
 
+    // _lumen_canvas2d_scale_resize(nid, w, h) — CSS resize: scale pixels, don't clear.
+    // Called by _lumen_deliver_canvas_css_resize when CSS layout dims change.
+    g.set(
+        "_lumen_canvas2d_scale_resize",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, w: u32, h: u32| {
+            let w = w.clamp(1, MAX_CANVAS_DIM);
+            let h = h.clamp(1, MAX_CANVAS_DIM);
+            with_canvas(nid, |c| c.scale_resize(w, h));
+            mark_dirty(nid);
+        }),
+    )?;
+
     // ── Rectangles ──────────────────────────────────────────────────────────
     g.set(
         "_lumen_canvas2d_fill_rect",
