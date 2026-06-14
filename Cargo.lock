@@ -1843,6 +1843,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-ipc"
+version = "0.0.1"
+dependencies = [
+ "bincode",
+ "lumen-core",
+ "serde",
+]
+
+[[package]]
 name = "lumen-js"
 version = "0.0.1"
 dependencies = [
@@ -1903,6 +1912,7 @@ dependencies = [
  "getrandom 0.2.17",
  "lru",
  "lumen-core",
+ "lumen-ipc",
  "p256",
  "regex",
  "rusqlite",
@@ -1946,6 +1956,7 @@ dependencies = [
  "lumen-font",
  "lumen-html-parser",
  "lumen-image",
+ "lumen-ipc",
  "lumen-js",
  "lumen-knowledge",
  "lumen-layout",

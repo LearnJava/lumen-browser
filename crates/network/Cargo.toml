@@ -6,8 +6,15 @@ authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "lumen-network-service"
+path = "src/bin/network_service.rs"
+
 [dependencies]
 lumen-core = { workspace = true }
+# PH1-4: IPC channel for RemoteNetworkTransport and network service binary.
+# Permanent — network service process is a long-term architecture goal (ADR-009).
+lumen-ipc = { workspace = true }
 # Exception #3 (§5): TLS / X.509 / crypto. Своя реализация — security antipattern.
 rustls = { version = "0.23", features = ["std"] }
 webpki-roots = "0.26"

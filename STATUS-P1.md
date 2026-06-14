@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH1-4: Network service в отдельном процессе  branch: p1-ph1-4-network-service
+Next step: создать lumen-ipc крейт (IpcChannel + messages) → crates/ipc/src/lib.rs
 
 ---
 
