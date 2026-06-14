@@ -2166,7 +2166,11 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
     }
 }
 
+/// Lay out a document without a text measurer. For tests and headless dump modes.
+/// Invalidates the rule-index cache before the cascade so stale hits are impossible.
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
+    // Prevent stale RULE_IDX_CACHE hits when a new sheet lands at the same address as a freed one.
+    crate::style::invalidate_rule_idx_cache();
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
