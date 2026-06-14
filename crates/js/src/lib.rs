@@ -1414,6 +1414,14 @@ impl QuickJsRuntime {
         self.raf_pending.swap(false, Ordering::Relaxed)
     }
 
+    /// Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued.
+    ///
+    /// Unlike `take_raf_pending`, this does not clear the flag. Use in the shell
+    /// vsync gate to check whether to defer firing without losing the signal.
+    pub fn has_raf_pending(&self) -> bool {
+        self.raf_pending.load(Ordering::Relaxed)
+    }
+
     /// Take the next timer wakeup as Unix epoch ms, clearing the stored value.
     ///
     /// Called by the shell event loop in `about_to_wait` to schedule

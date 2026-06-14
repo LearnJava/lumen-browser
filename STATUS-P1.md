@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+EE-5 `requestAnimationFrame` scheduling Phase 2  branch: p1-ee5-raf-vsync
+Next step: vsync gate в shell main.rs + has_raf_pending() в lib.rs + JS DOMHighResTimeStamp  main.rs:7555
 
 ---
 
