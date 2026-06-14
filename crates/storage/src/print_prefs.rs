@@ -25,6 +25,7 @@ const KEY_MARGINS: &str = "margins";
 const KEY_COLOR_MODE: &str = "color_mode";
 const KEY_PAGE_RANGE: &str = "page_range";
 const KEY_OUTPUT_PATH: &str = "output_path";
+const KEY_PRINT_BACKGROUNDS: &str = "print_backgrounds";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ const DEFAULT_MARGINS: &str = "normal";
 const DEFAULT_COLOR_MODE: &str = "color";
 const DEFAULT_PAGE_RANGE: &str = "all";
 const DEFAULT_OUTPUT_PATH: &str = "output.pdf";
+const DEFAULT_PRINT_BACKGROUNDS: bool = true;
 
 // ── Snapshot ─────────────────────────────────────────────────────────────────
 
@@ -55,6 +57,9 @@ pub struct PrintPrefsSnapshot {
     pub page_range: String,
     /// Output file path.
     pub output_path: String,
+    /// Whether CSS background graphics (background-color/image, gradients) are
+    /// printed (CC-8). `true` = print backgrounds, `false` = strip them.
+    pub print_backgrounds: bool,
 }
 
 impl Default for PrintPrefsSnapshot {
@@ -67,6 +72,7 @@ impl Default for PrintPrefsSnapshot {
             color_mode: DEFAULT_COLOR_MODE.to_owned(),
             page_range: DEFAULT_PAGE_RANGE.to_owned(),
             output_path: DEFAULT_OUTPUT_PATH.to_owned(),
+            print_backgrounds: DEFAULT_PRINT_BACKGROUNDS,
         }
     }
 }
@@ -120,6 +126,10 @@ impl PrintPrefs {
             .unwrap_or(DEFAULT_SCALE)
             .clamp(50, 200);
 
+        let print_backgrounds = self
+            .get_string(&conn, KEY_PRINT_BACKGROUNDS)?
+            != "0";
+
         Ok(PrintPrefsSnapshot {
             scale,
             paper_size: self.get_string(&conn, KEY_PAPER_SIZE)?,
@@ -128,6 +138,7 @@ impl PrintPrefs {
             color_mode: self.get_string(&conn, KEY_COLOR_MODE)?,
             page_range: self.get_string(&conn, KEY_PAGE_RANGE)?,
             output_path: self.get_string(&conn, KEY_OUTPUT_PATH)?,
+            print_backgrounds,
         })
     }
 
@@ -142,6 +153,11 @@ impl PrintPrefs {
         self.set_string(&conn, KEY_COLOR_MODE, &snap.color_mode)?;
         self.set_string(&conn, KEY_PAGE_RANGE, &snap.page_range)?;
         self.set_string(&conn, KEY_OUTPUT_PATH, &snap.output_path)?;
+        self.set_string(
+            &conn,
+            KEY_PRINT_BACKGROUNDS,
+            if snap.print_backgrounds { "1" } else { "0" },
+        )?;
 
         Ok(())
     }
@@ -177,6 +193,7 @@ impl PrintPrefs {
             KEY_COLOR_MODE => DEFAULT_COLOR_MODE,
             KEY_PAGE_RANGE => DEFAULT_PAGE_RANGE,
             KEY_OUTPUT_PATH => DEFAULT_OUTPUT_PATH,
+            KEY_PRINT_BACKGROUNDS => "1",
             _ => "unknown",
         }
     }
@@ -190,8 +207,16 @@ mod tests {
     use std::fs;
 
     fn tmp_db() -> (String, PrintPrefs) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let tmpdir = std::env::temp_dir();
-        let path = tmpdir.join(format!("test-print-prefs-{}-{}.db", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let uniq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = tmpdir.join(format!(
+            "test-print-prefs-{}-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
+            uniq,
+        ));
         let _ = fs::remove_file(&path);
         let prefs = PrintPrefs::open(&path).unwrap();
         (path.to_string_lossy().to_string(), prefs)
@@ -244,6 +269,26 @@ mod tests {
         assert_eq!(loaded.paper_size, "Letter");
         assert_eq!(loaded.orientation, "landscape");
         assert_eq!(loaded.page_range, "1-5");
+    }
+
+    #[test]
+    fn print_backgrounds_defaults_true() {
+        let (_path, db) = tmp_db();
+        let snap = db.load_snapshot().unwrap();
+        assert!(snap.print_backgrounds, "background graphics on by default");
+    }
+
+    #[test]
+    fn saves_and_loads_print_backgrounds_false() {
+        let (_path, db) = tmp_db();
+        let snap = PrintPrefsSnapshot {
+            print_backgrounds: false,
+            ..Default::default()
+        };
+        db.save_snapshot(&snap).unwrap();
+
+        let loaded = db.load_snapshot().unwrap();
+        assert!(!loaded.print_backgrounds);
     }
 
     #[test]

@@ -600,9 +600,12 @@ fn do_print_to_pdf_with_opts(
     margin_tb: f32,
     margin_lr: f32,
     scale: i32,
+    print_backgrounds: bool,
 ) -> Result<usize, Box<dyn Error>> {
     use lumen_layout::{paginate, PaginationContext};
-    use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
+    use lumen_paint::{
+        build_print_display_list, split_at_page_breaks, strip_background_graphics, Renderer,
+    };
 
     let raw = source.load_bytes(event_sink.clone(), None)?;
     // Apply scale to viewport (W-2b): 50–200% zoom
@@ -639,7 +642,9 @@ fn do_print_to_pdf_with_opts(
     let page_count_total = pages.len() as u32;
     attach_page_boxes(&mut pages, page_count_total, &ctx);
     let cmds = build_print_display_list(&pages);
-    let split_pages = split_at_page_breaks(cmds);
+    let mut split_pages = split_at_page_breaks(cmds);
+    // CC-8: drop CSS background graphics when the dialog toggle is off.
+    strip_background_graphics(&mut split_pages, print_backgrounds);
 
     let images = Renderer::render_print_pages(
         INTER_FONT.to_vec(),
@@ -6698,6 +6703,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 let sink = Arc::clone(&self.event_sink);
                                 let (margin_tb, margin_lr) = self.print_panel.margin_px();
                                 let scale = self.print_panel.scale;
+                                let print_backgrounds = self.print_panel.print_backgrounds;
                                 if let Err(e) = do_print_to_pdf_with_opts(
                                     &source,
                                     &path,
@@ -6705,6 +6711,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     margin_tb,
                                     margin_lr,
                                     scale,
+                                    print_backgrounds,
                                 ) {
                                     eprintln!("Ошибка печати: {e}");
                                 }
@@ -6731,6 +6738,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                             PrintHit::ColorMode(c) => {
                                 self.print_panel.color_mode = c;
+                            }
+                            PrintHit::Backgrounds(on) => {
+                                self.print_panel.print_backgrounds = on;
                             }
                             PrintHit::OutputPathField => {
                                 self.print_panel.editing_field =
@@ -10208,6 +10218,7 @@ impl Lumen {
             (margin_top + margin_bottom) / 2.0,  // Simplified: average for TB and LR.
             (margin_left + margin_right) / 2.0,
             100,  // Default scale: 100%
+            true, // print background graphics (JS print request default)
         ) {
             Ok(page_count) => {
                 eprintln!(
