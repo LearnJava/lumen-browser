@@ -18,7 +18,7 @@ use lumen_a11y;
 use lumen_core::error::{Error, Result};
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId};
-use lumen_layout::LayoutBox;
+use lumen_layout::{LayoutBox, PaintOrder, StackingTree};
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
@@ -144,8 +144,9 @@ impl WinitSession {
         let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
         let flat_tree = lumen_dom::build_flat_tree(&doc);
 
-        // Build display list from layout tree.
-        let display_list = lumen_paint::build_display_list(&layout_root);
+        let sc_tree = StackingTree::build(&layout_root);
+        let sc_order = PaintOrder::from_tree(&sc_tree);
+        let display_list = lumen_paint::build_display_list_ordered(&layout_root, &sc_tree, &sc_order);
 
         // Extract images from DOM and decode them.
         let images = extract_images(&doc);
@@ -594,7 +595,9 @@ impl BrowserSession for WinitSession {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
 
-        let display_list = lumen_paint::build_display_list(&state.layout_root);
+        let sc_tree = StackingTree::build(&state.layout_root);
+        let sc_order = PaintOrder::from_tree(&sc_tree);
+        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &sc_tree, &sc_order);
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
         let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height)

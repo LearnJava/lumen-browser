@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH1-6: Stacking contexts + CSS Painting Order  branch: p1-ph1-6-stacking
+Next step: подключить build_display_list_ordered в driver/session.rs  crates/driver/src/session.rs:245
 
 ---
 
