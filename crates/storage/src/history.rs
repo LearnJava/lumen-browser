@@ -208,6 +208,51 @@ impl History {
         Ok(out)
     }
 
+    /// Поиск по url и title: case-insensitive substring match.
+    ///
+    /// Возвращает до `limit` записей, отсортированных по `visit_count DESC`,
+    /// `visit_date DESC`. Пустой `q` немедленно возвращает пустой список —
+    /// используй [`recent`] или [`most_visited`] вместо этого.
+    ///
+    /// Предназначен для омнибокс-автодополнения: при вводе URL-фрагмента
+    /// (`"rust-lang"`, `"https://crates"`) пользователь получает совпадающие
+    /// посещённые страницы без полнотекстового FTS5-индекса.
+    pub fn search_prefix(&self, q: &str, limit: i64) -> Result<Vec<HistoryEntry>> {
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("history mutex poisoned".into()))?;
+        // Экранируем LIKE-спецсимволы, затем оборачиваем в %...%.
+        let escaped = q
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT id, url, title, visit_date, visit_count, favicon_hash, text_sha256
+                 FROM history
+                 WHERE url LIKE ?1 ESCAPE '\\'
+                    OR lower(title) LIKE lower(?1) ESCAPE '\\'
+                 ORDER BY visit_count DESC, visit_date DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| Error::Storage(format!("history prepare search_prefix: {e}")))?;
+        let rows = stmt
+            .query_map(params![pattern, limit], row_to_entry)
+            .map_err(|e| Error::Storage(format!("history query search_prefix: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(
+                r.map_err(|e| Error::Storage(format!("history row search_prefix: {e}")))?,
+            );
+        }
+        Ok(out)
+    }
+
     /// Удалить запись по url. Никаких ошибок, если url не существует.
     pub fn delete(&self, url: &str) -> Result<()> {
         let conn = self
@@ -424,5 +469,72 @@ mod tests {
         let e = h.get(url).unwrap().unwrap();
         assert_eq!(e.url, url);
         assert_eq!(e.title, "Главная страница");
+    }
+
+    // ── search_prefix tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn search_prefix_matches_url_substring() {
+        let h = make();
+        h.record_visit("https://rust-lang.org/", "Rust", 100).unwrap();
+        h.record_visit("https://crates.io/", "crates.io", 100).unwrap();
+        let results = h.search_prefix("rust-lang", 5).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://rust-lang.org/");
+    }
+
+    #[test]
+    fn search_prefix_matches_title_case_insensitive() {
+        let h = make();
+        h.record_visit("https://example.com/", "The Rust Book", 100).unwrap();
+        h.record_visit("https://other.com/", "Python Docs", 100).unwrap();
+        let results = h.search_prefix("rust book", 5).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://example.com/");
+    }
+
+    #[test]
+    fn search_prefix_empty_query_returns_empty() {
+        let h = make();
+        h.record_visit("https://example.com/", "Example", 100).unwrap();
+        let results = h.search_prefix("", 5).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn search_prefix_ordered_by_visit_count() {
+        let h = make();
+        h.record_visit("https://rust-lang.org/", "Rust", 100).unwrap();
+        h.record_visit("https://rust-lang.org/book/", "Rust Book", 100).unwrap();
+        h.record_visit("https://rust-lang.org/book/", "Rust Book", 200).unwrap();
+        h.record_visit("https://rust-lang.org/book/", "Rust Book", 300).unwrap();
+        let results = h.search_prefix("rust-lang", 5).unwrap();
+        assert_eq!(results.len(), 2);
+        // book has visit_count=3, root has visit_count=1.
+        assert_eq!(results[0].url, "https://rust-lang.org/book/");
+        assert_eq!(results[0].visit_count, 3);
+    }
+
+    #[test]
+    fn search_prefix_respects_limit() {
+        let h = make();
+        for i in 0..10 {
+            h.record_visit(
+                &format!("https://rust{i}.example.com/"),
+                "Rust Crate",
+                i * 100,
+            )
+            .unwrap();
+        }
+        let results = h.search_prefix("rust", 5).unwrap();
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn search_prefix_no_match_returns_empty() {
+        let h = make();
+        h.record_visit("https://example.com/", "Example", 100).unwrap();
+        let results = h.search_prefix("zzz_not_found_xyz", 5).unwrap();
+        assert!(results.is_empty());
     }
 }
