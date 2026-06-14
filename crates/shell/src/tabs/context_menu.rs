@@ -5,9 +5,10 @@
 //! viewport-locked `DisplayList`; `item_at` maps a CSS-px `(x, y)` to the menu
 //! row under it (used both for click dispatch and hover highlight).
 //!
-//! Menu items (5): Duplicate / Pin·Unpin / Move to new window / Close others /
-//! Close tabs to the right. The actual mutations are performed by the shell —
-//! this module only describes geometry, rendering, and hit-testing.
+//! Menu items (8): Duplicate / Pin·Unpin / Move to new window / Add to new
+//! group / Collapse·Expand group / Remove from group / Close others / Close
+//! tabs to the right. The actual mutations are performed by the shell — this
+//! module only describes geometry, rendering, and hit-testing.
 //!
 //! Visual constants follow the dark-chrome aesthetic of `strip.rs`.
 
@@ -52,6 +53,13 @@ pub enum MenuAction {
     TogglePin,
     /// Move the target tab into a new OS window (Phase 0: new process + close).
     MoveToNewWindow,
+    /// Put the target tab into a new tab group (CC-6).
+    AddToNewGroup,
+    /// Toggle the collapsed state of the target tab's group (CC-6). No-op when
+    /// the target is ungrouped.
+    ToggleGroupCollapse,
+    /// Remove the target tab from its group (CC-6). No-op when ungrouped.
+    RemoveFromGroup,
     /// Close every other tab, keeping only the target (pinned tabs survive).
     CloseOthers,
     /// Close all tabs positioned to the right of the target (pinned tabs survive).
@@ -59,16 +67,20 @@ pub enum MenuAction {
 }
 
 /// Fixed top-to-bottom order of menu rows.
-const ITEMS: [MenuAction; 5] = [
+const ITEMS: [MenuAction; 8] = [
     MenuAction::Duplicate,
     MenuAction::TogglePin,
     MenuAction::MoveToNewWindow,
+    MenuAction::AddToNewGroup,
+    MenuAction::ToggleGroupCollapse,
+    MenuAction::RemoveFromGroup,
     MenuAction::CloseOthers,
     MenuAction::CloseRight,
 ];
 
-/// Russian label for a row. `target_pinned` toggles the Pin/Unpin wording.
-fn label(action: MenuAction, target_pinned: bool) -> &'static str {
+/// Russian label for a row. `target_pinned` toggles the Pin/Unpin wording;
+/// `target_collapsed` toggles the Collapse/Expand wording.
+fn label(action: MenuAction, target_pinned: bool, target_collapsed: bool) -> &'static str {
     match action {
         MenuAction::Duplicate => "Дублировать",
         MenuAction::TogglePin => {
@@ -79,6 +91,15 @@ fn label(action: MenuAction, target_pinned: bool) -> &'static str {
             }
         }
         MenuAction::MoveToNewWindow => "В новое окно",
+        MenuAction::AddToNewGroup => "В новую группу",
+        MenuAction::ToggleGroupCollapse => {
+            if target_collapsed {
+                "Развернуть группу"
+            } else {
+                "Свернуть группу"
+            }
+        }
+        MenuAction::RemoveFromGroup => "Убрать из группы",
         MenuAction::CloseOthers => "Закрыть другие",
         MenuAction::CloseRight => "Закрыть справа",
     }
@@ -95,6 +116,12 @@ pub struct TabContextMenu {
     pub target_idx: usize,
     /// Whether the target tab is pinned (drives the Pin/Unpin label).
     pub target_pinned: bool,
+    /// Whether the target tab belongs to a group (CC-6; drives whether the
+    /// group rows are actionable).
+    pub target_grouped: bool,
+    /// Whether the target tab's group is collapsed (CC-6; drives the
+    /// Collapse/Expand label).
+    pub target_collapsed: bool,
     /// Raw cursor X where the menu was summoned, CSS px (pre-clamp).
     pub anchor_x: f32,
     /// Raw cursor Y where the menu was summoned, CSS px (pre-clamp).
@@ -109,6 +136,8 @@ impl Default for TabContextMenu {
             open: false,
             target_idx: 0,
             target_pinned: false,
+            target_grouped: false,
+            target_collapsed: false,
             anchor_x: 0.0,
             anchor_y: 0.0,
             hovered: None,
@@ -118,11 +147,22 @@ impl Default for TabContextMenu {
 
 impl TabContextMenu {
     /// Open the menu for tab `idx` at cursor `(x, y)`. `pinned` is the target
-    /// tab's current pinned state (drives the Pin/Unpin label).
-    pub fn open_for(&mut self, idx: usize, pinned: bool, x: f32, y: f32) {
+    /// tab's current pinned state (Pin/Unpin label); `grouped`/`collapsed`
+    /// describe its tab-group state (CC-6; Collapse/Expand label).
+    pub fn open_for(
+        &mut self,
+        idx: usize,
+        pinned: bool,
+        grouped: bool,
+        collapsed: bool,
+        x: f32,
+        y: f32,
+    ) {
         self.open = true;
         self.target_idx = idx;
         self.target_pinned = pinned;
+        self.target_grouped = grouped;
+        self.target_collapsed = collapsed;
         self.anchor_x = x;
         self.anchor_y = y;
         self.hovered = None;
@@ -213,8 +253,8 @@ pub fn build_overlay(menu: &TabContextMenu, window_w: f32, window_h: f32) -> Dis
             });
         }
 
-        // Divider above the two "close" rows to separate destructive actions.
-        if action == MenuAction::CloseOthers {
+        // Dividers: above the group rows and above the destructive "close" rows.
+        if action == MenuAction::AddToNewGroup || action == MenuAction::CloseOthers {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(x0 + 8.0, row_y - 1.0, MENU_W - 16.0, 1.0),
                 color: DIVIDER,
@@ -228,7 +268,7 @@ pub fn build_overlay(menu: &TabContextMenu, window_w: f32, window_h: f32) -> Dis
                 MENU_W - TEXT_PAD_X * 2.0,
                 FONT_SZ * 1.3,
             ),
-            text: label(action, menu.target_pinned).to_owned(),
+            text: label(action, menu.target_pinned, menu.target_collapsed).to_owned(),
             font_size: FONT_SZ,
             color: ITEM_TEXT,
             font_family: Vec::new(),
@@ -256,7 +296,7 @@ mod tests {
 
     fn open_menu() -> TabContextMenu {
         let mut m = TabContextMenu::default();
-        m.open_for(2, false, 100.0, 50.0);
+        m.open_for(2, false, false, false, 100.0, 50.0);
         m
     }
 
@@ -296,14 +336,32 @@ mod tests {
 
     #[test]
     fn pin_label_flips_with_state() {
-        assert_eq!(label(MenuAction::TogglePin, false), "Закрепить");
-        assert_eq!(label(MenuAction::TogglePin, true), "Открепить");
+        assert_eq!(label(MenuAction::TogglePin, false, false), "Закрепить");
+        assert_eq!(label(MenuAction::TogglePin, true, false), "Открепить");
+    }
+
+    #[test]
+    fn group_collapse_label_flips_with_state() {
+        assert_eq!(label(MenuAction::ToggleGroupCollapse, false, false), "Свернуть группу");
+        assert_eq!(label(MenuAction::ToggleGroupCollapse, false, true), "Развернуть группу");
+    }
+
+    #[test]
+    fn group_rows_present_in_overlay() {
+        let m = open_menu();
+        let dl = build_overlay(&m, 1024.0, 720.0);
+        let has = |needle: &str| {
+            dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == needle))
+        };
+        assert!(has("В новую группу"));
+        assert!(has("Свернуть группу"));
+        assert!(has("Убрать из группы"));
     }
 
     #[test]
     fn build_overlay_uses_unpin_when_pinned() {
         let mut m = TabContextMenu::default();
-        m.open_for(0, true, 10.0, 10.0);
+        m.open_for(0, true, false, false, 10.0, 10.0);
         let dl = build_overlay(&m, 1024.0, 720.0);
         let has_unpin = dl.iter().any(|c| match c {
             DisplayCommand::DrawText { text, .. } => text == "Открепить",
@@ -356,7 +414,7 @@ mod tests {
     fn menu_clamps_to_window_right_edge() {
         let mut m = TabContextMenu::default();
         // Anchor near the right edge — menu must shift left to stay visible.
-        m.open_for(0, false, 1000.0, 10.0);
+        m.open_for(0, false, false, false, 1000.0, 10.0);
         let (x0, _) = anchor(&m, 1024.0, 720.0);
         assert!(x0 + MENU_W <= 1024.0, "menu overflows right edge: x0={x0}");
     }
@@ -364,7 +422,7 @@ mod tests {
     #[test]
     fn menu_clamps_to_window_bottom_edge() {
         let mut m = TabContextMenu::default();
-        m.open_for(0, false, 10.0, 715.0);
+        m.open_for(0, false, false, false, 10.0, 715.0);
         let (_, y0) = anchor(&m, 1024.0, 720.0);
         assert!(y0 + menu_height() <= 720.0, "menu overflows bottom edge: y0={y0}");
     }

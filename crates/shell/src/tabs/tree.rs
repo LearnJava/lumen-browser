@@ -129,6 +129,7 @@ mod tests {
             container: crate::tabs::containers::ContainerKind::None,
             last_activated_ms: 0.0,
             pinned: false,
+            group_id: None,
         }
     }
 

@@ -13,6 +13,7 @@ use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::containers::ContainerKind;
+use crate::tabs::groups::{GroupColor, TabGroup};
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -63,6 +64,11 @@ const BADGE_Z_SZ: f32 = 9.0;
 /// Height of the container border-top strip in CSS px (7D.2). Drawn at the
 /// very top of each tab button when its `container` is not `ContainerKind::None`.
 const CONTAINER_STRIP_HEIGHT: f32 = 3.0;
+/// Height of the tab-group accent bar in CSS px (CC-6). Drawn at the bottom
+/// edge of a grouped tab in its group's [`GroupColor`].
+const GROUP_BAR_HEIGHT: f32 = 3.0;
+/// Width of the collapsed-group chip marker (a square swatch) in CSS px.
+const COLLAPSE_CHIP_W: f32 = 10.0;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -103,6 +109,10 @@ pub struct TabEntry {
     /// Whether the tab is pinned (CC-4). Pinned tabs survive the context-menu
     /// "Close others" / "Close to the right" bulk operations. Default `false`.
     pub pinned: bool,
+    /// Id of the [`TabGroup`] this tab belongs to (CC-6), or `None` when the
+    /// tab is ungrouped. Drives the coloured group accent bar and collapse
+    /// visibility in [`build_tab_bar`].
+    pub group_id: Option<usize>,
 }
 
 /// State of the tab strip (tab list + active index).
@@ -113,6 +123,10 @@ pub struct TabStrip {
     pub active: usize,
     /// Counter for generating fresh `TabEntry::id` values.
     pub(crate) next_id: usize,
+    /// Tab groups (CC-6), keyed by `TabGroup::id`. Order is creation order.
+    pub groups: Vec<TabGroup>,
+    /// Counter for generating fresh `TabGroup::id` values.
+    pub(crate) next_group_id: usize,
 }
 
 impl TabStrip {
@@ -127,9 +141,12 @@ impl TabStrip {
                 container: ContainerKind::None,
                 last_activated_ms: 0.0,
                 pinned: false,
+                group_id: None,
             }],
             active: 0,
             next_id: 1,
+            groups: Vec::new(),
+            next_group_id: 0,
         }
     }
 
@@ -153,6 +170,7 @@ impl TabStrip {
             container: ContainerKind::None,
             last_activated_ms: now_ms,
             pinned: false,
+            group_id: None,
         });
         self.tabs.len() - 1
     }
@@ -175,6 +193,7 @@ impl TabStrip {
             container: ContainerKind::None,
             last_activated_ms: now_ms,
             pinned: false,
+            group_id: None,
         });
         self.tabs.len() - 1
     }
@@ -287,6 +306,7 @@ impl TabStrip {
             container: source.container,
             last_activated_ms: now_ms,
             pinned: false,
+            group_id: source.group_id,
         };
         let dst = src + 1;
         self.tabs.insert(dst, clone);
@@ -347,6 +367,122 @@ impl TabStrip {
             .unwrap_or_else(|| idx.min(self.tabs.len().saturating_sub(1)));
         removed
     }
+
+    // ── Tab groups (CC-6) ───────────────────────────────────────────────────
+
+    /// Create a new expanded [`TabGroup`] with `label` and `color`.
+    /// Returns the fresh group id. Does not assign any tabs to it.
+    pub fn create_group(&mut self, label: impl Into<String>, color: GroupColor) -> usize {
+        let id = self.next_group_id;
+        self.next_group_id += 1;
+        self.groups.push(TabGroup::new(id, label, color));
+        id
+    }
+
+    /// Borrow the group with the given id, if it exists.
+    #[must_use]
+    pub fn group(&self, id: usize) -> Option<&TabGroup> {
+        self.groups.iter().find(|g| g.id == id)
+    }
+
+    /// The group id of the tab at `idx`, or `None` when ungrouped / out of bounds.
+    #[must_use]
+    pub fn group_of(&self, idx: usize) -> Option<usize> {
+        self.tabs.get(idx).and_then(|t| t.group_id)
+    }
+
+    /// Assign the tab at `idx` to the group `group_id`.
+    ///
+    /// Returns `false` (a no-op) for an out-of-bounds tab index or an unknown
+    /// group id; `true` on success.
+    pub fn assign_to_group(&mut self, idx: usize, group_id: usize) -> bool {
+        if self.group(group_id).is_none() {
+            return false;
+        }
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.group_id = Some(group_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove the tab at `idx` from its group (no-op if already ungrouped or
+    /// out of bounds). The group itself is kept even if it becomes empty.
+    pub fn ungroup(&mut self, idx: usize) {
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.group_id = None;
+        }
+    }
+
+    /// Toggle the collapsed flag of the group `id`. Returns the new collapsed
+    /// state (`false` for an unknown group, which is a no-op).
+    pub fn toggle_collapse(&mut self, id: usize) -> bool {
+        if let Some(g) = self.groups.iter_mut().find(|g| g.id == id) {
+            g.collapsed = !g.collapsed;
+            g.collapsed
+        } else {
+            false
+        }
+    }
+
+    /// `true` if the group `id` exists and is collapsed.
+    #[must_use]
+    pub fn is_collapsed(&self, id: usize) -> bool {
+        self.group(id).is_some_and(|g| g.collapsed)
+    }
+
+    /// The colour of the group `id`, or `None` for an unknown group.
+    #[must_use]
+    pub fn group_color(&self, id: usize) -> Option<GroupColor> {
+        self.group(id).map(|g| g.color)
+    }
+
+    /// Strip indices of every tab in the group `id`, in left-to-right order.
+    #[must_use]
+    pub fn group_members(&self, id: usize) -> Vec<usize> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.group_id == Some(id))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Remove the group `id` and ungroup all of its member tabs. No-op if the
+    /// group is unknown.
+    pub fn remove_group(&mut self, id: usize) {
+        for tab in &mut self.tabs {
+            if tab.group_id == Some(id) {
+                tab.group_id = None;
+            }
+        }
+        self.groups.retain(|g| g.id != id);
+    }
+
+    /// Strip indices of the tabs that should be drawn, in order.
+    ///
+    /// Every tab is visible except members of a *collapsed* group other than
+    /// that group's leftmost member, which stays as the collapsed-group chip.
+    /// For a strip with no collapsed groups this is simply `0..tabs.len()`, so
+    /// the ungrouped rendering path is unchanged.
+    #[must_use]
+    pub fn visible_indices(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.tabs.len());
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if let Some(gid) = tab.group_id
+                && self.is_collapsed(gid)
+            {
+                // Keep only the leftmost member of a collapsed group.
+                let earlier_member = self.tabs[..i].iter().any(|t| t.group_id == Some(gid));
+                if earlier_member {
+                    continue;
+                }
+            }
+            out.push(i);
+        }
+        out
+    }
 }
 
 // ── Drag state ────────────────────────────────────────────────────────────────
@@ -405,9 +541,12 @@ pub fn hit_test(strip: &TabStrip, x: f32, y: f32, window_w: f32) -> TabHit {
     if !(0.0..TAB_BAR_HEIGHT).contains(&y) {
         return TabHit::Empty;
     }
-    let n = strip.tabs.len();
-    for i in 0..n {
-        let (left, right) = tab_x_range(i, n, window_w);
+    // Lay out over the *visible* tabs so collapsed-group members map to the
+    // chip tab. For a strip with no collapsed groups this is `0..tabs.len()`.
+    let visible = strip.visible_indices();
+    let n = visible.len();
+    for (slot, &i) in visible.iter().enumerate() {
+        let (left, right) = tab_x_range(slot, n, window_w);
         if x >= left && x < right {
             // Close-button occupies the rightmost CLOSE_SZ + CLOSE_MARGIN px.
             let close_right = right - TAB_PAD;
@@ -441,8 +580,11 @@ pub fn build_tab_bar(
     accent: Color,
     drag: Option<&TabDragState>,
 ) -> DisplayList {
-    let n = strip.tabs.len();
-    let mut out = DisplayList::with_capacity(4 + n * 6);
+    // Lay out over the *visible* tabs: members of a collapsed group (except the
+    // chip) are skipped. With no collapsed groups this is `0..tabs.len()`.
+    let visible = strip.visible_indices();
+    let n = visible.len();
+    let mut out = DisplayList::with_capacity(4 + n * 7);
 
     // Background strip.
     out.push(DisplayCommand::FillRect {
@@ -450,8 +592,9 @@ pub fn build_tab_bar(
         color: BAR_BG,
     });
 
-    for (i, tab) in strip.tabs.iter().enumerate() {
-        let (left, right) = tab_x_range(i, n, window_w);
+    for (slot, &i) in visible.iter().enumerate() {
+        let tab = &strip.tabs[i];
+        let (left, right) = tab_x_range(slot, n, window_w);
         let is_active = i == strip.active;
 
         // Tab background: T2/T3 use darker backgrounds as fade-opacity signal.
@@ -468,6 +611,27 @@ pub fn build_tab_bar(
             rect: Rect::new(left, 0.0, right - left, TAB_BAR_HEIGHT),
             color: bg,
         });
+
+        // Tab-group accent bar (CC-6): a coloured strip along the bottom of a
+        // grouped tab in its group's colour. Drawn before the active accent so
+        // the active 2 px bar still reads on top for a grouped active tab.
+        if let Some(gid) = tab.group_id
+            && let Some(gc) = strip.group_color(gid)
+        {
+            let col = gc.color();
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(left, TAB_BAR_HEIGHT - GROUP_BAR_HEIGHT, right - left, GROUP_BAR_HEIGHT),
+                color: col,
+            });
+            // Collapsed-group chip: a small square swatch near the left edge of
+            // the leftmost (chip) tab, signalling the group is folded.
+            if strip.is_collapsed(gid) {
+                out.push(DisplayCommand::FillRect {
+                    rect: Rect::new(left + 4.0, (TAB_BAR_HEIGHT - COLLAPSE_CHIP_W) * 0.5, COLLAPSE_CHIP_W, COLLAPSE_CHIP_W),
+                    color: col,
+                });
+            }
+        }
 
         // Active tab accent bar at the bottom.
         if is_active {
@@ -945,6 +1109,7 @@ mod tests {
             container: ContainerKind::None,
             last_activated_ms: 0.0,
             pinned: false,
+            group_id: None,
         };
         assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_none());
     }
@@ -959,6 +1124,7 @@ mod tests {
             container: ContainerKind::None,
             last_activated_ms: 0.0,
             pinned: false,
+            group_id: None,
         };
         let cmds = build_tab_tooltip(&tab, 100.0, 36.0);
         assert!(cmds.is_some());
@@ -976,6 +1142,7 @@ mod tests {
             container: ContainerKind::None,
             last_activated_ms: 0.0,
             pinned: false,
+            group_id: None,
         };
         assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_some());
     }
@@ -1231,5 +1398,175 @@ mod tests {
             _ => false,
         });
         assert!(has_accent, "active tab must use the provided accent color");
+    }
+
+    // ── Tab group tests (CC-6) ───────────────────────────────────────────────
+
+    #[test]
+    fn create_group_returns_fresh_ids() {
+        let mut s = TabStrip::new();
+        let a = s.create_group("Work", GroupColor::Blue);
+        let b = s.create_group("Play", GroupColor::Green);
+        assert_ne!(a, b);
+        assert_eq!(s.groups.len(), 2);
+        assert_eq!(s.group(a).unwrap().label, "Work");
+        assert_eq!(s.group_color(b), Some(GroupColor::Green));
+    }
+
+    #[test]
+    fn assign_to_group_sets_membership() {
+        let mut s = strip_with_n(3);
+        let g = s.create_group("G", GroupColor::Red);
+        assert!(s.assign_to_group(1, g));
+        assert_eq!(s.group_of(1), Some(g));
+        assert_eq!(s.group_of(0), None);
+    }
+
+    #[test]
+    fn assign_to_unknown_group_is_noop() {
+        let mut s = strip_with_n(2);
+        assert!(!s.assign_to_group(0, 999));
+        assert_eq!(s.group_of(0), None);
+    }
+
+    #[test]
+    fn assign_out_of_bounds_is_noop() {
+        let mut s = strip_with_n(2);
+        let g = s.create_group("G", GroupColor::Red);
+        assert!(!s.assign_to_group(99, g));
+    }
+
+    #[test]
+    fn group_members_lists_in_order() {
+        let mut s = strip_with_n(4); // ids [0,1,2,3]
+        let g = s.create_group("G", GroupColor::Cyan);
+        s.assign_to_group(2, g);
+        s.assign_to_group(0, g);
+        assert_eq!(s.group_members(g), vec![0, 2]);
+    }
+
+    #[test]
+    fn toggle_collapse_flips_state() {
+        let mut s = TabStrip::new();
+        let g = s.create_group("G", GroupColor::Purple);
+        assert!(!s.is_collapsed(g));
+        assert!(s.toggle_collapse(g));
+        assert!(s.is_collapsed(g));
+        assert!(!s.toggle_collapse(g));
+        assert!(!s.is_collapsed(g));
+    }
+
+    #[test]
+    fn toggle_collapse_unknown_group_is_false() {
+        let mut s = TabStrip::new();
+        assert!(!s.toggle_collapse(42));
+    }
+
+    #[test]
+    fn ungroup_clears_membership() {
+        let mut s = strip_with_n(2);
+        let g = s.create_group("G", GroupColor::Grey);
+        s.assign_to_group(1, g);
+        s.ungroup(1);
+        assert_eq!(s.group_of(1), None);
+    }
+
+    #[test]
+    fn remove_group_ungroups_members() {
+        let mut s = strip_with_n(3);
+        let g = s.create_group("G", GroupColor::Yellow);
+        s.assign_to_group(0, g);
+        s.assign_to_group(2, g);
+        s.remove_group(g);
+        assert!(s.group(g).is_none());
+        assert_eq!(s.group_of(0), None);
+        assert_eq!(s.group_of(2), None);
+    }
+
+    #[test]
+    fn visible_indices_all_when_no_collapse() {
+        let s = strip_with_n(4);
+        assert_eq!(s.visible_indices(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn visible_indices_hides_collapsed_members_except_chip() {
+        let mut s = strip_with_n(4); // ids [0,1,2,3]
+        let g = s.create_group("G", GroupColor::Blue);
+        s.assign_to_group(1, g);
+        s.assign_to_group(2, g);
+        s.toggle_collapse(g);
+        // Tab 1 is the chip (leftmost member); tab 2 is hidden.
+        assert_eq!(s.visible_indices(), vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn visible_indices_expanded_group_shows_all() {
+        let mut s = strip_with_n(4);
+        let g = s.create_group("G", GroupColor::Blue);
+        s.assign_to_group(1, g);
+        s.assign_to_group(2, g);
+        // Not collapsed → every tab visible.
+        assert_eq!(s.visible_indices(), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn duplicate_inherits_group() {
+        let mut s = strip_with_n(2);
+        let g = s.create_group("G", GroupColor::Pink);
+        s.assign_to_group(0, g);
+        let new_idx = s.duplicate(0, 0.0).unwrap();
+        assert_eq!(s.group_of(new_idx), Some(g));
+    }
+
+    #[test]
+    fn build_tab_bar_draws_group_accent_bar() {
+        let mut s = strip_with_n(2);
+        let g = s.create_group("G", GroupColor::Green);
+        s.assign_to_group(0, g);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 1, g: 2, b: 3, a: 255 }, None);
+        let green = GroupColor::Green.color();
+        let has_group_bar = dl.iter().any(|c| match c {
+            DisplayCommand::FillRect { rect, color } => {
+                (rect.height - GROUP_BAR_HEIGHT).abs() < f32::EPSILON
+                    && (rect.y - (TAB_BAR_HEIGHT - GROUP_BAR_HEIGHT)).abs() < f32::EPSILON
+                    && *color == green
+            }
+            _ => false,
+        });
+        assert!(has_group_bar, "grouped tab must render its group accent bar");
+    }
+
+    #[test]
+    fn build_tab_bar_no_group_bar_for_ungrouped() {
+        let s = strip_with_n(2);
+        let dl = build_tab_bar(&s, 1024.0, Color { r: 1, g: 2, b: 3, a: 255 }, None);
+        let bars = dl
+            .iter()
+            .filter(|c| match c {
+                DisplayCommand::FillRect { rect, .. } => {
+                    (rect.height - GROUP_BAR_HEIGHT).abs() < f32::EPSILON
+                        && (rect.y - (TAB_BAR_HEIGHT - GROUP_BAR_HEIGHT)).abs() < f32::EPSILON
+                }
+                _ => false,
+            })
+            .count();
+        assert_eq!(bars, 0, "ungrouped tabs must not render a group bar");
+    }
+
+    #[test]
+    fn hit_test_collapsed_group_maps_to_chip() {
+        let mut s = strip_with_n(4); // 4 tabs
+        let g = s.create_group("G", GroupColor::Blue);
+        s.assign_to_group(1, g);
+        s.assign_to_group(2, g);
+        s.toggle_collapse(g);
+        // Visible: [0, 1(chip), 3]. With 3 visible tabs the width is clamped to
+        // TAB_MAX_W=200, so slot 1 spans [200, 400). Click inside it, away from
+        // the close button — it must map to the chip's real index (1).
+        let visible = s.visible_indices();
+        assert_eq!(visible, vec![0, 1, 3]);
+        let hit = hit_test(&s, 250.0, 18.0, 1024.0);
+        assert_eq!(hit, TabHit::Tab(1));
     }
 }

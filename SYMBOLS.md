@@ -2297,8 +2297,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:1812` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
 `crates/engine/paint/src/display_list.rs:2774` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
 `crates/engine/paint/src/display_list.rs:2903` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/display_list.rs:3596` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:12000` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:3627` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
+`crates/engine/paint/src/display_list.rs:12089` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/fingerprint.rs:21` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
 `crates/engine/paint/src/fingerprint.rs:36` **fn** `from_adapter_info` — Create normalized GPU fingerprint from wgpu adapter info
 `crates/engine/paint/src/fingerprint.rs:44` **fn** `vendor` — Vendor string: always "WebKit"
@@ -2476,7 +2476,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (781 symbols)
+## lumen-shell  (798 symbols)
 
 `crates/shell/src/address_bar.rs:56` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:70` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -3218,38 +3218,55 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/containers.rs:144` **fn** `get` — Look up an existing store id without allocating
 `crates/shell/src/tabs/containers.rs:150` **fn** `len` — Number of `(origin, container)` mappings tracked
 `crates/shell/src/tabs/containers.rs:156` **fn** `is_empty` — `true` if no mapping has been allocated yet
-`crates/shell/src/tabs/context_menu.rs:40` **fn** `menu_height` — Total menu height in CSS px (background box)
-`crates/shell/src/tabs/context_menu.rs:48` **enum** `MenuAction` — An action the user can pick from the tab context menu
-`crates/shell/src/tabs/context_menu.rs:91` **struct** `TabContextMenu` — State of the right-click tab context menu
-`crates/shell/src/tabs/context_menu.rs:122` **fn** `open_for` — Open the menu for tab `idx` at cursor `(x, y)`. `pinned` is the target
-`crates/shell/src/tabs/context_menu.rs:132` **fn** `close` — Hide the menu
-`crates/shell/src/tabs/context_menu.rs:138` **fn** `is_open` — `true` while the menu is visible
-`crates/shell/src/tabs/context_menu.rs:156` **fn** `item_at` — Map a CSS-px `(x, y)` to the menu row index under it, or `None` if the
-`crates/shell/src/tabs/context_menu.rs:174` **fn** `action_at` — Map a CSS-px `(x, y)` to the [`MenuAction`] under it, or `None`
-`crates/shell/src/tabs/context_menu.rs:184` **fn** `build_overlay` — Build a viewport-locked display list for the open menu
-`crates/shell/src/tabs/strip.rs:70` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:109` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:120` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:137` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:145` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:167` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:186` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
-`crates/shell/src/tabs/strip.rs:198` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:206` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:218` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:228` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:238` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
-`crates/shell/src/tabs/strip.rs:257` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
-`crates/shell/src/tabs/strip.rs:267` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
-`crates/shell/src/tabs/strip.rs:278` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
-`crates/shell/src/tabs/strip.rs:304` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
-`crates/shell/src/tabs/strip.rs:329` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
-`crates/shell/src/tabs/strip.rs:358` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
-`crates/shell/src/tabs/strip.rs:372` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
-`crates/shell/src/tabs/strip.rs:384` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:404` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:438` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
-`crates/shell/src/tabs/strip.rs:586` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
+`crates/shell/src/tabs/context_menu.rs:41` **fn** `menu_height` — Total menu height in CSS px (background box)
+`crates/shell/src/tabs/context_menu.rs:49` **enum** `MenuAction` — An action the user can pick from the tab context menu
+`crates/shell/src/tabs/context_menu.rs:112` **struct** `TabContextMenu` — State of the right-click tab context menu
+`crates/shell/src/tabs/context_menu.rs:152` **fn** `open_for` — Open the menu for tab `idx` at cursor `(x, y)`. `pinned` is the target
+`crates/shell/src/tabs/context_menu.rs:172` **fn** `close` — Hide the menu
+`crates/shell/src/tabs/context_menu.rs:178` **fn** `is_open` — `true` while the menu is visible
+`crates/shell/src/tabs/context_menu.rs:196` **fn** `item_at` — Map a CSS-px `(x, y)` to the menu row index under it, or `None` if the
+`crates/shell/src/tabs/context_menu.rs:214` **fn** `action_at` — Map a CSS-px `(x, y)` to the [`MenuAction`] under it, or `None`
+`crates/shell/src/tabs/context_menu.rs:224` **fn** `build_overlay` — Build a viewport-locked display list for the open menu
+`crates/shell/src/tabs/groups.rs:24` **enum** `GroupColor` — One of the preset tab-group colours (Chrome-compatible palette)
+`crates/shell/src/tabs/groups.rs:59` **fn** `color` — Fully-opaque RGB for the strip label and the per-tab accent bar
+`crates/shell/src/tabs/groups.rs:74` **fn** `index` — Stable palette index (`0..8`), used as the persisted on-disk value
+`crates/shell/src/tabs/groups.rs:81` **fn** `from_index` — Inverse of [`index`](GroupColor::index). Out-of-range indices clamp to
+`crates/shell/src/tabs/groups.rs:99` **struct** `TabGroup` — A named, colour-coded group of tabs
+`crates/shell/src/tabs/groups.rs:114` **fn** `new` — Create an expanded group with the given id, label and colour
+`crates/shell/src/tabs/strip.rs:76` **struct** `TabEntry` — Metadata for one browser tab
+`crates/shell/src/tabs/strip.rs:119` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:134` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:154` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:162` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:185` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:205` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:217` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:225` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:237` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:247` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:257` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
+`crates/shell/src/tabs/strip.rs:276` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
+`crates/shell/src/tabs/strip.rs:286` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
+`crates/shell/src/tabs/strip.rs:297` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
+`crates/shell/src/tabs/strip.rs:324` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
+`crates/shell/src/tabs/strip.rs:349` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
+`crates/shell/src/tabs/strip.rs:375` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
+`crates/shell/src/tabs/strip.rs:384` **fn** `group` — Borrow the group with the given id, if it exists
+`crates/shell/src/tabs/strip.rs:390` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
+`crates/shell/src/tabs/strip.rs:398` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
+`crates/shell/src/tabs/strip.rs:412` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
+`crates/shell/src/tabs/strip.rs:420` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
+`crates/shell/src/tabs/strip.rs:431` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
+`crates/shell/src/tabs/strip.rs:437` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
+`crates/shell/src/tabs/strip.rs:443` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
+`crates/shell/src/tabs/strip.rs:454` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
+`crates/shell/src/tabs/strip.rs:470` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
+`crates/shell/src/tabs/strip.rs:494` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
+`crates/shell/src/tabs/strip.rs:508` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
+`crates/shell/src/tabs/strip.rs:520` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:540` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:577` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:750` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -3260,7 +3277,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:31` **fn** `zoom_reset` — Reset zoom to 100%
 `crates/shell/src/zoom.rs:40` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
-## lumen-storage  (465 symbols)
+## lumen-storage  (478 symbols)
 
 `crates/storage/src/a11y_prefs.rs:38` **enum** `CursorSize` — Accessibility cursor magnification level
 `crates/storage/src/a11y_prefs.rs:50` **fn** `as_str` — Serialize to the storage string representation
@@ -3672,6 +3689,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/sw_interceptor.rs:31` **fn** `new`
 `crates/storage/src/sw_store.rs:25` **struct** `SwStore` — Per-origin persistence SW-регистраций поверх общего [`StorageBackend`]
 `crates/storage/src/sw_store.rs:35` **fn** `new` — Создать store для конкретного `origin` поверх разделяемого `backend`
+`crates/storage/src/tab_groups.rs:30` **struct** `PersistedGroup` — One persisted tab group
+`crates/storage/src/tab_groups.rs:46` **struct** `TabGroups` — SQLite-backed store of tab-group metadata
+`crates/storage/src/tab_groups.rs:58` **fn** `open` — Open (or create) the store at `path`
+`crates/storage/src/tab_groups.rs:65` **fn** `open_in_memory` — Open an ephemeral in-memory store (tests / private sessions)
+`crates/storage/src/tab_groups.rs:94` **fn** `create` — Create a group. `position` is auto-assigned as `MAX(existing) + 1`
+`crates/storage/src/tab_groups.rs:116` **fn** `get` — Fetch a group by id. `None` if absent
+`crates/storage/src/tab_groups.rs:132` **fn** `list_all` — All groups, ordered by `position` ascending
+`crates/storage/src/tab_groups.rs:154` **fn** `rename` — Rename a group. Missing id is a no-op
+`crates/storage/src/tab_groups.rs:164` **fn** `set_color` — Change a group's colour palette index. Missing id is a no-op
+`crates/storage/src/tab_groups.rs:174` **fn** `set_collapsed` — Set the collapsed flag. Missing id is a no-op
+`crates/storage/src/tab_groups.rs:184` **fn** `set_position` — Set the display position. Missing id is a no-op
+`crates/storage/src/tab_groups.rs:194` **fn** `delete` — Delete a group. Missing id is a no-op
+`crates/storage/src/tab_groups.rs:205` **fn** `count` — Number of stored groups
 `crates/storage/src/tab_sessions.rs:19` **struct** `TabSession` — Одна вкладка в сохранённой сессии
 `crates/storage/src/tab_sessions.rs:40` **struct** `SessionSnapshot` — Снимок сессии — корневая запись для group of tabs
 `crates/storage/src/tab_sessions.rs:46` **struct** `TabSessions`
@@ -3729,4 +3759,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3664 symbols in 20 crates*
+*Total: 3694 symbols in 20 crates*

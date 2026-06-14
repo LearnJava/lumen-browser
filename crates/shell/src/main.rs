@@ -432,6 +432,7 @@ fn run_window_mode(
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
+        tab_groups: lumen_storage::TabGroups::open_in_memory().expect("tab_groups in-memory"),
         history_store: History::open_in_memory().expect("history_store in-memory"),
         history_panel: panels::history_panel::HistoryPanel::new(),
         command_palette: panels::command_palette::CommandPalette::new(),
@@ -4139,6 +4140,11 @@ struct Lumen {
     /// visibility. Folder tree + bookmark list + search + drag-and-drop re-file
     /// (move bookmark to folder, persisted via `Bookmarks::set_folder`).
     bookmark_panel: panels::bookmark_panel::BookmarkPanel,
+    /// SQLite-backed tab-group metadata store (CC-6, in-memory for the session).
+    ///
+    /// Persists group label/colour/collapsed state created via the tab context
+    /// menu ("В новую группу"). Membership is session state on `TabStrip`.
+    tab_groups: lumen_storage::TabGroups,
     /// SQLite-backed browsing history store (in-memory for the session, task D-5).
     ///
     /// Records each page visit. The history panel reads via `History::recent`
@@ -6019,7 +6025,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w)
                         {
                             let pinned = self.tab_strip.is_pinned(idx);
-                            self.tab_context_menu.open_for(idx, pinned, x_css, y_css);
+                            let group = self.tab_strip.group_of(idx);
+                            let grouped = group.is_some();
+                            let collapsed = group.is_some_and(|g| self.tab_strip.is_collapsed(g));
+                            self.tab_context_menu
+                                .open_for(idx, pinned, grouped, collapsed, x_css, y_css);
                             self.request_redraw();
                             return;
                         }
@@ -11343,6 +11353,7 @@ impl Lumen {
                 container: tabs::containers::ContainerKind::None,
                 last_activated_ms: 0.0,
                 pinned: false,
+                group_id: None,
             });
             self.lifecycle_mgr.open_tab(id as u64);
 
@@ -12020,6 +12031,45 @@ impl Lumen {
             }
             MenuAction::Duplicate => self.duplicate_tab(idx),
             MenuAction::MoveToNewWindow => self.move_tab_to_new_window(idx, event_loop),
+            MenuAction::AddToNewGroup => {
+                // CC-6: bundle the target tab into a fresh group, cycling the
+                // colour by group count so successive groups differ. Persist
+                // the group metadata so a future restore can recover it.
+                use tabs::groups::GroupColor;
+                let color = GroupColor::from_index((self.tab_strip.groups.len() % 8) as u8);
+                let gid = self.tab_strip.create_group("Группа", color);
+                self.tab_strip.assign_to_group(idx, gid);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let _ = self.tab_groups.create("Группа", color.index(), now);
+                self.request_redraw();
+            }
+            MenuAction::ToggleGroupCollapse => {
+                if let Some(gid) = self.tab_strip.group_of(idx) {
+                    let now_collapsed = self.tab_strip.toggle_collapse(gid);
+                    // If the active tab is hidden by collapsing, move focus to
+                    // the group's chip tab so a valid page stays displayed.
+                    if now_collapsed
+                        && !self.tab_strip.visible_indices().contains(&self.tab_strip.active)
+                        && let Some(&chip) = self.tab_strip.group_members(gid).first()
+                    {
+                        self.switch_tab(chip);
+                    }
+                    self.request_redraw();
+                }
+            }
+            MenuAction::RemoveFromGroup => {
+                if let Some(gid) = self.tab_strip.group_of(idx) {
+                    self.tab_strip.ungroup(idx);
+                    // Drop the group entirely once its last member leaves.
+                    if self.tab_strip.group_members(gid).is_empty() {
+                        self.tab_strip.remove_group(gid);
+                    }
+                    self.request_redraw();
+                }
+            }
             MenuAction::CloseOthers => {
                 // Keep the target visible: switch to it first so a surviving
                 // page is shown, then drop everything else (non-pinned).
