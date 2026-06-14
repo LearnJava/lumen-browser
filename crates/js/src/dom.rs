@@ -4860,6 +4860,13 @@ var document = {
     createNodeIterator: function(root, whatToShow, filter) {
         return new _NodeIterator(root, whatToShow !== undefined ? whatToShow : 0xFFFFFFFF, filter || null);
     },
+    // CSSOM View §5.1: caretPositionFromPoint(x, y) — returns a CaretPosition or null.
+    // Phase 0: no layout hit-testing yet; returns body at offset 0 when body exists.
+    caretPositionFromPoint: function(x, y) {
+        var bodyNid = _lumen_u2n(_lumen_get_body());
+        if (bodyNid === null) return null;
+        return new _CaretPosition(_lumen_make_element(bodyNid), 0);
+    },
 };
 
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
@@ -7621,6 +7628,15 @@ _NodeIterator.prototype.previousNode = function() {
 
 // No-op per DOM LS §4.4.6.
 _NodeIterator.prototype.detach = function() {};
+
+// ── CaretPosition (CSSOM View §5.1) ──────────────────────────────────────────
+// Returned by document.caretPositionFromPoint(). Phase 0: no layout hit-testing;
+// always points to body at offset 0. getClientRects() returns an empty list.
+function _CaretPosition(offsetNode, offset) {
+    this.offsetNode = offsetNode;
+    this.offset     = offset;
+}
+_CaretPosition.prototype.getClientRects = function() { return []; };
 
 // ── window.matchMedia / MediaQueryList (CSS Media Queries L4 §4.2) ───────────
 // Pure-JS shim on top of the native binding `_lumen_match_media` (parses + matches
@@ -20394,6 +20410,34 @@ mod tests {
                inp.addEventListener('click', function() { clicked = true; }); \
                try { inp.showPicker(); } catch(e) {} \
                return clicked; \
+             })()"));
+    }
+
+    // ── document.caretPositionFromPoint tests ──────────────────────────────────
+
+    #[test]
+    fn caret_position_from_point_exists() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "typeof document.caretPositionFromPoint === 'function'"));
+    }
+
+    #[test]
+    fn caret_position_from_point_returns_object() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "(function() { \
+               var cp = document.caretPositionFromPoint(10, 20); \
+               return cp !== null && cp.offsetNode !== undefined && typeof cp.offset === 'number'; \
+             })()"));
+    }
+
+    #[test]
+    fn caret_position_from_point_has_get_client_rects() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt,
+            "(function() { \
+               var cp = document.caretPositionFromPoint(0, 0); \
+               return cp !== null && typeof cp.getClientRects === 'function'; \
              })()"));
     }
 
