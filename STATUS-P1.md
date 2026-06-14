@@ -6,8 +6,7 @@
 
 ## In progress
 
-EE-5 `requestAnimationFrame` scheduling Phase 2  branch: p1-ee5-raf-vsync
-Next step: vsync gate в shell main.rs + has_raf_pending() в lib.rs + JS DOMHighResTimeStamp  main.rs:7555
+_(нет)_
 
 ---
 
@@ -70,7 +69,7 @@ Next step: vsync gate в shell main.rs + has_raf_pending() в lib.rs + JS DOMHig
 | ~~EE-2~~ | ~~**ResizeObserver Phase 1**~~ — **выполнено** (p1-ee1-intersection-observer, 2026-06-14): реализация уже была (borderBoxSize/contentBoxSize/devicePixelContentBoxSize, shell deliver); добавлены 3 теста → 8 итого (size-change re-fire, borderBoxSize fields, unobserve) | M | `lumen-js`, `lumen-shell` |
 | ~~EE-3~~ | ~~**Layout invalidation subtree ratchet**~~ — **выполнено** (p1-ee3-incremental-layout, 2026-06-14): `DirtyBits(u8)` bitflag на `LayoutBox`; `mark_dirty/mark_dirty_set` + `HAS_DIRTY_DESCENDANT` propagation вверх; `INCREMENTAL_LAYOUT_MODE` thread_local в `lay_out` — clean-поддеревья транслируются без перемера; `lay_out_incremental` (pub) + re-export из crate root; 14 unit-тестов (bitops, mark, clear, translate, integration) | L | `lumen-layout` |
 | ~~EE-4~~ | ~~**Paint layer caching**~~ — **выполнено** (p1-ee4-paint-layer-cache, 2026-06-14): `DisplayListCache` LRU-кэш `Vec<DisplayCommand>` по `NodeId` (бюджет 32 МБ); `hash_commands()` — хэш-слепок среза команд; `EvictableCache` impl (Low noop / Medium 50% / High clear); заполнение в `relayout()` + scroll handler; `on_memory_pressure` в `about_to_wait`; попутно исправлены pre-existing E0063 от EE-3 в `LoadedPage::empty()` и `make_dialog_lb()`; 10 unit-тестов | M | `lumen-paint`, `lumen-shell` |
-| EE-5 | **`requestAnimationFrame` scheduling Phase 2** — `rAF`-callbacks группировать в batch не чаще vsync; coalesce multiple `requestAnimationFrame` за один кадр; deliver `DOMHighResTimeStamp` от shell clock; 5 unit-тестов | S | `lumen-js`, `lumen-shell` |
+| ~~EE-5~~ | ~~**`requestAnimationFrame` scheduling Phase 2**~~ — **выполнено** (p1-ee5-raf-vsync, 2026-06-14): vsync gate `RAF_MIN_INTERVAL_MS` (16.67 мс, 60 Гц) в shell + `last_raf_batch_ms: f64`; `has_raf_pending()` non-consuming peek в `QuickJsRuntime` и трейте; shell передаёт `-1.0` → JS захватывает `performance.now()` в начале пакета как единый `DOMHighResTimeStamp` для всех callback-ов (HTML §8.1.5.1); deterministic mode: `0.0`; 5 unit-тестов (coalesce, uniform-ts, deterministic-zero, live-clock-non-negative, exception-no-stop-batch) | S | `lumen-js`, `lumen-shell` |
 
 ### FF — Network & Fetch Phase 2
 
