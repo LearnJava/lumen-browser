@@ -3813,7 +3813,10 @@ function _lumen_make_element(nid) {
         get popover() {
             var v = _lumen_get_attr(nid, 'popover');
             if (v === undefined) return null;
-            return (v || '').toLowerCase() === 'manual' ? 'manual' : 'auto';
+            var norm = (v || '').toLowerCase();
+            if (norm === 'manual') return 'manual';
+            if (norm === 'hint') return 'hint'; // Popover API Level 2
+            return 'auto';
         },
         set popover(v) {
             if (v === null || v === undefined || v === false) {
@@ -10279,7 +10282,11 @@ document.addEventListener('keydown', function(evt) {
 // other and on outside clicks; Escape closes the topmost auto-popover.
 
 // Open auto-popovers in stack order (newest = last).
+// Stack of open auto popovers (popover='' or popover='auto').
 var _lumen_popover_stack = [];
+// Stack of open hint popovers (popover='hint', Popover API Level 2).
+// Hints live above autos but are closed when any auto closes.
+var _lumen_hint_stack = [];
 
 // Sentinel attribute written by showPopover() — read by layout's is_closed_popover.
 var _LPOP_ATTR = 'data-lumen-popover-open';
@@ -10298,9 +10305,17 @@ function _lumen_popover_show(nid) {
     // Re-check: still not open? (beforetoggle could in theory trigger re-entrant show)
     if (_lumen_get_attr(nid, _LPOP_ATTR) !== undefined) return;
     var popVal = (_lumen_get_attr(nid, 'popover') || '').toLowerCase();
-    var isAuto = popVal !== 'manual';
-    if (isAuto) {
-        // Close all currently open auto-popovers (top-of-stack first).
+    var isHint = popVal === 'hint';
+    var isAuto = !isHint && popVal !== 'manual';
+    if (isHint) {
+        // Popover API Level 2 §3.2: showing a hint closes other hints but NOT autos.
+        var hs = _lumen_hint_stack.slice();
+        for (var hi = hs.length - 1; hi >= 0; hi--) { _lumen_popover_hide(hs[hi]); }
+        _lumen_hint_stack.push(nid);
+    } else if (isAuto) {
+        // Showing an auto popover closes all hints first, then all autos.
+        var hs2 = _lumen_hint_stack.slice();
+        for (var hi2 = hs2.length - 1; hi2 >= 0; hi2--) { _lumen_popover_hide(hs2[hi2]); }
         var snap = _lumen_popover_stack.slice();
         for (var i = snap.length - 1; i >= 0; i--) { _lumen_popover_hide(snap[i]); }
         _lumen_popover_stack.push(nid);
@@ -10309,7 +10324,9 @@ function _lumen_popover_show(nid) {
     // Apply top-layer emulation via inline style (saved/restored around the forced override).
     var saved = _lumen_get_attr(nid, 'style') !== undefined ? _lumen_get_attr(nid, 'style') : '';
     _lumen_set_attr(nid, 'data-lumen-popover-saved-style', saved);
-    _lumen_set_attr(nid, 'style', _LPOP_STYLE + (saved ? saved : ''));
+    // hints get a slightly lower z-index than auto (still above page content).
+    var style = isHint ? 'position:fixed;z-index:2147483646;inset:auto;margin:auto;overflow:auto;' : _LPOP_STYLE;
+    _lumen_set_attr(nid, 'style', style + (saved ? saved : ''));
     var toggleEvt = new Event('toggle', { bubbles: false, cancelable: false });
     toggleEvt.oldState = 'closed'; toggleEvt.newState = 'open';
     _lumen_dispatch(nid, toggleEvt);
@@ -10321,8 +10338,16 @@ function _lumen_popover_hide(nid) {
     beforeEvt.oldState = 'open'; beforeEvt.newState = 'closed';
     _lumen_dispatch(nid, beforeEvt);
     if (_lumen_get_attr(nid, _LPOP_ATTR) === undefined) return; // closed by beforetoggle re-entry
+    // Remove from whichever stack holds this popover.
     var idx = _lumen_popover_stack.indexOf(nid);
-    if (idx >= 0) _lumen_popover_stack.splice(idx, 1);
+    if (idx >= 0) {
+        _lumen_popover_stack.splice(idx, 1);
+        // Hiding an auto popover also closes all hints above it in the stack.
+        var hs3 = _lumen_hint_stack.slice();
+        for (var hi3 = hs3.length - 1; hi3 >= 0; hi3--) { _lumen_popover_hide(hs3[hi3]); }
+    }
+    var hidx = _lumen_hint_stack.indexOf(nid);
+    if (hidx >= 0) _lumen_hint_stack.splice(hidx, 1);
     _lumen_remove_attr(nid, _LPOP_ATTR);
     // Restore saved inline style (remove popover-injected portion).
     var saved = _lumen_u2n(_lumen_get_attr(nid, 'data-lumen-popover-saved-style'));
@@ -10345,29 +10370,36 @@ function _lumen_popover_toggle(nid, force) {
     }
 }
 
-// Click outside handler — close auto-popovers when click lands outside all of them.
+// Click outside handler — close auto and hint popovers when click lands outside all of them.
 // Runs in capture phase so it fires before target-specific handlers.
 document.addEventListener('click', function(evt) {
-    if (_lumen_popover_stack.length === 0) return;
-    // Walk from target toward root; if any open auto-popover contains the target, bail.
+    if (_lumen_popover_stack.length === 0 && _lumen_hint_stack.length === 0) return;
+    // Walk from target toward root; if any open popover contains the target, bail.
     var cur = evt.target;
     while (cur && cur.__nid__ !== undefined) {
         if (_lumen_get_attr(cur.__nid__, _LPOP_ATTR) !== undefined) return;
         cur = cur.parentElement;
     }
-    // Outside click — close from top of stack downward.
+    // Outside click — close hints first (top-down), then autos (top-down).
+    var hs = _lumen_hint_stack.slice();
+    for (var hi = hs.length - 1; hi >= 0; hi--) { _lumen_popover_hide(hs[hi]); }
     var snap = _lumen_popover_stack.slice();
     for (var i = snap.length - 1; i >= 0; i--) { _lumen_popover_hide(snap[i]); }
 }, true);
 
-// Escape key — close topmost auto-popover (if no modal dialog takes precedence).
+// Escape key — close topmost hint or auto-popover (if no modal dialog takes precedence).
 document.addEventListener('keydown', function(evt) {
     if (evt.key !== 'Escape') return;
-    if (_lumen_popover_stack.length === 0) return;
     // Let dialog Escape handler take priority when a modal dialog is open.
     if (_lumen_modal_dialog_nids.length > 0) return;
-    var topNid = _lumen_popover_stack[_lumen_popover_stack.length - 1];
-    _lumen_popover_hide(topNid);
+    // Hints sit on top — close topmost hint first if any.
+    if (_lumen_hint_stack.length > 0) {
+        _lumen_popover_hide(_lumen_hint_stack[_lumen_hint_stack.length - 1]);
+        return;
+    }
+    if (_lumen_popover_stack.length > 0) {
+        _lumen_popover_hide(_lumen_popover_stack[_lumen_popover_stack.length - 1]);
+    }
 });
 
 // popovertarget / popovertargetaction: button/input clicks trigger show/hide/toggle on target.
@@ -20024,6 +20056,62 @@ mod tests {
              _lumen_dispatch_mouse_event(btn.__nid__, 'click', 0, 0, 0, 1, 0);"
         ).unwrap();
         assert!(bool_eval(&rt, "document.getElementById('p1').hasAttribute('data-lumen-popover-open')"));
+    }
+
+    // ── popover=hint tests (Popover API Level 2) ──────────────────────────────
+
+    fn make_hint_doc() -> Arc<Mutex<Document>> {
+        let mut doc = Document::new();
+        let html  = doc.create_element(QualName::html("html"));
+        let body  = doc.create_element(QualName::html("body"));
+        let auto_pop = doc.create_element(QualName::html("div"));
+        let hint_pop = doc.create_element(QualName::html("div"));
+        fn set_attr(doc: &mut Document, nid: lumen_dom::NodeId, k: &str, v: &str) {
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(nid).data {
+                attrs.push(lumen_dom::Attribute { name: QualName::html(k), value: v.into() });
+            }
+        }
+        set_attr(&mut doc, auto_pop, "id",      "auto");
+        set_attr(&mut doc, auto_pop, "popover", "auto");
+        set_attr(&mut doc, hint_pop, "id",      "hint");
+        set_attr(&mut doc, hint_pop, "popover", "hint");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, auto_pop);
+        doc.append_child(body, hint_pop);
+        Arc::new(Mutex::new(doc))
+    }
+
+    #[test]
+    fn hint_popover_property_getter() {
+        let rt = runtime_with_dom(make_hint_doc());
+        assert!(bool_eval(&rt, "document.getElementById('hint').popover === 'hint'"));
+    }
+
+    #[test]
+    fn hint_show_does_not_close_auto() {
+        let rt = runtime_with_dom(make_hint_doc());
+        // Show auto popover first, then show hint — auto must stay open.
+        assert!(bool_eval(&rt,
+            "(function() { \
+               document.getElementById('auto').showPopover(); \
+               document.getElementById('hint').showPopover(); \
+               return document.getElementById('auto').hasAttribute('data-lumen-popover-open') \
+                   && document.getElementById('hint').hasAttribute('data-lumen-popover-open'); \
+             })()"));
+    }
+
+    #[test]
+    fn auto_show_closes_hint() {
+        let rt = runtime_with_dom(make_hint_doc());
+        // Show hint first, then auto — hint must be closed.
+        assert!(bool_eval(&rt,
+            "(function() { \
+               document.getElementById('hint').showPopover(); \
+               document.getElementById('auto').showPopover(); \
+               return !document.getElementById('hint').hasAttribute('data-lumen-popover-open') \
+                   && document.getElementById('auto').hasAttribute('data-lumen-popover-open'); \
+             })()"));
     }
 
     // ── Form Constraint Validation API tests ──────────────────────────────────
