@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-**empty-cells** (CSS Tables L2 §17.6.1.1)  branch: p4-empty-cells
-Next step: merge — реализация завершена (ComputedStyle.empty_cells + emit_table_cell wiring + 11 тестов + graphic test 115)
+_(none)_ — p4-empty-cells влит 2026-06-14
 
 ## Workflow
 
