@@ -116,6 +116,11 @@ enum LoadEvent {
 const STREAM_CHUNK_BYTES: usize = 8 * 1024;
 /// Минимальный интервал между промежуточными кадрами при streaming (мс).
 const STREAM_PAINT_INTERVAL_MS: u128 = 150;
+/// Minimum interval between rAF batches (ms) — vsync gate at 60 Hz.
+///
+/// Prevents `requestAnimationFrame` from firing more than once per display frame
+/// when `RedrawRequested` is delivered at higher frequency (e.g. from scroll events).
+const RAF_MIN_INTERVAL_MS: f64 = 1000.0 / 60.0;
 
 /// EventSink, который печатает сетевые события в stdout — это и есть
 /// «network log» Phase 0, реализующий принцип №4 «каждый исходящий байт
@@ -340,6 +345,7 @@ fn run_window_mode(
         snap_containers: Vec::new(),
         scroll_containers: Vec::new(),
         epoch: std::time::Instant::now(),
+        last_raf_batch_ms: -RAF_MIN_INTERVAL_MS,
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
         hint: hints::HintState::default(),
@@ -1143,6 +1149,11 @@ pub(crate) trait PersistentJs {
     /// Shell requests another redraw when this returns `true` so animation loops
     /// continue without busy-polling.
     fn take_raf_pending(&self) -> bool;
+    /// Non-consuming peek: `true` if rAF callbacks are queued (does not clear).
+    ///
+    /// Used by the vsync gate: check without consuming so the signal is not lost
+    /// when the gate defers firing to the next frame.
+    fn has_raf_pending(&self) -> bool;
     /// Push a fresh snapshot of layout bounding rects into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -1424,6 +1435,9 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_raf_pending(&self) -> bool {
         self.rt.take_raf_pending()
+    }
+    fn has_raf_pending(&self) -> bool {
+        self.rt.has_raf_pending()
     }
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         self.rt.update_layout_rects(rects);
@@ -3820,6 +3834,12 @@ struct Lumen {
     /// (DOMHighResTimeStamp — HTML §8.1.5.1: «timestamp passed to callback
     /// should be the current high resolution time»).
     epoch: std::time::Instant,
+    /// Timestamp (ms from `epoch`) of the last `requestAnimationFrame` batch fire.
+    ///
+    /// Used by the vsync gate: rAF callbacks fire at most once per `RAF_MIN_INTERVAL_MS`
+    /// (~16.67 ms, 60 Hz). Initialized to `-RAF_MIN_INTERVAL_MS` so the first frame
+    /// fires immediately.
+    last_raf_batch_ms: f64,
     /// Состояние Ctrl+F. Открыт ли bar, текущий query и индекс активного
     /// совпадения. Содержимое поиска не сохраняется между reload-ами
     /// (close() полностью очищает state); это сознательно: после reload
@@ -7556,14 +7576,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 self.runtime.run_rendering_step(timestamp_ms);
 
                 // Step 3.1: JS requestAnimationFrame callbacks.
-                // Snapshot-pattern: callbacks registered during this call go into
-                // the next frame. If any new rAF was registered (animation loop),
-                // request another redraw immediately.
-                // In deterministic mode (8F) pass 0.0 to suppress wall-clock jitter.
+                // Vsync gate (EE-5): fire rAF at most once per RAF_MIN_INTERVAL_MS (~16.67ms).
+                // Multiple requestAnimationFrame() calls within one frame period are coalesced
+                // into a single batch (snapshot-pattern in JS shim). When RedrawRequested fires
+                // faster than vsync (e.g. from scroll), we defer the batch without losing the
+                // "pending" signal so it fires on the next eligible frame.
+                // Pass -1.0 → JS captures performance.now() at batch start (DOMHighResTimeStamp).
+                // Pass 0.0 in deterministic mode → frozen timestamp per HTML §8.1.5.1.
                 if let Some(js) = &self.js_ctx {
-                    let raf_ts = if self.deterministic { 0.0 } else { timestamp_ms };
-                    js.run_animation_frame(raf_ts);
-                    if js.take_raf_pending() {
+                    let raf_due = timestamp_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
+                    if raf_due && js.has_raf_pending() {
+                        // Consume the flag and fire the batch.
+                        js.take_raf_pending();
+                        self.last_raf_batch_ms = timestamp_ms;
+                        let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+                        js.run_animation_frame(raf_ts);
+                    }
+                    // Schedule next redraw if callbacks remain queued (animation loop or deferred).
+                    if js.has_raf_pending() {
                         self.request_redraw();
                     }
                 }

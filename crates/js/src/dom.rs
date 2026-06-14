@@ -5381,12 +5381,16 @@ function cancelAnimationFrame(id) {
 // Called by the shell event loop before each paint with the frame timestamp.
 // Snapshot-pattern per spec: new rAF calls during callbacks go into the NEXT
 // frame. Returns true when any callback was invoked (for relayout check).
+// timestamp_ms < 0 → use performance.now() (live DOMHighResTimeStamp, EE-5);
+// timestamp_ms >= 0 → use as-is (0 = deterministic mode, frozen clock).
+// All callbacks in a batch receive the SAME timestamp (captured once at start).
 function _lumen_run_raf_callbacks(timestamp_ms) {
-    _wa_current_time = +timestamp_ms;
+    var ts = timestamp_ms < 0 ? performance.now() : +timestamp_ms;
+    _wa_current_time = ts;
     var callbacks = _lumen_raf_callbacks.splice(0);
     if (callbacks.length === 0) return false;
     for (var i = 0; i < callbacks.length; i++) {
-        try { callbacks[i].fn(timestamp_ms); } catch(e) {}
+        try { callbacks[i].fn(ts); } catch(e) {}
     }
     return true;
 }
@@ -13944,6 +13948,70 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("typeof window.cancelAnimationFrame === 'function'").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── EE-5: rAF vsync batch / DOMHighResTimeStamp tests ────────────────────
+
+    #[test]
+    fn raf_coalesce_multiple_registrations_fire_in_one_batch() {
+        // EE-5: multiple requestAnimationFrame() calls in the same frame
+        // are all executed in a single _lumen_run_raf_callbacks() invocation.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _raf_log = []; \
+                 requestAnimationFrame(function(){ _raf_log.push(1); }); \
+                 requestAnimationFrame(function(){ _raf_log.push(2); }); \
+                 requestAnimationFrame(function(){ _raf_log.push(3); });").unwrap();
+        rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+        let len = rt.eval("_raf_log.length").unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(3.0), "all 3 callbacks fired in one batch");
+        let order = rt.eval("_raf_log[0] === 1 && _raf_log[1] === 2 && _raf_log[2] === 3").unwrap();
+        assert_eq!(order, lumen_core::JsValue::Bool(true), "callbacks fire in registration order");
+    }
+
+    #[test]
+    fn raf_batch_uniform_timestamp() {
+        // EE-5: all callbacks in a batch receive the identical DOMHighResTimeStamp.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _raf_ts1 = null; var _raf_ts2 = null; \
+                 requestAnimationFrame(function(t){ _raf_ts1 = t; }); \
+                 requestAnimationFrame(function(t){ _raf_ts2 = t; });").unwrap();
+        rt.eval("_lumen_run_raf_callbacks(42.5)").unwrap();
+        let eq = rt.eval("_raf_ts1 === _raf_ts2").unwrap();
+        assert_eq!(eq, lumen_core::JsValue::Bool(true), "both callbacks get same timestamp");
+        let val = rt.eval("_raf_ts1").unwrap();
+        assert_eq!(val, lumen_core::JsValue::Number(42.5));
+    }
+
+    #[test]
+    fn raf_deterministic_zero_timestamp() {
+        // EE-5: deterministic mode (timestamp_ms === 0) delivers 0 to all callbacks.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _raf_det_ts = -99; requestAnimationFrame(function(t){ _raf_det_ts = t; })").unwrap();
+        rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+        let ts = rt.eval("_raf_det_ts").unwrap();
+        assert_eq!(ts, lumen_core::JsValue::Number(0.0), "deterministic mode passes 0 to callback");
+    }
+
+    #[test]
+    fn raf_live_clock_timestamp_non_negative() {
+        // EE-5: when timestamp_ms < 0, JS uses performance.now() — must be >= 0.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _raf_live_ts = null; requestAnimationFrame(function(t){ _raf_live_ts = t; })").unwrap();
+        rt.eval("_lumen_run_raf_callbacks(-1)").unwrap();
+        let ts = rt.eval("typeof _raf_live_ts === 'number' && _raf_live_ts >= 0").unwrap();
+        assert_eq!(ts, lumen_core::JsValue::Bool(true), "live clock timestamp is non-negative DOMHighResTimeStamp");
+    }
+
+    #[test]
+    fn raf_exception_in_one_callback_does_not_stop_batch() {
+        // EE-5: if one callback throws, subsequent callbacks still run (try/catch).
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _raf_after_throw = false; \
+                 requestAnimationFrame(function(){ throw new Error('boom'); }); \
+                 requestAnimationFrame(function(){ _raf_after_throw = true; });").unwrap();
+        rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+        let ran = rt.eval("_raf_after_throw").unwrap();
+        assert_eq!(ran, lumen_core::JsValue::Bool(true), "second callback ran despite first throwing");
     }
 
     // ── MutationObserver tests ────────────────────────────────────────────────
