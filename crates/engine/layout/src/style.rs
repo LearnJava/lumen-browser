@@ -17,6 +17,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+use crate::color_mix::{MixColorSpace, mix_colors};
 use crate::rule_index::RuleIndex;
 use crate::scroll_timeline::ScrollAxis;
 
@@ -16416,21 +16417,34 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
 
     let segments = split_top_level_commas(inner);
 
+    // CSS Images L4 §3.1 — the prelude (first comma-segment) may carry a
+    // `<color-interpolation-method>` (`in <space> [<hue> hue]?`) in any order
+    // with the direction/shape. Strip it so the direction parsers see a clean
+    // prelude, and apply the resulting space to the stop list.
+    let first_seg = segments.first().map(|s| s.trim()).unwrap_or("");
+    let (clean_first, interp_space) = extract_gradient_interpolation(first_seg);
+
+    let interp = |stops: Vec<GradientStop>| -> Vec<GradientStop> {
+        match interp_space {
+            Some(sp) if sp != MixColorSpace::Srgb => densify_gradient_stops_for_space(&stops, sp),
+            _ => stops,
+        }
+    };
+
     if is_linear {
         // The first segment may be an angle / "to <side>" direction.
-        let angle_deg = parse_linear_gradient_angle(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let angle_deg = parse_linear_gradient_angle(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Linear { angle_deg, stops, repeating: repeating_linear }
     } else if is_radial {
         // Radial: look for `at <x> <y>` in the first segment.
-        let (cx, cy) = parse_radial_gradient_center(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let (cx, cy) = parse_radial_gradient_center(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Radial { center_x_pct: cx, center_y_pct: cy, stops, repeating: repeating_radial }
     } else {
         // Conic: `[from <angle>]? [at <x> <y>]?` in the first segment.
-        let (from_angle_deg, cx, cy) =
-            parse_conic_gradient_params(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let (from_angle_deg, cx, cy) = parse_conic_gradient_params(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Conic {
             center_x_pct: cx,
             center_y_pct: cy,
@@ -16439,6 +16453,153 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
             repeating: repeating_conic,
         }
     }
+}
+
+/// CSS Images L4 §3.1 — parse and strip the `<color-interpolation-method>`
+/// (`in <space> [<hue> hue]?`) from a gradient prelude segment.
+///
+/// Returns the prelude with the clause removed plus the parsed interpolation
+/// space (`None` if absent). The hue-interpolation method keyword (for polar
+/// spaces) is parsed and dropped — [`mix_colors`](crate::color_mix::mix_colors)
+/// always interpolates hue over the shortest arc, the CSS default.
+///
+/// Tokens that are not part of the interpolation clause (direction, `to <side>`,
+/// `circle`/`ellipse`, `from <angle>`, `at <x> <y>`) are preserved in order, so
+/// `linear-gradient(45deg in oklch, …)` and `linear-gradient(in oklch 45deg, …)`
+/// both yield `("45deg", Some(Oklch))`.
+fn extract_gradient_interpolation(prelude: &str) -> (String, Option<MixColorSpace>) {
+    let tokens: Vec<&str> = prelude.split_whitespace().collect();
+    let mut space = None;
+    let mut kept: Vec<&str> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        if space.is_none()
+            && tokens[i].eq_ignore_ascii_case("in")
+            && let Some(sp) = tokens.get(i + 1).and_then(|t| MixColorSpace::from_css(t))
+        {
+            space = Some(sp);
+            i += 2;
+            // Optional `<hue-interpolation-method> hue` for polar spaces.
+            if let (Some(h), Some(hue_kw)) = (tokens.get(i), tokens.get(i + 1))
+                && matches!(
+                    h.to_ascii_lowercase().as_str(),
+                    "shorter" | "longer" | "increasing" | "decreasing"
+                )
+                && hue_kw.eq_ignore_ascii_case("hue")
+            {
+                i += 2;
+            }
+            continue;
+        }
+        kept.push(tokens[i]);
+        i += 1;
+    }
+    (kept.join(" "), space)
+}
+
+/// CSS Images L4 §3.1 — approximate gradient color interpolation in a non-sRGB
+/// `space` by subdividing every adjacent stop pair into intermediate stops whose
+/// colors are computed via [`mix_colors`](crate::color_mix::mix_colors) in that
+/// space. The renderer then interpolates the dense stop list linearly in sRGB,
+/// which closely matches true interpolation in `space` (e.g. `in oklch` keeps
+/// red→blue vivid instead of the muddy grey-purple of sRGB).
+///
+/// Stop positions are first resolved to percentages per CSS Images §3.4.3
+/// (first→0%, last→100%, interior runs evenly distributed, monotonic clamp).
+/// Returns the stops unchanged when there are fewer than two, or when any stop
+/// uses a non-percentage (`px`) position — px positions need the gradient line
+/// length, which is unknown at parse time.
+fn densify_gradient_stops_for_space(stops: &[GradientStop], space: MixColorSpace) -> Vec<GradientStop> {
+    if stops.len() < 2 {
+        return stops.to_vec();
+    }
+    // Resolve positions to percentages [0, 100]; bail on any non-percentage.
+    let mut pos: Vec<Option<f32>> = Vec::with_capacity(stops.len());
+    for st in stops {
+        match &st.position {
+            None => pos.push(None),
+            Some(Length::Percent(p)) => pos.push(Some(*p)),
+            Some(_) => return stops.to_vec(),
+        }
+    }
+    let last = pos.len() - 1;
+    if pos[0].is_none() {
+        pos[0] = Some(0.0);
+    }
+    if pos[last].is_none() {
+        pos[last] = Some(100.0);
+    }
+    // Evenly distribute interior runs of unpositioned stops between anchors.
+    let mut i = 1;
+    while i < pos.len() {
+        if pos[i].is_some() {
+            i += 1;
+            continue;
+        }
+        let prev = pos[i - 1].unwrap_or(0.0);
+        let mut k = i;
+        while k < pos.len() && pos[k].is_none() {
+            k += 1;
+        }
+        let next = pos.get(k).and_then(|p| *p).unwrap_or(100.0);
+        let gaps = (k - i + 1) as f32;
+        for (offset, idx) in (i..k).enumerate() {
+            let frac = (offset + 1) as f32 / gaps;
+            pos[idx] = Some(prev + (next - prev) * frac);
+        }
+        i = k;
+    }
+    // Enforce monotonic non-decreasing positions.
+    let mut resolved: Vec<f32> = pos.into_iter().map(|p| p.unwrap_or(0.0)).collect();
+    for n in 1..resolved.len() {
+        if resolved[n] < resolved[n - 1] {
+            resolved[n] = resolved[n - 1];
+        }
+    }
+
+    let to_f = |c: Color| -> [f32; 4] {
+        [
+            c.r as f32 / 255.0,
+            c.g as f32 / 255.0,
+            c.b as f32 / 255.0,
+            c.a as f32 / 255.0,
+        ]
+    };
+    let from_f = |m: [f32; 4]| -> Color {
+        Color {
+            r: (m[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+            g: (m[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+            b: (m[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+            a: (m[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+        }
+    };
+
+    // Number of sub-segments per stop pair. 16 keeps the polyfill within the
+    // 0.5% diff budget against true space interpolation while bounding output.
+    const SEGMENTS: usize = 16;
+    let mut out: Vec<GradientStop> = Vec::with_capacity((stops.len() - 1) * SEGMENTS + 1);
+    out.push(GradientStop {
+        color: stops[0].color,
+        position: Some(Length::Percent(resolved[0])),
+    });
+    for w in 0..stops.len() - 1 {
+        let a = to_f(stops[w].color);
+        let b = to_f(stops[w + 1].color);
+        let p0 = resolved[w];
+        let p1 = resolved[w + 1];
+        for j in 1..SEGMENTS {
+            let t = j as f32 / SEGMENTS as f32;
+            out.push(GradientStop {
+                color: from_f(mix_colors(space, a, 1.0 - t, b, t)),
+                position: Some(Length::Percent(p0 + (p1 - p0) * t)),
+            });
+        }
+        out.push(GradientStop {
+            color: stops[w + 1].color,
+            position: Some(Length::Percent(p1)),
+        });
+    }
+    out
 }
 
 /// Parse the direction/angle portion of a `linear-gradient`.
@@ -27082,6 +27243,109 @@ mod tests {
         assert!(parse_color("color-mix(srgb, red, blue)").is_none());
         // Only 2 comma-separated parts → None
         assert!(parse_color("color-mix(in srgb, red)").is_none());
+    }
+
+    // ── gradient color-interpolation-method (CSS Images L4 §3.1) ──────────────
+
+    /// `extract_gradient_interpolation` strips the `in <space>` clause and
+    /// returns the parsed space, preserving an accompanying angle in any order.
+    #[test]
+    fn gradient_interp_extract_space_and_angle() {
+        let (clean, sp) = extract_gradient_interpolation("45deg in oklch");
+        assert_eq!(clean, "45deg");
+        assert_eq!(sp, Some(MixColorSpace::Oklch));
+
+        let (clean, sp) = extract_gradient_interpolation("in oklch 45deg");
+        assert_eq!(clean, "45deg");
+        assert_eq!(sp, Some(MixColorSpace::Oklch));
+
+        // Polar hue-interpolation keyword is parsed and dropped.
+        let (clean, sp) = extract_gradient_interpolation("to right in hsl longer hue");
+        assert_eq!(clean, "to right");
+        assert_eq!(sp, Some(MixColorSpace::Hsl));
+
+        // No interpolation clause — prelude untouched, no space.
+        let (clean, sp) = extract_gradient_interpolation("to bottom right");
+        assert_eq!(clean, "to bottom right");
+        assert_eq!(sp, None);
+    }
+
+    /// A plain `linear-gradient(red, blue)` (no `in <space>`) keeps exactly two
+    /// stops — the densify path must not fire without an interpolation method.
+    #[test]
+    fn gradient_srgb_default_not_densified() {
+        let g = parse_background_gradient("linear-gradient(red, blue)");
+        match g {
+            ParsedGradient::Linear { stops, angle_deg, .. } => {
+                assert_eq!(stops.len(), 2, "no interpolation method → no extra stops");
+                assert!((angle_deg - 180.0).abs() < 0.01, "default direction = to bottom");
+            }
+            other => panic!("expected linear, got {other:?}"),
+        }
+    }
+
+    /// `in oklab` subdivides the stop list, preserves the direction, and the
+    /// ~50% stop matches perceptual interpolation — distinct from the naive
+    /// sRGB blend (sRGB red→blue midpoint is rgb(127,0,127) with **no green**,
+    /// whereas oklab introduces a visible green component, ~rgb(140,83,162)).
+    #[test]
+    fn gradient_oklab_densifies_and_differs_from_srgb() {
+        let g = parse_background_gradient("linear-gradient(90deg in oklab, red, blue)");
+        let ParsedGradient::Linear { stops, angle_deg, .. } = g else {
+            panic!("expected linear");
+        };
+        assert!((angle_deg - 90.0).abs() < 0.01, "angle preserved past `in oklab`");
+        assert!(stops.len() > 2, "oklab interpolation should add intermediate stops");
+        // First/last endpoints unchanged.
+        assert_eq!((stops[0].color.r, stops[0].color.b), (255, 0), "starts red");
+        let last = stops.last().unwrap().color;
+        assert_eq!((last.r, last.b), (0, 255), "ends blue");
+        // Midpoint (~50%): oklab introduces green that the sRGB blend lacks.
+        let mid = stops
+            .iter()
+            .min_by(|a, b| {
+                let key = |s: &GradientStop| match s.position {
+                    Some(Length::Percent(v)) => (v - 50.0).abs(),
+                    _ => f32::INFINITY,
+                };
+                key(a).partial_cmp(&key(b)).unwrap()
+            })
+            .unwrap()
+            .color;
+        assert!(
+            mid.g > 20,
+            "oklab midpoint has visible green (sRGB would be 0), got g={}",
+            mid.g
+        );
+    }
+
+    /// Densification keeps resolved stop positions monotonic and within [0,100],
+    /// and an unknown interpolation space falls back gracefully (parses fine,
+    /// no densify because `MixColorSpace::from_css` rejects the token).
+    #[test]
+    fn gradient_interp_positions_and_unknown_space() {
+        let g = parse_background_gradient("radial-gradient(in oklab, red 10%, lime 40%, blue 90%)");
+        let ParsedGradient::Radial { stops, .. } = g else {
+            panic!("expected radial");
+        };
+        assert!(stops.len() > 3);
+        let mut prev = -1.0_f32;
+        for st in &stops {
+            if let Some(Length::Percent(p)) = st.position {
+                assert!(p >= prev - 0.01, "positions monotonic: {p} after {prev}");
+                assert!((0.0..=100.0).contains(&p), "position in range: {p}");
+                prev = p;
+            }
+        }
+
+        // Unknown space token: not stripped, treated as a (skipped) prelude
+        // token; stops parse normally and are not densified.
+        let g = parse_background_gradient("linear-gradient(in bogus, red, blue)");
+        if let ParsedGradient::Linear { stops, .. } = g {
+            assert_eq!(stops.len(), 2, "unknown space → no densify");
+        } else {
+            panic!("expected linear");
+        }
     }
 
     // ── color() predefined color spaces (CSS Color L4 §10) ─────────────────────

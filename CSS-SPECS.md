@@ -68,7 +68,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | ✅ | mix-blend-mode blend pipeline ✅; background-blend-mode comma-list cycling ✅ 2026-05-27 | **#15** |
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | ✅ | conic-gradient() ✅ 2026-05-24; multiple bg layers ✅ 2026-05-26 | **#17** |
-| CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
+| CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | 🟡 | image-set() ✅ 2026-06-02; cross-fade() ✅ 2026-06-02; gradient `<color-interpolation-method>` (`in <space>`) ✅ 2026-06-14 (p4-gradient-interpolation: srgb/srgb-linear/oklab/lab/hsl/hwb/xyz via dense-stop polyfill; polar oklch/lch blocked by BUG-154) | **#18** |
 | CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ✅ 2026-05-24 | **#19** |
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
@@ -458,6 +458,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `object-fit` / `object-position` | ✅ | |
 | `image-set()` | ⬜ | CSS Images L4 |
 | `conic-gradient()` | ✅ | ParsedGradient::Conic + DrawConicGradient + GPU shader 2026-05-24 |
+| gradient `in <space>` (color-interpolation-method) | 🟡 | rectangular + hsl/hwb ✅ 2026-06-14 (dense-stop polyfill via color-mix); polar oklch/lch ⬜ BUG-154 |
 | `cross-fade()` | ⬜ | CSS Images L4 |
 
 ### [T2] CSS Grid
