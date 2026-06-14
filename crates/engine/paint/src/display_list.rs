@@ -20,7 +20,7 @@ use lumen_layout::{
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     Appearance,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
-    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
+    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
@@ -4110,6 +4110,35 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 }
 
+/// CSS Tables L2 §17.6.1.1 — true when `b` is a table cell that must suppress its
+/// borders and background under `empty-cells: hide`. Applies only in the separated-
+/// borders model (`border-collapse: separate`) and only when the cell has no in-flow
+/// content. Under `border-collapse: collapse` the property has no effect.
+fn is_hidden_empty_cell(b: &LayoutBox) -> bool {
+    b.style.display == Display::TableCell
+        && b.style.empty_cells == EmptyCells::Hide
+        && b.style.border_collapse == BorderCollapse::Separate
+        && !table_cell_has_content(b)
+}
+
+/// True when a table cell has in-flow content: any descendant box that generates
+/// text, a replaced element, or a block. Whitespace-only inline runs and `Skip`
+/// boxes do not count (CSS Tables L2 §17.6.1.1 "empty" definition).
+fn table_cell_has_content(b: &LayoutBox) -> bool {
+    b.children.iter().any(box_generates_content)
+}
+
+/// Whether a single child box contributes in-flow content for the empty-cell test.
+fn box_generates_content(c: &LayoutBox) -> bool {
+    match &c.kind {
+        BoxKind::Skip => false,
+        BoxKind::InlineRun { lines, .. } => lines
+            .iter()
+            .any(|line| line.iter().any(|f| f.img_src.is_some() || !f.text.trim().is_empty())),
+        _ => true,
+    }
+}
+
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
 fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Option<&SelectionHighlight>) {
@@ -4123,6 +4152,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
         | BoxKind::Table | BoxKind::TableRowGroup => {
             if !is_paint_visible(b) {
+                return;
+            }
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide`: an empty cell draws
+            // neither borders nor background. Cell has no children to recurse into,
+            // so skipping self-emission fully hides it.
+            if is_hidden_empty_cell(b) {
                 return;
             }
             emit_box_shadows(b, out);
@@ -4743,7 +4778,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // CSS Display L3 §4 — `visibility: hidden`: self не рисуется
             // (фон/border/outline/shadow), но children обходятся (inherited
             // visibility, но child может вернуть себя через `:visible`).
-            let self_visible = is_paint_visible(b);
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide` suppresses an empty
+            // cell's background and borders the same way (children still walked).
+            let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
                 emit_box_shadows(b, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
@@ -5833,7 +5870,9 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                 out.push(DisplayCommand::PushTransform { matrix });
             }
 
-            let self_visible = is_paint_visible(b);
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide` suppresses an empty
+            // cell's background and borders (children still walked).
+            let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
                 emit_box_shadows(b, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
@@ -6093,22 +6132,32 @@ fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 /// рисует только top+left границы, чтобы избежать двойного рисования
 /// по общим рёбрам (Phase 0 упрощение; полный алгоритм §17.6.2 — Phase 2).
 fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // CSS Tables L2 §17.6.1.1 — `empty-cells: hide`: a cell with no in-flow
+    // content draws neither background nor borders (separated-borders model only).
+    // Content children are still walked (an empty cell has none, but this keeps
+    // the contract identical to the normal block path).
+    let hidden_empty = is_hidden_empty_cell(b);
+
     // Эмитим фон ячейки
-    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+    if !hidden_empty
+        && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
         && bg.a > 0
     {
         out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
     }
-    emit_background_image(out, b, dpr);
+    if !hidden_empty {
+        emit_background_image(out, b, dpr);
+    }
 
     let s = &b.style;
     // In separate mode: draw all 4 borders. In collapse mode: draw all 4 borders too
     // (spacing is already zeroed by layout; border overlap on shared edges is Phase 0 behaviour;
     // full §17.6.2 conflict resolution is deferred to Phase 2).
-    let has_border = s.border_top_style.is_visible()
+    let has_border = !hidden_empty
+        && (s.border_top_style.is_visible()
         || s.border_right_style.is_visible()
         || s.border_bottom_style.is_visible()
-        || s.border_left_style.is_visible();
+        || s.border_left_style.is_visible());
     if has_border {
         let cur = s.color;
         out.push(DisplayCommand::DrawBorder {
@@ -6188,6 +6237,65 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// True when `dl` contains a solid `FillRect` of exactly `(r,g,b)`.
+    fn has_fill_rgb(dl: &DisplayList, r: u8, g: u8, b: u8) -> bool {
+        fills(dl).iter().any(|c| c.r == r && c.g == g && c.b == b)
+    }
+
+    /// Number of `DrawBorder` commands with at least one non-zero width.
+    fn border_count(dl: &DisplayList) -> usize {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { widths, .. } if widths.iter().any(|w| *w > 0.0)))
+            .count()
+    }
+
+    // CSS Tables L2 §17.6.1.1 — `empty-cells`.
+    // Two cells with distinct backgrounds + borders; the first is empty, the
+    // second has text. Separated-borders model (default).
+    const EMPTY_CELLS_HTML: &str =
+        "<table><tr><td class=e></td><td class=f>x</td></tr></table>";
+    const EMPTY_CELLS_CSS_BASE: &str = "td{width:40px;height:30px;border:2px solid #000} \
+         .e{background:rgb(11,22,33)} .f{background:rgb(44,55,66)}";
+
+    #[test]
+    fn empty_cells_hide_suppresses_empty_cell_background() {
+        let css = format!("table{{empty-cells:hide}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(!has_fill_rgb(&dl, 11, 22, 33), "empty cell bg must be hidden");
+        assert!(has_fill_rgb(&dl, 44, 55, 66), "non-empty cell bg must stay");
+    }
+
+    #[test]
+    fn empty_cells_hide_suppresses_empty_cell_border() {
+        let css = format!("table{{empty-cells:hide}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        // Only the non-empty cell keeps its border (the table itself has none).
+        assert_eq!(border_count(&dl), 1, "only the filled cell draws a border");
+    }
+
+    #[test]
+    fn empty_cells_show_keeps_empty_cell_background() {
+        // `show` is the initial value — both cells paint normally.
+        let css = format!("table{{empty-cells:show}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(has_fill_rgb(&dl, 11, 22, 33), "empty cell bg shown under `show`");
+        assert!(has_fill_rgb(&dl, 44, 55, 66));
+        assert_eq!(border_count(&dl), 2, "both cells draw borders under `show`");
+    }
+
+    #[test]
+    fn empty_cells_hide_ignored_under_border_collapse() {
+        // Under `border-collapse: collapse`, `empty-cells` has no effect.
+        let css = format!(
+            "table{{empty-cells:hide;border-collapse:collapse}} {EMPTY_CELLS_CSS_BASE}"
+        );
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(
+            has_fill_rgb(&dl, 11, 22, 33),
+            "collapse model ignores empty-cells: empty cell bg stays"
+        );
     }
 
     /// CSS UI L4 §6.1 — `accent-color` tints a checked checkbox indicator.
