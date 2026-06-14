@@ -480,6 +480,112 @@ Ordered by priority. Сгруппированы по домену.
 
 ---
 
+### II — Незавершённые задачи Phase 1
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| II-1 | **PerformanceObserver JS binding** — `PerformanceObserver(callback)`, `observe({type,buffered})`, `disconnect()`, `takeRecords()`; delivery через `_lumen_deliver_performance_entries(json)`; типы: `navigation`/`resource`/`measure`/`mark`; интеграция с `mark()`/`measure()` (уже готовы в DOM-side); shell-driven delivery в `about_to_wait` | S | `lumen-js`, `lumen-shell` |
+| II-2 | **Passkeys/WebAuthn platform HID enumeration** — реальное перечисление CTAP2-устройств через WinUSB (Windows) / libusb (Linux); `platform_enumerate_ctap2_devices()` в `CtapRoamingTransport`; программный аутентификатор + платформенные устройства в `CompositeCredentialProvider`; 8 тестов | M | `lumen-network` |
+| II-3 | **8A.7 Shell → BrowserSession trait** — переписать `shell/src/main.rs` как первого клиента `BrowserSession` trait; winit/wgpu = один из транспортов; вся логика навигации/input через `InProcessSession` | L | `lumen-shell`, `lumen-driver` |
+| II-4 | **8H.3 BiDi gaps** — `bidi/src/extensions.rs`: response body streaming, per-context UA/locale/timezone/offline, viewport-before-popup, preload per-context, download lifecycle events, cookie change events, per-origin clear; gap-mapping в `subsystems/lumen-bidi-server.md` | M | `lumen-shell` |
+| II-5 | **8I lumen-cdp-shim** — thin CDP shim над BiDi: `Target.getTargets/activateTarget/closeTarget`, `Page.navigate/reload`, `Runtime.evaluate/callFunctionOn`, `DOM.getDocument/querySelector`; `lumen --cdp-port N` CLI; Phase 3+, opt-in по реальному спросу | L | `crates/cdp-shim/` |
+| II-6 | **10C.2 QuickJS heap serialization workaround** — native-function bindings не восстанавливаются через `JS_ReadObject`; workaround: snapshot JS-state через `JSON.stringify` side-channel для closures + re-bind stubs при restore | M | `lumen-js` |
+| II-7 | **10C.4 V8 compat note** — ADR в `docs/decisions/` перед миграцией Phase 3: риски (tracing handles, GC boundary, WASM ABI), migration checklist, rollback criteria | XS | `docs/decisions/` |
+| II-8 | **10E.4 Scroll-discard** — при удалении scroll-позиции >3 экрана от viewport — `ImageHandle` освобождается; `decode_gating.rs` в `shell/src/scroll/`; wired в `about_to_wait` после scroll events | S | `lumen-shell` |
+| II-9 | **10I.1 SQLite schema tab_snapshots** — `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll, form_state, ts)` в `storage/migrations/0NN_tab_snapshots.sql`; migration runner update; `TabSnapshotStore` trait + SQLite impl | S | `lumen-storage` |
+| II-10 | **10I.2 Async-save T1→T2** — `shell/src/tab_lifecycle/persist.rs`: задание в background thread при T1→T2 transition (без блокирования UI); compress heap snapshot → SQLite blob; completion callback | M | `lumen-shell`, `lumen-storage` |
+| II-11 | **10I.3 Async-load T2→T0** — `shell/src/tab_lifecycle/restore.rs`: async fetch blob из SQLite → decompress → restore; indeterminate progress UI при restore > 100 ms; cancel при повторной навигации | M | `lumen-shell`, `lumen-storage` |
+
+---
+
+### III — Незавершённые задачи Phase 2
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| III-1 | **Shadow DOM JS: customElements.define** — `customElements.define(name, class, opts)`, `customElements.get/whenDefined/upgrade/getName`; lifecycle callbacks `connectedCallback`/`disconnectedCallback`/`attributeChangedCallback`/`adoptedCallback`; `observedAttributes`; 12 тестов | M | `lumen-js` |
+| III-2 | **Platform accessibility bridges** — Windows: `UIA::IRawElementProviderSimple`; Linux: AT-SPI2 `Atspi::Accessible` через D-Bus; macOS: `NSAccessibility` protocol; shell wires a11y tree после relayout; 20 тестов | L | `lumen-shell`, `lumen-a11y` |
+| III-3 | **Forms: native pickers + validation UI** — `<input type=date/time/color>` native OS picker через winit; autofill popup (shell-side suggestions из `lumen-storage::Autofill`); validation tooltip overlay (`reportValidity` UI); 15 тестов | L | `lumen-shell`, `lumen-js` |
+| III-4 | **IME composition events** — `compositionstart`/`compositionupdate`/`compositionend` через winit `Ime::Preedit`/`Ime::Commit`; `KeyboardEvent.isComposing`; `_lumen_fire_composition_event(type, data, range)`; integration с contenteditable; 10 тестов | M | `lumen-shell`, `lumen-js` |
+| III-5 | **Range requests shell integration** — `<video>` seek: `_lumen_video_seek_to(nid, sec)` → `fetch_range` в background thread → buffer queue; resume downloads: `DownloadManager::resume(id)` — продолжить с byte offset; 8 тестов | M | `lumen-shell`, `lumen-network` |
+| III-6 | **Service Worker runtime (реальный)** — fetch interception через `_lumen_sw_fetch_intercept`; push delivery: `PushSubscription` + VAPID; background sync: `SyncManager.register` + `sync` event; `clients` API (`matchAll/claim/openWindow`); `CacheStorage` backend wired; 25 тестов | XL | `lumen-js`, `lumen-storage`, `lumen-network` |
+| III-7 | **Spell check** — hunspell-rs (provisional) за `SpellChecker`; словари ru/en; `check_word` + `suggest`; squiggly underline в paint (`DrawWavyLine` DisplayCommand); context menu suggestions; 15 тестов | L | `lumen-js`, `lumen-paint`, `lumen-shell` |
+| III-8 | **Back/forward cache (bfcache)** — eligibility rules (нет `unload`, нет SW с fetch, нет open WS); snapshot DOM+JS heap при navBack; `BFCacheEntry` в lumen-storage; instant restore; `pageshow`/`pagehide` с `persisted`; 15 тестов | L | `lumen-shell`, `lumen-storage`, `lumen-js` |
+| III-9 | **GC integration P3-side** — QuickJS finalizer вызывает `release_js_ref(node_id)`; idle GC tick (30s) дренирует `dead_node_ids() -> Vec<NodeId>` из `Document`; `_lumen_gc_collect(nids_json)` уже готов; 8 тестов | M | `lumen-js`, `lumen-shell` |
+| III-10 | **SOP enforcement shell-level** — `origin_check(src, dst)` при `postMessage`, `localStorage`/`sessionStorage` доступе, cookie set/get; `SecurityError` throw при нарушении; 10 тестов | M | `lumen-shell`, `lumen-network` |
+| III-11 | **Mixed-content enforcement HttpClient** — blockable subresources → блокировать до TCP при HTTPS→HTTP; sandbox flags применяются к iframe DOM: `apply_iframe_sandbox_gates` в shell; 8 тестов | M | `lumen-network`, `lumen-shell` |
+| III-12 | **HTTP auth: Negotiate/NTLM + mTLS + UI popup** — NTLM Type1/3 (Windows SSPI); client certs: PKCS#12 + `rustls::ResolvesClientCert`; credential popup overlay в shell; 15 тестов | L | `lumen-network`, `lumen-shell` |
+| III-13 | **OCSP stapling + CT log + cert UI** — OCSP response в TLS handshake; CT log inclusion check (Google/Cloudflare SCT); недоверенный cert → `about:cert-error` interstitial; 12 тестов | M | `lumen-network`, `lumen-shell` |
+| III-14 | **Permission prompt UI** — overlay для Camera/Mic/Geolocation/Notifications/Clipboard; `PermissionStore` в lumen-storage (persist per origin); `navigator.permissions.query` → `PermissionStore`; download UI: pause/resume/open-dir; 10 тестов | M | `lumen-shell`, `lumen-storage` |
+| III-15 | **GPU process/sandbox** — renderer → отдельный процесс; IPC через `tokio::net::UnixStream`/named pipe; seccomp-bpf (Linux) / AppContainer (Windows) / App Sandbox (macOS); `ProcessLauncher` trait в lumen-core | XL | `lumen-shell`, `lumen-core` |
+| III-16 | **StorageBackend origin partitioning** — добавить `(origin: &str, top_level_site: &str)` во все методы `StorageBackend`; обновить `SqliteStorage`/`InMemoryStorage`/`IdbStore`/`SwStore`; 8 тестов | S | `lumen-storage`, `lumen-core` |
+| III-17 | **RenderBackend RB-1..4** — `RenderBackend` trait + `RenderError` в `paint::backend`; `WgpuBackend` обёртка над текущим `Renderer`; feature flags в `lumen-paint/Cargo.toml`; shell → `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var; 10 тестов | L | `lumen-paint`, `lumen-shell` |
+| III-18 | **RenderBackend RB-5..6 FemtovgBackend** — скелет + базовые команды (`FillRect`, `FillRoundedRect`, `DrawText`, `DrawBorder`, `PushClipRect`); полный (~30 `DisplayCommand` вариантов); 15 тестов | L | `lumen-paint` |
+| III-19 | **RenderBackend RB-7..8 VelloBackend + CompareBackend** — `VelloBackend` заглушка (компилируется, логирует); `CompareBackend`: рендерит страницу двумя бэкендами → pixel diff; тест-раннер в `lumen-driver`; 8 тестов | M | `lumen-paint`, `lumen-driver` |
+| III-20 | **RenderBackend RB-9 FemtovgBackend → default** — промоутинг femtovg как default; WgpuBackend → fallback (`LUMEN_BACKEND=wgpu`); обновить `graphic_tests/run.py`; benchmark gate; 5 тестов | M | `lumen-paint`, `lumen-shell` |
+| III-21 | **contenteditable shell dispatch (P3-side)** — `keydown`/`keypress`/`keyup` + `beforeinput`/`input` через `_lumen_dispatch_key_event` в shell `KeyboardInput`; IME-aware paste; undo/redo stack (`UndoStack<String>` в `Lumen`, Ctrl+Z/Y); 12 тестов | M | `lumen-shell` |
+| III-22 | **Web Animations timeline scheduling** — `update_animations(timestamp_ms)` перед paint; `AnimationFrame::apply` через `_lumen_update_animation_styles(json)`; `Document.timeline.currentTime` из shell clock; compositor offload (P2) integ.; 8 тестов | M | `lumen-shell`, `lumen-js` |
+| III-23 | **Navigation API navigate event** — `navigation.navigate` event с `NavigateEvent` (destination/canIntercept/intercept()/scroll/commit); `navigation.currentEntry/entries()/go(delta)`; `window.navigation` global; 10 тестов | S | `lumen-js` |
+| III-24 | **GSUB/GPOS text shaping** — rustybuzz (provisional) за `ShapingProvider`; `shape_run(font, text, script, lang) -> Vec<GlyphInfo>`; integ. в `TextMeasurer` для Arabic/Indic/Thai; BiDi runs; 15 тестов | L | `lumen-font`, `lumen-layout` |
+
+---
+
+### IV — Phase 3 задачи (50 задач)
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| P3-1 | **V8 migration Phase 1** — rusty_v8 (Deno-style) как альтернативный `JsRuntime` backend; feature flag `js-v8`; `V8Runtime` impl trait; suspend/resume через v8::Context snapshot; 20 тестов | XL | `lumen-js`, `lumen-core` |
+| P3-2 | **Knowledge §12.1: полнотекстовый поиск истории** — `HistoryFts` (FTS5 + trigrams); индексирует title+body при посещении; omnibox `@history <query>` → BM25 snippets; 15 тестов | M | `lumen-knowledge`, `lumen-shell` |
+| P3-3 | **Knowledge §12.2: Read-later offline sync** — `fetch_offline_snapshot(url)` скачивает HTML+CSS+images как self-contained bundle (data URL images); sync при восстановлении сети через `SwBackend`; 12 тестов | M | `lumen-knowledge`, `lumen-network` |
+| P3-4 | **Knowledge §12.3: Annotations** — per-url аннотации (Range → text + highlight color + note); JS `window.lumenAnnotate(selector, note)` API; FillRect-highlights в paint; `@notes` omnibox поиск; 15 тестов | M | `lumen-knowledge`, `lumen-paint`, `lumen-js` |
+| P3-5 | **Knowledge §12.4: граф знаний** — `KnowledgeGraph` рёбра (url_from, url_to, link_text, ts); `graph_neighbors(url) -> Vec<RelatedPage>`; canvas-граф на `about:knowledge`; `_linked_from(url)`; 12 тестов | M | `lumen-knowledge`, `lumen-js` |
+| P3-6 | **Local AI layer §12.5 Phase 0** — `AiBackend` trait: `query(prompt) -> Future<String>` + `embed(text) -> Future<Vec<f32>>`; `NullAiBackend`; `LlamaBackend` (llama.cpp через `llama-sys`, feature `ai-llama`); `--ai-model path.gguf`; 8 тестов | L | `lumen-core`, `lumen-shell` |
+| P3-7 | **AI sidebar Phase 1** — 280px sidebar (Ctrl+Shift+I); TextInput + response stream area; контекст страницы: title+URL+a11y-snippet в prompt; `query_streaming` → token-by-token append; chat history; 10 тестов | M | `lumen-shell`, `lumen-core` |
+| P3-8 | **Semantic bookmarks §12.8** — `Bookmarks::add_semantic_tags`: `AiBackend::embed(title+snippet)` → store vector; `search_semantic(query, k)` (cosine similarity); `about:bookmarks` cluster view; 12 тестов | M | `lumen-knowledge`, `lumen-shell` |
+| P3-9 | **Focus mode §12.7** — `FocusMode { blocklist, timer_mins }`; blocked URL → `about:focus` interstitial countdown; Ctrl+Shift+F toggle; `focus_sessions` SQLite; session summary; 10 тестов | M | `lumen-shell`, `lumen-storage` |
+| P3-10 | **Multi-profile §12.10** — `BrowserProfile { id, name, color, storage_dir }`; изолированные cookies/localStorage/history/bookmarks per-profile; profile switcher toolbar; `--profile <name>` CLI; `ProfileStore`; 15 тестов | L | `lumen-shell`, `lumen-storage` |
+| P3-11 | **QUIC/HTTP3** — quinn (provisional) за `Http3Transport`; ALPN `h3`; `H3Connection` + мультиплексные streams; QPACK; pool integ.; fallback → H2/H1; 20 тестов | L | `lumen-network` |
+| P3-12 | **WebAssembly Phase 1** — wasmtime (provisional) за `WasmRuntime`; `WebAssembly.instantiate(bytes, imports)` → `Instance`; `exports.fn()` → JS-callable; `WebAssembly.Memory`; `validate`; 15 тестов | L | `lumen-js` |
+| P3-13 | **Shared Worker реальный** — выделенный `std::thread` per unique URL; cross-tab `SharedWorkerRegistry` (process-global); `connect` event при новом `new SharedWorker(url)`; mpsc routing; `port.start()`; 12 тестов | M | `lumen-js`, `lumen-shell` |
+| P3-14 | **CSS Houdini Paint Worklet** — `CSS.paintWorklet.addModule(url)` → fetch+eval в thread; `registerPaint(name, class { paint(ctx, geom, props) })`; `background: paint(name)` → `PaintWorkletImage` DisplayCommand; CPU canvas fallback; 15 тестов | L | `lumen-js`, `lumen-paint` |
+| P3-15 | **Web Push API полный** — `PushManager.subscribe({applicationServerKey})` → `PushSubscription`; VAPID JWT (P-256 ECDSA); push server HTTP/2 POST; SW `push` event; `PushEvent.data.json/text/arrayBuffer()`; 15 тестов | L | `lumen-js`, `lumen-network`, `lumen-storage` |
+| P3-16 | **IndexedDB SQLite backend** — `SqliteIdbBackend` impl `IdbBackend` (WAL mode, per-origin DB files); swap `InMemoryStorage` → `SqliteStorage` в shell; migration in-memory → SQLite при первом запуске; 12 тестов | M | `lumen-storage` |
+| P3-17 | **Safe Browsing полный** — 4-byte prefix hash download + full-hash callback (Google SB v4 API); PSL для безопасной обрезки host-suffix; `about:safebrowsing` UI; 15 тестов | M | `lumen-network`, `lumen-shell` |
+| P3-18 | **redb storage backend** — `RedbStorage` impl `StorageBackend` (pure Rust, ACID B+tree); feature `storage-redb`; p99 latency benchmark vs SQLite WAL; migration path; 10 тестов | M | `lumen-storage` |
+| P3-19 | **WebGL полный (GPU)** — `WebGLRenderingContext` поверх wgpu; `drawArrays/drawElements` → render pass; shader compile через naga (GLSL → WGSL); texture + framebuffer + depth; 20 тестов | XL | `lumen-paint`, `lumen-js` |
+| P3-20 | **CSS Typed OM Level 1** — `CSSStyleValue`/`CSSUnitValue`/`CSSKeywordValue`/`CSSMathSum`; `element.attributeStyleMap.set/get/getAll/delete/has`; 15 тестов | M | `lumen-js`, `lumen-layout` |
+| P3-21 | **CSS Custom Highlights API** — `CSS.highlights.set(name, new Highlight(...ranges))`; `::highlight(name)` в paint; `HighlightRegistry`; color/background-color на ranges; 12 тестов | M | `lumen-js`, `lumen-paint`, `lumen-layout` |
+| P3-22 | **CSS View Transitions Level 2** — `view-transition-name` на элементах; `::view-transition-old/new/image-pair/group` в paint; навигационные transitions; 15 тестов | L | `lumen-paint`, `lumen-layout`, `lumen-js` |
+| P3-23 | **CSS Container Queries полный** — `@container (size query)` width/height/inline-size/block-size; `@container style(--var: val)` style queries; `@container state(stuck)`; `container-type`; 20 тестов | L | `lumen-layout` |
+| P3-24 | **CSS Scroll-Driven Animations wiring** — `animation-timeline: scroll(root block)` + `view()`; `ScrollTimeline`/`ViewTimeline` из lumen-layout → `TransitionScheduler`; CSS `scroll-timeline-name/view-timeline-name`; 15 тестов | M | `lumen-layout`, `lumen-shell` |
+| P3-25 | **Declarative Shadow DOM Phase 2** — `shadowrootclonable`/`shadowrootdelegatesfocus`/`shadowrootserializable`; `Element.getHTML({serializableShadowRoots})`; DOM Parts API Phase 0 stub; 8 тестов | S | `lumen-html-parser`, `lumen-dom`, `lumen-js` |
+| P3-26 | **Template Instantiation API** — `HTMLTemplateElement.setHTMLUnsafe`; template parts `{{expr}}` Phase 0 literal; `importNode` deep clone wiring; `shadowRootMode` declarative; 8 тестов | S | `lumen-js`, `lumen-dom` |
+| P3-27 | **Clipboard read (images)** — `navigator.clipboard.read()` → `ClipboardItem` (image/png); Win32: `GetClipboardData(CF_DIB)` → PNG; Linux: xclip/wl-paste; 10 тестов | M | `lumen-shell`, `lumen-js` |
+| P3-28 | **File System Access API** — `showOpenFilePicker/showSaveFilePicker/showDirectoryPicker`; `FileSystemFileHandle/DirectoryHandle`; `createWritable()` → `FileSystemWritableFileStream`; origin private FS (`navigator.storage.getDirectory()`); 15 тестов | M | `lumen-js`, `lumen-shell` |
+| P3-29 | **Screen Orientation API** — `screen.orientation {type, angle, lock(), unlock()}`; `orientationchange` event; lock() только в fullscreen; Win32: `GetSystemMetrics`; 8 тестов | S | `lumen-js`, `lumen-shell` |
+| P3-30 | **DeviceMotion + DeviceOrientation API** — `DeviceMotionEvent {acceleration, rotationRate, interval}`; `DeviceOrientationEvent {alpha, beta, gamma}`; Phase 0: нулевые значения; Phase 3+: Windows Sensors API / Linux iio; 8 тестов | S | `lumen-js` |
+| P3-31 | **Gamepad API Phase 1 (реальный)** — Win32: XInput polling → `Gamepad.axes/buttons` в `about_to_wait`; Linux: `/dev/input/js0` evdev; `gamepadconnected`/`gamepaddisconnected`; vibration через `playEffect`; 15 тестов | M | `lumen-js`, `lumen-shell` |
+| P3-32 | **Battery Status API реальный** — Win32: `GetSystemPowerStatus`; Linux: `/sys/class/power_supply`; `navigator.getBattery()` → реальные данные; `chargingchange`/`levelchange`; 10 тестов | S | `lumen-js`, `lumen-shell` |
+| P3-33 | **MediaDevices enumerateDevices реальный** — Win32: DirectShow/WASAPI; Linux: `/dev/video*` + ALSA; возвращает реальный список без label (до getUserMedia разрешения); 10 тестов | M | `lumen-js`, `lumen-shell` |
+| P3-34 | **getUserMedia Phase 1 (video/audio)** — Win32: DirectShow + WASAPI capture; `MediaStream` с реальными треками; `<video srcObject={stream}>` → live preview; permission prompt wiring; 20 тестов | XL | `lumen-js`, `lumen-shell`, `lumen-paint` |
+| P3-35 | **MediaRecorder API** — `new MediaRecorder(stream, {mimeType})` + `start/stop/pause/resume`; `ondataavailable` → Blob chunks; output: WebM/VP8; `onstop` → complete Blob; 15 тестов | L | `lumen-js`, `lumen-shell` |
+| P3-36 | **Web Codecs API Phase 0** — `VideoEncoder`/`VideoDecoder`/`AudioEncoder`/`AudioDecoder` stubs; `VideoFrame`/`EncodedVideoChunk`; `ImageDecoder` (gif/jpeg/png/avif Blob → ImageBitmap); 12 тестов | M | `lumen-js` |
+| P3-37 | **Crash Recovery shell wiring** — `install_panic_hook(profile_dir)` при старте; при следующем запуске: detect crash-log → `about:crash-recovery` с restore option; `CrashLog` хранит `Vec<TabMetadata>`; 10 тестов | M | `lumen-shell`, `lumen-storage` |
+| P3-38 | **MediaSession OS forwarding** — Win32: SMTC (ISystemMediaTransportControls через WinRT); Linux: MPRIS2 D-Bus; macOS: MPNowPlayingInfoCenter; кнопки → `_lumen_fire_media_action`; 15 тестов | M | `lumen-shell` |
+| P3-39 | **WebRTC реальный Phase 1** — `RTCPeerConnection` поверх собственной реализации или libwebrtc: SDP offer/answer; ICE candidates (STUN); DTLS-SRTP; `RTCDataChannel` двусторонний; 25 тестов | XL | `lumen-js`, `lumen-network` |
+| P3-40 | **Trusted Types enforcement** — enforcement в innerHTML/outerHTML/insertAdjacentHTML/document.write/eval/script.src/Function; `Content-Security-Policy: require-trusted-types-for 'script'`; 15 тестов | M | `lumen-js` |
+| P3-41 | **CSS Paint Order + Decorations полный** — `paint-order: stroke fill markers`; `text-underline-offset` per-font metrics; `text-decoration-style: wavy` настоящие волны (sin-approximation DrawWavyLine); 12 тестов | M | `lumen-paint`, `lumen-layout` |
+| P3-42 | **CSS Cascade Layers (@layer) полный** — unlayered = выше всех; `layer` в `@import`; `!important` инвертирует порядок; forward-declaration; `revert-layer` keyword; 15 тестов | M | `lumen-layout`, `lumen-css-parser` |
+| P3-43 | **CSS `color()` function полный** — `color(display-p3/rec2020/a98-rgb/prophoto-rgb/xyz-d65/xyz-d50 r g b / a)`; round-trip через ComputedStyle; ICC profile match в paint; 12 тестов | M | `lumen-layout`, `lumen-paint` |
+| P3-44 | **CSS Subpixel rendering + hinting** — `font-smooth: antialiased/subpixel-antialiased`; subpixel RGB stripe (BGR/RGB LCD); `text-rendering: optimizeLegibility/speed/geometricPrecision`; 10 тестов | M | `lumen-font`, `lumen-paint` |
+| P3-45 | **Extension system Phase 1** — `lumen-extensions` крейт; `ExtensionManifest` (V3-inspired); WASM sandbox через wasmtime; `content_scripts` injected JS; `chrome.storage.local` via StorageBackend; 20 тестов | XL | `lumen-shell`, `lumen-js` |
+| P3-46 | **Plugin API Phase 1 (wasmtime host)** — `Plugin` trait (process_request/response/on_page_load); `PluginHost` loads WASM; sandbox: read-only DOM snapshot + network intercept stub; dev plugin: sidebar notes; 15 тестов | L | `lumen-shell`, `lumen-core` |
+| P3-47 | **Notifications Platform** — Win32: `Windows.UI.Notifications` toast; Linux: `org.freedesktop.Notifications` D-Bus; macOS: `NSUserNotificationCenter`; нотификации выживают после закрытия окна; `onclick`/`onclose` через SW message; 12 тестов | M | `lumen-shell` |
+| P3-48 | **RSS/Atom reader §12.2** — `lumen-knowledge::FeedParser` (RSS 2.0 + Atom 1.0); `subscribe_feed(url)` → poll каждые N мин; `FeedReader` panel (Ctrl+Shift+E); auto-detect `<link rel=alternate type=application/rss+xml>`; 15 тестов | M | `lumen-knowledge`, `lumen-shell` |
+| P3-49 | **lumen-bidi-server script/network/input модули** — `script.evaluate/callFunction` реальное исполнение через `InProcessSession::eval`; `network.addIntercept/provideResponse/failRequest`; `input.performActions` через native injection; 20 тестов | L | `lumen-shell`, `lumen-driver` |
+| P3-50 | **Tantivy FTS replacement** — tantivy (provisional) за `KnowledgeStore::search`; BM25 + phrase search + snippet highlighting; benchmark vs FTS5 на 10k документах; fallback SQLite FTS5 за feature flag | M | `lumen-knowledge` |
+
+---
+
 ## Recent merges
 
 - **p1-bidi-script-evaluate** ✅ 2026-06-03 — BiDi `script.evaluate` / `script.callFunction` / `script.addPreloadScript` / `script.removePreloadScript` (8H.3 subset). Phase 1 stub: context-валидация + детерминированный ответ `{type:"undefined"}`. `script.addPreloadScript` возвращает script-id через `state.next_id()`. 4 unit-теста (unknown context, no context, add/remove preload). Реальное выполнение JS требует 8A.7 (shell-as-driver-client, P3). lumen-shell: 953 тестов (было 951 + 2 новых script).
