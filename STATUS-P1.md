@@ -6,8 +6,7 @@
 
 ## In progress
 
-DD-1: `<details>`/`<summary>` interactive toggle — public `is_open_details` в layout  branch: p1-dd1-details-summary
-Next step: добавить `pub fn is_open_details` в box_tree.rs + экспорт в lib.rs + тест  crates/engine/layout/src/box_tree.rs:464
+_(нет)_
 
 ---
 
@@ -56,7 +55,7 @@ Next step: добавить `pub fn is_open_details` в box_tree.rs + экспо
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| DD-1 | **`<details>`/`<summary>` interactive toggle** — клик на `<summary>` → toggle `open` атрибут → relayout дочерних `<details>` children; `toggle` DOM event (HTML LS §4.11.1); `is_open_details(node)` в layout; 8 unit-тестов | S | `lumen-js`, `lumen-layout` |
+| ~~DD-1~~ | ~~**`<details>`/`<summary>` interactive toggle**~~ — **выполнено** (p1-dd1-details-summary, 2026-06-14): base toggle-механизм (L-1 P2 2026-06-08: FormClickAction::ToggleDetails, toggle_details_open, layout-фильтр, toggle DOM event) + pub `is_open_details(doc, id)` в box_tree.rs (экспортировано из lib.rs) для внешних потребителей; 13 тестов (3 layout + 5 forms + 5 dom) | S | `lumen-js`, `lumen-layout` |
 | DD-2 | **`<dialog>` element** — `show()`/`showModal()`/`close(returnValue)` методы; backdrop overlay (`::backdrop` pseudoelement Phase 0: fullscreen DimRect); modal = top-layer (поверх stacking context); `cancel`/`close` events; `dialog.open` attr; 10 unit-тестов | M | `lumen-js`, `lumen-shell` |
 | DD-3 | **`<selectlist>` (Customizable Select) Phase 0** — `<selectlist>` рендерится как `<select>`; popup `<listbox>` с `<option>`; CSS-стилизуется через `::picker(select)`; Phase 0: fallback на native select; `// CSS: appearance: base-select`; 5 unit-тестов | S | `lumen-js`, `lumen-layout` |
 | DD-4 | **`loading="lazy"` image lazy loading** — `img[loading=lazy]` не decode до нахождения в viewport±500px; `LazyImageSlot` в display list; IntersectionObserver trigger → `_lumen_load_lazy_image(nid, src)`; 6 unit-тестов | S | `lumen-layout`, `lumen-shell` |
