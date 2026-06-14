@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<!-- CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — paint-order.
+     A stroke is centred on the path outline, so half its width sits inside the
+     fill region and half outside. The default order `normal` paints fill first,
+     then stroke on top — the full stroke band is visible. `paint-order: stroke`
+     paints the stroke first and the fill on top of it, so the fill covers the
+     inner half of the stroke band: the visible stroke looks half as thick and
+     the fill region grows. Each row below shows the same shape (a thick-stroked
+     closed <path> square, fill yellow / stroke black on the left, fill teal /
+     stroke crimson on the right) rendered with `normal` (top) and
+     `paint-order: stroke` (bottom). The bottom row must show a noticeably
+     thinner visible stroke and a larger fill area than the top row. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 20px; box-sizing: border-box; }
+  .cell { display: inline-block; margin: 8px; vertical-align: top; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <!-- Top row: default paint-order (normal) — full stroke band on top of fill. -->
+    <div class="cell">
+      <svg width="460" height="320">
+        <path d="M 40 40 L 420 40 L 420 280 L 40 280 Z"
+              fill="#ffd400" stroke="#101010" stroke-width="40"/>
+      </svg>
+    </div>
+    <div class="cell">
+      <svg width="460" height="320">
+        <path d="M 40 40 L 420 40 L 420 280 L 40 280 Z"
+              fill="#0e8f8f" stroke="#c81e3a" stroke-width="40"/>
+      </svg>
+    </div>
+
+    <!-- Bottom row: paint-order: stroke — fill is painted over the stroke,
+         hiding its inner half. Visible stroke looks thinner, fill larger. -->
+    <div class="cell">
+      <svg width="460" height="320">
+        <path d="M 40 40 L 420 40 L 420 280 L 40 280 Z"
+              fill="#ffd400" stroke="#101010" stroke-width="40"
+              style="paint-order: stroke"/>
+      </svg>
+    </div>
+    <div class="cell">
+      <svg width="460" height="320">
+        <path d="M 40 40 L 420 40 L 420 280 L 40 280 Z"
+              fill="#0e8f8f" stroke="#c81e3a" stroke-width="40"
+              style="paint-order: stroke"/>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>
