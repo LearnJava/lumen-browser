@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+DD-1: `<details>`/`<summary>` interactive toggle — public `is_open_details` в layout  branch: p1-dd1-details-summary
+Next step: добавить `pub fn is_open_details` в box_tree.rs + экспорт в lib.rs + тест  crates/engine/layout/src/box_tree.rs:464
 
 ---
 
