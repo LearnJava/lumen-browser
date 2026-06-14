@@ -65,8 +65,8 @@ _(нет)_
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| EE-1 | **IntersectionObserver Phase 1** — shell-driven: каждый кадр `compute_intersections(root, containers)`; deliver через `_lumen_deliver_intersection_entries(json)`; threshold array; `rootMargin`; 10 unit-тестов | M | `lumen-js`, `lumen-shell`, `lumen-layout` |
-| EE-2 | **ResizeObserver Phase 1** — shell-driven: после layout сравнивать `border_box_size` с предыдущим; deliver через `_lumen_deliver_resize_entries(json)`; `contentBoxSize`/`borderBoxSize`/`devicePixelContentBoxSize`; 8 unit-тестов | M | `lumen-js`, `lumen-shell` |
+| ~~EE-1~~ | ~~**IntersectionObserver Phase 1**~~ — **выполнено** (p1-ee1-intersection-observer, 2026-06-14): реализация уже была (threshold array, rootMargin, shell deliver); добавлены 6 тестов → 10 итого (threshold crossing, rootMargin expand/contract, unobserve, two-observers, intersectionRect.height+ratio) | M | `lumen-js`, `lumen-shell`, `lumen-layout` |
+| ~~EE-2~~ | ~~**ResizeObserver Phase 1**~~ — **выполнено** (p1-ee1-intersection-observer, 2026-06-14): реализация уже была (borderBoxSize/contentBoxSize/devicePixelContentBoxSize, shell deliver); добавлены 3 теста → 8 итого (size-change re-fire, borderBoxSize fields, unobserve) | M | `lumen-js`, `lumen-shell` |
 | EE-3 | **Layout invalidation subtree ratchet** — `DirtyBits` bitflag на `LayoutBox`; mark dirty только изменённые поддеревья; `lay_out_incremental(root, dirty_set)` пропускает clean subtrees; benchmark: 10× speedup на scroll-triggered class toggle; 12 unit-тестов | L | `lumen-layout` |
 | EE-4 | **Paint layer caching** — `LayerCache: HashMap<NodeId, CachedLayer>` (display list + transform); пропускать emit для unmodified subtrees без `will-change`/анимации; `CacheRegistry::evict` при memory pressure; 8 unit-тестов | M | `lumen-paint`, `lumen-shell` |
 | EE-5 | **`requestAnimationFrame` scheduling Phase 2** — `rAF`-callbacks группировать в batch не чаще vsync; coalesce multiple `requestAnimationFrame` за один кадр; deliver `DOMHighResTimeStamp` от shell clock; 5 unit-тестов | S | `lumen-js`, `lumen-shell` |
