@@ -6,8 +6,7 @@
 
 ## In progress
 
-DD-4 `loading="lazy"` image lazy loading  branch: p1-dd4-lazy-loading
-Next step: добавить LazyImageSlot в display_list.rs + is_lazy в BoxKind::Image  crates/engine/layout/src/box_tree.rs:3075
+_(нет)_
 
 ---
 
@@ -59,7 +58,7 @@ Next step: добавить LazyImageSlot в display_list.rs + is_lazy в BoxKin
 | ~~DD-1~~ | ~~**`<details>`/`<summary>` interactive toggle**~~ — **выполнено** (p1-dd1-details-summary, 2026-06-14): base toggle-механизм (L-1 P2 2026-06-08: FormClickAction::ToggleDetails, toggle_details_open, layout-фильтр, toggle DOM event) + pub `is_open_details(doc, id)` в box_tree.rs (экспортировано из lib.rs) для внешних потребителей; 13 тестов (3 layout + 5 forms + 5 dom) | S | `lumen-js`, `lumen-layout` |
 | ~~DD-2~~ | ~~**`<dialog>` element**~~ — **выполнено** (p1-dd2-dialog, 2026-06-14): реализация была на main до создания ветки — `show()`/`showModal()`/`close(returnValue)` + backdrop `::backdrop` DimRect в `forms::build_dialog_overlay` + top-layer overlay в main.rs + UA stylesheet `dialog:not([open]) { display: none }` + `:modal` pseudo-class (`data-lumen-modal` sentinel) + Escape cancel/close handler; 12 тестов (7 JS + 5 shell) | M | `lumen-js`, `lumen-shell` |
 | ~~DD-3~~ | ~~**`<selectlist>` (Customizable Select) Phase 0**~~ — **выполнено** (p1-dd2-dialog, 2026-06-14): `collect_selectlist_label` + `is_selectlist()` в box_tree.rs (поддержка `<option>` в `<listbox>`); `is_form_control_element` расширен; FormControlKind::Select для selectlist; `_lumen_selectlist_options`/`_lumen_selectlist_listbox` JS-хелперы; JS API (`value`, `selectedIndex`, `length`, `options`, `add`, `remove`, `item`, `namedItem`) в `_lumen_make_element`; `// CSS: appearance: base-select` handoff для P4; 5 unit-тестов | S | `lumen-js`, `lumen-layout` |
-| DD-4 | **`loading="lazy"` image lazy loading** — `img[loading=lazy]` не decode до нахождения в viewport±500px; `LazyImageSlot` в display list; IntersectionObserver trigger → `_lumen_load_lazy_image(nid, src)`; 6 unit-тестов | S | `lumen-layout`, `lumen-shell` |
+| ~~DD-4~~ | ~~**`loading="lazy"` image lazy loading**~~ — **выполнено** (p1-dd4-lazy-loading, 2026-06-14): `is_lazy: bool` в `BoxKind::Image` + `InlineSegment` + `InlineFrag`; `DisplayCommand::LazyImageSlot { rect, node_id, src }` вместо `DrawImage` для lazy-изображений; grey placeholder во всех рендерерах (femtovg, cpu_raster, wgpu); proximity/IntersectionObserver уже были реализованы ранее; 6 unit-тестов | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
 | DD-5 | **`<canvas>` resize event** — `ResizeObserver` на canvas → при смене dimensions через CSS: сохранить пиксели, масштабировать буфер; fire `resize` event на элемент; 4 unit-теста | XS | `lumen-js` |
 
 ### EE — Performance Phase 2
