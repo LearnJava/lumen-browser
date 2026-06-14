@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH1-2: Progressive / streaming rendering pipeline  branch: p1-ph1-2-streaming
+Next step: 60Hz throttle + CSS streaming + parallel CSS load  crates/shell/src/main.rs:118
 
 ---
 
@@ -16,7 +17,6 @@
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| P0-2 | **Pure layout + paint audit** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D) | S | `lumen-layout`, `lumen-paint` |
 | P0-2 | **Pure layout + paint audit** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D) | S | `lumen-layout`, `lumen-paint` |
 
 ### PH1 — Phase 1: v0.1 «Reader»
