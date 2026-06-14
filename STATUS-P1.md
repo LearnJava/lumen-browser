@@ -65,6 +65,7 @@
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-14 | JJ-phase5: Modern HTML5 APIs Phase 5 | `checkVisibility(opts?)` (W3C Viewport API §4.1), `setHTMLUnsafe(html)`, `getHTML(opts?)` (WHATWG HTML LS §14.5), `moveBefore(node, child?)` (DOM LS / Chrome 133+); 11 тестов; 2014 всего в lumen-js. |
 | 2026-06-14 | PH1-1: Font fallback / matcher | `resolve_font_chain` в FemtovgBackend: CSS font-family list → FontProvider → femtovg FontId цепочка; eager preload CURATED_FALLBACK_FAMILIES; DrawText подключает font_family/weight/style. |
 | 2026-06-14 | P0-2: Pure layout + paint audit | Аудит: нет static mut/lazy_static/OnceCell в hot path; thread_local корректно сброшены; GlyphAtlas+ImageDecodeCache per-renderer; исправлен layout() — добавлен invalidate_rule_idx_cache(). |
 | 2026-06-14 | P0-1: DOM arena audit | Аудит подтвердил: NodeId(u32) арена без Rc<RefCell>, to_bytes/from_bytes с 214 тестами. Добавлен compile-time Send+Sync gate (ADR-008 §11.4). |
