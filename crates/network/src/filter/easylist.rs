@@ -12,11 +12,14 @@
 //! - `@@||domain.com^`            — exception (whitelist) — cancels a block rule
 //! - `|https://example.com/|`     — exact URL prefix match
 //! - `keyword`                    — substring match against the full URL string
+//! - `/regex/`                    — regex pattern match against the full URL string
 //! - `!` / `#`                    — comment lines, ignored
 //! - `##` / `#@#` / `#?#` / `#$#`— cosmetic rules, ignored
 //! - `$option,...`                — options stripped; per-type filtering is Phase 2
 
 use std::collections::{HashMap, HashSet};
+
+use regex::Regex;
 
 use lumen_core::url::Url;
 use lumen_core::ext::RequestFilter;
@@ -34,6 +37,8 @@ enum MatchKind {
     Substring(String),
     /// Exact URL prefix match (`|https://...`).
     ExactPrefix(String),
+    /// Regex match against the full URL string (`/pattern/`).
+    Regex(Regex),
 }
 
 /// A single parsed filter rule.
@@ -52,6 +57,7 @@ impl FilterEntry {
             MatchKind::PathPrefix(prefix) => url.path().starts_with(prefix.as_str()),
             MatchKind::Substring(sub) => url.as_str().contains(sub.as_str()),
             MatchKind::ExactPrefix(pfx) => url.as_str().starts_with(pfx.as_str()),
+            MatchKind::Regex(re) => re.is_match(url.as_str()),
         }
     }
 }
@@ -125,6 +131,23 @@ impl EasyListFilter {
 
         // Strip options after `$` (except `$` inside a URL — detect by `||` anchor).
         let pattern = strip_options(pattern);
+
+        // Regex rule: `/pattern/` — matches full URL against the regex.
+        if let Some(inner) = pattern.strip_prefix('/').and_then(|s| s.strip_suffix('/')) {
+            if !inner.is_empty() {
+                if let Ok(re) = Regex::new(inner) {
+                    let entry = FilterEntry { kind: MatchKind::Regex(re), reason: "easylist".into() };
+                    if is_exception {
+                        // Regex exceptions are stored in global_block as deny; for simplicity we
+                        // skip regex exception support in Phase 1 (rare in real lists).
+                    } else {
+                        self.global_block.push(entry);
+                        self.rule_count += 1;
+                    }
+                }
+            }
+            return;
+        }
 
         if let Some(rest) = pattern.strip_prefix("||") {
             self.parse_domain_rule(rest, is_exception);
@@ -442,6 +465,41 @@ mod tests {
         let f = filter("|https://ads.example.com/banner|");
         assert!(f.should_block(&url("https://ads.example.com/banner")).is_some());
         assert!(f.should_block(&url("https://ads.example.com/other")).is_none());
+    }
+
+    // ── Regex rules ───────────────────────────────────────────────────────
+
+    #[test]
+    fn regex_rule_blocks_matching_url() {
+        let f = filter(r"/\.ads\./");
+        assert!(f.should_block(&url("https://cdn.ads.example.com/banner.png")).is_some());
+    }
+
+    #[test]
+    fn regex_rule_does_not_block_non_matching_url() {
+        let f = filter(r"/\.ads\./");
+        assert!(f.should_block(&url("https://example.com/page")).is_none());
+    }
+
+    #[test]
+    fn regex_rule_counted_as_block_rule() {
+        let f = filter(r"/tracking\.php/");
+        assert_eq!(f.rule_count(), 1);
+    }
+
+    #[test]
+    fn invalid_regex_is_silently_skipped() {
+        // `[unclosed` is an invalid regex — should not panic, just skip.
+        let f = filter("/[unclosed/\n||tracker.com^");
+        assert_eq!(f.rule_count(), 1); // only the domain rule counts
+        assert!(f.should_block(&url("https://tracker.com/")).is_some());
+    }
+
+    #[test]
+    fn regex_rule_matches_query_string() {
+        let f = filter(r"/\?.*utm_source=/");
+        assert!(f.should_block(&url("https://example.com/page?utm_source=email")).is_some());
+        assert!(f.should_block(&url("https://example.com/page")).is_none());
     }
 
     // ── rule_count ────────────────────────────────────────────────────────

@@ -1,25 +1,34 @@
 //! Request filter implementations for Lumen's privacy-first block list engine.
 //!
 //! This module provides:
-//! - [`EasyListFilter`] — parses and matches EasyList / Adblock Plus network rules
-//! - [`HostsFilter`]    — parses and matches `/etc/hosts`-format block lists
-//! - [`CompositeFilter`] — chains multiple `RequestFilter` implementations
+//! - [`EasyListFilter`]    — parses and matches EasyList / Adblock Plus network rules
+//! - [`HostsFilter`]       — parses and matches `/etc/hosts`-format block lists
+//! - [`CompositeFilter`]   — chains multiple `RequestFilter` implementations
+//! - [`DefaultFilterList`] — built-in bundled ruleset implementing `FilterListSource`
 //!
-//! All types implement [`lumen_core::ext::RequestFilter`] and are safe to share
+//! All filter types implement [`lumen_core::ext::RequestFilter`] and are safe to share
 //! across threads (`Send + Sync`).
 //!
 //! ## Typical usage
 //!
 //! ```rust,ignore
+//! // Use the bundled default list:
+//! let text   = DefaultFilterList.fetch_rules().unwrap();
+//! let filter = EasyListFilter::parse(&text);
+//! let client = HttpClient::new().with_filter(Arc::new(filter));
+//!
+//! // Or compose custom lists:
 //! let easylist = EasyListFilter::parse(&easylist_text);
 //! let hosts    = HostsFilter::parse(&hosts_text);
 //! let filter   = CompositeFilter::new(vec![Box::new(easylist), Box::new(hosts)]);
 //! let client   = HttpClient::new().with_filter(Arc::new(filter));
 //! ```
 
+pub mod default_list;
 pub mod easylist;
 pub mod hosts;
 
+pub use default_list::DefaultFilterList;
 pub use easylist::EasyListFilter;
 pub use hosts::HostsFilter;
 
