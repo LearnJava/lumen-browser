@@ -6,8 +6,7 @@
 
 ## In progress
 
-EE-3: Layout invalidation subtree ratchet  branch: p1-ee3-incremental-layout
-Next step: create incremental.rs + add DirtyBits to LayoutBox  crates/engine/layout/src/incremental.rs
+_(нет)_
 
 ---
 
@@ -68,7 +67,7 @@ Next step: create incremental.rs + add DirtyBits to LayoutBox  crates/engine/lay
 |---|--------|--------|--------|
 | ~~EE-1~~ | ~~**IntersectionObserver Phase 1**~~ — **выполнено** (p1-ee1-intersection-observer, 2026-06-14): реализация уже была (threshold array, rootMargin, shell deliver); добавлены 6 тестов → 10 итого (threshold crossing, rootMargin expand/contract, unobserve, two-observers, intersectionRect.height+ratio) | M | `lumen-js`, `lumen-shell`, `lumen-layout` |
 | ~~EE-2~~ | ~~**ResizeObserver Phase 1**~~ — **выполнено** (p1-ee1-intersection-observer, 2026-06-14): реализация уже была (borderBoxSize/contentBoxSize/devicePixelContentBoxSize, shell deliver); добавлены 3 теста → 8 итого (size-change re-fire, borderBoxSize fields, unobserve) | M | `lumen-js`, `lumen-shell` |
-| EE-3 | **Layout invalidation subtree ratchet** — `DirtyBits` bitflag на `LayoutBox`; mark dirty только изменённые поддеревья; `lay_out_incremental(root, dirty_set)` пропускает clean subtrees; benchmark: 10× speedup на scroll-triggered class toggle; 12 unit-тестов | L | `lumen-layout` |
+| ~~EE-3~~ | ~~**Layout invalidation subtree ratchet**~~ — **выполнено** (p1-ee3-incremental-layout, 2026-06-14): `DirtyBits(u8)` bitflag на `LayoutBox`; `mark_dirty/mark_dirty_set` + `HAS_DIRTY_DESCENDANT` propagation вверх; `INCREMENTAL_LAYOUT_MODE` thread_local в `lay_out` — clean-поддеревья транслируются без перемера; `lay_out_incremental` (pub) + re-export из crate root; 14 unit-тестов (bitops, mark, clear, translate, integration) | L | `lumen-layout` |
 | EE-4 | **Paint layer caching** — `LayerCache: HashMap<NodeId, CachedLayer>` (display list + transform); пропускать emit для unmodified subtrees без `will-change`/анимации; `CacheRegistry::evict` при memory pressure; 8 unit-тестов | M | `lumen-paint`, `lumen-shell` |
 | EE-5 | **`requestAnimationFrame` scheduling Phase 2** — `rAF`-callbacks группировать в batch не чаще vsync; coalesce multiple `requestAnimationFrame` за один кадр; deliver `DOMHighResTimeStamp` от shell clock; 5 unit-тестов | S | `lumen-js`, `lumen-shell` |
 
