@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH1-8: Preload scanner  branch: p1-ph1-8-preload-scanner
-Next step: done — commit + merge
+—
 
 ---
 
@@ -53,6 +52,7 @@ Next step: done — commit + merge
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH1-8: Preload scanner | `PreloadScanner` struct поверх `PushTokenizer`: инкрементальный scan каждого HtmlChunk вместо первых 8 КБ. `collect_hints_from_tokens` — общая логика без дублирования. Shell `start_streaming_load` обновлён: hints + CSS-загрузчики стартуют из каждого chunk-а. 35 тестов (27 batch + 8 streaming). |
 | 2026-06-15 | PH1-7: Compositor thread + Property Trees | `InProcessCompositor` + `ThreadedCompositor` подключены в `session.rs` / `winit_session.rs`. `PropertyTrees::build()` вызывается после layout при каждой навигации и коммитируется в compositor. `scroll_page_by(dx, dy)` — off-main-thread scroll без relayout (обновляет `ScrollNode.offset`, recommit). 15 тестов в `test_compositor.rs`. |
 | 2026-06-15 | PH1-6: Stacking contexts + CSS Painting Order | Подключён `build_display_list_ordered` (StackingTree + PaintOrder) к 4 точкам driver: `InProcessSession.screenshot()`, `screenshot_cpu_rgba()`, `display_list_for_compare()`, `WinitSession.screenshot()`. 3 новых теста в `test_stacking_order.rs` верифицируют CSS 2.1 Appendix E порядок по FillRect-цвету. |
 | 2026-06-15 | PH1-5: Packages для Linux / macOS / Windows | `.github/workflows/ci.yml` — кросс-платформенная проверка (Linux/macOS/Windows) + unit-тесты 12 non-GUI крейтов; `.github/workflows/release.yml` — 4 бинарных пакета (linux-x86_64/macos-aarch64/macos-x86_64/windows-x86_64) → GitHub Release на тег v*.*.*. |
