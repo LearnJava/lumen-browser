@@ -6,7 +6,9 @@
 
 ## In progress
 
-—
+PH1-5: Packages для Linux / macOS / Windows — CI pipeline (GitHub Actions)
+branch: p1-ph1-5-ci-packages
+Next step: создать .github/workflows/ci.yml и release.yml
 
 ---
 
