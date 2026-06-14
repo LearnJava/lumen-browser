@@ -190,6 +190,7 @@ fn cmd_rect(cmd: &DisplayCommand) -> Option<Rect> {
         | DisplayCommand::DrawOutline { rect, .. }
         | DisplayCommand::DrawText { rect, .. }
         | DisplayCommand::DrawImage { rect, .. }
+        | DisplayCommand::LazyImageSlot { rect, .. }
         | DisplayCommand::DrawBackgroundImage { rect, .. }
         | DisplayCommand::DrawLinearGradient { rect, .. }
         | DisplayCommand::DrawRadialGradient { rect, .. }

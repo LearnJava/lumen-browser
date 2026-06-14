@@ -365,6 +365,18 @@ pub enum DisplayCommand {
         object_position: ObjectPosition,
         image_rendering: ImageRendering,
     },
+    /// Placeholder for an `<img loading="lazy">` that has not yet been decoded.
+    ///
+    /// Rendered as a grey rect (identical to an unregistered `DrawImage`).
+    /// `node_id` is the DOM node index — lets the shell correlate this slot with
+    /// the proximity check (`_lumen_request_lazy_image_load`).  `src` is the URL
+    /// to load; once the image is registered the shell triggers a redraw so the
+    /// next pass emits `DrawImage` instead.
+    LazyImageSlot {
+        rect: Rect,
+        node_id: u32,
+        src: String,
+    },
     /// CSS Backgrounds L3 §3.10 — `background-image: url(...)`.
     ///
     /// `rect` — background painting area (clip box), computed from `background-clip`
@@ -1116,6 +1128,7 @@ fn get_command_rect(cmd: &DisplayCommand) -> Option<Rect> {
         DisplayCommand::DrawOutline { rect, .. } => Some(*rect),
         DisplayCommand::DrawText { rect, .. } => Some(*rect),
         DisplayCommand::DrawImage { rect, .. } => Some(*rect),
+        DisplayCommand::LazyImageSlot { rect, .. } => Some(*rect),
         DisplayCommand::DrawBackgroundImage { rect, .. } => Some(*rect),
         DisplayCommand::DrawLinearGradient { rect, .. } => Some(*rect),
         DisplayCommand::DrawRadialGradient { rect, .. } => Some(*rect),
@@ -1301,6 +1314,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     ));
                 }
                 out.push('\n');
+            }
+            DisplayCommand::LazyImageSlot { rect, node_id, src } => {
+                out.push_str(&format!(
+                    "LazyImageSlot ({:.2}, {:.2}, {:.2}, {:.2}) nid={node_id} src={src:?}\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                ));
             }
             DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat, .. } => {
                 out.push_str(&format!(
@@ -2102,16 +2121,27 @@ fn emit_text_frags(
             continue;
         }
         let frag_y = line_y + frag.y_offset;
-        // Inline-replaced image: emit DrawImage, skip text rendering.
+        // Inline-replaced image: emit LazyImageSlot or DrawImage, skip text rendering.
         if let Some(src) = &frag.img_src {
-            out.push(DisplayCommand::DrawImage {
-                rect: Rect::new(container_x + frag.x, frag_y, frag.width, line_h),
-                src: src.clone(),
-                alt: frag.text.clone(),
-                object_fit: frag.style.object_fit,
-                object_position: frag.style.object_position,
-                image_rendering: frag.style.image_rendering,
-            });
+            let img_rect = Rect::new(container_x + frag.x, frag_y, frag.width, line_h);
+            if frag.img_is_lazy {
+                // node_id unavailable in InlineFrag (no box reference); use 0 as sentinel.
+                // The shell's proximity check uses the display list rects, not node_id here.
+                out.push(DisplayCommand::LazyImageSlot {
+                    rect: img_rect,
+                    node_id: 0,
+                    src: src.clone(),
+                });
+            } else {
+                out.push(DisplayCommand::DrawImage {
+                    rect: img_rect,
+                    src: src.clone(),
+                    alt: frag.text.clone(),
+                    object_fit: frag.style.object_fit,
+                    object_position: frag.style.object_position,
+                    image_rendering: frag.style.image_rendering,
+                });
+            }
             continue;
         }
 
@@ -4335,7 +4365,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
             emit_outline(b, out);
             emit_form_control_indicator(b, kind, out);
         }
-        BoxKind::Image { src, alt } => {
+        BoxKind::Image { src, alt, is_lazy } => {
             if !is_paint_visible(b) {
                 return;
             }
@@ -4380,14 +4410,22 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
-                src: src.clone(),
-                alt: alt.clone(),
-                object_fit: b.style.object_fit,
-                object_position: b.style.object_position,
-                image_rendering: b.style.image_rendering,
-            });
+            if *is_lazy {
+                out.push(DisplayCommand::LazyImageSlot {
+                    rect: b.rect,
+                    node_id: b.node.index() as u32,
+                    src: src.clone(),
+                });
+            } else {
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: src.clone(),
+                    alt: alt.clone(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
             emit_outline(b, out);
         }
         BoxKind::Video { src, poster } => {
@@ -5127,7 +5165,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
         BoxKind::InlineRun { lines, .. } => {
             emit_inline_run(b, lines, sel, out);
         }
-        BoxKind::Image { src, alt } => {
+        BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
             if !is_paint_visible(b) {
                 return;
@@ -5170,19 +5208,24 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Image content внутри padding/border-области; в Phase 0
-            // padding/border ещё не сжимают content-area Image (только
-            // расширяют коробку), `rect` — полная коробка вместе с border.
-            // object-fit / object-position читаются на render-стадии вместе
-            // с известным intrinsic-размером изображения.
-            out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
-                src: src.clone(),
-                alt: alt.clone(),
-                object_fit: b.style.object_fit,
-                object_position: b.style.object_position,
-                image_rendering: b.style.image_rendering,
-            });
+            if *is_lazy {
+                out.push(DisplayCommand::LazyImageSlot {
+                    rect: b.rect,
+                    node_id: b.node.index() as u32,
+                    src: src.clone(),
+                });
+            } else {
+                // object-fit / object-position читаются на render-стадии вместе
+                // с известным intrinsic-размером изображения.
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: src.clone(),
+                    alt: alt.clone(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
             emit_outline(b, out);
         }
         BoxKind::Video { src, poster } => {
@@ -7363,6 +7406,7 @@ mod tests {
                 DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
                 DisplayCommand::PageBreak => "PageBreak",
                 DisplayCommand::DrawCrossFade { .. } => "DrawCrossFade",
+                DisplayCommand::LazyImageSlot { .. } => "LazyImageSlot",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -7378,6 +7422,81 @@ mod tests {
         assert!(s.contains("DrawImage"), "must contain DrawImage line");
         assert!(s.contains(r#"src="photo.jpg""#), "must contain src");
         assert!(s.contains(r#"alt="A photo""#), "must contain alt");
+    }
+
+    // ── Тесты loading="lazy" / LazyImageSlot ───────────────────────────────
+
+    fn lazy_slots(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::LazyImageSlot { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn lazy_img_emits_lazy_image_slot_not_draw_image() {
+        let dl = build(
+            r#"<img src="hero.jpg" loading="lazy" width="200" height="100">"#,
+            "",
+        );
+        // Must emit LazyImageSlot, not DrawImage.
+        assert!(lazy_slots(&dl).len() == 1, "expected one LazyImageSlot");
+        assert!(images(&dl).is_empty(), "must not emit DrawImage for lazy img");
+    }
+
+    #[test]
+    fn eager_img_still_emits_draw_image() {
+        let dl = build(r#"<img src="thumb.jpg" width="80" height="40">"#, "");
+        assert!(images(&dl).len() == 1, "non-lazy img must emit DrawImage");
+        assert!(lazy_slots(&dl).is_empty(), "non-lazy must not emit LazyImageSlot");
+    }
+
+    #[test]
+    fn lazy_img_slot_has_correct_src_and_rect() {
+        let dl = build(
+            r#"<img src="banner.png" loading="lazy" width="300" height="150">"#,
+            "",
+        );
+        let slots = lazy_slots(&dl);
+        assert_eq!(slots.len(), 1);
+        if let DisplayCommand::LazyImageSlot { src, rect, .. } = slots[0] {
+            assert_eq!(src, "banner.png");
+            assert!((rect.width - 300.0).abs() < 0.1, "width={}", rect.width);
+            assert!((rect.height - 150.0).abs() < 0.1, "height={}", rect.height);
+        }
+    }
+
+    #[test]
+    fn lazy_img_case_insensitive() {
+        let dl = build(
+            r#"<img src="poster.jpg" loading="LAZY" width="50" height="50">"#,
+            "",
+        );
+        assert_eq!(lazy_slots(&dl).len(), 1, "LAZY (uppercase) must emit LazyImageSlot");
+    }
+
+    #[test]
+    fn lazy_img_node_id_set() {
+        let dl = build(
+            r#"<img src="lazy.png" loading="lazy" width="100" height="100">"#,
+            "",
+        );
+        let slots = lazy_slots(&dl);
+        assert_eq!(slots.len(), 1);
+        if let DisplayCommand::LazyImageSlot { node_id, .. } = slots[0] {
+            // node_id must be > 0 (document root is 0; img elements get a non-zero id).
+            assert!(*node_id > 0, "lazy img node_id must be non-zero, got {node_id}");
+        }
+    }
+
+    #[test]
+    fn lazy_img_serialize_contains_lazy_image_slot() {
+        let dl = build(
+            r#"<img src="deferred.jpg" loading="lazy" width="100" height="50">"#,
+            "",
+        );
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("LazyImageSlot"), "serialize must include LazyImageSlot");
+        assert!(s.contains(r#"src="deferred.jpg""#), "serialize must include src");
     }
 
     // ── Тесты <video> / DrawImage placeholder ───────────────────────────────

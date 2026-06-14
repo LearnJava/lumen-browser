@@ -1464,6 +1464,8 @@ pub struct InlineSegment {
     /// Non-None when this segment is an inline-replaced `<img>`. Contains the
     /// resolved image URL. `text` holds the alt attribute.
     pub img_src: Option<String>,
+    /// `loading="lazy"` on the inline `<img>` — emit `LazyImageSlot` instead of `DrawImage`.
+    pub img_is_lazy: bool,
     /// Pre-computed pixel width for image segments (0.0 for text segments).
     pub img_width: f32,
     /// True when this segment represents a forced line break (CSS §4.1: newline
@@ -1521,6 +1523,8 @@ pub struct InlineFrag {
     /// Non-None when this frag represents an inline-replaced `<img>`.
     /// `text` holds the alt attribute; `width` is the rendered pixel width.
     pub img_src: Option<String>,
+    /// `loading="lazy"` on the inline `<img>` — emit `LazyImageSlot` instead of `DrawImage`.
+    pub img_is_lazy: bool,
     /// True when this fragment lies on the first formatted line of its block container.
     /// Set by `lay_out` after `wrap_inline_run` completes.
     /// // CSS: ::first-line — P4 wires: `compute_pseudo_element_style(node, "first-line")` →
@@ -1565,6 +1569,9 @@ pub enum BoxKind {
     Image {
         src: String,
         alt: String,
+        /// `loading="lazy"` (HTML LS §lazy-loading): fetch deferred until proximity check.
+        /// Display list emits `LazyImageSlot` instead of `DrawImage` when `true`.
+        is_lazy: bool,
     },
     /// Replaced element: HTML `<video>` element (HTML spec §14).
     ///
@@ -1755,6 +1762,7 @@ fn apply_first_letter_style(
                     post_space: segments[i].post_space,
                     is_element_box,
                     img_src,
+                    img_is_lazy: false,
                     img_width,
                     forced_break,
                     pseudo_kind: PseudoKind::None,
@@ -2502,6 +2510,7 @@ fn apply_first_letter_pseudo(
         post_space,
         is_element_box: false,
         img_src: None,
+        img_is_lazy: false,
         img_width: 0.0,
         forced_break: false,
         pseudo_kind: PseudoKind::None,
@@ -2558,6 +2567,7 @@ fn collect_inline_segments(
                         post_space: 0.0,
                         is_element_box: false,
                         img_src: None,
+                        img_is_lazy: false,
                         img_width: 0.0,
                         forced_break: true,
                         pseudo_kind: PseudoKind::None,
@@ -2577,6 +2587,7 @@ fn collect_inline_segments(
                         post_space: 0.0,
                         is_element_box: false,
                         img_src: None,
+                        img_is_lazy: false,
                         img_width: 0.0,
                         forced_break: false,
                         pseudo_kind: PseudoKind::None,
@@ -2612,6 +2623,7 @@ fn collect_inline_segments(
                 post_space: 0.0,
                 is_element_box: false,
                 img_src: None,
+                img_is_lazy: false,
                 img_width: 0.0,
                 forced_break: false,
                 pseudo_kind: kind,
@@ -2641,6 +2653,8 @@ fn collect_inline_segments(
                     + s.border_right_width
                     + s.margin_right.resolve_or_zero(em, 0.0, viewport);
                 let alt = doc.get(id).get_attr("alt").unwrap_or("").to_string();
+                let img_is_lazy = doc.get(id).get_attr("loading")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
                 out.push(InlineSegment {
                     text: alt,
                     style: s,
@@ -2648,6 +2662,7 @@ fn collect_inline_segments(
                     post_space: post,
                     is_element_box: true,
                     img_src: Some(src.url),
+                    img_is_lazy,
                     img_width: w,
                     forced_break: false,
                     pseudo_kind: PseudoKind::None,
@@ -2858,6 +2873,7 @@ fn content_to_inline_segments(
         post_space: 0.0,
         is_element_box: false,
         img_src: None,
+        img_is_lazy: false,
         img_width: 0.0,
         forced_break: false,
         pseudo_kind: PseudoKind::None,
@@ -3072,7 +3088,9 @@ fn build_box(
                 {
                     style.height = Some(Length::Px(h as f32));
                 }
-                BoxKind::Image { src: src.url, alt }
+                let is_lazy = doc.get(id).get_attr("loading")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
+                BoxKind::Image { src: src.url, alt, is_lazy }
             } else if is_video_element(doc, id) {
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
@@ -8174,6 +8192,7 @@ fn wrap_inline_run(
                 padding_right: pad_r,
                 is_element_box: seg.is_element_box,
                 img_src: None,
+                img_is_lazy: false,
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
@@ -8205,6 +8224,7 @@ fn wrap_inline_run(
                 padding_right: pad_r,
                 is_element_box: true,
                 img_src: Some(img_src.clone()),
+                img_is_lazy: seg.img_is_lazy,
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
@@ -8290,6 +8310,7 @@ fn wrap_inline_run(
                         padding_right: 0.0,
                         is_element_box: seg.is_element_box,
                         img_src: None,
+                        img_is_lazy: false,
                         is_first_line: false,
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
@@ -8308,6 +8329,7 @@ fn wrap_inline_run(
                         padding_right: if is_seg_last { pad_r } else { 0.0 },
                         is_element_box: seg.is_element_box,
                         img_src: None,
+                        img_is_lazy: false,
                         is_first_line: false,
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
@@ -8340,6 +8362,7 @@ fn wrap_inline_run(
                                 padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                                 is_element_box: seg.is_element_box,
                                 img_src: None,
+                                img_is_lazy: false,
                                 is_first_line: false,
                                 source_node: seg.source_node,
                                 source_char_offset: frag_source_offset,
@@ -8390,6 +8413,7 @@ fn wrap_inline_run(
                             padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                             is_element_box: seg.is_element_box,
                             img_src: None,
+                            img_is_lazy: false,
                             is_first_line: false,
                             source_node: seg.source_node,
                             source_char_offset: frag_source_offset,
@@ -8443,6 +8467,7 @@ fn wrap_inline_run(
                     padding_right: if is_seg_last { pad_r } else { 0.0 },
                     is_element_box: seg.is_element_box,
                     img_src: None,
+                    img_is_lazy: false,
                     is_first_line: false,
                     source_node: seg.source_node,
                     source_char_offset: frag_source_offset,
@@ -8580,6 +8605,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 padding_right: 0.0,
                 is_element_box: true,
                 img_src: Some(img_src.clone()),
+                img_is_lazy: false,
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
@@ -8612,6 +8638,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 padding_right: 0.0,
                 is_element_box: seg.is_element_box,
                 img_src: None,
+                img_is_lazy: false,
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
@@ -9145,6 +9172,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -9186,6 +9214,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -9229,6 +9258,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -9281,6 +9311,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -9329,6 +9360,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -9380,6 +9412,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -9488,6 +9521,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -9547,6 +9581,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -12554,6 +12589,7 @@ mod tests {
             padding_right: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             is_first_line: false,
             source_node: NodeId::from_index(0),
             source_char_offset: 0,
@@ -13314,6 +13350,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: super::PseudoKind::None,

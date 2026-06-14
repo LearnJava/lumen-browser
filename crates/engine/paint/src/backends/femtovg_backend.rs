@@ -1736,6 +1736,15 @@ impl FemtovgBackend {
             DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. } => {
                 self.draw_image_in_rect(rect, src, *object_fit, object_position);
             }
+            DisplayCommand::LazyImageSlot { rect, .. } => {
+                // Render as grey placeholder — image not yet fetched.
+                if rect.width > 0.0 && rect.height > 0.0 {
+                    let paint = femtovg::Paint::color(femtovg::Color::rgbf(0.85, 0.85, 0.85));
+                    let mut path = femtovg::Path::new();
+                    path.rect(rect.x, rect.y, rect.width, rect.height);
+                    self.canvas.fill_path(&path, &paint);
+                }
+            }
             DisplayCommand::DrawBackgroundImage {
                 rect, origin_rect, src, size, position, repeat, ..
             } => {

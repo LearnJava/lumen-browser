@@ -285,7 +285,8 @@ pub(crate) fn rasterize_cpu(
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
             }
-            DisplayCommand::DrawImage { rect, .. } => {
+            DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::LazyImageSlot { rect, .. } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_image_placeholder(layers.last_mut().expect("base layer"), rect, c)?;
             }

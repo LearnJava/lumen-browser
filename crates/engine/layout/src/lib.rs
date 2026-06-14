@@ -7354,7 +7354,7 @@ mod tests {
         let root = lay(r#"<img src="logo.png" alt="logo">"#, "");
         let img = first_image_child(&root);
         match &img.kind {
-            BoxKind::Image { src, alt } => {
+            BoxKind::Image { src, alt, .. } => {
                 assert_eq!(src, "logo.png");
                 assert_eq!(alt, "logo");
             }
@@ -7366,7 +7366,7 @@ mod tests {
     fn img_without_src_or_alt_has_empty_strings() {
         let root = lay("<img>", "");
         let img = first_image_child(&root);
-        if let BoxKind::Image { src, alt } = &img.kind {
+        if let BoxKind::Image { src, alt, .. } = &img.kind {
             assert_eq!(src, "");
             assert_eq!(alt, "");
         }
