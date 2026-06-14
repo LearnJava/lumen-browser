@@ -22,6 +22,7 @@ pub mod matrix_util;
 ))]
 pub mod backends;
 pub mod backdrop_cache;
+pub mod display_list_cache;
 pub mod glsl;
 pub mod compositor;
 pub mod display_list;
@@ -56,6 +57,7 @@ pub use backends::CpuBackend;
 #[cfg(feature = "compare")]
 pub use backends::CompareBackend;
 pub use backdrop_cache::BackdropCache;
+pub use display_list_cache::{CachedDisplayLayer, DisplayListCache, hash_commands};
 pub use fallback::CURATED_FALLBACK_FAMILIES;
 pub use compositor::{
     BasicLayer, BasicLayerTree, Compositor, CompositorThread, InProcessCompositor, Layer,

@@ -1258,7 +1258,7 @@ pub fn advance_month(year: i32, month: u8, delta: i32) -> (i32, u8) {
 mod tests {
     use super::*;
     use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
-    use lumen_layout::ComputedStyle;
+    use lumen_layout::{ComputedStyle, DirtyBits};
 
     fn make_submit_doc() -> (Document, NodeId) {
         // <form action="/go" method="get">
@@ -1793,6 +1793,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: DirtyBits::CLEAN,
         }
     }
 

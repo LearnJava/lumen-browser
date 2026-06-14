@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+EE-4: Paint layer caching  branch: p1-ee4-paint-layer-cache
+Next step: merge to main after clippy/tests pass  STATUS-P1.md:71
 
 ---
 
