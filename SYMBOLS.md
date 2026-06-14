@@ -1018,7 +1018,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-js  (261 symbols)
+## lumen-js  (262 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1076,19 +1076,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/download_bindings.rs:61` **fn** `install_download_bindings` — Install the `_lumen_network_download(url, filename)` native binding
 `crates/js/src/element_internals.rs:10` **fn** `install_element_internals_bindings` — Install ElementInternals and CustomStateSet bindings into the JS context
 `crates/js/src/es2026_proposals.rs:24` **fn** `install_es2026_proposals` — Install all ES2026+ proposal shims into the given QuickJS context
-`crates/js/src/esm.rs:26` **type** `SharedPageUrl` — Shared, late-writable page URL used by `LumenResolver` to resolve relative
-`crates/js/src/esm.rs:33` **type** `ModuleRegistry` — Shared module source registry: specifier → source code
-`crates/js/src/esm.rs:36` **fn** `new_registry` — Creates an empty `ModuleRegistry`
-`crates/js/src/esm.rs:45` **struct** `ImportMap` — Import map: specifier mappings for bare specifiers and scoped paths
-`crates/js/src/esm.rs:57` **fn** `parse` — Parse an import map from a JSON string
-`crates/js/src/esm.rs:93` **fn** `resolve` — Resolve a specifier using this import map
-`crates/js/src/esm.rs:136` **struct** `LumenResolver` — URL resolver: normalises module specifiers into canonical keys for the registry
-`crates/js/src/esm.rs:146` **fn** `new` — Create a resolver; `page_url` is the initial fallback base (may be empty)
-`crates/js/src/esm.rs:155` **fn** `set_import_map` — Set the import map for this resolver
-`crates/js/src/esm.rs:169` **fn** `resolve_specifier` — Resolve `name` relative to `base` using simplified URL resolution rules
-`crates/js/src/esm.rs:225` **struct** `LumenLoader` — Module loader backed by `ModuleRegistry`
-`crates/js/src/esm.rs:234` **fn** `new` — Create a loader backed by `registry` with no declared module types
-`crates/js/src/esm.rs:240` **fn** `with_types` — Create a loader that also consults `types` for import-attribute
+`crates/js/src/esm.rs:27` **type** `SharedPageUrl` — Shared, late-writable page URL used by `LumenResolver` to resolve relative
+`crates/js/src/esm.rs:34` **type** `ModuleRegistry` — Shared module source registry: specifier → source code
+`crates/js/src/esm.rs:37` **fn** `new_registry` — Creates an empty `ModuleRegistry`
+`crates/js/src/esm.rs:46` **struct** `ImportMap` — Import map: specifier mappings for bare specifiers and scoped paths
+`crates/js/src/esm.rs:58` **fn** `parse` — Parse an import map from a JSON string
+`crates/js/src/esm.rs:94` **fn** `resolve` — Resolve a specifier using this import map
+`crates/js/src/esm.rs:137` **struct** `LumenResolver` — URL resolver: normalises module specifiers into canonical keys for the registry
+`crates/js/src/esm.rs:147` **fn** `new` — Create a resolver; `page_url` is the initial fallback base (may be empty)
+`crates/js/src/esm.rs:156` **fn** `set_import_map` — Set the import map for this resolver
+`crates/js/src/esm.rs:170` **fn** `resolve_specifier` — Resolve `name` relative to `base` using simplified URL resolution rules
+`crates/js/src/esm.rs:226` **struct** `LumenLoader` — Module loader backed by `ModuleRegistry`
+`crates/js/src/esm.rs:235` **fn** `new` — Create a loader backed by `registry` with no declared module types
+`crates/js/src/esm.rs:241` **fn** `with_types` — Create a loader that also consults `types` for import-attribute
 `crates/js/src/eye_dropper.rs:8` **fn** `install_eye_dropper_bindings`
 `crates/js/src/file_input.rs:17` **fn** `install_file_input_bindings` — Install File / FileList classes and `_lumen_deliver_file_list` into the JS context
 `crates/js/src/form_validation.rs:9` **fn** `install_form_validation_bindings` — Install Form Constraint Validation API bindings into the JS context
@@ -1119,53 +1119,54 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/import_attributes.rs:53` **type** `ModuleTypeRegistry` — Shared registry: resolved module specifier → declared module type
 `crates/js/src/import_attributes.rs:56` **fn** `new_type_registry` — Creates an empty [`ModuleTypeRegistry`]
 `crates/js/src/import_attributes.rs:306` **fn** `strip_import_attributes` — Strip `with { ... }` / `assert { ... }` import-attribute clauses from
+`crates/js/src/import_meta.rs:23` **fn** `transform_import_meta` — Transform `import.meta` in `source`, binding `url` as `.url`
 `crates/js/src/inert.rs:22` **fn** `install_inert_api` — Install `HTMLElement.prototype.inert` getter/setter into the JS context
 `crates/js/src/intl_bindings.rs:42` **fn** `install_intl_bindings` — Install the `Intl` shim into the JS context
 `crates/js/src/launch_handler.rs:14` **fn** `install_launch_handler_api` — Install Launch Handler API bindings into the JS context
-`crates/js/src/lib.rs:136` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:150` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:300` **fn** `new`
-`crates/js/src/lib.rs:374` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
-`crates/js/src/lib.rs:390` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
-`crates/js/src/lib.rs:400` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
-`crates/js/src/lib.rs:466` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:1217` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:1226` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:1243` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
-`crates/js/src/lib.rs:1286` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:1311` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
-`crates/js/src/lib.rs:1325` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:1350` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:1369` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:1379` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:1390` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
-`crates/js/src/lib.rs:1398` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
-`crates/js/src/lib.rs:1406` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:1415` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:1423` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
-`crates/js/src/lib.rs:1432` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:1441` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:1449` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:1458` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:1470` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:1479` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:1486` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
-`crates/js/src/lib.rs:1492` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
-`crates/js/src/lib.rs:1501` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:1512` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:1521` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
-`crates/js/src/lib.rs:1530` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:1539` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:1549` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:1567` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:1579` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
-`crates/js/src/lib.rs:1592` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
-`crates/js/src/lib.rs:1610` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
-`crates/js/src/lib.rs:1625` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
-`crates/js/src/lib.rs:1646` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
-`crates/js/src/lib.rs:1656` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
-`crates/js/src/lib.rs:1691` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
-`crates/js/src/lib.rs:1728` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
+`crates/js/src/lib.rs:137` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:151` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:301` **fn** `new`
+`crates/js/src/lib.rs:375` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
+`crates/js/src/lib.rs:391` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
+`crates/js/src/lib.rs:401` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
+`crates/js/src/lib.rs:471` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:1222` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:1231` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:1248` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
+`crates/js/src/lib.rs:1291` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:1316` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
+`crates/js/src/lib.rs:1330` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:1355` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:1374` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:1384` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:1395` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
+`crates/js/src/lib.rs:1403` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
+`crates/js/src/lib.rs:1411` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:1420` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:1428` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
+`crates/js/src/lib.rs:1437` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:1446` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:1454` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:1463` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:1475` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:1484` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:1491` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
+`crates/js/src/lib.rs:1497` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
+`crates/js/src/lib.rs:1506` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:1517` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:1526` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
+`crates/js/src/lib.rs:1535` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:1544` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:1554` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:1572` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:1584` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:1597` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
+`crates/js/src/lib.rs:1615` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
+`crates/js/src/lib.rs:1630` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
+`crates/js/src/lib.rs:1651` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
+`crates/js/src/lib.rs:1661` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
+`crates/js/src/lib.rs:1696` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
+`crates/js/src/lib.rs:1733` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
 `crates/js/src/local_font_access.rs:19` **fn** `install_local_font_access_api` — Install Local Font Access API shim into the JS context
 `crates/js/src/long_animation_frames.rs:24` **fn** `install_long_animation_frames_bindings` — Install Long Animation Frames API into the QuickJS context
 `crates/js/src/media_capabilities.rs:8` **fn** `install_media_capabilities_bindings` — Install Media Capabilities API bindings into the JS context
@@ -1940,7 +1941,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (268 symbols)
+## lumen-network  (269 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2015,15 +2016,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/dot.rs:159` **fn** `cloudflare` — Cloudflare `1.1.1.1:853` с SNI `one.one.one.one`
 `crates/network/src/dot.rs:167` **fn** `google` — Google Public DNS `8.8.8.8:853` с SNI `dns.google`
 `crates/network/src/dot.rs:175` **fn** `quad9` — Quad9 `9.9.9.9:853` с SNI `dns.quad9.net`
-`crates/network/src/filter/easylist.rs:73` **struct** `EasyListFilter` — EasyList-format `RequestFilter` implementation
-`crates/network/src/filter/easylist.rs:91` **fn** `parse` — Parse an EasyList-format text and return a filter
-`crates/network/src/filter/easylist.rs:100` **fn** `rule_count` — Number of block rules loaded
+`crates/network/src/filter/default_list.rs:25` **struct** `DefaultFilterList` — Bundled EasyList-format ruleset shipped inside the Lumen binary
+`crates/network/src/filter/easylist.rs:79` **struct** `EasyListFilter` — EasyList-format `RequestFilter` implementation
+`crates/network/src/filter/easylist.rs:97` **fn** `parse` — Parse an EasyList-format text and return a filter
+`crates/network/src/filter/easylist.rs:106` **fn** `rule_count` — Number of block rules loaded
 `crates/network/src/filter/hosts.rs:28` **struct** `HostsFilter` — Hosts-file `RequestFilter`
 `crates/network/src/filter/hosts.rs:34` **fn** `parse` — Parse a hosts-file text and return a filter
 `crates/network/src/filter/hosts.rs:73` **fn** `len` — Number of blocked hostnames
 `crates/network/src/filter/hosts.rs:78` **fn** `is_empty` — Returns `true` if the block list is empty
-`crates/network/src/filter/mod.rs:36` **struct** `CompositeFilter` — Chains multiple [`RequestFilter`] implementations
-`crates/network/src/filter/mod.rs:42` **fn** `new` — Create a composite filter from a list of inner filters
+`crates/network/src/filter/mod.rs:45` **struct** `CompositeFilter` — Chains multiple [`RequestFilter`] implementations
+`crates/network/src/filter/mod.rs:51` **fn** `new` — Create a composite filter from a list of inner filters
 `crates/network/src/h2/conn.rs:54` **type** `H2Response` — Decoded HTTP response from an H2 fetch: `(status, headers, body)`
 `crates/network/src/h2/conn.rs:103` **struct** `H2Conn` — Stateful HTTP/2 client connection
 `crates/network/src/h2/conn.rs:130` **fn** `connect` — Establish an HTTP/2 connection with Chrome-matching SETTINGS
@@ -2532,30 +2534,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (821 symbols)
+## lumen-shell  (835 symbols)
 
 `crates/shell/src/address_bar.rs:56` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:70` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
 `crates/shell/src/address_bar.rs:85` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
-`crates/shell/src/address_bar.rs:116` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
-`crates/shell/src/address_bar.rs:125` **fn** `label` — Основной текст строки dropdown
-`crates/shell/src/address_bar.rs:139` **fn** `sub_label` — Дополнительный текст под основным label
-`crates/shell/src/address_bar.rs:175` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
-`crates/shell/src/address_bar.rs:190` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
-`crates/shell/src/address_bar.rs:198` **fn** `close`
-`crates/shell/src/address_bar.rs:206` **fn** `is_open`
-`crates/shell/src/address_bar.rs:210` **fn** `input`
-`crates/shell/src/address_bar.rs:215` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
-`crates/shell/src/address_bar.rs:220` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
-`crates/shell/src/address_bar.rs:226` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
-`crates/shell/src/address_bar.rs:232` **fn** `select_next` — Перейти к следующей (вниз) подсказке
-`crates/shell/src/address_bar.rs:243` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
-`crates/shell/src/address_bar.rs:251` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
-`crates/shell/src/address_bar.rs:265` **fn** `backspace` — Backspace — удалить последний Unicode-символ
-`crates/shell/src/address_bar.rs:275` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
-`crates/shell/src/address_bar.rs:292` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
-`crates/shell/src/address_bar.rs:300` **struct** `BarOverlay` — Параметры для сборки overlay display list
-`crates/shell/src/address_bar.rs:308` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
+`crates/shell/src/address_bar.rs:125` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
+`crates/shell/src/address_bar.rs:134` **fn** `label` — Основной текст строки dropdown
+`crates/shell/src/address_bar.rs:148` **fn** `sub_label` — Дополнительный текст под основным label
+`crates/shell/src/address_bar.rs:186` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
+`crates/shell/src/address_bar.rs:201` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
+`crates/shell/src/address_bar.rs:209` **fn** `close`
+`crates/shell/src/address_bar.rs:217` **fn** `is_open`
+`crates/shell/src/address_bar.rs:221` **fn** `input`
+`crates/shell/src/address_bar.rs:226` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
+`crates/shell/src/address_bar.rs:231` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
+`crates/shell/src/address_bar.rs:237` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
+`crates/shell/src/address_bar.rs:243` **fn** `select_next` — Перейти к следующей (вниз) подсказке
+`crates/shell/src/address_bar.rs:254` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
+`crates/shell/src/address_bar.rs:262` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
+`crates/shell/src/address_bar.rs:276` **fn** `backspace` — Backspace — удалить последний Unicode-символ
+`crates/shell/src/address_bar.rs:286` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
+`crates/shell/src/address_bar.rs:303` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
+`crates/shell/src/address_bar.rs:311` **struct** `BarOverlay` — Параметры для сборки overlay display list
+`crates/shell/src/address_bar.rs:319` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
 `crates/shell/src/animation_scheduler.rs:49` **struct** `AnimationScheduler` — Планировщик CSS-анимаций. Хранит timing-состояние между кадрами
 `crates/shell/src/animation_scheduler.rs:54` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
@@ -2933,6 +2935,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/history_panel.rs:225` **enum** `HistoryHit` — Result of a click inside the history panel
 `crates/shell/src/panels/history_panel.rs:245` **fn** `hit_test` — Classify a click at `(mx, my)` in window-space CSS px
 `crates/shell/src/panels/history_panel.rs:297` **fn** `build_panel` — Build the panel display list
+`crates/shell/src/panels/note_viewer.rs:70` **enum** `NoteHit` — Which region of the overlay was hit by a mouse click
+`crates/shell/src/panels/note_viewer.rs:81` **struct** `NoteViewerPanel` — Floating overlay for displaying a single user annotation
+`crates/shell/src/panels/note_viewer.rs:96` **fn** `new` — Create a hidden panel with empty state
+`crates/shell/src/panels/note_viewer.rs:107` **fn** `open` — Show the panel populated with the given note data
+`crates/shell/src/panels/note_viewer.rs:116` **fn** `close` — Hide the panel (data is preserved for re-open)
+`crates/shell/src/panels/note_viewer.rs:121` **fn** `panel_height` — Total height of the overlay given the current content
+`crates/shell/src/panels/note_viewer.rs:129` **fn** `hit_test` — Hit-test a click at `(px, py)` in viewport coordinates
+`crates/shell/src/panels/note_viewer.rs:164` **fn** `build_note_viewer` — Build the display list for the note viewer overlay
 `crates/shell/src/panels/permission_panel.rs:58` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
 `crates/shell/src/panels/permission_panel.rs:79` **fn** `label` — Short display name for the permission row label
 `crates/shell/src/panels/permission_panel.rs:89` **fn** `icon` — Emoji icon shown to the left of the label
@@ -3098,11 +3108,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/tree_tabs.rs:140` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tree tabs panel
 `crates/shell/src/panels/tree_tabs.rs:179` **fn** `build_panel` — Build the display list for the tree-style tabs panel
 `crates/shell/src/panels/vertical_tabs.rs:54` **struct** `VerticalTabsPanel` — Vertical tabs panel: list of open tabs rendered as a left-docked sidebar
-`crates/shell/src/panels/vertical_tabs.rs:61` **fn** `new` — Create a new (hidden) panel
-`crates/shell/src/panels/vertical_tabs.rs:66` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
-`crates/shell/src/panels/vertical_tabs.rs:81` **enum** `VTabHit` — Result of a click inside the vertical tab panel area
-`crates/shell/src/panels/vertical_tabs.rs:95` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the vertical tabs panel
-`crates/shell/src/panels/vertical_tabs.rs:125` **fn** `build_panel` — Build the display list for the vertical tabs panel
+`crates/shell/src/panels/vertical_tabs.rs:66` **fn** `new` — Create a new (hidden) panel
+`crates/shell/src/panels/vertical_tabs.rs:71` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
+`crates/shell/src/panels/vertical_tabs.rs:79` **fn** `scroll_by` — Scroll the panel by `delta` CSS px (positive = down)
+`crates/shell/src/panels/vertical_tabs.rs:95` **enum** `VTabHit` — Result of a click inside the vertical tab panel area
+`crates/shell/src/panels/vertical_tabs.rs:110` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the vertical tabs panel
+`crates/shell/src/panels/vertical_tabs.rs:142` **fn** `build_tab_bar_vertical` — Build the display list for the vertical tabs panel with scroll support
 `crates/shell/src/panels/workspace_panel.rs:67` **struct** `WsEntry` — Lightweight workspace entry used for panel rendering (loaded from storage on
 `crates/shell/src/panels/workspace_panel.rs:80` **struct** `WorkspacePanel` — Workspace switcher panel state
 `crates/shell/src/panels/workspace_panel.rs:92` **fn** `new` — Create a new (hidden) panel with an empty workspace list
@@ -3312,40 +3323,45 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/groups.rs:81` **fn** `from_index` — Inverse of [`index`](GroupColor::index). Out-of-range indices clamp to
 `crates/shell/src/tabs/groups.rs:99` **struct** `TabGroup` — A named, colour-coded group of tabs
 `crates/shell/src/tabs/groups.rs:114` **fn** `new` — Create an expanded group with the given id, label and colour
-`crates/shell/src/tabs/strip.rs:76` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:119` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:134` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:154` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:162` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:185` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:205` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
-`crates/shell/src/tabs/strip.rs:217` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:225` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:237` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:247` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:257` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
-`crates/shell/src/tabs/strip.rs:276` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
-`crates/shell/src/tabs/strip.rs:286` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
-`crates/shell/src/tabs/strip.rs:297` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
-`crates/shell/src/tabs/strip.rs:324` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
-`crates/shell/src/tabs/strip.rs:349` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
-`crates/shell/src/tabs/strip.rs:375` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
-`crates/shell/src/tabs/strip.rs:384` **fn** `group` — Borrow the group with the given id, if it exists
-`crates/shell/src/tabs/strip.rs:390` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
-`crates/shell/src/tabs/strip.rs:398` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
-`crates/shell/src/tabs/strip.rs:412` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
-`crates/shell/src/tabs/strip.rs:420` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
-`crates/shell/src/tabs/strip.rs:431` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
-`crates/shell/src/tabs/strip.rs:437` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
-`crates/shell/src/tabs/strip.rs:443` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
-`crates/shell/src/tabs/strip.rs:454` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
-`crates/shell/src/tabs/strip.rs:470` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
-`crates/shell/src/tabs/strip.rs:494` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
-`crates/shell/src/tabs/strip.rs:508` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
-`crates/shell/src/tabs/strip.rs:520` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:540` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:577` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
-`crates/shell/src/tabs/strip.rs:750` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
+`crates/shell/src/tabs/strip.rs:81` **struct** `TabEntry` — Metadata for one browser tab
+`crates/shell/src/tabs/strip.rs:124` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:139` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:159` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:167` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:190` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:210` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:222` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:230` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:242` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:252` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:262` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
+`crates/shell/src/tabs/strip.rs:281` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
+`crates/shell/src/tabs/strip.rs:291` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
+`crates/shell/src/tabs/strip.rs:302` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
+`crates/shell/src/tabs/strip.rs:329` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
+`crates/shell/src/tabs/strip.rs:354` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
+`crates/shell/src/tabs/strip.rs:380` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
+`crates/shell/src/tabs/strip.rs:389` **fn** `group` — Borrow the group with the given id, if it exists
+`crates/shell/src/tabs/strip.rs:395` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
+`crates/shell/src/tabs/strip.rs:403` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
+`crates/shell/src/tabs/strip.rs:417` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
+`crates/shell/src/tabs/strip.rs:425` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
+`crates/shell/src/tabs/strip.rs:436` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
+`crates/shell/src/tabs/strip.rs:442` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
+`crates/shell/src/tabs/strip.rs:448` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
+`crates/shell/src/tabs/strip.rs:459` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
+`crates/shell/src/tabs/strip.rs:475` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
+`crates/shell/src/tabs/strip.rs:499` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
+`crates/shell/src/tabs/strip.rs:513` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
+`crates/shell/src/tabs/strip.rs:525` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:536` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
+`crates/shell/src/tabs/strip.rs:546` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
+`crates/shell/src/tabs/strip.rs:551` **fn** `as_str` — Serialize to a settings string
+`crates/shell/src/tabs/strip.rs:564` **fn** `hit_test_layout_btn` — Returns `true` if `(x, y)` falls inside the layout-mode toggle button
+`crates/shell/src/tabs/strip.rs:573` **fn** `build_layout_toggle_btn` — Build a display list for the vertical-tab layout toggle button
+`crates/shell/src/tabs/strip.rs:615` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:652` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:825` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -3356,7 +3372,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:31` **fn** `zoom_reset` — Reset zoom to 100%
 `crates/shell/src/zoom.rs:40` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
-## lumen-storage  (482 symbols)
+## lumen-storage  (484 symbols)
 
 `crates/storage/src/a11y_prefs.rs:38` **enum** `CursorSize` — Accessibility cursor magnification level
 `crates/storage/src/a11y_prefs.rs:50` **fn** `as_str` — Serialize to the storage string representation
@@ -3420,28 +3436,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/broadcast_channels.rs:174` **fn** `unregister` — `channel.close()` — снять регистрацию
 `crates/storage/src/broadcast_channels.rs:188` **fn** `unregister_context` — При закрытии вкладки — снять все регистрации этого context-а
 `crates/storage/src/broadcast_channels.rs:202` **fn** `count`
-`crates/storage/src/browser_settings.rs:41` **struct** `BrowserSettingsSnapshot` — All browser settings in a single value type for easy read/write
-`crates/storage/src/browser_settings.rs:76` **struct** `BrowserSettings` — Persistent settings store
-`crates/storage/src/browser_settings.rs:99` **fn** `open` — Open (or create) an on-disk settings database
-`crates/storage/src/browser_settings.rs:105` **fn** `open_in_memory` — Create an in-memory settings database (for tests / ephemeral sessions)
-`crates/storage/src/browser_settings.rs:165` **fn** `homepage` — Homepage / new-tab URL
-`crates/storage/src/browser_settings.rs:170` **fn** `set_homepage` — Set homepage URL
-`crates/storage/src/browser_settings.rs:175` **fn** `search_engine_id` — ID of the default search engine (`SearchProviderEntry::id`)
-`crates/storage/src/browser_settings.rs:180` **fn** `set_search_engine_id` — Set default search engine ID
-`crates/storage/src/browser_settings.rs:185` **fn** `shields_enabled` — Whether shields (tracker blocker) are globally enabled
-`crates/storage/src/browser_settings.rs:190` **fn** `set_shields_enabled` — Set shields on/off
-`crates/storage/src/browser_settings.rs:195` **fn** `fingerprint_mode` — Fingerprint resistance mode: `"standard"`, `"strict"`, or `"off"`
-`crates/storage/src/browser_settings.rs:200` **fn** `set_fingerprint_mode` — Set fingerprint resistance mode
-`crates/storage/src/browser_settings.rs:205` **fn** `doh_enabled` — Whether DNS-over-HTTPS is enabled
-`crates/storage/src/browser_settings.rs:210` **fn** `set_doh_enabled` — Set DNS-over-HTTPS on/off
-`crates/storage/src/browser_settings.rs:215` **fn** `font_size` — Base font size in CSS px (e.g. 16.0)
-`crates/storage/src/browser_settings.rs:220` **fn** `set_font_size` — Set base font size
-`crates/storage/src/browser_settings.rs:225` **fn** `theme` — UI theme: `"dark"`, `"light"`, or `"system"`
-`crates/storage/src/browser_settings.rs:230` **fn** `set_theme` — Set UI theme
-`crates/storage/src/browser_settings.rs:235` **fn** `download_path` — Absolute path to the default download directory. Empty = OS default
-`crates/storage/src/browser_settings.rs:240` **fn** `set_download_path` — Set default download directory path
-`crates/storage/src/browser_settings.rs:245` **fn** `snapshot` — Read all settings into a snapshot value
-`crates/storage/src/browser_settings.rs:259` **fn** `apply_snapshot` — Persist all fields from a snapshot in one call
+`crates/storage/src/browser_settings.rs:43` **struct** `BrowserSettingsSnapshot` — All browser settings in a single value type for easy read/write
+`crates/storage/src/browser_settings.rs:83` **struct** `BrowserSettings` — Persistent settings store
+`crates/storage/src/browser_settings.rs:106` **fn** `open` — Open (or create) an on-disk settings database
+`crates/storage/src/browser_settings.rs:112` **fn** `open_in_memory` — Create an in-memory settings database (for tests / ephemeral sessions)
+`crates/storage/src/browser_settings.rs:172` **fn** `homepage` — Homepage / new-tab URL
+`crates/storage/src/browser_settings.rs:177` **fn** `set_homepage` — Set homepage URL
+`crates/storage/src/browser_settings.rs:182` **fn** `search_engine_id` — ID of the default search engine (`SearchProviderEntry::id`)
+`crates/storage/src/browser_settings.rs:187` **fn** `set_search_engine_id` — Set default search engine ID
+`crates/storage/src/browser_settings.rs:192` **fn** `shields_enabled` — Whether shields (tracker blocker) are globally enabled
+`crates/storage/src/browser_settings.rs:197` **fn** `set_shields_enabled` — Set shields on/off
+`crates/storage/src/browser_settings.rs:202` **fn** `fingerprint_mode` — Fingerprint resistance mode: `"standard"`, `"strict"`, or `"off"`
+`crates/storage/src/browser_settings.rs:207` **fn** `set_fingerprint_mode` — Set fingerprint resistance mode
+`crates/storage/src/browser_settings.rs:212` **fn** `doh_enabled` — Whether DNS-over-HTTPS is enabled
+`crates/storage/src/browser_settings.rs:217` **fn** `set_doh_enabled` — Set DNS-over-HTTPS on/off
+`crates/storage/src/browser_settings.rs:222` **fn** `font_size` — Base font size in CSS px (e.g. 16.0)
+`crates/storage/src/browser_settings.rs:227` **fn** `set_font_size` — Set base font size
+`crates/storage/src/browser_settings.rs:232` **fn** `theme` — UI theme: `"dark"`, `"light"`, or `"system"`
+`crates/storage/src/browser_settings.rs:237` **fn** `set_theme` — Set UI theme
+`crates/storage/src/browser_settings.rs:242` **fn** `download_path` — Absolute path to the default download directory. Empty = OS default
+`crates/storage/src/browser_settings.rs:247` **fn** `set_download_path` — Set default download directory path
+`crates/storage/src/browser_settings.rs:252` **fn** `tab_layout` — Tab layout mode: `"horizontal"` or `"vertical"` (GG-4)
+`crates/storage/src/browser_settings.rs:257` **fn** `set_tab_layout` — Set tab layout mode
+`crates/storage/src/browser_settings.rs:262` **fn** `snapshot` — Read all settings into a snapshot value
+`crates/storage/src/browser_settings.rs:277` **fn** `apply_snapshot` — Persist all fields from a snapshot in one call
 `crates/storage/src/cache_storage.rs:19` **struct** `CachedEntry`
 `crates/storage/src/cache_storage.rs:30` **struct** `CacheStorage`
 `crates/storage/src/cache_storage.rs:41` **fn** `open`
@@ -3800,22 +3818,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/tab_sessions.rs:260` **fn** `delete_snapshot` — Удалить snapshot (cascade удаляет все его вкладки через FK)
 `crates/storage/src/tab_sessions.rs:274` **fn** `delete_tab` — Удалить одну вкладку
 `crates/storage/src/tab_sessions.rs:285` **fn** `snapshot_count` — Число snapshot-ов
-`crates/storage/src/tab_snapshot.rs:75` **struct** `HibernatedTabData` — All data stored on disk for a hibernated tab
-`crates/storage/src/tab_snapshot.rs:100` **struct** `TabSnapshotStore` — SQLite-backed store for hibernated tab snapshots
-`crates/storage/src/tab_snapshot.rs:112` **fn** `open_in_memory` — Open an in-memory store (data is lost when the process exits)
-`crates/storage/src/tab_snapshot.rs:119` **fn** `open` — Open a persistent on-disk store at `path`
-`crates/storage/src/tab_snapshot.rs:147` **fn** `store` — Persist a hibernated tab snapshot.  Overwrites any previous entry for
-`crates/storage/src/tab_snapshot.rs:171` **fn** `fetch` — Load the hibernated snapshot for `tab_id`
-`crates/storage/src/tab_snapshot.rs:202` **fn** `delete` — Remove the snapshot for `tab_id` (called after successful restore)
-`crates/storage/src/tab_snapshot.rs:213` **fn** `exists` — Returns `true` if a snapshot exists for `tab_id`
-`crates/storage/src/tab_snapshot.rs:243` **struct** `T2SleepData` — Snapshot data persisted when a tab enters T2 (BackgroundOld)
-`crates/storage/src/tab_snapshot.rs:265` **struct** `SleepingTabStore` — SQLite-backed store for T2 (BackgroundOld) tab checkpoints
-`crates/storage/src/tab_snapshot.rs:277` **fn** `open_in_memory` — Open an in-memory store (data lost on process exit)
-`crates/storage/src/tab_snapshot.rs:284` **fn** `open` — Open a persistent on-disk store at `path`
-`crates/storage/src/tab_snapshot.rs:311` **fn** `store` — Persist a T2 checkpoint.  Overwrites any previous entry for the same tab
-`crates/storage/src/tab_snapshot.rs:334` **fn** `fetch` — Load the T2 checkpoint for `tab_id`
-`crates/storage/src/tab_snapshot.rs:356` **fn** `delete` — Remove the checkpoint for `tab_id` (called after successful restore or close)
-`crates/storage/src/tab_snapshot.rs:364` **fn** `exists` — Returns `true` if a checkpoint exists for `tab_id`
+`crates/storage/src/tab_snapshot.rs:95` **struct** `HibernatedTabData` — All data stored on disk for a hibernated tab
+`crates/storage/src/tab_snapshot.rs:120` **struct** `TabSnapshotStore` — SQLite-backed store for hibernated tab snapshots
+`crates/storage/src/tab_snapshot.rs:132` **fn** `open_in_memory` — Open an in-memory store (data is lost when the process exits)
+`crates/storage/src/tab_snapshot.rs:139` **fn** `open` — Open a persistent on-disk store at `path`
+`crates/storage/src/tab_snapshot.rs:167` **fn** `store` — Persist a hibernated tab snapshot.  Overwrites any previous entry for
+`crates/storage/src/tab_snapshot.rs:191` **fn** `fetch` — Load the hibernated snapshot for `tab_id`
+`crates/storage/src/tab_snapshot.rs:222` **fn** `delete` — Remove the snapshot for `tab_id` (called after successful restore)
+`crates/storage/src/tab_snapshot.rs:233` **fn** `exists` — Returns `true` if a snapshot exists for `tab_id`
+`crates/storage/src/tab_snapshot.rs:263` **struct** `T2SleepData` — Snapshot data persisted when a tab enters T2 (BackgroundOld)
+`crates/storage/src/tab_snapshot.rs:285` **struct** `SleepingTabStore` — SQLite-backed store for T2 (BackgroundOld) tab checkpoints
+`crates/storage/src/tab_snapshot.rs:297` **fn** `open_in_memory` — Open an in-memory store (data lost on process exit)
+`crates/storage/src/tab_snapshot.rs:304` **fn** `open` — Open a persistent on-disk store at `path`
+`crates/storage/src/tab_snapshot.rs:340` **fn** `store` — Persist a T2 checkpoint.  Overwrites any previous entry for the same tab
+`crates/storage/src/tab_snapshot.rs:367` **fn** `fetch` — Load the T2 checkpoint for `tab_id`
+`crates/storage/src/tab_snapshot.rs:406` **fn** `delete` — Remove the checkpoint for `tab_id` (called after successful restore or close)
+`crates/storage/src/tab_snapshot.rs:414` **fn** `exists` — Returns `true` if a checkpoint exists for `tab_id`
 `crates/storage/src/web_manifest.rs:14` **struct** `WebManifest`
 `crates/storage/src/web_manifest.rs:25` **struct** `WebManifests`
 `crates/storage/src/web_manifest.rs:36` **fn** `open`
@@ -3842,4 +3860,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3777 symbols in 20 crates*
+*Total: 3795 symbols in 20 crates*
