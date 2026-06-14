@@ -181,6 +181,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('116', '116-gradient-interpolation.html', 0.5, 'CSS Images L4 §3.1: gradient color-interpolation-method (`in <space>`) — одинаковый red→blue линейный градиент в srgb/srgb-linear/oklab/lab/hsl; Lumen дробит список стопов через color-mix-математику, рендерер лерпит плотные стопы в sRGB; середины полос заметно различаются по пространству'),
     ('117', '117-quotes.html', 0.5, 'CSS Generated Content L3 §3.2: quotes + content open-quote/close-quote — auto curly quotes, вложенные <q> (primary “”→secondary ‘’), кастомные пары « » / ‹ ›, quotes:none без знаков; глубина вложенности считается в document order через counters pre-pass'),
     ('118', '118-media-hover-pointer.html', 0.5, 'Media Queries L4 §5.3-5.6: hover/any-hover/pointer/any-pointer — на десктопе (мышь) matched-свотчи (hover:hover, any-hover:hover, pointer:fine, any-pointer:fine) зелёные, no-match (hover:none, pointer:coarse) остаются красными'),
+    ('119', '119-paint-order.html', 0.5, 'CSS Fill & Stroke L3 §6 / SVG2 §13.7: paint-order — thick-stroked <path> с centred stroke; верхний ряд normal (полная ширина обводки поверх заливки), нижний paint-order:stroke (заливка поверх обводки → видимая обводка вдвое тоньше, заливка крупнее)'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
