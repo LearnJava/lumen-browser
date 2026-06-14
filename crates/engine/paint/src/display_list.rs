@@ -1836,6 +1836,42 @@ pub fn split_at_page_breaks(cmds: Vec<DisplayCommand>) -> Vec<Vec<DisplayCommand
     pages
 }
 
+/// Removes background-graphics paint commands from each print page when the
+/// user disabled "Background graphics" in the print dialog (CC-8).
+///
+/// Mirrors Chrome's "Background graphics" print toggle: when `print_backgrounds`
+/// is `false`, the CSS-background paint family is stripped — solid background
+/// fills (`FillRect`, `FillRoundedRect`), `background-image`s, and the three
+/// gradient kinds (linear/radial/conic). Foreground content — text, borders,
+/// outlines, `<img>` raster images, and SVG paths — is preserved.
+///
+/// No-op when `print_backgrounds` is `true`. Operates in place, page by page;
+/// `Push*`/`Pop*` nesting stays balanced because only leaf paint commands are
+/// removed.
+pub fn strip_background_graphics(pages: &mut [Vec<DisplayCommand>], print_backgrounds: bool) {
+    if print_backgrounds {
+        return;
+    }
+    for page in pages.iter_mut() {
+        page.retain(|cmd| !is_background_graphic(cmd));
+    }
+}
+
+/// Classifies a [`DisplayCommand`] as a CSS background-graphics paint op —
+/// the set removed when "Background graphics" is off (see
+/// [`strip_background_graphics`]).
+fn is_background_graphic(cmd: &DisplayCommand) -> bool {
+    matches!(
+        cmd,
+        DisplayCommand::FillRect { .. }
+            | DisplayCommand::FillRoundedRect { .. }
+            | DisplayCommand::DrawBackgroundImage { .. }
+            | DisplayCommand::DrawLinearGradient { .. }
+            | DisplayCommand::DrawRadialGradient { .. }
+            | DisplayCommand::DrawConicGradient { .. }
+    )
+}
+
 #[derive(Default, Clone)]
 struct ScBucket {
     /// PushOpacity / PushBlendMode / PushClipRect — открывают layer-effects
@@ -11126,6 +11162,89 @@ mod tests {
     fn print_dl_empty_pages() {
         let cmds = build_print_display_list(&[]);
         assert!(cmds.is_empty());
+    }
+
+    // ── strip_background_graphics (CC-8) ────────────────────────────────────
+
+    /// `print_backgrounds = true` is a no-op: every command survives.
+    #[test]
+    fn strip_bg_keeps_all_when_enabled() {
+        use lumen_core::geom::Rect;
+        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
+        let mut pages = vec![vec![
+            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
+            DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
+        ]];
+        strip_background_graphics(&mut pages, true);
+        assert_eq!(pages[0].len(), 2);
+    }
+
+    /// `print_backgrounds = false` removes solid background fills + gradients +
+    /// background images, but keeps text, borders and `<img>` foreground.
+    #[test]
+    fn strip_bg_removes_background_family_when_disabled() {
+        use lumen_core::geom::Rect;
+        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
+        let mut pages = vec![vec![
+            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
+            DisplayCommand::FillRoundedRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 }, radii: CornerRadii::default() },
+            DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
+            DisplayCommand::DrawRadialGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, stops: vec![], repeating: false },
+            DisplayCommand::DrawConicGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, from_angle_deg: 0.0, stops: vec![], repeating: false },
+            DisplayCommand::DrawBackgroundImage {
+                rect: r, origin_rect: r, src: "bg.png".to_owned(),
+                size: BackgroundSize::Auto, position: ObjectPosition::default(),
+                repeat: BackgroundRepeat::default(), image_rendering: ImageRendering::Auto,
+            },
+            DisplayCommand::DrawText {
+                rect: r, text: "hi".to_owned(), font_size: 12.0,
+                color: Color { r: 0, g: 0, b: 0, a: 255 }, font_family: vec![],
+                font_weight: FontWeight::NORMAL, font_style: FontStyle::Normal,
+                font_variation_axes: vec![], tab_size: 0.0, highlight_name: None,
+            },
+            DisplayCommand::DrawImage {
+                rect: r, src: "img.png".to_owned(), alt: String::new(),
+                object_fit: ObjectFit::Fill, object_position: ObjectPosition::default(),
+                image_rendering: ImageRendering::Auto,
+            },
+        ]];
+        strip_background_graphics(&mut pages, false);
+        assert_eq!(pages[0].len(), 2, "only DrawText + DrawImage survive");
+        assert!(matches!(pages[0][0], DisplayCommand::DrawText { .. }));
+        assert!(matches!(pages[0][1], DisplayCommand::DrawImage { .. }));
+    }
+
+    /// Filtering is applied per page across a multi-page job and keeps
+    /// `Push*`/`Pop*` nesting balanced (only leaf fills are dropped).
+    #[test]
+    fn strip_bg_per_page_and_balanced_nesting() {
+        use lumen_core::geom::Rect;
+        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
+        let mut pages = vec![
+            vec![
+                DisplayCommand::PushClipRect { rect: r },
+                DisplayCommand::FillRect { rect: r, color: Color { r: 9, g: 9, b: 9, a: 255 } },
+                DisplayCommand::PopClip,
+            ],
+            vec![
+                DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 1, b: 1, a: 255 } },
+            ],
+        ];
+        strip_background_graphics(&mut pages, false);
+        // Page 0: clip push/pop remain, the fill between them is gone.
+        assert_eq!(pages[0].len(), 2);
+        assert!(matches!(pages[0][0], DisplayCommand::PushClipRect { .. }));
+        assert!(matches!(pages[0][1], DisplayCommand::PopClip));
+        // Page 1: lone background fill removed → empty.
+        assert!(pages[1].is_empty());
+    }
+
+    /// Empty input slice is handled without panicking.
+    #[test]
+    fn strip_bg_empty_pages_noop() {
+        let mut pages: Vec<Vec<DisplayCommand>> = vec![];
+        strip_background_graphics(&mut pages, false);
+        assert!(pages.is_empty());
     }
 
     /// build_print_display_list on two pages inserts exactly one PageBreak.

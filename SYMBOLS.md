@@ -1871,11 +1871,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:9966` **fn** `parse_length`
 `crates/engine/layout/src/style.rs:13453` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
 `crates/engine/layout/src/style.rs:15465` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
-`crates/engine/layout/src/style.rs:16540` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
-`crates/engine/layout/src/style.rs:16620` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:16972` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:17604` **fn** `parse_color`
-`crates/engine/layout/src/style.rs:17767` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style.rs:16545` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:16625` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
+`crates/engine/layout/src/style.rs:16977` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:17609` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:17772` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/subgrid.rs:24` **struct** `SubgridContext` — Resolved track sizes and cumulative offsets for one grid axis (columns or rows)
 `crates/engine/layout/src/subgrid.rs:35` **fn** `from_parent_tracks` — Build from a slice of parent track sizes and the gap value used between them
 `crates/engine/layout/src/subgrid.rs:46` **fn** `total_size` — Total span width/height occupied by all inherited tracks (including inter-track gaps)
@@ -2190,7 +2190,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (301 symbols)
+## lumen-paint  (302 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -2313,10 +2313,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:1708` **fn** `build_display_list_ordered_with_anim_dpr` — Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
 `crates/engine/paint/src/display_list.rs:1762` **fn** `build_print_display_list` — Builds a print display list from paginated layout
 `crates/engine/paint/src/display_list.rs:1824` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
-`crates/engine/paint/src/display_list.rs:2812` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
-`crates/engine/paint/src/display_list.rs:2941` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/display_list.rs:3665` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:12518` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:1851` **fn** `strip_background_graphics` — Removes background-graphics paint commands from each print page when the
+`crates/engine/paint/src/display_list.rs:2848` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
+`crates/engine/paint/src/display_list.rs:2977` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
+`crates/engine/paint/src/display_list.rs:3701` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
+`crates/engine/paint/src/display_list.rs:12637` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/fingerprint.rs:21` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
 `crates/engine/paint/src/fingerprint.rs:36` **fn** `from_adapter_info` — Create normalized GPU fingerprint from wgpu adapter info
 `crates/engine/paint/src/fingerprint.rs:44` **fn** `vendor` — Vendor string: always "WebKit"
@@ -2366,14 +2367,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:218` **fn** `sync_promoted_layers` — Remove promoted layers for nodes NOT in `current_nodes`
 `crates/engine/paint/src/layer_cache.rs:231` **fn** `promoted_count` — Number of nodes currently promoted to their own GPU layer
 `crates/engine/paint/src/layer_cache.rs:240` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:95` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:109` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/lib.rs:294` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:304` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:318` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:332` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:348` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:363` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:96` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:110` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/lib.rs:295` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:305` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:319` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:333` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:349` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:364` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
@@ -2927,15 +2928,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/print_panel.rs:108` **enum** `ColorMode` — Output colour mode for the print job
 `crates/shell/src/panels/print_panel.rs:117` **enum** `PrintField` — Which editable text field currently has keyboard focus in the print panel
 `crates/shell/src/panels/print_panel.rs:131` **struct** `PrintPanel` — Print dialog panel state
-`crates/shell/src/panels/print_panel.rs:154` **fn** `new` — Create a new hidden panel with default print settings
-`crates/shell/src/panels/print_panel.rs:169` **fn** `toggle` — Toggle panel visibility; clears the active editing field on hide
-`crates/shell/src/panels/print_panel.rs:177` **fn** `close` — Hide the panel and clear the editing field
-`crates/shell/src/panels/print_panel.rs:183` **fn** `push_char` — Append a character to the currently focused text field
-`crates/shell/src/panels/print_panel.rs:192` **fn** `pop_char` — Delete the last character from the currently focused text field
-`crates/shell/src/panels/print_panel.rs:203` **fn** `margin_px` — Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI
-`crates/shell/src/panels/print_panel.rs:222` **enum** `PrintHit` — Result of a click on (or near) the print panel
-`crates/shell/src/panels/print_panel.rs:265` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
-`crates/shell/src/panels/print_panel.rs:403` **fn** `build_panel` — Build the centred print dialog overlay
+`crates/shell/src/panels/print_panel.rs:158` **fn** `new` — Create a new hidden panel with default print settings
+`crates/shell/src/panels/print_panel.rs:174` **fn** `toggle` — Toggle panel visibility; clears the active editing field on hide
+`crates/shell/src/panels/print_panel.rs:182` **fn** `close` — Hide the panel and clear the editing field
+`crates/shell/src/panels/print_panel.rs:188` **fn** `push_char` — Append a character to the currently focused text field
+`crates/shell/src/panels/print_panel.rs:197` **fn** `pop_char` — Delete the last character from the currently focused text field
+`crates/shell/src/panels/print_panel.rs:208` **fn** `margin_px` — Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI
+`crates/shell/src/panels/print_panel.rs:227` **enum** `PrintHit` — Result of a click on (or near) the print panel
+`crates/shell/src/panels/print_panel.rs:272` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
+`crates/shell/src/panels/print_panel.rs:425` **fn** `build_panel` — Build the centred print dialog overlay
 `crates/shell/src/panels/privacy_panel.rs:79` **fn** `list_body_height` — Height in CSS px of the scrollable request-list area, given the full window
 `crates/shell/src/panels/privacy_panel.rs:88` **struct** `PrivacyPanel` — Privacy network panel (V5). Holds a snapshot of the shared [`NetworkLog`] and
 `crates/shell/src/panels/privacy_panel.rs:104` **fn** `new` — Create a new hidden panel backed by the given shared `log`
@@ -3573,11 +3574,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/plugins.rs:211` **fn** `list_enabled` — Только enabled-плагины — для runtime-loading
 `crates/storage/src/plugins.rs:233` **fn** `uninstall`
 `crates/storage/src/plugins.rs:243` **fn** `count`
-`crates/storage/src/print_prefs.rs:43` **struct** `PrintPrefsSnapshot` — All print preferences as a copyable value type
-`crates/storage/src/print_prefs.rs:81` **struct** `PrintPrefs` — Print preferences backed by SQLite
-`crates/storage/src/print_prefs.rs:93` **fn** `open` — Open (or create) the SQLite store for print preferences
-`crates/storage/src/print_prefs.rs:114` **fn** `load_snapshot` — Load the current snapshot of all print preferences
-`crates/storage/src/print_prefs.rs:135` **fn** `save_snapshot` — Persist a snapshot of print preferences to the database
+`crates/storage/src/print_prefs.rs:45` **struct** `PrintPrefsSnapshot` — All print preferences as a copyable value type
+`crates/storage/src/print_prefs.rs:87` **struct** `PrintPrefs` — Print preferences backed by SQLite
+`crates/storage/src/print_prefs.rs:99` **fn** `open` — Open (or create) the SQLite store for print preferences
+`crates/storage/src/print_prefs.rs:120` **fn** `load_snapshot` — Load the current snapshot of all print preferences
+`crates/storage/src/print_prefs.rs:146` **fn** `save_snapshot` — Persist a snapshot of print preferences to the database
 `crates/storage/src/profiles.rs:25` **struct** `Profile` — Один профиль пользователя
 `crates/storage/src/profiles.rs:38` **struct** `ProfileRegistry`
 `crates/storage/src/profiles.rs:49` **fn** `open`
@@ -3787,4 +3788,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3722 symbols in 20 crates*
+*Total: 3723 symbols in 20 crates*
