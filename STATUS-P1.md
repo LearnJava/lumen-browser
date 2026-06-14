@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH1-4: Network service в отдельном процессе  branch: p1-ph1-4-network-service
-Next step: создать lumen-ipc крейт (IpcChannel + messages) → crates/ipc/src/lib.rs
+—
 
 ---
 
@@ -17,7 +16,6 @@ Next step: создать lumen-ipc крейт (IpcChannel + messages) → crate
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PH1-4 | **Network service в отдельном процессе** — IPC с shell-ом, fetch в отдельном process | L | `lumen-network`, `lumen-shell` |
 | PH1-5 | **Packages для Linux / macOS / Windows** — бинарные дистрибутивы; CI pipeline (GitHub Actions) | M | infrastructure |
 | PH1-6 | **Stacking contexts + CSS Painting Order** (CSS 2.1 Appendix E) — модель stacking-ов в layout; z-index детерминированный; сейчас paint в порядке DOM-обхода | L | `lumen-layout` |
 | PH1-7 | **Compositor thread + Property Trees** — `TransformTree/ScrollTree/EffectTree/ClipTree` на отдельном thread, off-main-thread scroll; P1 строит property trees от style/layout, P2 compositor pipeline + GPU | L | `lumen-layout`, `lumen-paint` |
@@ -57,6 +55,7 @@ Next step: создать lumen-ipc крейт (IpcChannel + messages) → crate
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH1-4: Network service в отдельном процессе | `lumen-ipc` крейт (IpcChannel/IpcServer/IpcClient, 4 теста); `RemoteNetworkTransport`; `lumen-network-service` бинарник; shell `--network-service` флаг + `NetworkServiceHandle::spawn()`. |
 | 2026-06-15 | PH1-15: T1 (paused) | `pause_event_loop()`/`unpause_event_loop()` в `PersistentJs`; `QuickPersistentJs` делегирует `set_document_visibility()`; вызовы в `switch_tab` (T0→T1 и T1→T0); 6 тестов. |
 | 2026-06-15 | PH1-2: Progressive / streaming rendering pipeline | 60 Hz throttle (16 мс); `LoadEvent::CssLoaded`; `load_css_for_streaming()`; параллельная загрузка CSS из EarlyPreloadHints; `stream_sheet` накапливает CSS для промежуточных кадров; 3 unit-теста. |
 | 2026-06-14 | JJ-phase5: Modern HTML5 APIs Phase 5 | `checkVisibility(opts?)` (W3C Viewport API §4.1), `setHTMLUnsafe(html)`, `getHTML(opts?)` (WHATWG HTML LS §14.5), `moveBefore(node, child?)` (DOM LS / Chrome 133+); 11 тестов; 2014 всего в lumen-js. |
