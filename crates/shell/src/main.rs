@@ -10001,14 +10001,30 @@ impl Lumen {
                         });
                     }
                 }
-                // FTS5 по истории страниц (до 4 строк, итого ≤ 8).
-                if let Ok(hits) = self.history_fts.search(query, 4) {
+                // URL/title substring match по history_store (до 5 строк).
+                // Даёт результаты по URL-фрагменту даже без FTS5-индекса.
+                if let Ok(hits) = self.history_store.search_prefix(query, 5) {
                     for hit in hits {
                         suggestions.push(OmniboxSuggestion::HistoryFts {
                             url: hit.url,
                             title: hit.title,
-                            snippet: hit.snippet,
+                            snippet: String::new(),
                         });
+                    }
+                }
+                // FTS5 по истории страниц (до 4 строк, итого ≤ 8).
+                if let Ok(hits) = self.history_fts.search(query, 4) {
+                    for hit in hits {
+                        // Дедупликация: FTS5 может повторить URL из search_prefix выше.
+                        if !suggestions.iter().any(|s| {
+                            matches!(s, OmniboxSuggestion::HistoryFts { url, .. } if url == &hit.url)
+                        }) {
+                            suggestions.push(OmniboxSuggestion::HistoryFts {
+                                url: hit.url,
+                                title: hit.title,
+                                snippet: hit.snippet,
+                            });
+                        }
                     }
                 }
             }

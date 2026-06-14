@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+CC-10: Omnibox autocomplete Phase 1  branch: p1-cc10-omnibox-autocomplete
+Next step: add History::search_prefix  storage/src/history.rs:209
 
 ---
 
