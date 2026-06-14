@@ -241,6 +241,7 @@ fn make_anonymous_box_with_style(style: crate::style::ComputedStyle) -> LayoutBo
         svg_group_transform: None,
         scroll_x: 0.0,
         scroll_y: 0.0,
+        dirty: Default::default(),
     }
 }
 

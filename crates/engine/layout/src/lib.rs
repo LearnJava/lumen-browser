@@ -18,6 +18,7 @@ pub mod anchor;
 pub mod animation;
 pub mod box_tree;
 pub mod color_mix;
+pub mod incremental;
 pub mod content_visibility;
 pub mod field_sizing;
 pub mod hyphenation;
@@ -71,9 +72,10 @@ pub use animation::{
 pub use box_tree::{
     apply_container_styles, build_iframe_document,
     collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
-    layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
+    layout_measured_hyp, lay_out_incremental, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, ViewBox,
 };
+pub use incremental::{DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{

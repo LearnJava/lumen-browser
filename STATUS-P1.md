@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+EE-3: Layout invalidation subtree ratchet  branch: p1-ee3-incremental-layout
+Next step: create incremental.rs + add DirtyBits to LayoutBox  crates/engine/layout/src/incremental.rs
 
 ---
 

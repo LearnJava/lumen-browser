@@ -35,6 +35,12 @@ use crate::anchor::{collect_anchors, InsetAreaKeyword};
 use crate::field_sizing::field_sizing_content_intrinsic;
 use crate::style::FieldSizing;
 use crate::TextMeasurer;
+use std::cell::Cell;
+
+// EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.
+thread_local! {
+    static INCREMENTAL_LAYOUT_MODE: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Layout-side gutter width for `scrollbar-width: auto` in CSS px.
 ///
@@ -954,7 +960,7 @@ fn process_svg_node(
                     },
                     svg_transform: svg_transform.clone(),
                 },
-                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
@@ -970,7 +976,7 @@ fn process_svg_node(
                     },
                     svg_transform: svg_transform.clone(),
                 },
-                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
         }
@@ -986,7 +992,7 @@ fn process_svg_node(
                     },
                     svg_transform: svg_transform.clone(),
                 },
-                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
         }
@@ -1002,7 +1008,7 @@ fn process_svg_node(
                     },
                     svg_transform: svg_transform.clone(),
                 },
-                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
         }
@@ -1011,7 +1017,7 @@ fn process_svg_node(
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
-                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
         }
@@ -1032,7 +1038,7 @@ fn process_svg_node(
                     dominant_baseline,
                     svg_transform: svg_transform.clone(),
                 },
-                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             // Recurse for potential nested text/tspan/textPath elements.
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
@@ -1045,7 +1051,7 @@ fn process_svg_node(
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::Block,
-                children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0,
+                children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
         }
         "use" => {
@@ -1097,7 +1103,7 @@ fn process_svg_node(
                     kind: BoxKind::Block,
                     children: use_children, col_span: 1, row_span: 1,
                     svg_group_transform: Some(combined),
-                    scroll_x: 0.0, scroll_y: 0.0,
+                    scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 });
             }
         }
@@ -1444,6 +1450,10 @@ pub struct LayoutBox {
     pub scroll_x: f32,
     /// Vertical scroll offset in CSS px. Same semantics as `scroll_x`.
     pub scroll_y: f32,
+    /// Incremental-layout dirty flags (EE-3). Only consulted during
+    /// `lay_out_incremental` passes — normal `lay_out` ignores this field.
+    /// Set via `mark_dirty`; cleared via `clear_dirty` / `lay_out_incremental`.
+    pub dirty: crate::incremental::DirtyBits,
 }
 
 /// Отрезок inline-контента с собственным стилем (до layout).
@@ -1863,7 +1873,7 @@ fn extract_first_letter_float(
             kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
             children: vec![],
             col_span: 1,
-            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
         };
         let mut outer_style = fl_style.clone();
         outer_style.display = Display::Block;
@@ -1875,7 +1885,7 @@ fn extract_first_letter_float(
             kind: BoxKind::Block,
             children: vec![inner],
             col_span: 1,
-            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
         });
     }
     None
@@ -2141,6 +2151,7 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
         // Reuse the original box as the first-line box.
         child.style = *fls;
@@ -2220,6 +2231,38 @@ pub fn layout_measured_hyp(
     // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
     split_first_line_boxes(&mut root);
     root
+}
+
+/// Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones.
+///
+/// `root` must be a previously laid-out `LayoutBox` (from `layout_measured_hyp`).
+/// Call [`crate::incremental::mark_dirty`] on changed nodes first.
+///
+/// Internally enables [`INCREMENTAL_LAYOUT_MODE`] so that `lay_out` returns early
+/// (translating the subtree to its new position) for any node with
+/// [`crate::incremental::DirtyBits::CLEAN`]. After this call all dirty bits are
+/// cleared automatically via [`crate::incremental::clear_dirty`].
+///
+/// Parameters match `lay_out` / `layout_measured_hyp`. Phase 0 limitation:
+/// container-query re-evaluation and anchor positioning are not re-run here
+/// (they rely on a full layout pass); add a full `layout_measured_hyp` call when
+/// those features are required.
+#[allow(clippy::too_many_arguments)]
+pub fn lay_out_incremental(
+    root: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) {
+    INCREMENTAL_LAYOUT_MODE.with(|m| m.set(true));
+    lay_out(root, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp, false);
+    INCREMENTAL_LAYOUT_MODE.with(|m| m.set(false));
+    crate::incremental::clear_dirty(root);
 }
 
 /// CSS Fonts L5 §4 — used `font-size` after applying `font-size-adjust`.
@@ -2458,7 +2501,7 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
         kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None },
         children: vec![],
         col_span: 1,
-        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     }
 }
 
@@ -2527,7 +2570,7 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
         kind: BoxKind::InlineBlockRow,
         children: items,
         col_span: 1,
-        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     }
 }
 
@@ -2785,7 +2828,7 @@ fn inject_pseudo(
                 kind: BoxKind::Block,
                 children: inner,
                 col_span: 1,
-                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             };
             if is_before {
                 children.insert(0, b);
@@ -2981,7 +3024,7 @@ fn inject_marker(
         },
         children: vec![],
         col_span: 1,
-        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     });
 }
 
@@ -3302,6 +3345,7 @@ fn build_box(
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
     }
 
@@ -3413,7 +3457,7 @@ fn build_box(
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
                                 col_span: 1,
-                                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                             });
                         }
                         row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode));
@@ -3537,7 +3581,7 @@ fn build_box(
         children,
         col_span,
         row_span,
-        svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     }
 }
 
@@ -4309,6 +4353,16 @@ fn lay_out(
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
+        return;
+    }
+
+    // EE-3: incremental layout — skip clean subtrees entirely.
+    // When INCREMENTAL_LAYOUT_MODE is on and the box has no dirty bits, translate
+    // the existing rect to the new (start_x, start_y) without re-running layout.
+    // The block-children loop in the parent already advanced child_y using the
+    // existing height, so the position is consistent across siblings.
+    if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
+        crate::incremental::translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y);
         return;
     }
 
@@ -13371,6 +13425,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
         let mut root_style = ComputedStyle::root();
         root_style.font_size = 100.0;
@@ -13386,6 +13441,7 @@ mod tests {
             svg_group_transform: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dirty: Default::default(),
         };
         super::apply_font_size_adjust(&mut root, &m);
         assert!((root.style.font_size - 62.5).abs() < 0.01, "root not adjusted: {}", root.style.font_size);
