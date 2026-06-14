@@ -29,6 +29,7 @@
 //!   (CPU mix_blend_rgba compositing). Normal → SourceOver fast path, PlusLighter → Lighter.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use glutin::config::ConfigTemplateBuilder;
@@ -46,7 +47,7 @@ use lumen_image::{Image, resize_area_avg};
 use lumen_layout::Color;
 
 use lumen_layout::{
-    BackgroundRepeat, BackgroundSize, BorderStyle, GradientStop, ObjectFit,
+    BackgroundRepeat, BackgroundSize, BorderStyle, FontStyle, GradientStop, ObjectFit,
     ObjectPosition, PositionComponent,
 };
 
@@ -213,6 +214,12 @@ pub struct FemtovgBackend {
     snapshots: HashMap<u64, femtovg::ImageId>,
     /// Провайдер шрифтов для multi-family рендера (опциональный).
     font_provider: Option<Arc<dyn FontProvider>>,
+    /// Cache path → femtovg FontId, prevents re-loading the same .ttf/.otf bytes.
+    loaded_fonts: HashMap<PathBuf, femtovg::FontId>,
+    /// Pre-loaded curated system fallback font IDs (emoji/CJK/RTL/Indic/Thai).
+    /// Built eagerly in `set_font_provider`; appended to every DrawText paint chain
+    /// so glyphs missing from CSS-declared families fall through to system fonts.
+    fallback_chain: Vec<femtovg::FontId>,
     /// Глубина стека сохранений canvas (PushClip/Opacity/Transform/...).
     layer_stack_depth: usize,
     /// Стек смещений для position:sticky: (dy, dx).
@@ -728,6 +735,8 @@ impl FemtovgBackend {
             raw_images: HashMap::new(),
             snapshots: HashMap::new(),
             font_provider: None,
+            loaded_fonts: HashMap::new(),
+            fallback_chain: Vec::new(),
             layer_stack_depth: 0,
             sticky_stack: Vec::new(),
             scroll_y: 0.0,
@@ -928,14 +937,86 @@ impl FemtovgBackend {
         self.canvas.fill_path(&path, &paint);
     }
 
-    /// Рисует текст.
+    /// Loads font bytes for a given path and registers them in `canvas`, returning
+    /// the `FontId`. Returns `None` if bytes cannot be read or `add_font_mem` fails.
+    /// Results are cached in `loaded_fonts` to avoid re-loading the same file.
+    fn load_font_by_path(&mut self, path: &Path, provider: &Arc<dyn FontProvider>) -> Option<femtovg::FontId> {
+        if let Some(&id) = self.loaded_fonts.get(path) {
+            return Some(id);
+        }
+        let bytes = if let Some(mem) = provider.read_face_bytes(path) {
+            mem
+        } else {
+            std::fs::read(path).ok()?
+        };
+        let id = self.canvas.add_font_mem(&bytes).ok()?;
+        self.loaded_fonts.insert(path.to_owned(), id);
+        Some(id)
+    }
+
+    /// Resolves CSS `font-family` list + weight/style to a femtovg font chain.
+    ///
+    /// Order: CSS-declared families (first match wins per CSS Fonts L4 §3.1) →
+    /// bundled Inter → curated system fallbacks (emoji/CJK/RTL/Indic/Thai).
+    /// Generic keywords (serif/sans-serif/monospace/cursive/fantasy/system-ui)
+    /// are skipped — they fall through to Inter which covers Latin well enough.
+    /// Returns at least `[inter_id]` when no provider is set.
+    fn resolve_font_chain(
+        &mut self,
+        families: &[String],
+        weight: u16,
+        style: FontStyle,
+    ) -> Vec<femtovg::FontId> {
+        let mut ids: Vec<femtovg::FontId> = Vec::new();
+
+        if let Some(provider) = self.font_provider.clone() {
+            let core_style = match style {
+                FontStyle::Normal => lumen_core::ext::FontStyle::Normal,
+                FontStyle::Italic => lumen_core::ext::FontStyle::Italic,
+                FontStyle::Oblique => lumen_core::ext::FontStyle::Oblique,
+            };
+            for fam in families {
+                let lc = fam.to_ascii_lowercase();
+                if matches!(
+                    lc.as_str(),
+                    "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
+                ) {
+                    continue;
+                }
+                if let Some(rec) = provider.pick_face(fam, weight, core_style)
+                    && let Some(id) = self.load_font_by_path(&rec.path.clone(), &provider)
+                    && !ids.contains(&id)
+                {
+                    ids.push(id);
+                }
+            }
+        }
+
+        // Bundled Inter as the primary Latin fallback.
+        if let Some(inter) = self.font_id
+            && !ids.contains(&inter)
+        {
+            ids.push(inter);
+        }
+
+        // Curated system fallbacks (emoji/CJK/RTL/Indic/Thai) appended last.
+        for &fb in &self.fallback_chain.clone() {
+            if !ids.contains(&fb) {
+                ids.push(fb);
+            }
+        }
+
+        ids
+    }
+
+    /// Рисует текст с уже разрешённой font chain.
     ///
     /// Baseline ≈ 80% от font_size (аппроксимация;
     /// точные метрики — из font metrics в будущих задачах).
-    fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: Color) {
+    fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: Color, chain: &[femtovg::FontId]) {
         let mut paint = femtovg::Paint::color(lumen_to_fvg(color));
-        if let Some(id) = self.font_id {
-            paint.set_font(&[id]);
+        if !chain.is_empty() {
+            paint.set_font(chain);
         }
         paint.set_font_size(font_size);
         let _ = self.canvas.fill_text(x, y + font_size * 0.8, text, &paint);
@@ -1628,8 +1709,9 @@ impl FemtovgBackend {
                     );
                 }
             }
-            DisplayCommand::DrawText { rect, text, font_size, color, .. } => {
-                self.draw_text(rect.x, rect.y, text, *font_size, *color);
+            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, .. } => {
+                let chain = self.resolve_font_chain(font_family, font_weight.0, *font_style);
+                self.draw_text(rect.x, rect.y, text, *font_size, *color, &chain);
             }
             DisplayCommand::PushClipRect { rect } => {
                 self.canvas.save();
@@ -2331,7 +2413,23 @@ impl RenderBackend for FemtovgBackend {
     }
 
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
-        self.font_provider = provider;
+        self.font_provider = provider.clone();
+        self.fallback_chain.clear();
+        // Eagerly load curated system fonts (emoji/CJK/RTL/Indic/Thai) into
+        // femtovg canvas so they are available as a fallback chain for every
+        // DrawText without re-loading on each call.
+        if let Some(p) = provider {
+            for name in crate::fallback::CURATED_FALLBACK_FAMILIES {
+                if let Some(rec) = p.pick_face(name, 400, lumen_core::ext::FontStyle::Normal) {
+                    let path = rec.path.clone();
+                    if let Some(id) = self.load_font_by_path(&path, &p)
+                        && !self.fallback_chain.contains(&id)
+                    {
+                        self.fallback_chain.push(id);
+                    }
+                }
+            }
+        }
     }
 
     fn viewport_size(&self) -> Size {
