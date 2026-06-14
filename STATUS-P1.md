@@ -6,8 +6,7 @@
 
 ## In progress
 
-FF-1: Fetch streaming response (`response.body` ReadableStream)  branch: p1-ff1-fetch-streaming
-Next step: add per-response stream slots (Rust) + update _fromFetchCache (JS)  crates/js/src/dom.rs:1038
+_(нет)_
 
 ---
 
@@ -76,7 +75,7 @@ Next step: add per-response stream slots (Rust) + update _fromFetchCache (JS)  c
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| FF-1 | **Fetch streaming response** (`response.body` ReadableStream) — `ReadableStreamSource` из chunked HTTP; `getReader()` → `ReadableStreamDefaultReader`; `read()` → `{value: Uint8Array, done}`; backpressure Phase 2; 8 unit-тестов | M | `lumen-js`, `lumen-network` |
+| ~~FF-1~~ | ~~**Fetch streaming response**~~ — **выполнено** (p1-ff1-fetch-streaming, 2026-06-14): per-response stream slots `_lumen_stream_alloc/length/chunk/free` в Rust; `Response._fromFetchCache` хранит `handle` → тело ответа изолировано от перезаписи последующими `fetch()`; `_consumeBody`/`.text()`/`.arrayBuffer()` читают из слота; 8 K-3 тестов (6 существующих + `stream_slot_alloc_returns_zero_when_no_cache` + `fetch_response_body_getreader_yields_correct_bytes`) | M | `lumen-js` |
 | FF-2 | **EventSource (Server-Sent Events)** — `new EventSource(url)`, state machine (CONNECTING/OPEN/CLOSED); `message`/`open`/`error` events; `data:` / `event:` / `id:` / `retry:` parsing (W3C SSE §9.2); auto-reconnect с backoff; 10 unit-тестов | M | `lumen-js`, `lumen-network` |
 | FF-3 | **`navigator.sendBeacon(url, data)`** — WHATWG Fetch §3.6: fire-and-forget POST; данные: `string | Blob | FormData | URLSearchParams`; возвращает `bool`; использует background HttpClient task; 5 unit-тестов | XS | `lumen-js`, `lumen-network` |
 | FF-4 | **Cache API Phase 1** — `caches.open(name)` → `Cache`; `cache.put/match/matchAll/delete/keys`; persist в SQLite через `lumen-storage::CacheStore`; `caches.has/keys/delete` на `CacheStorage`; 12 unit-тестов | M | `lumen-js`, `lumen-storage` |
