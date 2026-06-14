@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+FF-1: Fetch streaming response (`response.body` ReadableStream)  branch: p1-ff1-fetch-streaming
+Next step: add per-response stream slots (Rust) + update _fromFetchCache (JS)  crates/js/src/dom.rs:1038
 
 ---
 

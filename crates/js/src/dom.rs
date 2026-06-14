@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
@@ -1171,6 +1171,61 @@ fn install_primitives(
                     }
                 }
             );
+        }
+
+        // ── Per-response stream slots ────────────────────────────────────────────
+        // Each call to Response._fromFetchCache() allocates a dedicated slot so the
+        // body can be consumed independently of subsequent fetch() calls that would
+        // otherwise overwrite the single FetchCache slot.
+        //
+        // _lumen_stream_alloc()                  → u32  (0 = empty body)
+        // _lumen_stream_length(id: u32)          → u32
+        // _lumen_stream_chunk(id, offset, size)  → Vec<u8>
+        // _lumen_stream_free(id: u32)
+        {
+            let stream_slots: Arc<Mutex<HashMap<u32, Vec<u8>>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+            let stream_next: Arc<AtomicU32> = Arc::new(AtomicU32::new(1));
+
+            let (ss_alloc, sn, c_sa) = (
+                Arc::clone(&stream_slots),
+                Arc::clone(&stream_next),
+                Arc::clone(&cache),
+            );
+            reg!("_lumen_stream_alloc", move || -> u32 {
+                let body = {
+                    let guard = c_sa.lock().unwrap();
+                    guard.as_ref().map_or_else(Vec::new, |r| r.body.clone())
+                };
+                if body.is_empty() {
+                    return 0;
+                }
+                let id = sn.fetch_add(1, Ordering::Relaxed);
+                ss_alloc.lock().unwrap().insert(id, body);
+                id
+            });
+
+            let ss_len = Arc::clone(&stream_slots);
+            reg!("_lumen_stream_length", move |id: u32| -> u32 {
+                ss_len.lock().unwrap().get(&id).map_or(0, |b| b.len() as u32)
+            });
+
+            let ss_chunk = Arc::clone(&stream_slots);
+            reg!(
+                "_lumen_stream_chunk",
+                move |id: u32, offset: u32, size: u32| -> Vec<u8> {
+                    let guard = ss_chunk.lock().unwrap();
+                    let body = guard.get(&id).map_or(&[] as &[u8], |b| b.as_slice());
+                    let start = (offset as usize).min(body.len());
+                    let end = (start + size as usize).min(body.len());
+                    body[start..end].to_vec()
+                }
+            );
+
+            let ss_free = Arc::clone(&stream_slots);
+            reg!("_lumen_stream_free", move |id: u32| {
+                ss_free.lock().unwrap().remove(&id);
+            });
         }
 
         // _lumen_send_beacon(url, body, content_type) → bool
@@ -6214,8 +6269,9 @@ function Response(body, init) {
     this.body = _rs_make_body_stream(bodyBytes, this);
 }
 // _fromFetchCache — factory used by fetch() to build a Response that reads
-// the response body lazily from the Rust-side FetchCache via _lumen_fetch_body_chunk().
-// This avoids a full copy of large bodies into JS memory at response construction time.
+// the response body lazily from a per-response stream slot.
+// _lumen_stream_alloc() copies the body out of the single FetchCache slot into a
+// dedicated HashMap entry, so subsequent fetch() calls cannot clobber this body.
 Response._fromFetchCache = function(status, statusText, headers) {
     var r = Object.create(Response.prototype);
     r.status = status;
@@ -6226,18 +6282,26 @@ Response._fromFetchCache = function(status, statusText, headers) {
     r.type = 'default';
     r.url = '';
     r.bodyUsed = false;
-    r._body = null; // loaded on demand
-    var totalLen = _lumen_fetch_body_length();
+    r._body = null; // consumed via stream slot
+    // Allocate a per-response slot — body survives until consumed or cancelled.
+    var handle = _lumen_stream_alloc();
+    r._stream_handle = handle;
+    var totalLen = _lumen_stream_length(handle);
     var pos = 0;
+    var freed = false;
+    function freeHandle() {
+        if (!freed && handle > 0) { freed = true; _lumen_stream_free(handle); r._stream_handle = 0; }
+    }
     var stream = new ReadableStream({
         pull: function(c) {
-            if (pos >= totalLen) { c.close(); return; }
+            if (pos >= totalLen) { freeHandle(); c.close(); return; }
             var size = Math.min(_RS_CHUNK, totalLen - pos);
-            var chunk = _lumen_fetch_body_chunk(pos, size);
+            var chunk = _lumen_stream_chunk(handle, pos, size);
             c.enqueue(new Uint8Array(chunk));
             pos += size;
+            if (pos >= totalLen) freeHandle();
         },
-        cancel: function() { pos = totalLen; }
+        cancel: function() { freeHandle(); pos = totalLen; }
     });
     var _orig = stream.getReader.bind(stream);
     stream.getReader = function(opts) {
@@ -6252,45 +6316,40 @@ Response.prototype._consumeBody = function() {
     if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
     if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
     this.bodyUsed = true;
-    // When body was loaded via _fromFetchCache, _body is null — read all from Rust side.
     if (this._body === null) {
-        var len = _lumen_fetch_body_length();
-        return Promise.resolve(len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0));
+        // Body came from _fromFetchCache — read from the dedicated stream slot.
+        var h = this._stream_handle || 0;
+        if (h > 0) {
+            var len = _lumen_stream_length(h);
+            var bytes = len > 0 ? new Uint8Array(_lumen_stream_chunk(h, 0, len)) : new Uint8Array(0);
+            _lumen_stream_free(h);
+            this._stream_handle = 0;
+            return Promise.resolve(bytes);
+        }
+        // Fallback for legacy callers that set _body = null without a stream slot.
+        var len2 = _lumen_fetch_body_length();
+        return Promise.resolve(len2 > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len2)) : new Uint8Array(0));
     }
     return Promise.resolve(this._body);
 };
 Response.prototype.text = function() {
-    if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
-    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
-    this.bodyUsed = true;
-    if (this._body === null) {
-        var len = _lumen_fetch_body_length();
-        var bytes = len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0);
-        return Promise.resolve(new TextDecoder().decode(bytes));
-    }
-    var b = this._body;
-    if (b instanceof Uint8Array) return Promise.resolve(new TextDecoder().decode(b));
-    return Promise.resolve(b == null ? '' : String(b));
+    return this._consumeBody().then(function(bytes) {
+        if (bytes instanceof Uint8Array) return new TextDecoder().decode(bytes);
+        return bytes == null ? '' : String(bytes);
+    });
 };
 Response.prototype.json = function() {
     return this.text().then(function(t) { return JSON.parse(t); });
 };
 Response.prototype.arrayBuffer = function() {
-    if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
-    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
-    this.bodyUsed = true;
-    if (this._body === null) {
-        var len = _lumen_fetch_body_length();
-        var arr = len > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len)) : new Uint8Array(0);
-        return Promise.resolve(arr.buffer.slice(0));
-    }
-    var b = this._body;
-    if (b instanceof Uint8Array) return Promise.resolve(b.buffer.slice(0));
-    return Promise.resolve(new Uint8Array(0).buffer);
+    return this._consumeBody().then(function(bytes) {
+        if (bytes instanceof Uint8Array) return bytes.buffer.slice(0);
+        return new Uint8Array(0).buffer;
+    });
 };
 Response.prototype.blob = function() {
-    return this.arrayBuffer().then(function(ab) {
-        return new Blob([new Uint8Array(ab)]);
+    return this._consumeBody().then(function(bytes) {
+        return new Blob([bytes]);
     });
 };
 Response.prototype.clone = function() {
@@ -18836,6 +18895,31 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval(
             "_lumen_fetch_body_length() === 0 && _lumen_fetch_body_chunk(0, 10).length === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn stream_slot_alloc_returns_zero_when_no_cache() {
+        // _lumen_stream_alloc returns 0 when FetchCache is empty (no prior fetch).
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_lumen_stream_alloc() === 0").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_response_body_getreader_yields_correct_bytes() {
+        // fetch() via mock provider → response.body.getReader().read() delivers body bytes.
+        let capture = CaptureFetch::new();
+        let rt = runtime_with_fetch(Arc::clone(&capture));
+        let r = rt.eval(
+            "var out = null; \
+             fetch('https://example.com/').then(function(resp) { \
+                 return resp.body.getReader().read(); \
+             }).then(function(r) { out = r; }); \
+             _lumen_drain_microtasks(); \
+             out !== null && !out.done && out.value instanceof Uint8Array \
+             && out.value[0] === 111 && out.value[1] === 107"  // 'ok' = [111, 107]
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
