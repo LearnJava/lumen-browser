@@ -13,7 +13,7 @@ use serde_json;
 use lumen_dom::Document;
 use lumen_dom::NodeData;
 use lumen_dom::NodeId;
-use lumen_layout::{computed_style_by_selector, LayoutBox};
+use lumen_layout::{computed_style_by_selector, LayoutBox, PaintOrder, StackingTree};
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
@@ -242,7 +242,9 @@ impl InProcessSession {
     #[cfg(feature = "cpu-render")]
     pub fn screenshot_cpu_rgba(&self) -> Result<lumen_image::Image> {
         let state = self.state()?;
-        let display_list = lumen_paint::build_display_list(&state.layout_root);
+        let tree = StackingTree::build(&state.layout_root);
+        let order = PaintOrder::from_tree(&tree);
+        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order);
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
         lumen_paint::Renderer::render_to_image_cpu(width, height, &display_list, &[], 0.0, 0.0)
@@ -274,7 +276,9 @@ impl InProcessSession {
         &self,
     ) -> Result<Vec<lumen_paint::DisplayCommand>> {
         let state = self.state()?;
-        Ok(lumen_paint::build_display_list(&state.layout_root))
+        let tree = StackingTree::build(&state.layout_root);
+        let order = PaintOrder::from_tree(&tree);
+        Ok(lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order))
     }
 }
 
@@ -290,8 +294,9 @@ impl BrowserSession for InProcessSession {
     fn screenshot(&self) -> Result<Vec<u8>> {
         let state = self.state()?;
 
-        // Build display list from layout tree.
-        let display_list = lumen_paint::build_display_list(&state.layout_root);
+        let tree = StackingTree::build(&state.layout_root);
+        let order = PaintOrder::from_tree(&tree);
+        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order);
 
         // Create headless renderer for off-screen rendering.
         let width = self.viewport.width as u32;
