@@ -18,8 +18,9 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
+    Appearance,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
-    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
+    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
@@ -229,8 +230,15 @@ pub enum ResolvedClipShape {
         /// Вертикальная полуось (px).
         ry: f32,
     },
-    /// `polygon(...)`: вершины в page px (nonzero fill rule).
-    Polygon(Vec<(f32, f32)>),
+    /// `polygon(...)` / `path(...)`: вершины в page px. `even_odd` выбирает
+    /// правило заливки самопересекающихся контуров (CSS Shapes L1 §3/§4):
+    /// `true` → even-odd (дырки в перекрытиях), `false` → nonzero (default).
+    Polygon {
+        /// Вершины формы в page px (до transform элемента).
+        verts: Vec<(f32, f32)>,
+        /// `true` = even-odd fill rule, `false` = nonzero.
+        even_odd: bool,
+    },
 }
 
 impl ResolvedClipShape {
@@ -245,7 +253,7 @@ impl ResolvedClipShape {
             Self::Ellipse { cx, cy, rx, ry } => {
                 Rect::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
             }
-            Self::Polygon(verts) => {
+            Self::Polygon { verts, .. } => {
                 if verts.is_empty() {
                     return Rect::new(0.0, 0.0, 0.0, 0.0);
                 }
@@ -1344,8 +1352,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                             "PushClipPath ellipse({cx:.2}, {cy:.2}, rx={rx:.2}, ry={ry:.2})\n"
                         ));
                     }
-                    ResolvedClipShape::Polygon(verts) => {
-                        out.push_str("PushClipPath polygon(");
+                    ResolvedClipShape::Polygon { verts, even_odd } => {
+                        out.push_str(if *even_odd {
+                            "PushClipPath polygon evenodd("
+                        } else {
+                            "PushClipPath polygon("
+                        });
                         for (i, (x, y)) in verts.iter().enumerate() {
                             if i > 0 {
                                 out.push_str(", ");
@@ -1936,26 +1948,28 @@ fn clip_path_to_shape(clip: &ClipPath, r: Rect) -> Option<ResolvedClipShape> {
                 ry: ry.resolve(r.height),
             })
         }
-        ClipPath::Polygon(vertices) => {
+        ClipPath::Polygon(vertices, fill_rule) => {
             if vertices.is_empty() {
                 return None;
             }
-            Some(ResolvedClipShape::Polygon(
-                vertices
+            Some(ResolvedClipShape::Polygon {
+                verts: vertices
                     .iter()
                     .map(|(x, y)| (r.x + x.resolve(r.width), r.y + y.resolve(r.height)))
                     .collect(),
-            ))
+                even_odd: matches!(fill_rule, FillRule::EvenOdd),
+            })
         }
         // CSS Shapes L1 §4 — `path()`: точки уже флэттены в px системы пути
         // (origin = верхний левый угол reference box). Смещаем на позицию box.
-        ClipPath::Path(points) => {
+        ClipPath::Path(points, fill_rule) => {
             if points.len() < 3 {
                 return None;
             }
-            Some(ResolvedClipShape::Polygon(
-                points.iter().map(|(x, y)| (r.x + x, r.y + y)).collect(),
-            ))
+            Some(ResolvedClipShape::Polygon {
+                verts: points.iter().map(|(x, y)| (r.x + x, r.y + y)).collect(),
+                even_odd: matches!(fill_rule, FillRule::EvenOdd),
+            })
         }
     }
 }
@@ -3787,10 +3801,28 @@ fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
     b.style.opacity > 0.0
 }
 
+/// UA default accent for form controls when `accent-color: auto`. The same
+/// blue previously hard-coded across checkbox / radio / range / progress.
+const ACCENT_DEFAULT: Color = Color { r: 21, g: 90, b: 192, a: 255 };
+
 /// Render checkbox checkmark or radio dot for checked form controls.
 /// P2 note: this renders a simple filled rectangle as indicator; a full
 /// vector checkmark / circle belongs to the renderer GPU primitive set.
 fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
+    // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`/
+    // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
+    // the native "primitive appearance" of a form control: the checkbox tick,
+    // radio dot, range slider, progress bar, meter bar and select arrow. The box
+    // (border/padding/background) is already stripped in `apply_ua_appearance`;
+    // here we suppress the painted indicator so authors can fully restyle it.
+    if b.style.appearance == Appearance::None {
+        return;
+    }
+    // CSS UI L4 §6.1 — accent-color tints the "accent" of checkbox, radio,
+    // range and progress controls. `auto` (None) keeps the UA default blue.
+    // <meter> is intentionally excluded: its bar keeps the semantic
+    // green/yellow/red coloring from HTML §4.10.14, not the accent color.
+    let accent = b.style.accent_color.unwrap_or(ACCENT_DEFAULT);
     match kind {
         FormControlKind::Input { input_type, checked, .. } => {
             if !checked { return; }
@@ -3806,7 +3838,7 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                     (b.rect.width  - inset * 2.0).max(1.0),
                     (b.rect.height - inset * 2.0).max(1.0),
                 ),
-                color: Color { r: 21, g: 90, b: 192, a: 255 },
+                color: accent,
             });
         }
         FormControlKind::Select { selected_text } => {
@@ -3814,10 +3846,10 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
         }
         FormControlKind::Button | FormControlKind::Textarea { .. } => {}
         FormControlKind::Range { value, min, max } => {
-            emit_range_slider(b, *value, *min, *max, out);
+            emit_range_slider(b, *value, *min, *max, accent, out);
         }
         FormControlKind::Progress { value, max } => {
-            emit_progress_bar(b, *value, *max, out);
+            emit_progress_bar(b, *value, *max, accent, out);
         }
         FormControlKind::Meter { value, min, max, low, high, optimum } => {
             emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
@@ -3825,8 +3857,11 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     }
 }
 
-/// Draw a range slider: gray track, blue filled portion, circular thumb.
-fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, out: &mut Vec<DisplayCommand>) {
+/// Draw a range slider: gray track, accent-colored filled portion, circular thumb.
+///
+/// `accent` is the resolved `accent-color` (UA default blue when `auto`); it
+/// tints both the filled track portion and the thumb per CSS UI L4 §6.1.
+fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, accent: Color, out: &mut Vec<DisplayCommand>) {
     let range = (max - min).max(f32::EPSILON);
     let fraction = ((value - min) / range).clamp(0.0, 1.0);
 
@@ -3837,7 +3872,7 @@ fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, out: &mut Ve
     let track_w = (b.rect.width - thumb_r).max(1.0);
 
     let gray = Color { r: 200, g: 200, b: 200, a: 255 };
-    let blue = Color { r: 21, g: 90, b: 192, a: 255 };
+    let blue = accent;
     let track_radius = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
 
     // Gray background track.
@@ -3871,15 +3906,16 @@ fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, out: &mut Ve
 
 /// Draw a `<progress>` bar inside the border box.
 ///
-/// Determinate: blue fill proportional to `value / max`.
+/// Determinate: `accent`-colored fill proportional to `value / max`.
 /// Indeterminate (`value` is `None`): static 30% fill to indicate pending state.
-fn emit_progress_bar(b: &LayoutBox, value: Option<f32>, max: f32, out: &mut Vec<DisplayCommand>) {
+/// `accent` is the resolved `accent-color` (UA default blue when `auto`).
+fn emit_progress_bar(b: &LayoutBox, value: Option<f32>, max: f32, accent: Color, out: &mut Vec<DisplayCommand>) {
     let pad = 2.0_f32;
     let bar_x = b.rect.x + pad;
     let bar_y = b.rect.y + pad;
     let bar_max_w = (b.rect.width - pad * 2.0).max(0.0);
     let bar_h = (b.rect.height - pad * 2.0).max(1.0);
-    let blue = Color { r: 21, g: 90, b: 192, a: 255 };
+    let blue = accent;
     let radii = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
 
     let fraction = match value {
@@ -4088,6 +4124,35 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 }
 
+/// CSS Tables L2 §17.6.1.1 — true when `b` is a table cell that must suppress its
+/// borders and background under `empty-cells: hide`. Applies only in the separated-
+/// borders model (`border-collapse: separate`) and only when the cell has no in-flow
+/// content. Under `border-collapse: collapse` the property has no effect.
+fn is_hidden_empty_cell(b: &LayoutBox) -> bool {
+    b.style.display == Display::TableCell
+        && b.style.empty_cells == EmptyCells::Hide
+        && b.style.border_collapse == BorderCollapse::Separate
+        && !table_cell_has_content(b)
+}
+
+/// True when a table cell has in-flow content: any descendant box that generates
+/// text, a replaced element, or a block. Whitespace-only inline runs and `Skip`
+/// boxes do not count (CSS Tables L2 §17.6.1.1 "empty" definition).
+fn table_cell_has_content(b: &LayoutBox) -> bool {
+    b.children.iter().any(box_generates_content)
+}
+
+/// Whether a single child box contributes in-flow content for the empty-cell test.
+fn box_generates_content(c: &LayoutBox) -> bool {
+    match &c.kind {
+        BoxKind::Skip => false,
+        BoxKind::InlineRun { lines, .. } => lines
+            .iter()
+            .any(|line| line.iter().any(|f| f.img_src.is_some() || !f.text.trim().is_empty())),
+        _ => true,
+    }
+}
+
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
 fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Option<&SelectionHighlight>) {
@@ -4101,6 +4166,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
         | BoxKind::Table | BoxKind::TableRowGroup => {
             if !is_paint_visible(b) {
+                return;
+            }
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide`: an empty cell draws
+            // neither borders nor background. Cell has no children to recurse into,
+            // so skipping self-emission fully hides it.
+            if is_hidden_empty_cell(b) {
                 return;
             }
             emit_box_shadows(b, out);
@@ -4721,7 +4792,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // CSS Display L3 §4 — `visibility: hidden`: self не рисуется
             // (фон/border/outline/shadow), но children обходятся (inherited
             // visibility, но child может вернуть себя через `:visible`).
-            let self_visible = is_paint_visible(b);
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide` suppresses an empty
+            // cell's background and borders the same way (children still walked).
+            let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
                 emit_box_shadows(b, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
@@ -5823,7 +5896,9 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                 out.push(DisplayCommand::PushTransform { matrix });
             }
 
-            let self_visible = is_paint_visible(b);
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide` suppresses an empty
+            // cell's background and borders (children still walked).
+            let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
                 emit_box_shadows(b, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
@@ -6083,22 +6158,32 @@ fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 /// рисует только top+left границы, чтобы избежать двойного рисования
 /// по общим рёбрам (Phase 0 упрощение; полный алгоритм §17.6.2 — Phase 2).
 fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // CSS Tables L2 §17.6.1.1 — `empty-cells: hide`: a cell with no in-flow
+    // content draws neither background nor borders (separated-borders model only).
+    // Content children are still walked (an empty cell has none, but this keeps
+    // the contract identical to the normal block path).
+    let hidden_empty = is_hidden_empty_cell(b);
+
     // Эмитим фон ячейки
-    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+    if !hidden_empty
+        && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
         && bg.a > 0
     {
         out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
     }
-    emit_background_image(out, b, dpr);
+    if !hidden_empty {
+        emit_background_image(out, b, dpr);
+    }
 
     let s = &b.style;
     // In separate mode: draw all 4 borders. In collapse mode: draw all 4 borders too
     // (spacing is already zeroed by layout; border overlap on shared edges is Phase 0 behaviour;
     // full §17.6.2 conflict resolution is deferred to Phase 2).
-    let has_border = s.border_top_style.is_visible()
+    let has_border = !hidden_empty
+        && (s.border_top_style.is_visible()
         || s.border_right_style.is_visible()
         || s.border_bottom_style.is_visible()
-        || s.border_left_style.is_visible();
+        || s.border_left_style.is_visible());
     if has_border {
         let cur = s.color;
         out.push(DisplayCommand::DrawBorder {
@@ -6169,6 +6254,204 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn rounded_fills(dl: &DisplayList) -> Vec<&Color> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRoundedRect { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// True when `dl` contains a solid `FillRect` of exactly `(r,g,b)`.
+    fn has_fill_rgb(dl: &DisplayList, r: u8, g: u8, b: u8) -> bool {
+        fills(dl).iter().any(|c| c.r == r && c.g == g && c.b == b)
+    }
+
+    /// Number of `DrawBorder` commands with at least one non-zero width.
+    fn border_count(dl: &DisplayList) -> usize {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { widths, .. } if widths.iter().any(|w| *w > 0.0)))
+            .count()
+    }
+
+    // CSS Tables L2 §17.6.1.1 — `empty-cells`.
+    // Two cells with distinct backgrounds + borders; the first is empty, the
+    // second has text. Separated-borders model (default).
+    const EMPTY_CELLS_HTML: &str =
+        "<table><tr><td class=e></td><td class=f>x</td></tr></table>";
+    const EMPTY_CELLS_CSS_BASE: &str = "td{width:40px;height:30px;border:2px solid #000} \
+         .e{background:rgb(11,22,33)} .f{background:rgb(44,55,66)}";
+
+    #[test]
+    fn empty_cells_hide_suppresses_empty_cell_background() {
+        let css = format!("table{{empty-cells:hide}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(!has_fill_rgb(&dl, 11, 22, 33), "empty cell bg must be hidden");
+        assert!(has_fill_rgb(&dl, 44, 55, 66), "non-empty cell bg must stay");
+    }
+
+    #[test]
+    fn empty_cells_hide_suppresses_empty_cell_border() {
+        let css = format!("table{{empty-cells:hide}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        // Only the non-empty cell keeps its border (the table itself has none).
+        assert_eq!(border_count(&dl), 1, "only the filled cell draws a border");
+    }
+
+    #[test]
+    fn empty_cells_show_keeps_empty_cell_background() {
+        // `show` is the initial value — both cells paint normally.
+        let css = format!("table{{empty-cells:show}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(has_fill_rgb(&dl, 11, 22, 33), "empty cell bg shown under `show`");
+        assert!(has_fill_rgb(&dl, 44, 55, 66));
+        assert_eq!(border_count(&dl), 2, "both cells draw borders under `show`");
+    }
+
+    #[test]
+    fn empty_cells_hide_ignored_under_border_collapse() {
+        // Under `border-collapse: collapse`, `empty-cells` has no effect.
+        let css = format!(
+            "table{{empty-cells:hide;border-collapse:collapse}} {EMPTY_CELLS_CSS_BASE}"
+        );
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(
+            has_fill_rgb(&dl, 11, 22, 33),
+            "collapse model ignores empty-cells: empty cell bg stays"
+        );
+    }
+
+    /// CSS UI L4 §6.1 — `accent-color` tints a checked checkbox indicator.
+    #[test]
+    fn checkbox_accent_color_tints_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { accent-color: rgb(10, 200, 30); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 10 && c.g == 200 && c.b == 30),
+            "checkbox indicator should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `accent-color: auto` (the default) keeps the UA blue indicator.
+    #[test]
+    fn checkbox_default_accent_is_ua_blue() {
+        let dl = build("<input type=checkbox checked>", "");
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 21 && c.g == 90 && c.b == 192),
+            "default checkbox indicator should be UA blue, got {f:?}"
+        );
+    }
+
+    /// Radio dot also honours `accent-color`.
+    #[test]
+    fn radio_accent_color_tints_dot() {
+        let dl = build(
+            "<input type=radio checked>",
+            "input { accent-color: rgb(200, 0, 100); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 200 && c.g == 0 && c.b == 100),
+            "radio dot should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `<progress>` fill bar uses `accent-color` (a rounded-rect fill).
+    #[test]
+    fn progress_accent_color_tints_bar() {
+        let dl = build(
+            "<progress value=0.5 max=1></progress>",
+            "progress { accent-color: rgb(7, 130, 240); }",
+        );
+        let f = rounded_fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 7 && c.g == 130 && c.b == 240),
+            "progress bar should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `<input type=range>` filled track + thumb use `accent-color`; the gray
+    /// background track is left untinted.
+    #[test]
+    fn range_accent_color_tints_fill_not_track() {
+        let dl = build(
+            "<input type=range value=50 min=0 max=100>",
+            "input { accent-color: rgb(240, 60, 8); }",
+        );
+        let f = rounded_fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 240 && c.g == 60 && c.b == 8),
+            "range fill/thumb should use accent-color, got {f:?}"
+        );
+        assert!(
+            f.iter().any(|c| c.r == 200 && c.g == 200 && c.b == 200),
+            "range background track should stay gray, got {f:?}"
+        );
+    }
+
+    /// CSS Basic UI L4 §4.2 — `appearance: none` removes the native checkbox
+    /// tick: no UA-blue indicator fill is emitted.
+    #[test]
+    fn appearance_none_suppresses_checkbox_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { appearance: none; }",
+        );
+        let f = fills(&dl);
+        assert!(
+            !f.iter().any(|c| c.r == 21 && c.g == 90 && c.b == 192),
+            "appearance:none must suppress the checkbox indicator, got {f:?}"
+        );
+    }
+
+    /// `appearance: none` also suppresses a custom `accent-color` indicator —
+    /// the author opted out of the native control entirely.
+    #[test]
+    fn appearance_none_suppresses_accent_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { appearance: none; accent-color: rgb(10, 200, 30); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            !f.iter().any(|c| c.r == 10 && c.g == 200 && c.b == 30),
+            "appearance:none must suppress even an accent-tinted indicator, got {f:?}"
+        );
+    }
+
+    /// `appearance: none` removes the native `<progress>` bar (no rounded fill).
+    #[test]
+    fn appearance_none_suppresses_progress_bar() {
+        let dl = build(
+            "<progress value=0.5 max=1></progress>",
+            "progress { appearance: none; }",
+        );
+        assert!(
+            rounded_fills(&dl).is_empty(),
+            "appearance:none must suppress the progress bar, got {:?}",
+            rounded_fills(&dl)
+        );
+    }
+
+    /// `appearance: none` removes the native range slider track and thumb.
+    #[test]
+    fn appearance_none_suppresses_range_slider() {
+        let dl = build(
+            "<input type=range value=50 min=0 max=100>",
+            "input { appearance: none; }",
+        );
+        assert!(
+            rounded_fills(&dl).is_empty(),
+            "appearance:none must suppress the range slider, got {:?}",
+            rounded_fills(&dl)
+        );
     }
 
     #[test]
@@ -9982,44 +10265,45 @@ mod tests {
     #[test]
     fn clip_path_polygon_bounding_box() {
         use super::{clip_path_to_rect, clip_path_to_shape, ResolvedClipShape};
-        use lumen_layout::{ClipPath, ShapeValue};
+        use lumen_layout::{ClipPath, FillRule, ShapeValue};
         let r = Rect::new(0.0, 0.0, 200.0, 200.0);
         // triangle: (100,0) (200,200) (0,200)
-        let clip = ClipPath::Polygon(vec![
-            (ShapeValue::Px(100.0), ShapeValue::Px(0.0)),
-            (ShapeValue::Px(200.0), ShapeValue::Px(200.0)),
-            (ShapeValue::Px(0.0), ShapeValue::Px(200.0)),
-        ]);
+        let clip = ClipPath::Polygon(
+            vec![
+                (ShapeValue::Px(100.0), ShapeValue::Px(0.0)),
+                (ShapeValue::Px(200.0), ShapeValue::Px(200.0)),
+                (ShapeValue::Px(0.0), ShapeValue::Px(200.0)),
+            ],
+            FillRule::NonZero,
+        );
         let cr = clip_path_to_rect(&clip, r);
         assert_eq!(cr, Rect::new(0.0, 0.0, 200.0, 200.0));
         // BUG-140 (TEST-109 c2): точная форма — полигон, не bbox.
         let shape = clip_path_to_shape(&clip, r);
         assert_eq!(
             shape,
-            Some(ResolvedClipShape::Polygon(vec![
-                (100.0, 0.0),
-                (200.0, 200.0),
-                (0.0, 200.0)
-            ]))
+            Some(ResolvedClipShape::Polygon {
+                verts: vec![(100.0, 0.0), (200.0, 200.0), (0.0, 200.0)],
+                even_odd: false,
+            })
         );
     }
 
     #[test]
     fn clip_path_path_resolves_to_polygon() {
         use super::{clip_path_to_shape, ResolvedClipShape};
-        use lumen_layout::ClipPath;
+        use lumen_layout::{ClipPath, FillRule};
         // path() хранит уже флэттенные px-точки в системе пути; clip_path_to_shape
         // только смещает их на позицию border-box (r.x/r.y).
         let r = Rect::new(20.0, 30.0, 100.0, 100.0);
-        let clip = ClipPath::Path(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)]);
+        let clip = ClipPath::Path(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)], FillRule::NonZero);
         let shape = clip_path_to_shape(&clip, r);
         assert_eq!(
             shape,
-            Some(ResolvedClipShape::Polygon(vec![
-                (20.0, 30.0),
-                (120.0, 30.0),
-                (70.0, 110.0),
-            ]))
+            Some(ResolvedClipShape::Polygon {
+                verts: vec![(20.0, 30.0), (120.0, 30.0), (70.0, 110.0)],
+                even_odd: false,
+            })
         );
     }
 

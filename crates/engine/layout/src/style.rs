@@ -17,6 +17,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+use crate::color_mix::{MixColorSpace, mix_colors};
 use crate::rule_index::RuleIndex;
 use crate::scroll_timeline::ScrollAxis;
 
@@ -1159,6 +1160,30 @@ impl BorderCollapse {
         match s {
             "separate" => Some(Self::Separate),
             "collapse" => Some(Self::Collapse),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Tables L2 §17.6.1.1 — `empty-cells`. Inherited. Initial: `Show`.
+/// In the separated-borders model, controls whether borders and backgrounds
+/// are drawn around table cells that have no in-flow content. Has no effect
+/// when `border-collapse: collapse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmptyCells {
+    /// Empty cells are painted normally (borders + background drawn).
+    #[default]
+    Show,
+    /// Empty cells suppress their borders and background.
+    Hide,
+}
+
+impl EmptyCells {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "show" => Some(Self::Show),
+            "hide" => Some(Self::Hide),
             _ => None,
         }
     }
@@ -2402,6 +2427,10 @@ pub struct ComputedStyle {
     /// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Default `Separate`.
     /// When `Collapse`, `border-spacing` has no effect and adjacent cell borders merge.
     pub border_collapse: BorderCollapse,
+    /// CSS Tables L2 §17.6.1.1 — `empty-cells`. Inherited. Default `Show`.
+    /// When `Hide`, a table cell with no in-flow content draws neither borders nor
+    /// background. No effect under `border-collapse: collapse`.
+    pub empty_cells: EmptyCells,
     /// CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`. Inherited. Default 0.
     /// Horizontal gap (px) between adjacent table cells in separate-border mode.
     /// Only applies when `border-collapse: separate` (CSS 2.1 default).
@@ -2689,6 +2718,17 @@ pub struct ComputedStyle {
     /// CSS Containment L3 §4 — `content-visibility`. NOT inherited. Initial: `Visible`.
     /// Phase 0: parse + store; skip-content optimization — deferred.
     pub content_visibility: ContentVisibility,
+    /// CSS Box Sizing L4 §5 — `contain-intrinsic-width`. NOT inherited. Initial: `None`.
+    /// Placeholder inline-size used as the box's intrinsic width when the element
+    /// is subject to size containment (`contain: size`, `content-visibility: hidden`,
+    /// or `content-visibility: auto` while skipped off-screen). `None` = the CSS
+    /// keyword `none` (no placeholder; content-based width collapses). The optional
+    /// `auto` keyword (last-remembered size) is parsed but treated as the length.
+    /// Stored as a content-box `Length`, resolved against the font-size at layout.
+    pub contain_intrinsic_width: Option<Length>,
+    /// CSS Box Sizing L4 §5 — `contain-intrinsic-height`. NOT inherited. Initial: `None`.
+    /// Placeholder block-size under size containment. See `contain_intrinsic_width`.
+    pub contain_intrinsic_height: Option<Length>,
     /// CSS Sizing L4 §4.5 — `interpolate-size`. **Inherited.** Initial: `NumericOnly`.
     /// Controls whether keyword sizes (`auto`, `min-content`, …) participate in
     /// transitions/animations. Read by `TransitionScheduler::sync()` to gate
@@ -2819,6 +2859,9 @@ pub struct ComputedStyle {
     /// During a `document.startViewTransition()` call the shell matches old/new snapshots
     /// by name and cross-fades them. `None` means the property is `none`.
     pub view_transition_name: Option<Box<str>>,
+    /// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial `auto`.
+    /// Supplies the glyph pairs for `content: open-quote` / `close-quote`.
+    pub quotes: Quotes,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -2861,6 +2904,52 @@ pub enum ContentItem {
     CloseQuote,
     NoOpenQuote,
     NoCloseQuote,
+}
+
+/// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial: `auto`.
+///
+/// Controls the quotation marks produced by `content: open-quote` /
+/// `close-quote`. The nesting depth (which pair is used) is tracked in
+/// document order by the counters pre-pass; this value only supplies the
+/// glyph pairs to choose from.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Quotes {
+    /// `auto` — UA language-appropriate quotation marks. Lumen uses English
+    /// curly quotes: primary “ ”, secondary ‘ ’.
+    #[default]
+    Auto,
+    /// `none` — `open-quote` / `close-quote` produce no marks (depth still
+    /// advances).
+    None,
+    /// Explicit `[<string> <string>]+` pairs — outermost (depth 0) first.
+    /// Each tuple is `(open, close)`.
+    Pairs(Vec<(String, String)>),
+}
+
+impl Quotes {
+    /// Returns the `(open, close)` glyph strings for the given nesting `depth`.
+    ///
+    /// `Auto` uses the built-in English pairs; `Pairs` clamps `depth` to the
+    /// last available pair (CSS Content L3 §3.2). Returns `None` for `quotes:
+    /// none` or an empty explicit list — the caller emits nothing in that case.
+    pub fn pair_for_depth(&self, depth: usize) -> Option<(&str, &str)> {
+        const AUTO: &[(&str, &str)] = &[("\u{201C}", "\u{201D}"), ("\u{2018}", "\u{2019}")];
+        match self {
+            Quotes::None => None,
+            Quotes::Auto => {
+                let idx = depth.min(AUTO.len() - 1);
+                Some(AUTO[idx])
+            }
+            Quotes::Pairs(pairs) => {
+                if pairs.is_empty() {
+                    return None;
+                }
+                let idx = depth.min(pairs.len() - 1);
+                let (o, c) = &pairs[idx];
+                Some((o.as_str(), c.as_str()))
+            }
+        }
+    }
 }
 
 /// CSS Scrollbars 1 — `scrollbar-width`. Inherited.
@@ -4618,15 +4707,19 @@ pub enum ClipPath {
         /// Центр; `None` = 50% 50%.
         center: Option<(ShapeValue, ShapeValue)>,
     },
-    /// `polygon(x1 y1, x2 y2, ...)` — список вершин (x — % от width,
-    /// y — % от height).
-    Polygon(Vec<(ShapeValue, ShapeValue)>),
+    /// `polygon([<fill-rule>,]? x1 y1, x2 y2, ...)` — список вершин (x — % от
+    /// width, y — % от height) + правило заливки. `FillRule` (CSS Shapes L1
+    /// §3) управляет самопересекающимися полигонами: `EvenOdd` оставляет
+    /// «дырки» в местах перекрытия, `NonZero` (default) заливает их.
+    Polygon(Vec<(ShapeValue, ShapeValue)>, FillRule),
     /// `path([<fill-rule>,]? "<svg-path>")` — CSS Shapes L1 §4. Хранит
     /// предварительно флэттенный полигон в px-координатах системы пути
     /// (origin = верхний левый угол reference box; проценты в `path()`
     /// недопустимы по спецификации). Кривые разбиты на отрезки на этапе
-    /// парсинга через `motion_path::flatten_path_to_polygon`.
-    Path(Vec<(f32, f32)>),
+    /// парсинга через `motion_path::flatten_path_to_polygon`. Второе поле —
+    /// `FillRule` (default `NonZero`); `EvenOdd` делает дырки в
+    /// самопересекающихся путях (звёзды-пентаграммы и т. п.).
+    Path(Vec<(f32, f32)>, FillRule),
 }
 
 /// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
@@ -4868,6 +4961,7 @@ impl ComputedStyle {
             gap_rule_style: BorderStyle::None,
             gap_rule_color: CssColor::CurrentColor,
             border_collapse: BorderCollapse::Separate,
+            empty_cells: EmptyCells::Show,
             border_spacing_h: 0.0,
             border_spacing_v: 0.0,
             column_span_all: false,
@@ -4974,6 +5068,8 @@ impl ComputedStyle {
             widows: 2,
             contain: ContainFlags::NONE,
             content_visibility: ContentVisibility::Visible,
+            contain_intrinsic_width: None,
+            contain_intrinsic_height: None,
             interpolate_size: InterpolateSizeMode::NumericOnly,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
@@ -5028,6 +5124,7 @@ impl ComputedStyle {
             anchor_size_w: None,
             anchor_size_h: None,
             view_transition_name: None,
+            quotes: Quotes::Auto,
         }
     }
 }
@@ -5211,6 +5308,7 @@ pub fn compute_style(
         overscroll_behavior_y: OverscrollBehavior::Auto,
         // CSS Table — border-collapse and border-spacing are inherited (CSS Tables L2 §17.6).
         border_collapse: inherited.border_collapse,
+        empty_cells: inherited.empty_cells,
         border_spacing_h: inherited.border_spacing_h,
         border_spacing_v: inherited.border_spacing_v,
         // CSS Text typography — все inherited.
@@ -5298,6 +5396,9 @@ pub fn compute_style(
         // CSS Containment L3 — не наследуются. Initial values.
         contain: ContainFlags::NONE,
         content_visibility: ContentVisibility::Visible,
+        // CSS Box Sizing L4 §5 — contain-intrinsic-* are NOT inherited.
+        contain_intrinsic_width: None,
+        contain_intrinsic_height: None,
         // CSS Sizing L4 §4.5 — interpolate-size is inherited.
         interpolate_size: inherited.interpolate_size,
         container_type: ContainerType::Normal,
@@ -5358,6 +5459,8 @@ pub fn compute_style(
         anchor_size_w: None,
         anchor_size_h: None,
         view_transition_name: None,
+        // CSS Generated Content L3 §3.2 — quotes inherited.
+        quotes: inherited.quotes.clone(),
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -6152,6 +6255,7 @@ pub fn compute_pseudo_element_style(
     style.text_wrap_mode = parent.text_wrap_mode;
     style.text_wrap_style = parent.text_wrap_style;
     style.interpolate_size = parent.interpolate_size;
+    style.quotes = parent.quotes.clone();
 
     // Собираем matching declarations из всех правил.
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
@@ -11306,6 +11410,12 @@ fn apply_declaration(
             // Default value на счётчик при отсутствии числа = 0 (по spec).
             style.counter_set = parse_counter_list(val, 0);
         }
+        "quotes" => {
+            // CSS Generated Content L3 §3.2 — `auto | none | [<string> <string>]+`.
+            if let Some(q) = parse_quotes(val) {
+                style.quotes = q;
+            }
+        }
         "clip-path" => {
             // CSS Masking L1 §3 — basic-shape | none. `none` чистит.
             let trimmed = val.trim();
@@ -11499,6 +11609,12 @@ fn apply_declaration(
             // CSS Tables L2 §17.6 — `border-collapse: separate | collapse`.
             if let Some(v) = BorderCollapse::parse(val.trim()) {
                 style.border_collapse = v;
+            }
+        }
+        "empty-cells" => {
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: show | hide`.
+            if let Some(v) = EmptyCells::parse(val.trim()) {
+                style.empty_cells = v;
             }
         }
         "border-spacing" => {
@@ -12146,6 +12262,27 @@ fn apply_declaration(
                 "hidden" => ContentVisibility::Hidden,
                 _ => style.content_visibility,
             };
+        }
+        // CSS Box Sizing L4 §5 — contain-intrinsic-size and its longhands.
+        // Each value is `auto? [ none | <length> ]`. `none` → field stays/becomes
+        // `None`; the optional `auto` (last-remembered size) is accepted and
+        // ignored (we always use the length). Logical `*-block-size` /
+        // `*-inline-size` map to height / width under horizontal-tb writing modes.
+        "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
+            if let Some(v) = parse_contain_intrinsic_one(val) {
+                style.contain_intrinsic_width = v;
+            }
+        }
+        "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
+            if let Some(v) = parse_contain_intrinsic_one(val) {
+                style.contain_intrinsic_height = v;
+            }
+        }
+        "contain-intrinsic-size" => {
+            if let Some((w, h)) = parse_contain_intrinsic_size(val) {
+                style.contain_intrinsic_width = w;
+                style.contain_intrinsic_height = h;
+            }
         }
         "interpolate-size" => {
             // CSS Sizing L4 §4.5 — gates keyword-size interpolation in transitions.
@@ -13672,6 +13809,55 @@ fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks
 /// `<'text-wrap-mode'> || <'text-wrap-style'>` — 1..=2 keyword-а, любой
 /// порядок, без повторов внутри своего слота. Нераспознанный токен ⇒
 /// весь shorthand невалиден (initial-значения сохраняются как «после reset»).
+/// CSS Box Sizing L4 §5 — parse one `contain-intrinsic-*` component:
+/// `auto? [ none | <length> ]`. Returns `Some(None)` for `none` (no placeholder),
+/// `Some(Some(len))` for a length, and `None` on a parse error (declaration is
+/// then ignored, leaving the previous value). The leading `auto` keyword
+/// (last-remembered-size hint) is accepted and discarded.
+fn parse_contain_intrinsic_one(val: &str) -> Option<Option<Length>> {
+    let mut v = val.trim();
+    if let Some(rest) = v.strip_prefix("auto")
+        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        v = rest.trim_start();
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    parse_length(v).map(Some)
+}
+
+/// CSS Box Sizing L4 §5 — parse the `contain-intrinsic-size` shorthand:
+/// `[ auto? [ none | <length> ] ]{1,2}`. One component sets both axes; two set
+/// width then height. Returns `None` on any parse error.
+fn parse_contain_intrinsic_size(val: &str) -> Option<(Option<Length>, Option<Length>)> {
+    let tokens: Vec<&str> = val.split_whitespace().collect();
+    let mut comps: Vec<Option<Length>> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i].eq_ignore_ascii_case("auto") {
+            i += 1;
+            if i >= tokens.len() {
+                return None;
+            }
+        }
+        let t = tokens[i];
+        if t.eq_ignore_ascii_case("none") {
+            comps.push(None);
+        } else if let Some(l) = parse_length(t) {
+            comps.push(Some(l));
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    match comps.len() {
+        1 => Some((comps[0].clone(), comps[0].clone())),
+        2 => Some((comps[0].clone(), comps[1].clone())),
+        _ => None,
+    }
+}
+
 fn apply_text_wrap_shorthand(style: &mut ComputedStyle, val: &str) {
     style.text_wrap_mode = TextWrapMode::Wrap;
     style.text_wrap_style = TextWrapStyle::Auto;
@@ -14158,6 +14344,29 @@ fn apply_css_wide_keyword(
                 init.content_visibility
             };
         }
+        "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
+            style.contain_intrinsic_width = if inh_only_inherit {
+                inherited.contain_intrinsic_width.clone()
+            } else {
+                init.contain_intrinsic_width.clone()
+            };
+        }
+        "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
+            style.contain_intrinsic_height = if inh_only_inherit {
+                inherited.contain_intrinsic_height.clone()
+            } else {
+                init.contain_intrinsic_height.clone()
+            };
+        }
+        "contain-intrinsic-size" => {
+            if inh_only_inherit {
+                style.contain_intrinsic_width = inherited.contain_intrinsic_width.clone();
+                style.contain_intrinsic_height = inherited.contain_intrinsic_height.clone();
+            } else {
+                style.contain_intrinsic_width = init.contain_intrinsic_width.clone();
+                style.contain_intrinsic_height = init.contain_intrinsic_height.clone();
+            }
+        }
         "container-type" => {
             style.container_type = if inh_only_inherit {
                 inherited.container_type
@@ -14453,6 +14662,9 @@ fn apply_css_wide_keyword(
         "border-collapse" => {
             style.border_collapse = if inh_only_inherit { inherited.border_collapse } else { init.border_collapse };
         }
+        "empty-cells" => {
+            style.empty_cells = if inh_only_inherit { inherited.empty_cells } else { init.empty_cells };
+        }
         "border-spacing" => {
             style.border_spacing_h = if inh_only_inherit { inherited.border_spacing_h } else { init.border_spacing_h };
             style.border_spacing_v = if inh_only_inherit { inherited.border_spacing_v } else { init.border_spacing_v };
@@ -14594,6 +14806,10 @@ fn apply_css_wide_keyword(
             } else {
                 init.counter_set.clone()
             };
+        }
+        // CSS Generated Content L3 §3.2 — quotes inherited.
+        "quotes" => {
+            style.quotes = if inh { inherited.quotes.clone() } else { init.quotes.clone() };
         }
         // Masking / Transforms / Filter — все non-inherited.
         "clip-path" => {
@@ -14899,6 +15115,77 @@ fn is_css_ident(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// CSS Generated Content L3 §3.2 — parse the `quotes` value.
+///
+/// `auto` → [`Quotes::Auto`]; `none` → [`Quotes::None`]; otherwise an even
+/// number of CSS strings forms `(open, close)` pairs (outermost first).
+/// Returns `None` if the value is malformed (odd string count or none found).
+fn parse_quotes(value: &str) -> Option<Quotes> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(Quotes::Auto);
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Quotes::None);
+    }
+    let strings = parse_css_string_sequence(v);
+    if strings.is_empty() || !strings.len().is_multiple_of(2) {
+        return None;
+    }
+    let pairs = strings
+        .chunks_exact(2)
+        .map(|c| (c[0].clone(), c[1].clone()))
+        .collect();
+    Some(Quotes::Pairs(pairs))
+}
+
+/// Extracts consecutive CSS string literals from `s` (single- or double-quoted),
+/// unescaping `\XXXXXX` hex escapes and `\<char>` literals. Non-string tokens are
+/// skipped. Used by [`parse_quotes`].
+fn parse_css_string_sequence(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '"' || chars[i] == '\'' {
+            let quote = chars[i];
+            i += 1;
+            let mut cur = String::new();
+            while i < chars.len() && chars[i] != quote {
+                if chars[i] == '\\' {
+                    i += 1;
+                    let mut hex = String::new();
+                    while i < chars.len() && chars[i].is_ascii_hexdigit() && hex.len() < 6 {
+                        hex.push(chars[i]);
+                        i += 1;
+                    }
+                    if !hex.is_empty() {
+                        if i < chars.len() && chars[i].is_whitespace() {
+                            i += 1;
+                        }
+                        if let Ok(code) = u32::from_str_radix(&hex, 16)
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            cur.push(ch);
+                        }
+                    } else if i < chars.len() {
+                        cur.push(chars[i]);
+                        i += 1;
+                    }
+                } else {
+                    cur.push(chars[i]);
+                    i += 1;
+                }
+            }
+            i += 1; // skip closing quote
+            out.push(cur);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Парсит угол в радианах из строки вида `45deg`, `1.5rad`, `0.25turn`,
 /// `100grad`. Без единицы — number-as-radians (для совместимости).
 fn parse_angle_to_radians(s: &str) -> Option<f32> {
@@ -14972,12 +15259,14 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
     match func.as_str() {
         "path" => {
             // `path([<fill-rule>,]? "<svg-path>")`. Опциональный fill-rule
-            // (nonzero|evenodd) отбрасывается — Lumen клиппит полигоном по
-            // nonzero (см. ResolvedClipShape::Polygon). Строка пути в кавычках.
+            // (nonzero|evenodd) управляет заливкой самопересекающихся путей
+            // (CSS Shapes L1 §4). Строка пути — в кавычках.
+            let mut fill_rule = FillRule::NonZero;
             let inner = match inner.split_once(',') {
-                Some((head, rest))
-                    if matches!(head.trim(), "nonzero" | "evenodd") =>
-                {
+                Some((head, rest)) if matches!(head.trim(), "nonzero" | "evenodd") => {
+                    if head.trim().eq_ignore_ascii_case("evenodd") {
+                        fill_rule = FillRule::EvenOdd;
+                    }
                     rest.trim()
                 }
                 _ => inner,
@@ -14990,7 +15279,7 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             if pts.len() < 3 {
                 None
             } else {
-                Some(ClipPath::Path(pts))
+                Some(ClipPath::Path(pts, fill_rule))
             }
         }
         "inset" => {
@@ -15036,6 +15325,19 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             })
         }
         "polygon" => {
+            // `polygon([<fill-rule>,]? x1 y1, ...)`. Опциональный fill-rule —
+            // первый токен перед первой запятой (CSS Shapes L1 §3).
+            let mut fill_rule = FillRule::NonZero;
+            let mut inner = inner;
+            if let Some((head, rest)) = inner.split_once(',') {
+                let head = head.trim();
+                if head.eq_ignore_ascii_case("nonzero") || head.eq_ignore_ascii_case("evenodd") {
+                    if head.eq_ignore_ascii_case("evenodd") {
+                        fill_rule = FillRule::EvenOdd;
+                    }
+                    inner = rest.trim();
+                }
+            }
             let mut vertices = Vec::new();
             for pair in inner.split(',') {
                 let coords: Vec<ShapeValue> = pair
@@ -15049,7 +15351,7 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             if vertices.is_empty() {
                 None
             } else {
-                Some(ClipPath::Polygon(vertices))
+                Some(ClipPath::Polygon(vertices, fill_rule))
             }
         }
         _ => None,
@@ -16249,21 +16551,34 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
 
     let segments = split_top_level_commas(inner);
 
+    // CSS Images L4 §3.1 — the prelude (first comma-segment) may carry a
+    // `<color-interpolation-method>` (`in <space> [<hue> hue]?`) in any order
+    // with the direction/shape. Strip it so the direction parsers see a clean
+    // prelude, and apply the resulting space to the stop list.
+    let first_seg = segments.first().map(|s| s.trim()).unwrap_or("");
+    let (clean_first, interp_space) = extract_gradient_interpolation(first_seg);
+
+    let interp = |stops: Vec<GradientStop>| -> Vec<GradientStop> {
+        match interp_space {
+            Some(sp) if sp != MixColorSpace::Srgb => densify_gradient_stops_for_space(&stops, sp),
+            _ => stops,
+        }
+    };
+
     if is_linear {
         // The first segment may be an angle / "to <side>" direction.
-        let angle_deg = parse_linear_gradient_angle(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let angle_deg = parse_linear_gradient_angle(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Linear { angle_deg, stops, repeating: repeating_linear }
     } else if is_radial {
         // Radial: look for `at <x> <y>` in the first segment.
-        let (cx, cy) = parse_radial_gradient_center(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let (cx, cy) = parse_radial_gradient_center(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Radial { center_x_pct: cx, center_y_pct: cy, stops, repeating: repeating_radial }
     } else {
         // Conic: `[from <angle>]? [at <x> <y>]?` in the first segment.
-        let (from_angle_deg, cx, cy) =
-            parse_conic_gradient_params(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let (from_angle_deg, cx, cy) = parse_conic_gradient_params(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Conic {
             center_x_pct: cx,
             center_y_pct: cy,
@@ -16272,6 +16587,153 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
             repeating: repeating_conic,
         }
     }
+}
+
+/// CSS Images L4 §3.1 — parse and strip the `<color-interpolation-method>`
+/// (`in <space> [<hue> hue]?`) from a gradient prelude segment.
+///
+/// Returns the prelude with the clause removed plus the parsed interpolation
+/// space (`None` if absent). The hue-interpolation method keyword (for polar
+/// spaces) is parsed and dropped — [`mix_colors`](crate::color_mix::mix_colors)
+/// always interpolates hue over the shortest arc, the CSS default.
+///
+/// Tokens that are not part of the interpolation clause (direction, `to <side>`,
+/// `circle`/`ellipse`, `from <angle>`, `at <x> <y>`) are preserved in order, so
+/// `linear-gradient(45deg in oklch, …)` and `linear-gradient(in oklch 45deg, …)`
+/// both yield `("45deg", Some(Oklch))`.
+fn extract_gradient_interpolation(prelude: &str) -> (String, Option<MixColorSpace>) {
+    let tokens: Vec<&str> = prelude.split_whitespace().collect();
+    let mut space = None;
+    let mut kept: Vec<&str> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        if space.is_none()
+            && tokens[i].eq_ignore_ascii_case("in")
+            && let Some(sp) = tokens.get(i + 1).and_then(|t| MixColorSpace::from_css(t))
+        {
+            space = Some(sp);
+            i += 2;
+            // Optional `<hue-interpolation-method> hue` for polar spaces.
+            if let (Some(h), Some(hue_kw)) = (tokens.get(i), tokens.get(i + 1))
+                && matches!(
+                    h.to_ascii_lowercase().as_str(),
+                    "shorter" | "longer" | "increasing" | "decreasing"
+                )
+                && hue_kw.eq_ignore_ascii_case("hue")
+            {
+                i += 2;
+            }
+            continue;
+        }
+        kept.push(tokens[i]);
+        i += 1;
+    }
+    (kept.join(" "), space)
+}
+
+/// CSS Images L4 §3.1 — approximate gradient color interpolation in a non-sRGB
+/// `space` by subdividing every adjacent stop pair into intermediate stops whose
+/// colors are computed via [`mix_colors`](crate::color_mix::mix_colors) in that
+/// space. The renderer then interpolates the dense stop list linearly in sRGB,
+/// which closely matches true interpolation in `space` (e.g. `in oklch` keeps
+/// red→blue vivid instead of the muddy grey-purple of sRGB).
+///
+/// Stop positions are first resolved to percentages per CSS Images §3.4.3
+/// (first→0%, last→100%, interior runs evenly distributed, monotonic clamp).
+/// Returns the stops unchanged when there are fewer than two, or when any stop
+/// uses a non-percentage (`px`) position — px positions need the gradient line
+/// length, which is unknown at parse time.
+fn densify_gradient_stops_for_space(stops: &[GradientStop], space: MixColorSpace) -> Vec<GradientStop> {
+    if stops.len() < 2 {
+        return stops.to_vec();
+    }
+    // Resolve positions to percentages [0, 100]; bail on any non-percentage.
+    let mut pos: Vec<Option<f32>> = Vec::with_capacity(stops.len());
+    for st in stops {
+        match &st.position {
+            None => pos.push(None),
+            Some(Length::Percent(p)) => pos.push(Some(*p)),
+            Some(_) => return stops.to_vec(),
+        }
+    }
+    let last = pos.len() - 1;
+    if pos[0].is_none() {
+        pos[0] = Some(0.0);
+    }
+    if pos[last].is_none() {
+        pos[last] = Some(100.0);
+    }
+    // Evenly distribute interior runs of unpositioned stops between anchors.
+    let mut i = 1;
+    while i < pos.len() {
+        if pos[i].is_some() {
+            i += 1;
+            continue;
+        }
+        let prev = pos[i - 1].unwrap_or(0.0);
+        let mut k = i;
+        while k < pos.len() && pos[k].is_none() {
+            k += 1;
+        }
+        let next = pos.get(k).and_then(|p| *p).unwrap_or(100.0);
+        let gaps = (k - i + 1) as f32;
+        for (offset, idx) in (i..k).enumerate() {
+            let frac = (offset + 1) as f32 / gaps;
+            pos[idx] = Some(prev + (next - prev) * frac);
+        }
+        i = k;
+    }
+    // Enforce monotonic non-decreasing positions.
+    let mut resolved: Vec<f32> = pos.into_iter().map(|p| p.unwrap_or(0.0)).collect();
+    for n in 1..resolved.len() {
+        if resolved[n] < resolved[n - 1] {
+            resolved[n] = resolved[n - 1];
+        }
+    }
+
+    let to_f = |c: Color| -> [f32; 4] {
+        [
+            c.r as f32 / 255.0,
+            c.g as f32 / 255.0,
+            c.b as f32 / 255.0,
+            c.a as f32 / 255.0,
+        ]
+    };
+    let from_f = |m: [f32; 4]| -> Color {
+        Color {
+            r: (m[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+            g: (m[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+            b: (m[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+            a: (m[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+        }
+    };
+
+    // Number of sub-segments per stop pair. 16 keeps the polyfill within the
+    // 0.5% diff budget against true space interpolation while bounding output.
+    const SEGMENTS: usize = 16;
+    let mut out: Vec<GradientStop> = Vec::with_capacity((stops.len() - 1) * SEGMENTS + 1);
+    out.push(GradientStop {
+        color: stops[0].color,
+        position: Some(Length::Percent(resolved[0])),
+    });
+    for w in 0..stops.len() - 1 {
+        let a = to_f(stops[w].color);
+        let b = to_f(stops[w + 1].color);
+        let p0 = resolved[w];
+        let p1 = resolved[w + 1];
+        for j in 1..SEGMENTS {
+            let t = j as f32 / SEGMENTS as f32;
+            out.push(GradientStop {
+                color: from_f(mix_colors(space, a, 1.0 - t, b, t)),
+                position: Some(Length::Percent(p0 + (p1 - p0) * t)),
+            });
+        }
+        out.push(GradientStop {
+            color: stops[w + 1].color,
+            position: Some(Length::Percent(p1)),
+        });
+    }
+    out
 }
 
 /// Parse the direction/angle portion of a `linear-gradient`.
@@ -16544,6 +17006,7 @@ fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
 /// `dark_mode` отражает OS-предпочтение `prefers-color-scheme: dark`,
 /// прокинутое shell-ом через `layout_measured_hyp`.
 fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext {
+    // hover/pointer берут desktop-дефолты (мышь) из `MediaContext::default()`.
     MediaContext {
         media_type: "screen".into(),
         width: viewport.width,
@@ -16551,6 +17014,7 @@ fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext 
         prefers_dark: dark_mode,
         prefers_reduced_motion: false,
         forced_colors: false,
+        ..Default::default()
     }
 }
 
@@ -22381,6 +22845,60 @@ mod tests {
         s
     }
 
+    // === quotes parsing (CSS Generated Content L3 §3.2) ===
+
+    #[test]
+    fn quotes_auto_and_none() {
+        assert_eq!(ts_prop("quotes", "auto").quotes, Quotes::Auto);
+        assert_eq!(ts_prop("quotes", "none").quotes, Quotes::None);
+    }
+
+    #[test]
+    fn quotes_explicit_pairs() {
+        let s = ts_prop("quotes", "\"«\" \"»\" \"‹\" \"›\"");
+        assert_eq!(
+            s.quotes,
+            Quotes::Pairs(vec![
+                ("«".to_string(), "»".to_string()),
+                ("‹".to_string(), "›".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn quotes_odd_string_count_rejected() {
+        // Three strings → malformed → value unchanged (stays initial Auto).
+        let s = ts_prop("quotes", "\"a\" \"b\" \"c\"");
+        assert_eq!(s.quotes, Quotes::Auto);
+    }
+
+    #[test]
+    fn quotes_hex_escape_decoded() {
+        // \201C “ and \201D ”.
+        let s = ts_prop("quotes", "\"\\201C\" \"\\201D\"");
+        assert_eq!(
+            s.quotes,
+            Quotes::Pairs(vec![("\u{201C}".to_string(), "\u{201D}".to_string())])
+        );
+    }
+
+    #[test]
+    fn quotes_pair_for_depth_clamps() {
+        let q = Quotes::Pairs(vec![
+            ("«".to_string(), "»".to_string()),
+            ("‹".to_string(), "›".to_string()),
+        ]);
+        assert_eq!(q.pair_for_depth(0), Some(("«", "»")));
+        assert_eq!(q.pair_for_depth(1), Some(("‹", "›")));
+        // Beyond the last pair → clamp to last.
+        assert_eq!(q.pair_for_depth(5), Some(("‹", "›")));
+        // Auto uses the built-in English pairs.
+        assert_eq!(Quotes::Auto.pair_for_depth(0), Some(("\u{201C}", "\u{201D}")));
+        assert_eq!(Quotes::Auto.pair_for_depth(1), Some(("\u{2018}", "\u{2019}")));
+        // none → no glyphs.
+        assert_eq!(Quotes::None.pair_for_depth(0), None);
+    }
+
     // === transition shorthand parsing (CSS Transitions L1 §3) ===
 
     fn ts(val: &str) -> ComputedStyle {
@@ -24921,6 +25439,89 @@ mod tests {
         assert_eq!(input_style.field_sizing, FieldSizing::Fixed);
     }
 
+    // --- contain-intrinsic-size (CSS Box Sizing L4 §5) ---
+
+    #[test]
+    fn contain_intrinsic_size_default_is_none() {
+        let s = ComputedStyle::root();
+        assert!(s.contain_intrinsic_width.is_none());
+        assert!(s.contain_intrinsic_height.is_none());
+    }
+
+    #[test]
+    fn contain_intrinsic_size_shorthand_two_values() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 200px 100px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(200.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(100.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_shorthand_one_value_both_axes() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 50px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(50.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_auto_keyword_uses_length() {
+        // `auto <length>` — the `auto` last-remembered hint is accepted and the
+        // length is used as the placeholder.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: auto 300px auto 150px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(300.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(150.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_none_is_no_placeholder() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(s.contain_intrinsic_width.is_none());
+        assert!(s.contain_intrinsic_height.is_none());
+    }
+
+    #[test]
+    fn contain_intrinsic_height_longhand_and_logical_alias() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { contain-intrinsic-height: 80px; contain-intrinsic-inline-size: 40px; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(80.0)));
+        // inline-size maps to width under horizontal-tb.
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(40.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 200px 100px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.contain_intrinsic_height, Some(Length::Px(100.0)));
+        assert!(span_style.contain_intrinsic_width.is_none());
+        assert!(span_style.contain_intrinsic_height.is_none());
+    }
+
     // --- Display extended values ---
 
     #[test]
@@ -26834,6 +27435,109 @@ mod tests {
         assert!(parse_color("color-mix(in srgb, red)").is_none());
     }
 
+    // ── gradient color-interpolation-method (CSS Images L4 §3.1) ──────────────
+
+    /// `extract_gradient_interpolation` strips the `in <space>` clause and
+    /// returns the parsed space, preserving an accompanying angle in any order.
+    #[test]
+    fn gradient_interp_extract_space_and_angle() {
+        let (clean, sp) = extract_gradient_interpolation("45deg in oklch");
+        assert_eq!(clean, "45deg");
+        assert_eq!(sp, Some(MixColorSpace::Oklch));
+
+        let (clean, sp) = extract_gradient_interpolation("in oklch 45deg");
+        assert_eq!(clean, "45deg");
+        assert_eq!(sp, Some(MixColorSpace::Oklch));
+
+        // Polar hue-interpolation keyword is parsed and dropped.
+        let (clean, sp) = extract_gradient_interpolation("to right in hsl longer hue");
+        assert_eq!(clean, "to right");
+        assert_eq!(sp, Some(MixColorSpace::Hsl));
+
+        // No interpolation clause — prelude untouched, no space.
+        let (clean, sp) = extract_gradient_interpolation("to bottom right");
+        assert_eq!(clean, "to bottom right");
+        assert_eq!(sp, None);
+    }
+
+    /// A plain `linear-gradient(red, blue)` (no `in <space>`) keeps exactly two
+    /// stops — the densify path must not fire without an interpolation method.
+    #[test]
+    fn gradient_srgb_default_not_densified() {
+        let g = parse_background_gradient("linear-gradient(red, blue)");
+        match g {
+            ParsedGradient::Linear { stops, angle_deg, .. } => {
+                assert_eq!(stops.len(), 2, "no interpolation method → no extra stops");
+                assert!((angle_deg - 180.0).abs() < 0.01, "default direction = to bottom");
+            }
+            other => panic!("expected linear, got {other:?}"),
+        }
+    }
+
+    /// `in oklab` subdivides the stop list, preserves the direction, and the
+    /// ~50% stop matches perceptual interpolation — distinct from the naive
+    /// sRGB blend (sRGB red→blue midpoint is rgb(127,0,127) with **no green**,
+    /// whereas oklab introduces a visible green component, ~rgb(140,83,162)).
+    #[test]
+    fn gradient_oklab_densifies_and_differs_from_srgb() {
+        let g = parse_background_gradient("linear-gradient(90deg in oklab, red, blue)");
+        let ParsedGradient::Linear { stops, angle_deg, .. } = g else {
+            panic!("expected linear");
+        };
+        assert!((angle_deg - 90.0).abs() < 0.01, "angle preserved past `in oklab`");
+        assert!(stops.len() > 2, "oklab interpolation should add intermediate stops");
+        // First/last endpoints unchanged.
+        assert_eq!((stops[0].color.r, stops[0].color.b), (255, 0), "starts red");
+        let last = stops.last().unwrap().color;
+        assert_eq!((last.r, last.b), (0, 255), "ends blue");
+        // Midpoint (~50%): oklab introduces green that the sRGB blend lacks.
+        let mid = stops
+            .iter()
+            .min_by(|a, b| {
+                let key = |s: &GradientStop| match s.position {
+                    Some(Length::Percent(v)) => (v - 50.0).abs(),
+                    _ => f32::INFINITY,
+                };
+                key(a).partial_cmp(&key(b)).unwrap()
+            })
+            .unwrap()
+            .color;
+        assert!(
+            mid.g > 20,
+            "oklab midpoint has visible green (sRGB would be 0), got g={}",
+            mid.g
+        );
+    }
+
+    /// Densification keeps resolved stop positions monotonic and within [0,100],
+    /// and an unknown interpolation space falls back gracefully (parses fine,
+    /// no densify because `MixColorSpace::from_css` rejects the token).
+    #[test]
+    fn gradient_interp_positions_and_unknown_space() {
+        let g = parse_background_gradient("radial-gradient(in oklab, red 10%, lime 40%, blue 90%)");
+        let ParsedGradient::Radial { stops, .. } = g else {
+            panic!("expected radial");
+        };
+        assert!(stops.len() > 3);
+        let mut prev = -1.0_f32;
+        for st in &stops {
+            if let Some(Length::Percent(p)) = st.position {
+                assert!(p >= prev - 0.01, "positions monotonic: {p} after {prev}");
+                assert!((0.0..=100.0).contains(&p), "position in range: {p}");
+                prev = p;
+            }
+        }
+
+        // Unknown space token: not stripped, treated as a (skipped) prelude
+        // token; stops parse normally and are not densified.
+        let g = parse_background_gradient("linear-gradient(in bogus, red, blue)");
+        if let ParsedGradient::Linear { stops, .. } = g {
+            assert_eq!(stops.len(), 2, "unknown space → no densify");
+        } else {
+            panic!("expected linear");
+        }
+    }
+
     // ── color() predefined color spaces (CSS Color L4 §10) ─────────────────────
 
     /// Parse a `color()` string through the cascade colour path and resolve to
@@ -27695,6 +28399,89 @@ mod anchor_positioning_tests {
         let table = doc.get(body).children[0];
         let s = compute_style(&doc, table, &sheet, &root, VP, false);
         assert_eq!(s.border_collapse, BorderCollapse::Separate, "initial resets to Separate");
+    }
+
+    // ── empty-cells ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn p4_empty_cells_default_is_show() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show);
+    }
+
+    #[test]
+    fn p4_empty_cells_parse_hide() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: hide; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Hide);
+    }
+
+    #[test]
+    fn p4_empty_cells_parse_show_explicit() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: show; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show);
+    }
+
+    #[test]
+    fn p4_empty_cells_inherited_by_cells() {
+        // empty-cells is inherited: td should see the table's hide value.
+        let doc = lumen_html_parser::parse("<table><tr><td>x</td></tr></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: hide; }");
+        let root_style = ComputedStyle::root();
+        let body_node = doc.body().expect("body");
+        let body_style = compute_style(&doc, body_node, &sheet, &root_style, VP, false);
+        fn find_tag(doc: &lumen_dom::Document, parent: lumen_dom::NodeId, tag_name: &str) -> Option<lumen_dom::NodeId> {
+            for &c in &doc.get(parent).children {
+                if let lumen_dom::NodeData::Element { name, .. } = &doc.get(c).data
+                    && name.local == tag_name
+                {
+                    return Some(c);
+                }
+                if let Some(found) = find_tag(doc, c, tag_name) { return Some(found); }
+            }
+            None
+        }
+        let table = find_tag(&doc, body_node, "table").expect("table");
+        let table_style = compute_style(&doc, table, &sheet, &body_style, VP, false);
+        let tr = find_tag(&doc, table, "tr").expect("tr");
+        let tr_style = compute_style(&doc, tr, &sheet, &table_style, VP, false);
+        let td = find_tag(&doc, tr, "td").expect("td");
+        let td_style = compute_style(&doc, td, &sheet, &tr_style, VP, false);
+        assert_eq!(td_style.empty_cells, EmptyCells::Hide, "td inherits hide from table");
+    }
+
+    #[test]
+    fn p4_empty_cells_initial_via_keyword() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse(
+            "table { empty-cells: hide; } table { empty-cells: initial; }",
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show, "initial resets to Show");
+    }
+
+    #[test]
+    fn p4_empty_cells_keyword_parse() {
+        assert_eq!(EmptyCells::parse("show"), Some(EmptyCells::Show));
+        assert_eq!(EmptyCells::parse("hide"), Some(EmptyCells::Hide));
+        assert_eq!(EmptyCells::parse("bogus"), None);
     }
 
 }

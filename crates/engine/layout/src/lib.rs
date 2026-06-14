@@ -50,7 +50,7 @@ pub use counters::{
     format_counter, format_counter_with_registry, precompute_counters,
     build_counter_style_registry, build_list_marker_text, resolve_counter_value,
     CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
-    CounterSystem, CounterRange, RangeBound,
+    CounterSystem, CounterRange, QuoteSlot, RangeBound,
 };
 pub use color_mix::{MixColorSpace, mix_colors};
 pub use field_sizing::field_sizing_content_intrinsic;
@@ -113,13 +113,13 @@ pub use style::{
     set_interactive_state, clear_interactive_state,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
-    AlignValue, AnimationDirection, ContainerContext,
+    AlignValue, AnimationDirection, Appearance, ContainerContext,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     ClearSide, ContainFlags, ComputedStyle, Content,
-    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
+    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
     FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
     MasonryAutoFlow,
@@ -127,7 +127,7 @@ pub use style::{
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
     PointerEvents,
-    Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
+    Position, PositionComponent, Quotes, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
     FillRule, ScrollbarWidth, ShapeValue, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextDecorationSkipInk, TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
@@ -8886,11 +8886,12 @@ mod tests {
         );
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
-            Some(ClipPath::Polygon(verts)) => {
+            Some(ClipPath::Polygon(verts, rule)) => {
                 assert_eq!(verts.len(), 3);
                 assert_eq!(verts[0], (ShapeValue::Px(0.0), ShapeValue::Px(0.0)));
                 assert_eq!(verts[1], (ShapeValue::Px(100.0), ShapeValue::Px(0.0)));
                 assert_eq!(verts[2], (ShapeValue::Px(50.0), ShapeValue::Px(100.0)));
+                assert_eq!(rule, FillRule::NonZero, "default fill-rule = nonzero");
             }
             _ => panic!("expected Polygon, got {cp:?}"),
         }
@@ -8906,7 +8907,7 @@ mod tests {
         );
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
-            Some(ClipPath::Polygon(verts)) => {
+            Some(ClipPath::Polygon(verts, _)) => {
                 assert_eq!(verts.len(), 3);
                 assert_eq!(verts[0], (ShapeValue::Pct(50.0), ShapeValue::Pct(0.0)));
                 assert_eq!(verts[1], (ShapeValue::Pct(100.0), ShapeValue::Pct(100.0)));
@@ -8926,10 +8927,11 @@ mod tests {
         );
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
-            Some(ClipPath::Path(pts)) => {
+            Some(ClipPath::Path(pts, rule)) => {
                 assert!(pts.contains(&(0.0, 0.0)));
                 assert!(pts.contains(&(100.0, 0.0)));
                 assert!(pts.contains(&(50.0, 80.0)));
+                assert_eq!(rule, FillRule::NonZero, "default fill-rule = nonzero");
             }
             _ => panic!("expected Path, got {cp:?}"),
         }
@@ -8937,13 +8939,36 @@ mod tests {
 
     #[test]
     fn clip_path_path_with_fill_rule() {
-        // Опциональный fill-rule перед строкой пути отбрасывается.
+        // CSS Shapes L1 §4 — опциональный fill-rule перед строкой пути
+        // сохраняется и управляет заливкой самопересекающихся путей.
         let root = lay(
             "<p>x</p>",
             r#"p { clip-path: path(evenodd, "M 0 0 L 10 0 L 10 10 Z"); }"#,
         );
         let cp = first_p_style(&root).clip_path.clone();
-        assert!(matches!(cp, Some(ClipPath::Path(_))), "got {cp:?}");
+        match cp {
+            Some(ClipPath::Path(_, rule)) => {
+                assert_eq!(rule, FillRule::EvenOdd, "evenodd должен сохраниться");
+            }
+            _ => panic!("expected Path, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_polygon_evenodd() {
+        // CSS Shapes L1 §3 — polygon() принимает опциональный fill-rule.
+        let root = lay(
+            "<p>x</p>",
+            "p { clip-path: polygon(evenodd, 0 0, 100px 0, 50px 100px); }",
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Polygon(verts, rule)) => {
+                assert_eq!(verts.len(), 3, "fill-rule не должен поглотить вершину");
+                assert_eq!(rule, FillRule::EvenOdd);
+            }
+            _ => panic!("expected Polygon, got {cp:?}"),
+        }
     }
 
     #[test]

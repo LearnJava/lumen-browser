@@ -68,7 +68,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | ✅ | mix-blend-mode blend pipeline ✅; background-blend-mode comma-list cycling ✅ 2026-05-27 | **#15** |
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | ✅ | conic-gradient() ✅ 2026-05-24; multiple bg layers ✅ 2026-05-26 | **#17** |
-| CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
+| CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | 🟡 | image-set() ✅ 2026-06-02; cross-fade() ✅ 2026-06-02; gradient `<color-interpolation-method>` (`in <space>`) ✅ 2026-06-14 (p4-gradient-interpolation: srgb/srgb-linear/oklab/lab/hsl/hwb/xyz via dense-stop polyfill; polar oklch/lch blocked by BUG-154) | **#18** |
 | CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ✅ 2026-05-24 | **#19** |
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
@@ -90,10 +90,10 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset ✅ 2026-06-10 | **#32** |
 | CSS Scrollbars L1 | [css-scrollbars-1](https://www.w3.org/TR/css-scrollbars-1/) | 🟡 | scrollbar-width/color rendering | **#33** |
 | CSS Basic UI L3/L4 | [css3-ui](https://www.w3.org/TR/css3-ui/) | 🟡 | resize drag-UI; appearance form widgets; field-sizing ✅ 2026-06-13 | **#34** |
-| Media Queries L4/L5 | [mediaqueries-4](https://www.w3.org/TR/mediaqueries-4/) | 🟡 | prefers-reduced-motion; hover; pointer | **#35** |
+| Media Queries L4/L5 | [mediaqueries-4](https://www.w3.org/TR/mediaqueries-4/) | 🟡 | prefers-reduced-motion ✅; hover/any-hover/pointer/any-pointer ✅ 2026-06-14 (p4-media-hover-pointer: desktop defaults hover/fine) | **#35** |
 | CSS Conditional L4 | [css-conditional-4](https://www.w3.org/TR/css-conditional-4/) | 🟡 | @supports full feature detection | **#36** |
 | CSS Color Adjust L1 | [css-color-adjust-1](https://www.w3.org/TR/css-color-adjust-1/) | 🟡 | color-scheme UA switching | **#37** |
-| CSS Box Sizing L4 | [css-sizing-4](https://www.w3.org/TR/css-sizing-4/) | 🟡 | contain-intrinsic-size (interpolate-size ✅) | **#38** |
+| CSS Box Sizing L4 | [css-sizing-4](https://www.w3.org/TR/css-sizing-4/) | ✅ | contain-intrinsic-size ✅ 2026-06-14 (p4-contain-intrinsic-size: longhands + logical aliases + shorthand; size-containment wiring for block/flex/grid height + inline-block width); interpolate-size ✅ | **#38** |
 | CSS Overflow L4 | [css-overflow-4](https://www.w3.org/TR/css-overflow-4/) | ✅ | line-clamp multi-line truncation (layout algorithm done; -webkit-line-clamp/line-clamp, ellipsis, N-line truncation) | **#39** |
 | CSS Easing L1 | [css-easing-1](https://www.w3.org/TR/css-easing-1/) | 🟡 | cubic-bezier/steps interpolation wiring | **#40** |
 
@@ -103,7 +103,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 |--------|------|--------|--------------|---------|
 | CSS Writing Modes L4 | [css-writing-modes-4](https://www.w3.org/TR/css-writing-modes-4/) | 🟡 | vertical-rl/lr layout axis swap | **#41** |
 | CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry ✅ 2026-06-10 (`masonry.rs`, `GridTrackSize::Masonry`, greedy waterfall algorithm) | **#42** |
-| CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | circle() ✅ 2026-06-03; polygon/ellipse ✅ (`shape_polygons`/`shape_ellipses`); inset() ✅ 2026-06-10 (`shape_insets`, `parse_shape_inset_px`, rounded corners); `clip-path: path()` ✅ 2026-06-14 (p4-clip-path-path); `shape-outside: path()` ⬜ | **#43** |
+| CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | circle() ✅ 2026-06-03; polygon/ellipse ✅ (`shape_polygons`/`shape_ellipses`); inset() ✅ 2026-06-10 (`shape_insets`, `parse_shape_inset_px`, rounded corners); `clip-path: path()` ✅ 2026-06-14 (p4-clip-path-path); `path()`/`polygon()` `<fill-rule>` evenodd/nonzero ✅ 2026-06-14 (p4-clip-path-fill-rule); `shape-outside: path()` ✅ 2026-06-14 (p4-shape-outside-path: `parse_shape_path_px` flattens SVG path → wrapping polygon) | **#43** |
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ✅ | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ✅ (p4-relative-color 2026-06-13) | **#46** |
@@ -206,7 +206,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `color-scheme` | 🟡 | parsed; UA switching ⬜ |
 | `forced-color-adjust` | 🟡 | parsed; Forced Colors Mode ⬜ |
 | `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
-| `accent-color` | 🟡 | parsed; UA default ⬜ |
+| `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
 | `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |
 | `color()` predefined spaces | ✅ | srgb/display-p3/rec2020 + srgb-linear/a98-rgb/prophoto-rgb/xyz/xyz-d65/xyz-d50 (P4 2026-06-13); non-displayable gamut-mapped to sRGB; 11 tests; test 96 |
 
@@ -349,6 +349,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `display: table-header-group` / `table-footer-group` | 🟡 | parsed |
 | `border-collapse` | ✅ | ComputedStyle.border_collapse wired; collapse zeroes spacing; 5 unit-тестов + graphic test 80 (P4 2026-06-10) |
 | `border-spacing` | ✅ | border_spacing_h/v in ComputedStyle; zero when collapse mode |
+| `empty-cells` | ✅ | ComputedStyle.empty_cells (inherited); `hide` suppresses border+bg of empty cells in separate mode; wired in emit_table_cell; 6 unit + 5 paint tests + graphic test 115 (P4 2026-06-14) |
 | `caption-side` / `table-layout` | 🟡 | parsed |
 
 ### [T1] Positioning (sticky & z-index)
@@ -402,7 +403,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@media` | ✅ | width/height exact ✅; min/max ✅; em/rem units ✅; orientation ✅; aspect-ratio ✅; re-eval on resize ✅ |
 | `prefers-color-scheme` | ✅ | |
 | `prefers-reduced-motion` | ✅ | parsed + matched; OS integration deferred (always `no-preference` until shell wires OS pref) |
-| `hover`, `pointer` | ⬜ | |
+| `hover`, `pointer` | ✅ | Media Queries L4 §5.3-5.6; `hover`/`any-hover` (none/hover) + `pointer`/`any-pointer` (none/coarse/fine); desktop defaults hover/fine in `MediaContext`; 8 tests + graphic 118 (P4 2026-06-14) |
 | `prefers-contrast` / `prefers-reduced-data` | ⬜ | MQ L5 |
 
 ---
@@ -418,8 +419,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `clip-path` | ✅ | inset/circle/ellipse/polygon rendered (bbox-clip); complex paths ⬜ |
-| `clip-rule` | ⬜ | evenodd/nonzero |
+| `clip-path` | ✅ | inset/circle/ellipse/polygon/path() rendered; `<fill-rule>` (nonzero/evenodd) in path()/polygon() ✅ 2026-06-14 |
+| `clip-rule` | ⬜ | evenodd/nonzero (SVG-only; CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14) |
 | `mask` (shorthand) | 🟡 | |
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed |
@@ -457,6 +458,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `object-fit` / `object-position` | ✅ | |
 | `image-set()` | ⬜ | CSS Images L4 |
 | `conic-gradient()` | ✅ | ParsedGradient::Conic + DrawConicGradient + GPU shader 2026-05-24 |
+| gradient `in <space>` (color-interpolation-method) | 🟡 | rectangular + hsl/hwb ✅ 2026-06-14 (dense-stop polyfill via color-mix); polar oklch/lch ⬜ BUG-154 |
 | `cross-fade()` | ⬜ | CSS Images L4 |
 
 ### [T2] CSS Grid
@@ -544,7 +546,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `content` | 🟡 | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; url() ⬜ |
+| `content` | 🟡 | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; open-quote/close-quote ✅ 2026-06-14; url() ⬜ |
+| `quotes` | ✅ | CSS Generated Content L3 §3.2; auto/none/[<string> <string>]+; nesting depth tracked in document order via counters pre-pass; тест 117 2026-06-14 |
 
 ### [T3] Box Alignment (grid)
 
@@ -576,7 +579,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `pointer-events` | 🟡 | none ✅ (cursor wired); auto/shell enforcement ⬜ |
 | `touch-action` | 🟡 | parsed; gesture ⬜ |
 | `resize` | 🟡 | parsed; drag-UI ⬜ |
-| `appearance` | 🟡 | parsed; form widgets ⬜ |
+| `appearance` | ✅ | none/auto/compat; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14) |
 | `caret-color` | 🟡 | parsed; text input ⬜ |
 | `will-change` | 🟡 | parsed; GPU hints ⬜ |
 

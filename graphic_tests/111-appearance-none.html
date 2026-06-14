@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<!-- CSS Basic UI L4 §4.2 — appearance: none.
+     `appearance: none` strips a form control's native "primitive appearance":
+     the checkbox tick, radio dot, range slider track/thumb and <progress> bar
+     are all removed, leaving a plain box the author can restyle. Each control
+     below sits inside a light wrapper and is given an explicit size; with the
+     native UI suppressed both Lumen and the reference UA render an empty control,
+     so the only painted colour comes from the wrappers. If the engine failed to
+     suppress the indicator, a stray blue tick/bar would appear over the wrapper —
+     that divergence is exactly what this page guards against.
+     Controls are kept small (24px) so the size stays close to the reference. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 24px; box-sizing: border-box; }
+
+  .row { display: block; margin-bottom: 28px; }
+  .box {
+    display: inline-block;
+    width: 44px; height: 44px;
+    margin-right: 16px;
+    background: #cfe3ff;
+    border-radius: 6px;
+    vertical-align: middle;
+  }
+  /* appearance:none removes the native UI; the controls become blank boxes. */
+  .box > input,
+  .box > progress {
+    appearance: none;
+    -webkit-appearance: none;
+    display: block;
+    width: 24px; height: 24px;
+    margin: 10px;
+  }
+  .box > progress { width: 24px; height: 12px; margin: 16px 10px; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- Checked checkboxes — no native tick must be painted. -->
+  <div class="row">
+    <span class="box"><input type="checkbox" checked></span>
+    <span class="box"><input type="checkbox" checked></span>
+    <span class="box"><input type="checkbox"></span>
+  </div>
+
+  <!-- Checked radios — no native dot must be painted. -->
+  <div class="row">
+    <span class="box"><input type="radio" checked></span>
+    <span class="box"><input type="radio" checked></span>
+    <span class="box"><input type="radio"></span>
+  </div>
+
+  <!-- Range sliders — no native track/thumb must be painted. -->
+  <div class="row">
+    <span class="box"><input type="range" value="50" min="0" max="100"></span>
+    <span class="box"><input type="range" value="20" min="0" max="100"></span>
+  </div>
+
+  <!-- Progress bars — no native value bar must be painted. -->
+  <div class="row">
+    <span class="box"><progress value="0.6" max="1"></progress></span>
+    <span class="box"><progress value="0.3" max="1"></progress></span>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<!-- CSS UI L4 §6.1 — accent-color.
+     The accent-color property tints the "accent" of UA-rendered form controls:
+     the checked checkbox/radio indicator, the filled portion + thumb of a range
+     slider, and the value bar of <progress>. Each row pins a different accent so
+     the tint is the only variable. <meter> is intentionally omitted — it keeps
+     the semantic green/yellow/red bar, not the accent color. Native control
+     sizes are kept (16px boxes, 160px sliders) so the divergence from the
+     reference UA stays small. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 24px; box-sizing: border-box; }
+
+  .row { display: block; margin-bottom: 28px; }
+  input[type=checkbox], input[type=radio] { width: 16px; height: 16px; }
+  input[type=range] { width: 160px; }
+  progress { width: 160px; height: 16px; }
+
+  .a-red    { accent-color: #d12f2f; }
+  .a-green  { accent-color: #1f9d3a; }
+  .a-orange { accent-color: #e8820c; }
+  .a-purple { accent-color: #7a2fd1; }
+  /* No accent-color → UA default blue. */
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <div class="row">
+    <input type="checkbox" class="a-red" checked>
+    <input type="checkbox" class="a-green" checked>
+    <input type="checkbox" class="a-orange" checked>
+    <input type="checkbox" class="a-purple" checked>
+    <input type="checkbox" checked>
+  </div>
+
+  <div class="row">
+    <input type="radio" class="a-red" checked>
+    <input type="radio" class="a-green" checked>
+    <input type="radio" class="a-orange" checked>
+    <input type="radio" class="a-purple" checked>
+    <input type="radio" checked>
+  </div>
+
+  <div class="row">
+    <input type="range" class="a-red"    value="40" min="0" max="100">
+    <input type="range" class="a-green"  value="60" min="0" max="100">
+    <input type="range" class="a-orange" value="80" min="0" max="100">
+  </div>
+
+  <div class="row">
+    <progress class="a-red"    value="0.4" max="1"></progress>
+    <progress class="a-green"  value="0.6" max="1"></progress>
+    <progress class="a-purple" value="0.8" max="1"></progress>
+  </div>
+
+</div>
+</body>
+</html>
