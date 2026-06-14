@@ -60,6 +60,8 @@ pub mod tls;
 pub mod ctap2;
 pub mod webauthn;
 pub(crate) mod websocket;
+pub mod remote;
+pub use remote::RemoteNetworkTransport;
 pub use auth::StaticCredentialProvider;
 pub use ctap2::{CompositeCredentialProvider, CtapRoamingTransport};
 pub use socks5::Socks5Proxy;

@@ -54,6 +54,7 @@ mod session_persist;
 mod tab_lifecycle;
 mod tabs;
 mod zoom;
+mod network_service;
 
 use crate::tab_lifecycle::state::TabState;
 use std::cell::Cell;
@@ -216,6 +217,7 @@ fn main() -> ExitCode {
     let det_mode = det_cfg.enabled;
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
+    let (use_network_service, rest_args) = extract_network_service(&rest_args);
     let (proxy, rest_args) = match extract_proxy(&rest_args) {
         Ok(r) => r,
         Err(err) => {
@@ -276,6 +278,25 @@ fn main() -> ExitCode {
         }),
         log: Arc::clone(&blocked_log),
     });
+
+    // PH1-4: Запустить сетевой сервис как дочерний процесс (если --network-service).
+    // Хендл живёт до конца main() — при дропе убивает дочерний процесс.
+    // _transport хранит Arc, чтобы не дропнуть IPC-соединение до конца сессии.
+    let (_network_svc, _transport) = if use_network_service {
+        match network_service::NetworkServiceHandle::spawn() {
+            Ok((handle, transport)) => {
+                eprintln!("lumen: сетевой сервис запущен (PH1-4, --network-service)");
+                (Some(handle), Some(transport))
+            }
+            Err(e) => {
+                eprintln!("lumen: не удалось запустить сетевой сервис: {e}");
+                eprintln!("lumen: продолжаю со встроенным HttpClient");
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
 
     // --import-session переопределяет источник страницы и начальный scroll.
     let (cli, initial_scroll) = match import_session {
@@ -842,6 +863,7 @@ fn print_usage() {
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
     eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
     eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
+    eprintln!("  [--network-service]                             — вынести HTTP/TLS/DNS в отдельный процесс (PH1-4)");
 }
 
 /// Извлечь `--print-to-pdf <output.pdf>` из аргументов.
@@ -998,6 +1020,23 @@ fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
     let mut rest = Vec::new();
     for arg in args {
         if arg == "--no-scrollbar" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
+/// Извлечь `--network-service` из аргументов (PH1-4).
+///
+/// Когда флаг присутствует, шелл запускает `lumen-network-service` как дочерний процесс
+/// и делегирует все HTTP/TLS/DNS запросы через IPC вместо встроенного `HttpClient`.
+fn extract_network_service(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = false;
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--network-service" {
             found = true;
         } else {
             rest.push(arg.clone());

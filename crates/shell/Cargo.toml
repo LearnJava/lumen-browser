@@ -31,6 +31,8 @@ backend-wgpu = ["lumen-paint/backend-wgpu"]
 
 [dependencies]
 lumen-core.workspace = true
+# PH1-4: IPC to the out-of-process network service (NetworkServiceHandle, --network-service).
+lumen-ipc.workspace = true
 lumen-a11y.workspace = true
 lumen-devtools.workspace = true
 lumen-knowledge.workspace = true

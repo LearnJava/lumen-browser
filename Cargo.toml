@@ -11,6 +11,7 @@ members = [
     "crates/storage",
     "crates/knowledge",
     "crates/bench",
+    "crates/ipc",
     "crates/engine/html-parser",
     "crates/engine/css-parser",
     "crates/engine/dom",
@@ -32,6 +33,7 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }
+lumen-ipc = { path = "crates/ipc" }
 lumen-devtools = { path = "crates/devtools" }
 lumen-js = { path = "crates/js" }
 lumen-network = { path = "crates/network" }
