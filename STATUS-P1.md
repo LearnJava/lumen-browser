@@ -6,8 +6,7 @@
 
 ## In progress
 
-EE-4: Paint layer caching  branch: p1-ee4-paint-layer-cache
-Next step: merge to main after clippy/tests pass  STATUS-P1.md:71
+_(нет)_
 
 ---
 
@@ -69,7 +68,7 @@ Next step: merge to main after clippy/tests pass  STATUS-P1.md:71
 | ~~EE-1~~ | ~~**IntersectionObserver Phase 1**~~ — **выполнено** (p1-ee1-intersection-observer, 2026-06-14): реализация уже была (threshold array, rootMargin, shell deliver); добавлены 6 тестов → 10 итого (threshold crossing, rootMargin expand/contract, unobserve, two-observers, intersectionRect.height+ratio) | M | `lumen-js`, `lumen-shell`, `lumen-layout` |
 | ~~EE-2~~ | ~~**ResizeObserver Phase 1**~~ — **выполнено** (p1-ee1-intersection-observer, 2026-06-14): реализация уже была (borderBoxSize/contentBoxSize/devicePixelContentBoxSize, shell deliver); добавлены 3 теста → 8 итого (size-change re-fire, borderBoxSize fields, unobserve) | M | `lumen-js`, `lumen-shell` |
 | ~~EE-3~~ | ~~**Layout invalidation subtree ratchet**~~ — **выполнено** (p1-ee3-incremental-layout, 2026-06-14): `DirtyBits(u8)` bitflag на `LayoutBox`; `mark_dirty/mark_dirty_set` + `HAS_DIRTY_DESCENDANT` propagation вверх; `INCREMENTAL_LAYOUT_MODE` thread_local в `lay_out` — clean-поддеревья транслируются без перемера; `lay_out_incremental` (pub) + re-export из crate root; 14 unit-тестов (bitops, mark, clear, translate, integration) | L | `lumen-layout` |
-| EE-4 | **Paint layer caching** — `LayerCache: HashMap<NodeId, CachedLayer>` (display list + transform); пропускать emit для unmodified subtrees без `will-change`/анимации; `CacheRegistry::evict` при memory pressure; 8 unit-тестов | M | `lumen-paint`, `lumen-shell` |
+| ~~EE-4~~ | ~~**Paint layer caching**~~ — **выполнено** (p1-ee4-paint-layer-cache, 2026-06-14): `DisplayListCache` LRU-кэш `Vec<DisplayCommand>` по `NodeId` (бюджет 32 МБ); `hash_commands()` — хэш-слепок среза команд; `EvictableCache` impl (Low noop / Medium 50% / High clear); заполнение в `relayout()` + scroll handler; `on_memory_pressure` в `about_to_wait`; попутно исправлены pre-existing E0063 от EE-3 в `LoadedPage::empty()` и `make_dialog_lb()`; 10 unit-тестов | M | `lumen-paint`, `lumen-shell` |
 | EE-5 | **`requestAnimationFrame` scheduling Phase 2** — `rAF`-callbacks группировать в batch не чаще vsync; coalesce multiple `requestAnimationFrame` за один кадр; deliver `DOMHighResTimeStamp` от shell clock; 5 unit-тестов | S | `lumen-js`, `lumen-shell` |
 
 ### FF — Network & Fetch Phase 2
