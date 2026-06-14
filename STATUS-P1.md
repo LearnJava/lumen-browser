@@ -6,7 +6,8 @@
 
 ## In progress
 
-(пусто)
+II-1: Navigation Timing shell delivery  branch: p1-ii1-nav-timing
+Next step: add nav_start field to Lumen struct + deliver_nav_timing to PersistentJs  crates/shell/src/main.rs:2611
 
 ---
 
