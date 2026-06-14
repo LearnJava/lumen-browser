@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+P0-1: DOM arena audit  branch: p1-dom-arena-audit
+Next step: добавить compile-time Send+Sync assertion для Document  crates/engine/dom/src/lib.rs:10
 
 ---
 

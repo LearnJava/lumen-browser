@@ -2949,6 +2949,15 @@ fn utf8_floor(s: &str, mut off: usize) -> usize {
     off
 }
 
+// Compile-time gate (ADR-008 §11.4, trk 10B): Document must stay Send + Sync so
+// tabs can be moved between threads and T3 hibernation snapshots are safe to hand
+// off across thread boundaries. Adding Rc<RefCell<_>> or any other !Send/!Sync
+// type to Document's fields breaks this assertion — use NodeId indices instead.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Document>();
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
