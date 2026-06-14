@@ -12626,6 +12626,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::LazyImageSlot { rect, .. }
             | DisplayCommand::DrawBackgroundImage { rect, .. }
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::DrawLinearGradient { rect, .. }
@@ -12683,6 +12684,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::LazyImageSlot { rect, .. }
             | DisplayCommand::DrawBackgroundImage { rect, .. }
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::DrawLinearGradient { rect, .. }

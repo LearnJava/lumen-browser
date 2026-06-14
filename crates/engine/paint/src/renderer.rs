@@ -4508,6 +4508,26 @@ impl Renderer {
                         }
                     }
                 }
+                DisplayCommand::LazyImageSlot { rect, .. } => {
+                    // Render as grey placeholder — image not yet fetched.
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let v_start = fill_vertices.len() as u32;
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        scrolled,
+                        apply_alpha_to_color([0.85, 0.85, 0.85, 1.0], 1.0),
+                    );
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                    }
+                    let v_count = fill_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    }
+                }
                 // Clip-stack управление. PushClipRect добавляет пересечение
                 // с топом (CSS Masking L1 §3 — clip-rect = intersection всех
                 // ancestor clip-region-ов). PopClip снимает топ. Scissor для

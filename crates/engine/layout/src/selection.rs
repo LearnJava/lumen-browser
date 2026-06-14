@@ -250,6 +250,7 @@ mod tests {
             padding_right: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             is_first_line: true,
             source_node,
             source_char_offset,
