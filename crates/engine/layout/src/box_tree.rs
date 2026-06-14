@@ -471,6 +471,14 @@ fn is_summary_element(doc: &Document, id: NodeId) -> bool {
     matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local == "summary")
 }
 
+/// Returns `true` when `id` is a `<details>` element with the `open` attribute set.
+///
+/// HTML LS §4.11.1: when `open` is absent only `<summary>` is rendered; when present all
+/// children are visible. External callers (paint, a11y) use this to query disclosure state.
+pub fn is_open_details(doc: &Document, id: NodeId) -> bool {
+    is_details_element(doc, id) && doc.get(id).get_attr("open").is_some()
+}
+
 /// Returns `true` when `id` has a `popover` attribute but is not open.
 ///
 /// Elements with `popover` are hidden by default (UA: `[popover]{display:none}`);
@@ -13290,6 +13298,30 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    // --- is_open_details ---
+
+    #[test]
+    fn is_open_details_false_without_open_attr() {
+        let doc = lumen_html_parser::parse(r#"<details id="d"><summary>Q</summary>A</details>"#);
+        let id = doc.find_by_id("d").expect("details element not found");
+        assert!(!super::is_open_details(&doc, id), "closed <details> must return false");
+    }
+
+    #[test]
+    fn is_open_details_true_with_open_attr() {
+        let doc = lumen_html_parser::parse(r#"<details id="d" open><summary>Q</summary>A</details>"#);
+        let id = doc.find_by_id("d").expect("details element not found");
+        assert!(super::is_open_details(&doc, id), "open <details> must return true");
+    }
+
+    #[test]
+    fn is_open_details_false_for_summary_child() {
+        // is_open_details must be false for <summary>, not just any element without `open`.
+        let doc = lumen_html_parser::parse(r#"<details id="d" open><summary id="s">Q</summary>A</details>"#);
+        let s = doc.find_by_id("s").expect("summary not found");
+        assert!(!super::is_open_details(&doc, s), "<summary> is never a details disclosure root");
     }
 }
 

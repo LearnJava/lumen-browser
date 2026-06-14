@@ -70,7 +70,7 @@ pub use animation::{
 };
 pub use box_tree::{
     apply_container_styles, build_iframe_document,
-    collect_background_image_requests, collect_image_requests, layout, layout_measured,
+    collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
     layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, ViewBox,
 };
