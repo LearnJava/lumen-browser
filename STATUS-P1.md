@@ -6,9 +6,6 @@
 
 ## In progress
 
-II-1: PerformanceObserver single-type form + supportedEntryTypes  branch: p1-ii1-perf-observer
-Next step: observe({type, buffered}) §6.2.2 + supportedEntryTypes  crates/js/src/dom.rs:8347
-
 ---
 
 ## Next
@@ -298,6 +295,7 @@ Next step: observe({type, buffered}) §6.2.2 + supportedEntryTypes  crates/js/sr
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-14 | II-1: PerformanceObserver §6.2.2 single-type form + supportedEntryTypes | Performance Timeline L2 §6.2.2: observe({type, buffered}) одиночный тип с поддержкой buffered: true (replay накопленных entries). Множественная форма ({entryTypes}) сохранена с backward-compat поддержкой buffered. Повторные observe() аккумулируют типы. PerformanceObserver.supportedEntryTypes static getter (12 типов). Изменения только в crates/js/src/dom.rs. +4 unit-теста (2003 всего; 1 pre-existing fail BUG-155). |
 | 2026-06-14 | II-1: Navigation Timing L2 shell delivery | W3C Navigation Timing Level 2 §4.2: `nav_start: Option<Instant>` в `Lumen` + `PageSnapshot`; `PersistentJs::deliver_nav_timing(url, duration_ms)` + `QuickPersistentJs` impl (вызывает `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, null)`). `reload()` фиксирует nav_start и доставляет entry после успешной загрузки (inline/File/Snapshot/Url). `resumed()` фиксирует nav_start перед `start_streaming_load()`; `user_event(LoadDone)` доставляет entry после streaming-загрузки. Ошибки и `reset_to_blank_tab` обнуляют nav_start. 4 новых теста в dom.rs (observer, startTime=0, name=URL, buffered replay). |
 | 2026-06-14 | II-1: import.meta.url + import.meta.resolve() + import.meta.env | `crates/js/src/import_meta.rs` — source-level препроцессор: находит `import.meta` вне строк/комментов через минимальный лексер → заменяет на `__$lumen_meta__` + вставляет преамбулу с `.url` (resolved specifier), `.resolve()` (relative join), `.env` (Vite-compat stub). Wiring: `LumenLoader::load()` в `esm.rs` + `eval_module()` в `lib.rs` (page_url). 5 unit + 3 integration тестов; 1979 lumen-js тестов зелёных. |
 | 2026-06-12 | HH-5: Compression Streams API Phase 1 | (d8f53ccc) `CompressionStream`/`DecompressionStream` через `miniz_oxide`; deflate/gzip/deflate-raw; `TransformStream`-based API; `ReadableStream` pipe; 8 unit-тестов |
@@ -514,7 +512,7 @@ Ordered by priority. Сгруппированы по домену.
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| II-1 | **PerformanceObserver JS binding** — `PerformanceObserver(callback)`, `observe({type,buffered})`, `disconnect()`, `takeRecords()`; delivery через `_lumen_deliver_performance_entries(json)`; типы: `navigation`/`resource`/`measure`/`mark`; интеграция с `mark()`/`measure()` (уже готовы в DOM-side); shell-driven delivery в `about_to_wait` | S | `lumen-js`, `lumen-shell` |
+| ~~II-1~~ | ~~**PerformanceObserver JS binding**~~ — **выполнено** (p1-ii1-perf-observer, 2026-06-14): observe({type,buffered}) §6.2.2 + supportedEntryTypes + аккумулятивные вызовы observe(); 4 unit-теста | S | `lumen-js` |
 | II-2 | **Passkeys/WebAuthn platform HID enumeration** — реальное перечисление CTAP2-устройств через WinUSB (Windows) / libusb (Linux); `platform_enumerate_ctap2_devices()` в `CtapRoamingTransport`; программный аутентификатор + платформенные устройства в `CompositeCredentialProvider`; 8 тестов | M | `lumen-network` |
 | II-3 | **8A.7 Shell → BrowserSession trait** — переписать `shell/src/main.rs` как первого клиента `BrowserSession` trait; winit/wgpu = один из транспортов; вся логика навигации/input через `InProcessSession` | L | `lumen-shell`, `lumen-driver` |
 | II-4 | **8H.3 BiDi gaps** — `bidi/src/extensions.rs`: response body streaming, per-context UA/locale/timezone/offline, viewport-before-popup, preload per-context, download lifecycle events, cookie change events, per-origin clear; gap-mapping в `subsystems/lumen-bidi-server.md` | M | `lumen-shell` |
