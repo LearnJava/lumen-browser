@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет)_
+FF-4: Cache API Phase 1  branch: p1-ff4-cache-api
+Next step: done — CacheBackend trait + SQLite impl + 12 dispatch tests
 
 ---
 
