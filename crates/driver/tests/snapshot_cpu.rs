@@ -196,6 +196,10 @@ const PAGES: &[&str] = &[
     // CSS Generated Content L3 §3.2 — quotes + content open-quote/close-quote.
     // Nesting depth computed in document order via the counters pre-pass.
     "117-quotes",
+    // Media Queries L4 §5.3-5.6 — hover/any-hover/pointer/any-pointer. Desktop
+    // (mouse) context: matched swatches green, no-match swatches red. A GUI-
+    // independent gate; run.py's Edge pipeline can't capture interaction MQs.
+    "118-media-hover-pointer",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.
