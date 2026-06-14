@@ -1229,6 +1229,7 @@
   .lst-col { flex:1; }
   .lst-col ol { padding-left:40px; list-style-type: bracket; margin:0; }
   .lst-col li { color:#e0e0e0; font-size:14px; line-height:1.5; }
+  .lst-col ul.lsi { padding-left:32px; margin:0; list-style-image: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHklEQVR42mP8z8BQz0AEYBxVSIqKYdQ6UkBqHSmgJgCzR8/HfUkLvQAAAABJRU5ErkJggg==); }
 </style>
 <div class="card lst-card">
   <h4>list-style-type: custom @counter-style</h4>
@@ -1239,6 +1240,13 @@
         <li>Banana</li>
         <li>Cherry</li>
       </ol>
+    </div>
+    <div class="lst-col">
+      <ul class="lsi">
+        <li>Image A</li>
+        <li>Image B</li>
+        <li>Image C</li>
+      </ul>
     </div>
   </div>
 </div><!-- /list-style-type custom card -->
