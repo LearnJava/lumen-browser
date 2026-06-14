@@ -6,8 +6,7 @@
 
 ## In progress
 
-II-2: Passkeys/WebAuthn platform HID enumeration  branch: p1-ii2-webauthn-hid
-Next step: implement platform_enumerate_ctap2_devices() in crates/network/src/ctap2.rs
+—
 
 ---
 
@@ -107,6 +106,7 @@ Next step: implement platform_enumerate_ctap2_devices() in crates/network/src/ct
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | ~~II-1~~ | ~~**`import.meta.url` + `import.meta.resolve()`**~~ — **выполнено** (96a61267, Merge p1-hh-status): `import_meta.rs` source-level препроцессор; `.url` + `.resolve()` + `.env` stub; 8 тестов | S | `lumen-js` |
+| ~~II-2~~ | ~~**Passkeys/WebAuthn platform HID enumeration**~~ — **выполнено** (p1-ii2-webauthn-hid, 2026-06-14): `platform_enumerate_ctap2_devices()` + `win_hid::enumerate()` (SetupDi + HidP_GetCaps фильтр FIDO_USAGE_PAGE) + `linux_hid::enumerate()` (hidraw0..31 + sysfs HID-дескриптор); inline FFI без новых зависимостей; 10 unit-тестов | M | `lumen-network` |
 
 ### JJ — Modern HTML5 APIs Phase 4
 
@@ -298,6 +298,7 @@ Next step: implement platform_enumerate_ctap2_devices() in crates/network/src/ct
 ## Recent merges
 
 | Дата | Задача | Описание |
+| 2026-06-14 | II-2: WebAuthn platform HID enumeration Phase 1 | `probe_usb_fido_devices()` теперь вызывает `platform_enumerate_ctap2_devices()`. `win_hid::enumerate()`: SetupDiGetClassDevsW + HidD_GetHidGuid + HidP_GetCaps фильтр по FIDO_USAGE_PAGE/FIDO_USAGE. `linux_hid::enumerate()`: сканирует `/dev/hidraw0..31`, читает HID report descriptor из sysfs, фильтрует по usage page. Inline FFI (Win32 setupapi/hid; Linux poll(2)) без новых зависимостей. 10 unit-тестов: composite provider, roaming-wins-over-software, FIDO descriptor parser. Clippy чистый, 745 тестов зелёных. |
 | 2026-06-14 | II-1: PerformanceObserver §6.2.2 single-type form + supportedEntryTypes | Performance Timeline L2 §6.2.2: observe({type, buffered}) одиночный тип с поддержкой buffered: true (replay накопленных entries). Множественная форма ({entryTypes}) сохранена с backward-compat поддержкой buffered. Повторные observe() аккумулируют типы. PerformanceObserver.supportedEntryTypes static getter (12 типов). Изменения только в crates/js/src/dom.rs. +4 unit-теста (2003 всего; 1 pre-existing fail BUG-155). |
 | 2026-06-14 | II-1: Navigation Timing L2 shell delivery | W3C Navigation Timing Level 2 §4.2: `nav_start: Option<Instant>` в `Lumen` + `PageSnapshot`; `PersistentJs::deliver_nav_timing(url, duration_ms)` + `QuickPersistentJs` impl (вызывает `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, null)`). `reload()` фиксирует nav_start и доставляет entry после успешной загрузки (inline/File/Snapshot/Url). `resumed()` фиксирует nav_start перед `start_streaming_load()`; `user_event(LoadDone)` доставляет entry после streaming-загрузки. Ошибки и `reset_to_blank_tab` обнуляют nav_start. 4 новых теста в dom.rs (observer, startTime=0, name=URL, buffered replay). |
 | 2026-06-14 | II-1: import.meta.url + import.meta.resolve() + import.meta.env | `crates/js/src/import_meta.rs` — source-level препроцессор: находит `import.meta` вне строк/комментов через минимальный лексер → заменяет на `__$lumen_meta__` + вставляет преамбулу с `.url` (resolved specifier), `.resolve()` (relative join), `.env` (Vite-compat stub). Wiring: `LumenLoader::load()` в `esm.rs` + `eval_module()` в `lib.rs` (page_url). 5 unit + 3 integration тестов; 1979 lumen-js тестов зелёных. |
