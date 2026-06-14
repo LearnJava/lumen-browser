@@ -177,6 +177,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('112', '112-clip-path-fill-rule.html', 0.5, 'CSS Shapes L1 §3/§4: clip-path fill-rule — path()/polygon() с evenodd оставляют полую середину у self-intersecting пентаграммы и пересечения квадратов; nonzero (default) заливает форму целиком'),
     ('113', '113-shape-outside-path.html', 0.5, 'CSS Shapes L1 §4: shape-outside: path() — inline-block квадраты обтекают треугольный float по флэттенному SVG-контуру; колонка path() должна совпасть с эталонной колонкой polygon() (одинаковая лесенка)'),
     ('114', '114-contain-intrinsic-size.html', 0.5, 'CSS Box Sizing L4 §5: contain-intrinsic-size — боксы с contain: size берут размер из contain-intrinsic-size, игнорируя огромного ребёнка; inline-block боксы 200×120/120×200/200×100 (em), блок высотой 90px; зелёный ребёнок не должен вылезать'),
+    ('115', '115-empty-cells.html', 0.5, 'CSS Tables L2 §17.6.1.1: empty-cells — в separate-модели hide прячет border+фон у пустых <td></td>; верхняя таблица (hide) показывает шахматку только из заполненных ячеек, нижняя (show) рисует рамки+фон всех ячеек'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

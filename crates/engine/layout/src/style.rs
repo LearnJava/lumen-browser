@@ -1164,6 +1164,30 @@ impl BorderCollapse {
     }
 }
 
+/// CSS Tables L2 §17.6.1.1 — `empty-cells`. Inherited. Initial: `Show`.
+/// In the separated-borders model, controls whether borders and backgrounds
+/// are drawn around table cells that have no in-flow content. Has no effect
+/// when `border-collapse: collapse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmptyCells {
+    /// Empty cells are painted normally (borders + background drawn).
+    #[default]
+    Show,
+    /// Empty cells suppress their borders and background.
+    Hide,
+}
+
+impl EmptyCells {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "show" => Some(Self::Show),
+            "hide" => Some(Self::Hide),
+            _ => None,
+        }
+    }
+}
+
 /// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
 /// Controls how the interior of a shape is determined for overlapping contours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2402,6 +2426,10 @@ pub struct ComputedStyle {
     /// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Default `Separate`.
     /// When `Collapse`, `border-spacing` has no effect and adjacent cell borders merge.
     pub border_collapse: BorderCollapse,
+    /// CSS Tables L2 §17.6.1.1 — `empty-cells`. Inherited. Default `Show`.
+    /// When `Hide`, a table cell with no in-flow content draws neither borders nor
+    /// background. No effect under `border-collapse: collapse`.
+    pub empty_cells: EmptyCells,
     /// CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`. Inherited. Default 0.
     /// Horizontal gap (px) between adjacent table cells in separate-border mode.
     /// Only applies when `border-collapse: separate` (CSS 2.1 default).
@@ -4883,6 +4911,7 @@ impl ComputedStyle {
             gap_rule_style: BorderStyle::None,
             gap_rule_color: CssColor::CurrentColor,
             border_collapse: BorderCollapse::Separate,
+            empty_cells: EmptyCells::Show,
             border_spacing_h: 0.0,
             border_spacing_v: 0.0,
             column_span_all: false,
@@ -5228,6 +5257,7 @@ pub fn compute_style(
         overscroll_behavior_y: OverscrollBehavior::Auto,
         // CSS Table — border-collapse and border-spacing are inherited (CSS Tables L2 §17.6).
         border_collapse: inherited.border_collapse,
+        empty_cells: inherited.empty_cells,
         border_spacing_h: inherited.border_spacing_h,
         border_spacing_v: inherited.border_spacing_v,
         // CSS Text typography — все inherited.
@@ -11521,6 +11551,12 @@ fn apply_declaration(
                 style.border_collapse = v;
             }
         }
+        "empty-cells" => {
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: show | hide`.
+            if let Some(v) = EmptyCells::parse(val.trim()) {
+                style.empty_cells = v;
+            }
+        }
         "border-spacing" => {
             // CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`.
             // One value: both h and v. Two values: h then v. Negatives invalid — skip.
@@ -14565,6 +14601,9 @@ fn apply_css_wide_keyword(
         }
         "border-collapse" => {
             style.border_collapse = if inh_only_inherit { inherited.border_collapse } else { init.border_collapse };
+        }
+        "empty-cells" => {
+            style.empty_cells = if inh_only_inherit { inherited.empty_cells } else { init.empty_cells };
         }
         "border-spacing" => {
             style.border_spacing_h = if inh_only_inherit { inherited.border_spacing_h } else { init.border_spacing_h };
@@ -27906,6 +27945,89 @@ mod anchor_positioning_tests {
         let table = doc.get(body).children[0];
         let s = compute_style(&doc, table, &sheet, &root, VP, false);
         assert_eq!(s.border_collapse, BorderCollapse::Separate, "initial resets to Separate");
+    }
+
+    // ── empty-cells ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn p4_empty_cells_default_is_show() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show);
+    }
+
+    #[test]
+    fn p4_empty_cells_parse_hide() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: hide; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Hide);
+    }
+
+    #[test]
+    fn p4_empty_cells_parse_show_explicit() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: show; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show);
+    }
+
+    #[test]
+    fn p4_empty_cells_inherited_by_cells() {
+        // empty-cells is inherited: td should see the table's hide value.
+        let doc = lumen_html_parser::parse("<table><tr><td>x</td></tr></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: hide; }");
+        let root_style = ComputedStyle::root();
+        let body_node = doc.body().expect("body");
+        let body_style = compute_style(&doc, body_node, &sheet, &root_style, VP, false);
+        fn find_tag(doc: &lumen_dom::Document, parent: lumen_dom::NodeId, tag_name: &str) -> Option<lumen_dom::NodeId> {
+            for &c in &doc.get(parent).children {
+                if let lumen_dom::NodeData::Element { name, .. } = &doc.get(c).data
+                    && name.local == tag_name
+                {
+                    return Some(c);
+                }
+                if let Some(found) = find_tag(doc, c, tag_name) { return Some(found); }
+            }
+            None
+        }
+        let table = find_tag(&doc, body_node, "table").expect("table");
+        let table_style = compute_style(&doc, table, &sheet, &body_style, VP, false);
+        let tr = find_tag(&doc, table, "tr").expect("tr");
+        let tr_style = compute_style(&doc, tr, &sheet, &table_style, VP, false);
+        let td = find_tag(&doc, tr, "td").expect("td");
+        let td_style = compute_style(&doc, td, &sheet, &tr_style, VP, false);
+        assert_eq!(td_style.empty_cells, EmptyCells::Hide, "td inherits hide from table");
+    }
+
+    #[test]
+    fn p4_empty_cells_initial_via_keyword() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse(
+            "table { empty-cells: hide; } table { empty-cells: initial; }",
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show, "initial resets to Show");
+    }
+
+    #[test]
+    fn p4_empty_cells_keyword_parse() {
+        assert_eq!(EmptyCells::parse("show"), Some(EmptyCells::Show));
+        assert_eq!(EmptyCells::parse("hide"), Some(EmptyCells::Hide));
+        assert_eq!(EmptyCells::parse("bogus"), None);
     }
 
 }

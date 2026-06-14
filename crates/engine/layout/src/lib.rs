@@ -119,7 +119,7 @@ pub use style::{
     BackgroundSize, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     ClearSide, ContainFlags, ComputedStyle, Content,
-    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
+    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
     FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
     MasonryAutoFlow,
