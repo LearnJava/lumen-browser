@@ -22479,6 +22479,63 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    // ── Navigation Timing L2 tests (II-1) ─────────────────────────────────────
+
+    #[test]
+    fn nav_timing_observer_receives_navigation_entry() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
+            po.observe({entryTypes: ['navigation']});
+            _lumen_deliver_perf_entry('navigation', 'https://example.com/', 0.0, 350.0, null);
+            got.length === 1 && got[0].entryType === 'navigation' && got[0].duration === 350
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn nav_timing_start_time_is_zero() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_deliver_perf_entry('navigation', 'https://lumen.test/', 0.0, 120.0, null);
+            var e = performance.getEntriesByType('navigation')[0];
+            e.startTime === 0
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn nav_timing_name_is_url() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_deliver_perf_entry('navigation', 'https://lumen.test/page', 0.0, 200.0, null);
+            performance.getEntriesByType('navigation')[0].name === 'https://lumen.test/page'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn nav_timing_buffered_replay() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            r#"
+            _lumen_deliver_perf_entry('navigation', 'https://buffered.test/', 0.0, 500.0, null);
+            var got = [];
+            var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
+            po.observe({entryTypes: ['navigation'], buffered: true});
+            got.length === 1 && got[0].name === 'https://buffered.test/'
+            "#
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     // ── CSS Typed OM L1 tests (A-3 feature) ────────────────────────────────────
     #[test]
     fn css_typed_om_css_style_value_exists() {

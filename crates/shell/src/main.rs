@@ -395,6 +395,7 @@ fn run_window_mode(
         no_scrollbar,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
+        nav_start: None,
         history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
         notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
@@ -1200,6 +1201,12 @@ pub(crate) trait PersistentJs {
     /// Calls `_lumen_deliver_paint_entry(name, start_ms)` in QuickJS.
     #[allow(dead_code)]
     fn deliver_paint_timing(&self, name: &str, start_ms: f64);
+    /// Deliver a PerformanceNavigationTiming entry to JS PerformanceObservers.
+    ///
+    /// Called after a page load completes. `url` is the navigation URL;
+    /// `duration_ms` is total load time (Navigation Timing L2 §4.2 `duration`).
+    /// Calls `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, detail)`.
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64);
     /// Deliver a LargestContentfulPaint entry to JS PerformanceObservers.
     ///
     /// Called when a large content element (>500px²) is rendered.
@@ -1472,6 +1479,12 @@ impl PersistentJs for QuickPersistentJs {
         self.eval_js(&format!(
             "_lumen_deliver_paint_entry({}, {start_ms})",
             js_string_literal(name),
+        ));
+    }
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64) {
+        self.eval_js(&format!(
+            "_lumen_deliver_perf_entry('navigation', {}, 0.0, {duration_ms}, null)",
+            js_string_literal(url),
         ));
     }
     fn deliver_lcp_entry(&self, element_id: u32, size: u32, start_ms: f64, render_time_ms: f64) {
@@ -2610,6 +2623,9 @@ struct PageSnapshot {
     js_ctx: Option<Box<dyn PersistentJs>>,
     first_paint_delivered: bool,
     first_contentful_paint_delivered: bool,
+    /// Instant at which the current navigation began (set in `reload()`).
+    /// Used to compute `duration` for the W3C Navigation Timing entry.
+    nav_start: Option<std::time::Instant>,
     animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
     gif_last_frame: HashMap<String, usize>,
     image_cache: lumen_image::ImageDecodeCache,
@@ -4021,6 +4037,9 @@ struct Lumen {
     first_paint_delivered: bool,
     /// `true` once `first-contentful-paint` has been delivered to JS.
     first_contentful_paint_delivered: bool,
+    /// Instant at which the current navigation began (set in `reload()`).
+    /// Used to compute `duration` for the W3C Navigation Timing entry.
+    nav_start: Option<std::time::Instant>,
     /// FTS5-индекс по тексту посещённых страниц — используется omnibox (@history).
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     history_fts: HistoryFts,
@@ -4825,6 +4844,8 @@ impl Lumen {
         if matches!(self.source, PageSource::Empty) {
             return;
         }
+        // Record navigation start for PerformanceNavigationTiming (Navigation Timing L2 §4.2).
+        self.nav_start = Some(std::time::Instant::now());
         click_log::log_load_start(&self.source.describe());
         println!("Reload: {}", self.source.describe());
 
@@ -4945,10 +4966,21 @@ impl Lumen {
                 // Store it for processing in about_to_wait (after first render).
                 self.pending_js_navigate = page.js_navigate;
                 let title = self.title.as_deref().unwrap_or("");
+                // Deliver W3C Navigation Timing L2 entry (§4.2) to JS PerformanceObservers.
+                #[cfg(feature = "quickjs")]
+                if let (Some(js), Some(start), Some(url)) =
+                    (&self.js_ctx, self.nav_start.take(), self.source.url_str())
+                {
+                    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    js.deliver_nav_timing(url, duration_ms);
+                } else {
+                    self.nav_start = None;
+                }
                 click_log::log_load_ok(&self.source.describe(), title);
                 click_log::log_page_ready(&self.source.describe(), self.scroll_y);
             }
             Err(err) => {
+                self.nav_start = None;
                 click_log::log_load_err(&self.source.describe(), &err.to_string());
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
             }
@@ -5354,6 +5386,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // первый кадр (пустой) уже виден, пока идёт fetch/parse.
         // Сбрасываем набор уже отправленных preload-хинтов — новая страница.
         self.preload_dispatched.clear();
+        // Record navigation start for the initial streaming load.
+        self.nav_start = Some(std::time::Instant::now());
         self.start_streaming_load();
     }
 
@@ -5393,15 +5427,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
+                        // Deliver W3C Navigation Timing L2 entry after streaming load completes.
+                        #[cfg(feature = "quickjs")]
+                        if let (Some(js), Some(start), Some(url)) =
+                            (&self.js_ctx, self.nav_start.take(), self.source.url_str())
+                        {
+                            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                            js.deliver_nav_timing(url, duration_ms);
+                        } else {
+                            self.nav_start = None;
+                        }
                         click_log::log_page_ready(&self.source.describe(), self.scroll_y);
                     }
                     Err(e) => {
+                        self.nav_start = None;
                         click_log::log_load_err(&self.source.describe(), &e.to_string());
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
                     }
                 }
             }
             LoadEvent::LoadError(msg) => {
+                self.nav_start = None;
                 click_log::log_load_err(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
                 self.stream_builder = None;
@@ -12295,6 +12341,7 @@ impl Lumen {
             js_ctx: self.js_ctx.take(),
             first_paint_delivered: self.first_paint_delivered,
             first_contentful_paint_delivered: self.first_contentful_paint_delivered,
+            nav_start: self.nav_start.take(),
             animated_gifs: std::mem::take(&mut self.animated_gifs),
             gif_last_frame: std::mem::take(&mut self.gif_last_frame),
             image_cache: std::mem::replace(
@@ -12355,6 +12402,7 @@ impl Lumen {
         self.js_ctx = snap.js_ctx;
         self.first_paint_delivered = snap.first_paint_delivered;
         self.first_contentful_paint_delivered = snap.first_contentful_paint_delivered;
+        self.nav_start = snap.nav_start;
         self.animated_gifs = snap.animated_gifs;
         self.gif_last_frame = snap.gif_last_frame;
         self.image_cache = snap.image_cache;
@@ -12415,6 +12463,7 @@ impl Lumen {
         self.js_ctx = None;
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
+        self.nav_start = None;
         self.animated_gifs = HashMap::new();
         self.gif_last_frame = HashMap::new();
         self.image_cache = lumen_image::ImageDecodeCache::new();
