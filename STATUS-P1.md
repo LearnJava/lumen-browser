@@ -6,8 +6,7 @@
 
 ## In progress
 
-DD-5: `<canvas>` resize event  branch: p1-dd5-canvas-resize
-Next step: commit + finish  crates/js/src/dom.rs, crates/js/src/canvas2d.rs, crates/engine/canvas/src/lib.rs
+_(нет)_
 
 ---
 
@@ -60,7 +59,7 @@ Next step: commit + finish  crates/js/src/dom.rs, crates/js/src/canvas2d.rs, cra
 | ~~DD-2~~ | ~~**`<dialog>` element**~~ — **выполнено** (p1-dd2-dialog, 2026-06-14): реализация была на main до создания ветки — `show()`/`showModal()`/`close(returnValue)` + backdrop `::backdrop` DimRect в `forms::build_dialog_overlay` + top-layer overlay в main.rs + UA stylesheet `dialog:not([open]) { display: none }` + `:modal` pseudo-class (`data-lumen-modal` sentinel) + Escape cancel/close handler; 12 тестов (7 JS + 5 shell) | M | `lumen-js`, `lumen-shell` |
 | ~~DD-3~~ | ~~**`<selectlist>` (Customizable Select) Phase 0**~~ — **выполнено** (p1-dd2-dialog, 2026-06-14): `collect_selectlist_label` + `is_selectlist()` в box_tree.rs (поддержка `<option>` в `<listbox>`); `is_form_control_element` расширен; FormControlKind::Select для selectlist; `_lumen_selectlist_options`/`_lumen_selectlist_listbox` JS-хелперы; JS API (`value`, `selectedIndex`, `length`, `options`, `add`, `remove`, `item`, `namedItem`) в `_lumen_make_element`; `// CSS: appearance: base-select` handoff для P4; 5 unit-тестов | S | `lumen-js`, `lumen-layout` |
 | ~~DD-4~~ | ~~**`loading="lazy"` image lazy loading**~~ — **выполнено** (p1-dd4-lazy-loading, 2026-06-14): `is_lazy: bool` в `BoxKind::Image` + `InlineSegment` + `InlineFrag`; `DisplayCommand::LazyImageSlot { rect, node_id, src }` вместо `DrawImage` для lazy-изображений; grey placeholder во всех рендерерах (femtovg, cpu_raster, wgpu); proximity/IntersectionObserver уже были реализованы ранее; 6 unit-тестов | S | `lumen-layout`, `lumen-paint`, `lumen-shell` |
-| DD-5 | **`<canvas>` resize event** — `ResizeObserver` на canvas → при смене dimensions через CSS: сохранить пиксели, масштабировать буфер; fire `resize` event на элемент; 4 unit-теста | XS | `lumen-js` |
+| ~~DD-5~~ | ~~**`<canvas>` resize event**~~ — **выполнено** (p1-dd5-canvas-resize, 2026-06-14): `Context2D::scale_resize()` (nearest-neighbour pixel scaling); `_lumen_canvas2d_scale_resize` native binding; `_lumen_deliver_canvas_css_resize()` в dom.js — отслеживает CSS-размеры canvas через `_lumen_get_bounding_rect`, при изменении: scale_resize буфера + dispatch('resize'); вызывается из shell `deliver_layout_observers`; 4 unit-теста | XS | `lumen-js`, `lumen-canvas` |
 
 ### EE — Performance Phase 2
 
