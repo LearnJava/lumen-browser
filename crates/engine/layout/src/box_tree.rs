@@ -27,7 +27,7 @@ use crate::style::{
     TextWrapMode, TextWrapStyle,
     VerticalAlign, WordBreak,
 };
-use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry,
+use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry, QuoteSlot,
                       build_counter_style_registry, format_counter_with_registry,
                       build_list_marker_text};
 use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
@@ -2659,7 +2659,7 @@ fn collect_inline_segments(
                         | Display::InlineBlock
                 )
             {
-                push_pseudo_inline_segs(&ps, doc, id, viewport, counters, registry, out);
+                push_pseudo_inline_segs(&ps, doc, id, QuoteSlot::Before, viewport, counters, registry, out);
             }
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
@@ -2676,7 +2676,7 @@ fn collect_inline_segments(
                         | Display::InlineBlock
                 )
             {
-                push_pseudo_inline_segs(&ps, doc, id, viewport, counters, registry, out);
+                push_pseudo_inline_segs(&ps, doc, id, QuoteSlot::After, viewport, counters, registry, out);
             }
             let added = out.len() - start;
             // Mark all segments from this element (including pseudo-element content)
@@ -2708,12 +2708,13 @@ fn inject_pseudo(
     registry: &CounterStyleRegistry,
 ) {
     let Some(ps) = ps else { return };
+    let slot = if is_before { QuoteSlot::Before } else { QuoteSlot::After };
     match ps.display {
         Display::Inline
         | Display::InlineFlex
         | Display::InlineGrid
         | Display::InlineBlock => {
-            let segs = content_to_inline_segments(&ps, doc, parent_id, counters, registry);
+            let segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
             if segs.is_empty() {
                 return;
             }
@@ -2737,7 +2738,7 @@ fn inject_pseudo(
         }
         _ => {
             // Block-level pseudo-element.
-            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, counters, registry);
+            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
             let inner = if inner_segs.is_empty() {
                 vec![]
             } else {
@@ -2764,20 +2765,25 @@ fn inject_pseudo(
 /// Extracts text from `Content::Items` and returns it as a single `InlineSegment`.
 ///
 /// Resolves `ContentItem::String`, `ContentItem::Counter`, `ContentItem::Counters`,
-/// and `ContentItem::Attr` using the per-element `CounterMap` snapshot and DOM lookup.
-/// `owner_id` is the element whose `::before`/`::after` pseudo-element we're generating.
+/// `ContentItem::Attr` and `open-quote`/`close-quote` using the per-element
+/// `CounterMap` snapshot and DOM lookup. `owner_id` is the element whose
+/// `::before`/`::after` pseudo-element we're generating; `slot` selects which
+/// precomputed quote-depth list to consume (CSS Generated Content L3 §3.2).
 /// Custom `@counter-style` names are resolved via `registry`.
 fn content_to_inline_segments(
     style: &ComputedStyle,
     doc: &Document,
     owner_id: NodeId,
+    slot: QuoteSlot,
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
 ) -> Vec<InlineSegment> {
     let Content::Items(items) = &style.content else {
         return vec![];
     };
-    let snap = counters.get(&owner_id);
+    let snap = counters.counters(owner_id);
+    let qdepths = counters.quote_depths(owner_id, slot);
+    let mut qi = 0usize;
     let text: String = items
         .iter()
         .filter_map(|item| match item {
@@ -2806,6 +2812,20 @@ fn content_to_inline_segments(
             ContentItem::Attr(attr) => {
                 doc.get(owner_id).get_attr(attr).map(|s| s.to_string())
             }
+            // CSS Generated Content L3 §3.2 — open-quote / close-quote pick a
+            // (open, close) pair from `quotes` at the precomputed nesting depth.
+            ContentItem::OpenQuote => {
+                let depth = qdepths.get(qi).copied().unwrap_or(0);
+                qi += 1;
+                style.quotes.pair_for_depth(depth).map(|(o, _)| o.to_string())
+            }
+            ContentItem::CloseQuote => {
+                let depth = qdepths.get(qi).copied().unwrap_or(0);
+                qi += 1;
+                style.quotes.pair_for_depth(depth).map(|(_, c)| c.to_string())
+            }
+            // no-open-quote / no-close-quote only advance depth (handled in the
+            // precompute pass) and emit nothing.
             _ => None,
         })
         .collect();
@@ -2830,16 +2850,18 @@ fn content_to_inline_segments(
 /// Builds inline segments for a pseudo-element and applies its own box model
 /// spacing (margin + border + padding) as `pre_space` / `post_space`.
 /// Used by `collect_inline_segments` to inject `::before` / `::after` content.
+#[allow(clippy::too_many_arguments)]
 fn push_pseudo_inline_segs(
     ps: &ComputedStyle,
     doc: &Document,
     owner_id: NodeId,
+    slot: QuoteSlot,
     viewport: Size,
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
     out: &mut Vec<InlineSegment>,
 ) {
-    let mut segs = content_to_inline_segments(ps, doc, owner_id, counters, registry);
+    let mut segs = content_to_inline_segments(ps, doc, owner_id, slot, counters, registry);
     if segs.is_empty() {
         return;
     }
@@ -2933,7 +2955,7 @@ fn marker_content_text(
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
 ) -> String {
-    let snap = counters.get(&owner_id);
+    let snap = counters.counters(owner_id);
     items.iter().filter_map(|item| match item {
         ContentItem::String(s) => Some(s.clone()),
         ContentItem::Counter { name, style: list_style } => {
@@ -10705,6 +10727,65 @@ mod tests {
     fn find_markers(b: &super::LayoutBox, out: &mut Vec<super::LayoutBox>) {
         if matches!(b.kind, super::BoxKind::Marker { .. }) { out.push(b.clone()); }
         for c in &b.children { find_markers(c, out); }
+    }
+
+    // ── CSS Generated Content L3 §3.2 — open-quote / close-quote ─────────────
+
+    fn collect_seg_text(b: &super::LayoutBox, out: &mut String) {
+        if let super::BoxKind::InlineRun { segments, .. } = &b.kind {
+            for s in segments { out.push_str(&s.text); }
+        }
+        for c in &b.children { collect_seg_text(c, out); }
+    }
+
+    #[test]
+    fn quotes_nested_q_uses_primary_then_secondary() {
+        // Nested <q> → outer uses primary “ ”, inner uses secondary ‘ ’.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><q>outer <q>inner</q> end</q></p>"),
+            &lumen_css_parser::parse(
+                "q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        let po = text.find('\u{201C}').expect("primary open quote");
+        let so = text.find('\u{2018}').expect("secondary open quote");
+        let sc = text.find('\u{2019}').expect("secondary close quote");
+        let pc = text.find('\u{201D}').expect("primary close quote");
+        assert!(po < so && so < sc && sc < pc, "quote nesting order wrong: {text:?}");
+    }
+
+    #[test]
+    fn quotes_custom_pairs_applied() {
+        let root = super::layout(
+            &lumen_html_parser::parse("<q>hi</q>"),
+            &lumen_css_parser::parse(
+                "q{quotes:\"\u{ab}\" \"\u{bb}\"} q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        assert!(text.contains('\u{ab}') && text.contains('\u{bb}'), "custom quotes: {text:?}");
+    }
+
+    #[test]
+    fn quotes_none_suppresses_marks() {
+        let root = super::layout(
+            &lumen_html_parser::parse("<q>hi</q>"),
+            &lumen_css_parser::parse(
+                "q{quotes:none} q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        assert!(
+            !text.contains('\u{201C}') && !text.contains('\u{201D}'),
+            "quotes:none must emit no marks: {text:?}",
+        );
     }
 
     #[test]

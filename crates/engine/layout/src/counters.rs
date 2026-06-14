@@ -31,7 +31,9 @@ use std::collections::HashMap;
 
 use lumen_dom::{Document, FlatTree, NodeData, NodeId};
 
-use crate::style::{compute_style, ComputedStyle, ListStyleType};
+use crate::style::{
+    compute_pseudo_element_style, compute_style, Content, ComputedStyle, ContentItem, ListStyleType,
+};
 use lumen_css_parser::Stylesheet;
 use lumen_core::Size;
 
@@ -41,15 +43,52 @@ use lumen_core::Size;
 /// innermost last). The stack holds all nested scopes so `counters()` can join them.
 pub type CounterSnapshot = HashMap<String, Vec<i32>>;
 
-/// Maps each element `NodeId` to its counter snapshot (after own reset/increment,
-/// before children). Used during content resolution for `::before` / `::after`.
-pub type CounterMap = HashMap<NodeId, CounterSnapshot>;
+/// Generated-content slot of an element that can carry `open-quote` /
+/// `close-quote` content (CSS Generated Content L3 §3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QuoteSlot {
+    /// `::before` pseudo-element content (processed before children).
+    Before,
+    /// `::after` pseudo-element content (processed after children).
+    After,
+}
+
+/// Document-order snapshot of CSS generated-content state.
+///
+/// Holds both the per-element counter snapshots (after own reset/increment,
+/// before children — for `counter()` / `counters()`) and the quote-nesting
+/// depth index for each `open-quote` / `close-quote` occurrence in document
+/// order (for the `quotes` property).
+#[derive(Default)]
+pub struct CounterMap {
+    /// `NodeId` → counter snapshot used by `counter()` / `counters()`.
+    nodes: HashMap<NodeId, CounterSnapshot>,
+    /// `(NodeId, slot)` → ordered list of quote-nesting depth indices, one per
+    /// `open-quote` / `close-quote` item in that slot's `content` (in order).
+    /// `no-open-quote` / `no-close-quote` adjust depth but emit no entry.
+    quotes: HashMap<(NodeId, QuoteSlot), Vec<usize>>,
+}
+
+impl CounterMap {
+    /// Returns the counter snapshot for `id`, if any.
+    pub fn counters(&self, id: NodeId) -> Option<&CounterSnapshot> {
+        self.nodes.get(&id)
+    }
+
+    /// Returns the ordered quote-depth indices for the given `(id, slot)`'s
+    /// generated content. Empty slice when the slot has no quote items.
+    pub fn quote_depths(&self, id: NodeId, slot: QuoteSlot) -> &[usize] {
+        self.quotes.get(&(id, slot)).map_or(&[][..], |v| v.as_slice())
+    }
+}
 
 /// Mutable state threaded through the pre-order DOM traversal.
 #[derive(Default)]
 struct CounterCtx {
     /// name → stack of scope values (innermost = last).
     stacks: HashMap<String, Vec<i32>>,
+    /// Running quote-nesting depth in document order (CSS Content L3 §3.2).
+    quote_depth: usize,
 }
 
 impl CounterCtx {
@@ -123,9 +162,37 @@ pub fn precompute_counters(
 ) -> CounterMap {
     let root_style = ComputedStyle::root();
     let mut ctx = CounterCtx::default();
-    let mut map = CounterMap::new();
+    let mut map = CounterMap::default();
     walk(doc, sheet, doc.root(), &root_style, viewport, flat, &mut ctx, &mut map, dark_mode);
     map
+}
+
+/// CSS Generated Content L3 §3.2 — record the quote-nesting depth for each
+/// `open-quote` / `close-quote` item in `content`, advancing `depth` in document
+/// order. `open-quote` uses the current depth then increments; `close-quote`
+/// decrements (clamped) then uses the result; the `no-*` variants only adjust
+/// depth. Returns the per-item depth indices (one per open/close-quote).
+fn record_quote_depths(content: &Content, depth: &mut usize) -> Vec<usize> {
+    let Content::Items(items) = content else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in items {
+        match item {
+            ContentItem::OpenQuote => {
+                out.push(*depth);
+                *depth += 1;
+            }
+            ContentItem::CloseQuote => {
+                *depth = depth.saturating_sub(1);
+                out.push(*depth);
+            }
+            ContentItem::NoOpenQuote => *depth += 1,
+            ContentItem::NoCloseQuote => *depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -163,10 +230,31 @@ fn walk(
     ctx.apply_increment(&style.counter_increment);
     ctx.apply_set(&style.counter_set);
 
-    map.insert(id, ctx.snapshot());
+    map.nodes.insert(id, ctx.snapshot());
+
+    // CSS Generated Content L3 §3.2 — ::before quotes are in document order
+    // before the element's children; advance and snapshot the quote depth.
+    if let Some(bps) =
+        compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode)
+    {
+        let depths = record_quote_depths(&bps.content, &mut ctx.quote_depth);
+        if !depths.is_empty() {
+            map.quotes.insert((id, QuoteSlot::Before), depths);
+        }
+    }
 
     for &child_id in flat.children_of(doc, id) {
         walk(doc, sheet, child_id, &style, viewport, flat, ctx, map, dark_mode);
+    }
+
+    // ::after quotes come after all children in document order.
+    if let Some(aps) =
+        compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode)
+    {
+        let depths = record_quote_depths(&aps.content, &mut ctx.quote_depth);
+        if !depths.is_empty() {
+            map.quotes.insert((id, QuoteSlot::After), depths);
+        }
     }
 
     ctx.pop_reset(&style.counter_reset);
@@ -904,6 +992,58 @@ mod tests {
 
         ctx.pop_reset(&[("x".into(), 0)]);
         assert!(!ctx.stacks.contains_key("x"));
+    }
+
+    // ── quote nesting depth (CSS Generated Content L3 §3.2) ──────────────────
+
+    #[test]
+    fn quote_depths_nested_document_order() {
+        // Document order for `<q><q></q></q>`: outer ::before open, inner
+        // ::before open, inner ::after close, outer ::after close.
+        let mut depth = 0;
+        let ob = record_quote_depths(&Content::Items(vec![ContentItem::OpenQuote]), &mut depth);
+        let ib = record_quote_depths(&Content::Items(vec![ContentItem::OpenQuote]), &mut depth);
+        let ia = record_quote_depths(&Content::Items(vec![ContentItem::CloseQuote]), &mut depth);
+        let oa = record_quote_depths(&Content::Items(vec![ContentItem::CloseQuote]), &mut depth);
+        assert_eq!(ob, vec![0]);
+        assert_eq!(ib, vec![1]);
+        assert_eq!(ia, vec![1]);
+        assert_eq!(oa, vec![0]);
+        assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn quote_depths_no_quote_adjusts_without_emit() {
+        let mut depth = 0;
+        let v = record_quote_depths(
+            &Content::Items(vec![
+                ContentItem::OpenQuote,
+                ContentItem::NoOpenQuote,
+                ContentItem::CloseQuote,
+                ContentItem::NoCloseQuote,
+            ]),
+            &mut depth,
+        );
+        // open→emit 0 (depth 1); no-open→depth 2; close→depth 1, emit 1; no-close→depth 0.
+        assert_eq!(v, vec![0, 1]);
+        assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn quote_depths_close_underflow_clamped() {
+        let mut depth = 0;
+        let v = record_quote_depths(&Content::Items(vec![ContentItem::CloseQuote]), &mut depth);
+        // Unbalanced close at depth 0 stays at 0 (saturating).
+        assert_eq!(v, vec![0]);
+        assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn quote_depths_non_items_content_empty() {
+        let mut depth = 3;
+        let v = record_quote_depths(&Content::Normal, &mut depth);
+        assert!(v.is_empty());
+        assert_eq!(depth, 3);
     }
 
     #[test]

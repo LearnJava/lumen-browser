@@ -2859,6 +2859,9 @@ pub struct ComputedStyle {
     /// During a `document.startViewTransition()` call the shell matches old/new snapshots
     /// by name and cross-fades them. `None` means the property is `none`.
     pub view_transition_name: Option<Box<str>>,
+    /// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial `auto`.
+    /// Supplies the glyph pairs for `content: open-quote` / `close-quote`.
+    pub quotes: Quotes,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -2901,6 +2904,52 @@ pub enum ContentItem {
     CloseQuote,
     NoOpenQuote,
     NoCloseQuote,
+}
+
+/// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial: `auto`.
+///
+/// Controls the quotation marks produced by `content: open-quote` /
+/// `close-quote`. The nesting depth (which pair is used) is tracked in
+/// document order by the counters pre-pass; this value only supplies the
+/// glyph pairs to choose from.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Quotes {
+    /// `auto` — UA language-appropriate quotation marks. Lumen uses English
+    /// curly quotes: primary “ ”, secondary ‘ ’.
+    #[default]
+    Auto,
+    /// `none` — `open-quote` / `close-quote` produce no marks (depth still
+    /// advances).
+    None,
+    /// Explicit `[<string> <string>]+` pairs — outermost (depth 0) first.
+    /// Each tuple is `(open, close)`.
+    Pairs(Vec<(String, String)>),
+}
+
+impl Quotes {
+    /// Returns the `(open, close)` glyph strings for the given nesting `depth`.
+    ///
+    /// `Auto` uses the built-in English pairs; `Pairs` clamps `depth` to the
+    /// last available pair (CSS Content L3 §3.2). Returns `None` for `quotes:
+    /// none` or an empty explicit list — the caller emits nothing in that case.
+    pub fn pair_for_depth(&self, depth: usize) -> Option<(&str, &str)> {
+        const AUTO: &[(&str, &str)] = &[("\u{201C}", "\u{201D}"), ("\u{2018}", "\u{2019}")];
+        match self {
+            Quotes::None => None,
+            Quotes::Auto => {
+                let idx = depth.min(AUTO.len() - 1);
+                Some(AUTO[idx])
+            }
+            Quotes::Pairs(pairs) => {
+                if pairs.is_empty() {
+                    return None;
+                }
+                let idx = depth.min(pairs.len() - 1);
+                let (o, c) = &pairs[idx];
+                Some((o.as_str(), c.as_str()))
+            }
+        }
+    }
 }
 
 /// CSS Scrollbars 1 — `scrollbar-width`. Inherited.
@@ -5075,6 +5124,7 @@ impl ComputedStyle {
             anchor_size_w: None,
             anchor_size_h: None,
             view_transition_name: None,
+            quotes: Quotes::Auto,
         }
     }
 }
@@ -5409,6 +5459,8 @@ pub fn compute_style(
         anchor_size_w: None,
         anchor_size_h: None,
         view_transition_name: None,
+        // CSS Generated Content L3 §3.2 — quotes inherited.
+        quotes: inherited.quotes.clone(),
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -6203,6 +6255,7 @@ pub fn compute_pseudo_element_style(
     style.text_wrap_mode = parent.text_wrap_mode;
     style.text_wrap_style = parent.text_wrap_style;
     style.interpolate_size = parent.interpolate_size;
+    style.quotes = parent.quotes.clone();
 
     // Собираем matching declarations из всех правил.
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
@@ -11357,6 +11410,12 @@ fn apply_declaration(
             // Default value на счётчик при отсутствии числа = 0 (по spec).
             style.counter_set = parse_counter_list(val, 0);
         }
+        "quotes" => {
+            // CSS Generated Content L3 §3.2 — `auto | none | [<string> <string>]+`.
+            if let Some(q) = parse_quotes(val) {
+                style.quotes = q;
+            }
+        }
         "clip-path" => {
             // CSS Masking L1 §3 — basic-shape | none. `none` чистит.
             let trimmed = val.trim();
@@ -14748,6 +14807,10 @@ fn apply_css_wide_keyword(
                 init.counter_set.clone()
             };
         }
+        // CSS Generated Content L3 §3.2 — quotes inherited.
+        "quotes" => {
+            style.quotes = if inh { inherited.quotes.clone() } else { init.quotes.clone() };
+        }
         // Masking / Transforms / Filter — все non-inherited.
         "clip-path" => {
             style.clip_path = if inh_only_inherit { inherited.clip_path.clone() } else { init.clip_path.clone() };
@@ -15050,6 +15113,77 @@ fn is_css_ident(s: &str) -> bool {
         return false;
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// CSS Generated Content L3 §3.2 — parse the `quotes` value.
+///
+/// `auto` → [`Quotes::Auto`]; `none` → [`Quotes::None`]; otherwise an even
+/// number of CSS strings forms `(open, close)` pairs (outermost first).
+/// Returns `None` if the value is malformed (odd string count or none found).
+fn parse_quotes(value: &str) -> Option<Quotes> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(Quotes::Auto);
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Quotes::None);
+    }
+    let strings = parse_css_string_sequence(v);
+    if strings.is_empty() || !strings.len().is_multiple_of(2) {
+        return None;
+    }
+    let pairs = strings
+        .chunks_exact(2)
+        .map(|c| (c[0].clone(), c[1].clone()))
+        .collect();
+    Some(Quotes::Pairs(pairs))
+}
+
+/// Extracts consecutive CSS string literals from `s` (single- or double-quoted),
+/// unescaping `\XXXXXX` hex escapes and `\<char>` literals. Non-string tokens are
+/// skipped. Used by [`parse_quotes`].
+fn parse_css_string_sequence(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '"' || chars[i] == '\'' {
+            let quote = chars[i];
+            i += 1;
+            let mut cur = String::new();
+            while i < chars.len() && chars[i] != quote {
+                if chars[i] == '\\' {
+                    i += 1;
+                    let mut hex = String::new();
+                    while i < chars.len() && chars[i].is_ascii_hexdigit() && hex.len() < 6 {
+                        hex.push(chars[i]);
+                        i += 1;
+                    }
+                    if !hex.is_empty() {
+                        if i < chars.len() && chars[i].is_whitespace() {
+                            i += 1;
+                        }
+                        if let Ok(code) = u32::from_str_radix(&hex, 16)
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            cur.push(ch);
+                        }
+                    } else if i < chars.len() {
+                        cur.push(chars[i]);
+                        i += 1;
+                    }
+                } else {
+                    cur.push(chars[i]);
+                    i += 1;
+                }
+            }
+            i += 1; // skip closing quote
+            out.push(cur);
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Парсит угол в радианах из строки вида `45deg`, `1.5rad`, `0.25turn`,
@@ -22707,6 +22841,60 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), false, false);
         s
+    }
+
+    // === quotes parsing (CSS Generated Content L3 §3.2) ===
+
+    #[test]
+    fn quotes_auto_and_none() {
+        assert_eq!(ts_prop("quotes", "auto").quotes, Quotes::Auto);
+        assert_eq!(ts_prop("quotes", "none").quotes, Quotes::None);
+    }
+
+    #[test]
+    fn quotes_explicit_pairs() {
+        let s = ts_prop("quotes", "\"«\" \"»\" \"‹\" \"›\"");
+        assert_eq!(
+            s.quotes,
+            Quotes::Pairs(vec![
+                ("«".to_string(), "»".to_string()),
+                ("‹".to_string(), "›".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn quotes_odd_string_count_rejected() {
+        // Three strings → malformed → value unchanged (stays initial Auto).
+        let s = ts_prop("quotes", "\"a\" \"b\" \"c\"");
+        assert_eq!(s.quotes, Quotes::Auto);
+    }
+
+    #[test]
+    fn quotes_hex_escape_decoded() {
+        // \201C “ and \201D ”.
+        let s = ts_prop("quotes", "\"\\201C\" \"\\201D\"");
+        assert_eq!(
+            s.quotes,
+            Quotes::Pairs(vec![("\u{201C}".to_string(), "\u{201D}".to_string())])
+        );
+    }
+
+    #[test]
+    fn quotes_pair_for_depth_clamps() {
+        let q = Quotes::Pairs(vec![
+            ("«".to_string(), "»".to_string()),
+            ("‹".to_string(), "›".to_string()),
+        ]);
+        assert_eq!(q.pair_for_depth(0), Some(("«", "»")));
+        assert_eq!(q.pair_for_depth(1), Some(("‹", "›")));
+        // Beyond the last pair → clamp to last.
+        assert_eq!(q.pair_for_depth(5), Some(("‹", "›")));
+        // Auto uses the built-in English pairs.
+        assert_eq!(Quotes::Auto.pair_for_depth(0), Some(("\u{201C}", "\u{201D}")));
+        assert_eq!(Quotes::Auto.pair_for_depth(1), Some(("\u{2018}", "\u{2019}")));
+        // none → no glyphs.
+        assert_eq!(Quotes::None.pair_for_depth(0), None);
     }
 
     // === transition shorthand parsing (CSS Transitions L1 §3) ===

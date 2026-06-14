@@ -188,6 +188,16 @@
     <div class="pe-box"></div>
   </div>
 
+  <!-- ── quotes / open-quote demo (CSS Generated Content L3 §3.2) ───────────── -->
+  <style>
+    .q-row { margin-top: 10px; margin-left: 24px; font-size: 20px; color: #102a43; }
+    .q-row q::before { content: open-quote; }
+    .q-row q::after  { content: close-quote; }
+    .q-fr { quotes: "\00ab" "\00bb" "\2039" "\203a"; }
+  </style>
+  <div class="q-row"><q>outer <q>inner</q></q></div>
+  <div class="q-row q-fr"><q>guillemets</q></div>
+
   <!-- ── vertical-align demo ───────────────────────────────────────────────── -->
   <style>
     .va-row { margin-top: 12px; margin-left: 24px; white-space: nowrap; }
