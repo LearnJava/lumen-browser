@@ -2889,3 +2889,157 @@ mod ai_backend_tests {
         assert_eq!(r1, r2, "NullAiBackend should return same stub regardless of input");
     }
 }
+
+// ── Audio capture (getUserMedia Phase 1) ─────────────────────────────────────
+
+/// Describes a single audio input or output device available on the host platform.
+///
+/// Returned by [`AudioCaptureProvider::enumerate_devices`] and mapped to W3C
+/// `MediaDeviceInfo` objects in the JS shim.
+pub struct AudioDeviceDescriptor {
+    /// Opaque per-device identifier, stable across sessions on the same machine.
+    pub device_id: String,
+    /// Group identifier linking physically related input/output pairs.
+    ///
+    /// Empty string when the platform does not expose group information.
+    pub group_id: String,
+    /// Human-readable device name.
+    ///
+    /// Only populated after a successful `getUserMedia` grant; empty otherwise
+    /// to avoid fingerprinting before permission is granted (W3C Media Capture §4.3.3).
+    pub label: String,
+    /// W3C device kind: `"audioinput"`, `"audiooutput"`, or `"videoinput"`.
+    pub kind: &'static str,
+    /// Whether this is the platform's default capture device.
+    pub is_default: bool,
+}
+
+/// Constraints forwarded from JS `getUserMedia({audio: {…}})`.
+///
+/// All fields are hints; the implementation picks the nearest supported values.
+#[derive(Debug, Clone, Default)]
+pub struct AudioCaptureConfig {
+    /// Preferred sample rate in Hz.  `None` → use device default.
+    pub sample_rate: Option<u32>,
+    /// Preferred number of channels (1 = mono, 2 = stereo).  `None` → use device default.
+    pub channel_count: Option<u32>,
+    /// Hint: request echo cancellation from the platform capture stack.
+    pub echo_cancellation: bool,
+    /// Hint: request noise suppression from the platform capture stack.
+    pub noise_suppression: bool,
+    /// Hint: request automatic gain control from the platform capture stack.
+    pub auto_gain_control: bool,
+    /// Optional device ID from `enumerateDevices`.  `None` → use the default device.
+    pub device_id: Option<String>,
+}
+
+/// Errors returned by [`AudioCaptureProvider::capture`].
+#[derive(Debug)]
+pub enum AudioCaptureError {
+    /// The user denied microphone permission or the OS blocked access.
+    NotAllowed,
+    /// No matching audio input device was found.
+    NotFound,
+    /// The requested device is in use by another application (exclusive-mode lock).
+    DeviceInUse,
+    /// Platform error not covered by the above categories.
+    Other(String),
+}
+
+/// Live audio capture stream returned by [`AudioCaptureProvider::capture`].
+///
+/// Holds an active OS capture session.  Dropping the handle stops capture.
+/// All methods are called exclusively from the JS thread (rquickjs single-threaded runtime),
+/// so implementors do not need interior mutability on `&self`.
+pub trait AudioCaptureHandle: 'static {
+    /// Actual sample rate in Hz used by the capture stream.
+    fn sample_rate(&self) -> u32;
+    /// Actual number of channels used by the capture stream (1 = mono, 2 = stereo).
+    fn channel_count(&self) -> u32;
+    /// Opaque device ID matching the value from [`AudioDeviceDescriptor::device_id`].
+    fn device_id(&self) -> &str;
+    /// Human-readable device name, always populated after capture starts.
+    fn device_label(&self) -> &str;
+    /// Non-blocking drain.  Returns all PCM samples accumulated since the last call.
+    ///
+    /// Samples are interleaved: `[L0, R0, L1, R1, …]` for stereo.
+    /// Returns an empty `Vec` when no new samples are available yet.
+    fn read_pcm_f32(&mut self) -> Vec<f32>;
+    /// Stop capture and release the OS audio device.
+    ///
+    /// After `stop`, `read_pcm_f32` must return an empty `Vec`.
+    fn stop(&mut self);
+}
+
+/// Platform audio capture backend backing `navigator.mediaDevices.getUserMedia({audio})`.
+///
+/// Installed process-globally by the shell via `lumen_js::set_audio_capture_provider`.
+/// The JS bridge holds an `Arc<dyn AudioCaptureProvider>` and calls `capture()` on each
+/// `getUserMedia({audio})` call.
+///
+/// Shell implementation: `lumen_shell::platform::audio_capture::PlatformAudioCapture`
+/// (WASAPI on Windows, ALSA on Linux via `cpal`).
+pub trait AudioCaptureProvider: Send + Sync {
+    /// Return all available audio input devices on the host platform.
+    ///
+    /// Device labels are empty until the user grants microphone permission (W3C §4.3.3).
+    fn enumerate_devices(&self) -> Vec<AudioDeviceDescriptor>;
+
+    /// Start capturing audio from the device specified in `config.device_id`, or the
+    /// system default when `config.device_id` is `None`.
+    ///
+    /// Returns a live `AudioCaptureHandle` on success.  The handle must remain alive
+    /// for as long as capture should continue; dropping it stops the stream.
+    fn capture(
+        &self,
+        config: AudioCaptureConfig,
+    ) -> std::result::Result<Box<dyn AudioCaptureHandle>, AudioCaptureError>;
+}
+
+/// Stub `AudioCaptureProvider` that returns zero devices and always rejects capture.
+///
+/// Installed when no real audio backend is available (headless mode, tests, CI without a mic).
+pub struct NullAudioCaptureProvider;
+
+impl AudioCaptureProvider for NullAudioCaptureProvider {
+    fn enumerate_devices(&self) -> Vec<AudioDeviceDescriptor> {
+        Vec::new()
+    }
+
+    fn capture(
+        &self,
+        _config: AudioCaptureConfig,
+    ) -> std::result::Result<Box<dyn AudioCaptureHandle>, AudioCaptureError> {
+        Err(AudioCaptureError::NotAllowed)
+    }
+}
+
+#[cfg(test)]
+mod audio_capture_tests {
+    use super::*;
+
+    #[test]
+    fn null_provider_enumerate_empty() {
+        let p = NullAudioCaptureProvider;
+        assert!(p.enumerate_devices().is_empty());
+    }
+
+    #[test]
+    fn null_provider_capture_rejects_with_not_allowed() {
+        let p = NullAudioCaptureProvider;
+        let result = p.capture(AudioCaptureConfig::default());
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), AudioCaptureError::NotAllowed));
+    }
+
+    #[test]
+    fn audio_capture_config_default_fields() {
+        let c = AudioCaptureConfig::default();
+        assert!(c.sample_rate.is_none());
+        assert!(c.channel_count.is_none());
+        assert!(!c.echo_cancellation);
+        assert!(!c.noise_suppression);
+        assert!(!c.auto_gain_control);
+        assert!(c.device_id.is_none());
+    }
+}

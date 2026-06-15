@@ -60,3 +60,10 @@ winit.workspace = true
 regex.workspace = true
 # Exception #8 из §5: pdf-writer — PDF-сериализация для --print-to-pdf.
 pdf-writer.workspace = true
+# Provisional (PH3-3): cross-platform audio capture for getUserMedia({audio}).
+# cpal is the only pure-Rust cross-platform audio I/O library; it maps to
+# WASAPI on Windows and ALSA on Linux.  Alternative: raw windows-rs + alsa
+# crates would be 2 platform-specific deps with 5x more boilerplate.
+# Graduation: permanent if Lumen ships a native audio capture service;
+# removed otherwise (replace with a lighter platform-specific impl).
+cpal = "0.15"
