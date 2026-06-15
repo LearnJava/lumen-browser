@@ -1542,6 +1542,30 @@ pub(crate) trait PersistentJs {
     /// No-op default for runtimes that don't support it.
     #[allow(dead_code)]
     fn unpause_event_loop(&self) {}
+
+    /// Drain JS focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`.
+    ///
+    /// `None` = clear focus (blur); `Some(nid)` = focus that node. Populated by
+    /// `showModal()` (focus autofocus descendant or dialog) and `close()` (restore
+    /// previous focus). Shell applies each to `self.focused_node` and requests a
+    /// relayout so `:focus` / `:focus-within` CSS rules update.
+    #[allow(dead_code)]
+    fn take_focus_requests(&self) -> Vec<Option<u32>> { Vec::new() }
+
+    /// Close a `<dialog>` as a result of a `<form method="dialog">` submission.
+    ///
+    /// Calls `dialog.close(return_value)` in the JS runtime so the `close` event
+    /// fires and `returnValue` is updated. `dialog_nid` is the dialog's node index;
+    /// `return_value` is the submit button's `value` attribute (empty string if none).
+    #[allow(dead_code)]
+    fn fire_dialog_close(&self, _dialog_nid: u32, _return_value: &str) {}
+
+    /// Notify the JS runtime that the shell moved keyboard focus to a new node.
+    ///
+    /// Updates `_lumen_last_focused_nid` so `showModal()` can record it for
+    /// restoration when the dialog closes. `nid = None` means focus was cleared.
+    #[allow(dead_code)]
+    fn notify_focus_changed(&self, _nid: Option<u32>) {}
 }
 
 #[cfg(feature = "quickjs")]
@@ -1781,6 +1805,15 @@ impl PersistentJs for QuickPersistentJs {
     fn unpause_event_loop(&self) {
         // T1 → T0: mark document visible again, fire visibilitychange.
         self.rt.set_document_visibility(false);
+    }
+    fn take_focus_requests(&self) -> Vec<Option<u32>> {
+        self.rt.take_focus_requests()
+    }
+    fn fire_dialog_close(&self, dialog_nid: u32, return_value: &str) {
+        self.rt.fire_dialog_close(dialog_nid, return_value);
+    }
+    fn notify_focus_changed(&self, nid: Option<u32>) {
+        self.rt.notify_focus_changed(nid);
     }
 }
 
@@ -6154,6 +6187,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // Dialog focus management (HTML LS §6.6.3): apply focus changes requested by
+        // showModal() / close() in JS via _lumen_request_focus / _lumen_request_blur.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let focus_reqs = js.take_focus_requests();
+            if !focus_reqs.is_empty() {
+                // Only the last request in the batch matters.
+                if let Some(last_req) = focus_reqs.into_iter().last() {
+                    let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
+                    if new_nid != self.focused_node {
+                        self.focused_node = new_nid;
+                        self.relayout();
+                        self.platform_bridge.focused_node_changed(new_nid);
+                    }
+                }
+            }
+        }
+
         // CSS View Transitions API: drain snapshot/animation events from JS.
         #[cfg(feature = "quickjs")]
         if let Some(js) = &self.js_ctx {
@@ -9248,6 +9299,10 @@ impl Lumen {
             self.relayout();
             // Notify platform accessibility bridge so screen readers can track focus.
             self.platform_bridge.focused_node_changed(new_focused);
+            // Keep JS _lumen_last_focused_nid in sync so showModal() can save/restore it.
+            if let Some(js) = &self.js_ctx {
+                js.notify_focus_changed(new_focused.map(|n| n.index() as u32));
+            }
         }
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so
@@ -9454,6 +9509,20 @@ impl Lumen {
                                     body: body.clone(),
                                 });
                                 match method.as_str() {
+                                    "dialog" => {
+                                        // HTML LS §4.10.18.3: form with method="dialog" closes
+                                        // the nearest ancestor <dialog>, setting its returnValue
+                                        // to the submit button's value attribute.
+                                        let rv = fields.iter()
+                                            .find(|(n, _)| n.is_empty() || n == "value")
+                                            .map(|(_, v)| v.as_str())
+                                            .unwrap_or("");
+                                        let dialog_nid = lumen_dom::find_ancestor_dialog(&doc, submit_node);
+                                        drop(doc);
+                                        if let (Some(dnid), Some(js)) = (dialog_nid, &self.js_ctx) {
+                                            js.fire_dialog_close(dnid.index() as u32, rv);
+                                        }
+                                    }
                                     "get" => {
                                         // HTML LS §form-submission step 23: navigate
                                         // to action + query-string (only urlencoded for GET).

@@ -1761,6 +1761,25 @@ pub fn find_ancestor_form(doc: &Document, mut node: NodeId) -> Option<NodeId> {
     None
 }
 
+/// Walk up the DOM from `node` and return the first ancestor `<dialog>` element.
+///
+/// Returns `None` if no dialog ancestor exists. Used by `<form method="dialog">`
+/// processing: when a form inside a dialog is submitted, this finds the dialog to close.
+pub fn find_ancestor_dialog(doc: &Document, mut node: NodeId) -> Option<NodeId> {
+    while let Some(parent) = doc.get(node).parent {
+        if doc
+            .get(parent)
+            .element_name()
+            .map(|q| q.local.eq_ignore_ascii_case("dialog"))
+            .unwrap_or(false)
+        {
+            return Some(parent);
+        }
+        node = parent;
+    }
+    None
+}
+
 /// Собрать имена и значения submittable-контролов формы из DOM-атрибутов.
 ///
 /// Обходит потомков `form_id` depth-first и возвращает `(name, value)` для
@@ -3902,6 +3921,38 @@ mod tests {
         doc.append_child(doc.root(), div);
         doc.append_child(div, input);
         assert_eq!(find_ancestor_form(&doc, input), None);
+    }
+
+    #[test]
+    fn find_ancestor_dialog_direct() {
+        let mut doc = Document::new();
+        let dialog = doc.create_element(QualName::html("dialog"));
+        let form = doc.create_element(QualName::html("form"));
+        doc.append_child(doc.root(), dialog);
+        doc.append_child(dialog, form);
+        assert_eq!(find_ancestor_dialog(&doc, form), Some(dialog));
+    }
+
+    #[test]
+    fn find_ancestor_dialog_nested() {
+        let mut doc = Document::new();
+        let dialog = doc.create_element(QualName::html("dialog"));
+        let div = doc.create_element(QualName::html("div"));
+        let btn = doc.create_element(QualName::html("button"));
+        doc.append_child(doc.root(), dialog);
+        doc.append_child(dialog, div);
+        doc.append_child(div, btn);
+        assert_eq!(find_ancestor_dialog(&doc, btn), Some(dialog));
+    }
+
+    #[test]
+    fn find_ancestor_dialog_none() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let btn = doc.create_element(QualName::html("button"));
+        doc.append_child(doc.root(), div);
+        doc.append_child(div, btn);
+        assert_eq!(find_ancestor_dialog(&doc, btn), None);
     }
 
     #[test]

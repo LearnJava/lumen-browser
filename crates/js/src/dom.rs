@@ -261,10 +261,11 @@ pub fn install_dom_api(
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
+    pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
     // True when COOP=same-origin + COEP=require-corp are both present on this document.
     cross_origin_isolated: bool,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests, print_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests, print_requests, pending_focus_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -376,6 +377,7 @@ fn install_primitives(
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
+    pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -409,6 +411,22 @@ fn install_primitives(
         reg!("_lumen_print_dialog", move || {
             eprintln!("[window.print()] Opening print preview dialog");
             pr.lock().unwrap().push(PrintRequest::default());
+        });
+    }
+
+    // ── dialog focus management (HTML LS §6.6.3) ─────────────────────────────
+    // `showModal()` calls `_lumen_request_focus(nid)` to focus the first autofocus
+    // element (or the dialog itself).  `close()` calls `_lumen_request_focus(prev)`
+    // to restore focus to the element that was active before the dialog opened.
+    // The shell drains these via `take_focus_requests()` after each JS pump.
+    {
+        let pfr = Arc::clone(&pending_focus_requests);
+        reg!("_lumen_request_focus", move |nid: u32| {
+            pfr.lock().unwrap().push(Some(nid));
+        });
+        let pfr2 = Arc::clone(&pending_focus_requests);
+        reg!("_lumen_request_blur", move || {
+            pfr2.lock().unwrap().push(None);
         });
     }
 
@@ -3802,6 +3820,11 @@ function _lumen_make_element(nid) {
             if (_lumen_modal_dialog_nids.indexOf(nid) < 0) {
                 _lumen_modal_dialog_nids.push(nid);
             }
+            // HTML LS §6.6.3: save the currently focused element so close() can restore it.
+            _lumen_dialog_prev_focus[nid] = _lumen_last_focused_nid;
+            // Focus the first [autofocus] descendant, or the dialog itself if none.
+            var target = _lumen_find_autofocus_in(nid);
+            _lumen_request_focus(target !== -1 ? target : nid);
         },
         close: function(rv) {
             if (_lumen_get_attr(nid, 'open') === undefined) return;
@@ -3810,6 +3833,14 @@ function _lumen_make_element(nid) {
             _lumen_remove_attr(nid, 'data-lumen-modal');
             var idx = _lumen_modal_dialog_nids.indexOf(nid);
             if (idx >= 0) _lumen_modal_dialog_nids.splice(idx, 1);
+            // HTML LS §6.6.3: restore focus to the element that was focused before open.
+            var prev = _lumen_dialog_prev_focus[nid];
+            delete _lumen_dialog_prev_focus[nid];
+            if (prev !== undefined && prev !== -1) {
+                _lumen_request_focus(prev);
+            } else {
+                _lumen_request_blur();
+            }
             var closeEvt = new Event('close', { bubbles: false, cancelable: false });
             _lumen_dispatch(nid, closeEvt);
         },
@@ -10300,6 +10331,26 @@ window._lumen_apply_visibility  = _lumen_apply_visibility;
 // Tracks nids of dialogs opened via showModal(), in open order.
 // Maintained by _lumen_make_element's showModal/close methods (see below).
 var _lumen_modal_dialog_nids = [];
+
+// nid of the element that had keyboard focus immediately before the most
+// recent showModal() call (-1 = none). Used to restore focus on close.
+var _lumen_last_focused_nid = -1;
+
+// Per-dialog saved focus nid: restored when that dialog closes.
+var _lumen_dialog_prev_focus = {};
+
+// DFS search for the first descendant of `container_nid` that has an
+// `autofocus` attribute. Returns its nid, or -1 if none found.
+function _lumen_find_autofocus_in(container_nid) {
+    var queue = _lumen_get_children(container_nid).slice();
+    while (queue.length > 0) {
+        var cur = queue.shift();
+        if (_lumen_get_attr(cur, 'autofocus') !== undefined) return cur;
+        var ch = _lumen_get_children(cur);
+        for (var i = 0; i < ch.length; i++) queue.push(ch[i]);
+    }
+    return -1;
+}
 
 // ── <selectlist> helpers (Open UI Customizable Select §3) ─────────────────────
 // Returns the <listbox> child nid of a <selectlist>, or null if absent.
@@ -20084,6 +20135,102 @@ mod tests {
         // cancel was prevented, so dialog stays open
         assert!(bool_eval(&rt,
             "document.getElementById('dlg').hasAttribute('open')"));
+    }
+
+    // ── <dialog> focus management tests (HTML LS §6.6.3) ─────────────────────
+
+    fn make_dialog_focus_doc() -> Arc<Mutex<Document>> {
+        // <body>
+        //   <button id="btn">Trigger</button>
+        //   <dialog id="dlg">
+        //     <button id="ok" autofocus>OK</button>
+        //   </dialog>
+        //   <dialog id="dlg2">
+        //     <button id="ok2">OK (no autofocus)</button>
+        //   </dialog>
+        // </body>
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        let btn   = doc.create_element(QualName::html("button"));
+        let dlg   = doc.create_element(QualName::html("dialog"));
+        let ok    = doc.create_element(QualName::html("button"));
+        let dlg2  = doc.create_element(QualName::html("dialog"));
+        let ok2   = doc.create_element(QualName::html("button"));
+        set_attribute(&mut doc, btn,  "id", "btn");
+        set_attribute(&mut doc, dlg,  "id", "dlg");
+        set_attribute(&mut doc, ok,   "id", "ok");
+        set_attribute(&mut doc, ok,   "autofocus", "");
+        set_attribute(&mut doc, dlg2, "id", "dlg2");
+        set_attribute(&mut doc, ok2,  "id", "ok2");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, btn);
+        doc.append_child(body, dlg);
+        doc.append_child(dlg, ok);
+        doc.append_child(body, dlg2);
+        doc.append_child(dlg2, ok2);
+        Arc::new(Mutex::new(doc))
+    }
+
+    #[test]
+    fn dialog_show_modal_requests_focus_on_autofocus() {
+        let rt = runtime_with_dom(make_dialog_focus_doc());
+        // showModal should queue a focus request for the [autofocus] button.
+        rt.eval("document.getElementById('dlg').showModal();").unwrap();
+        let reqs = rt.take_focus_requests();
+        // Should have exactly one request for the [autofocus] button (ok).
+        assert!(!reqs.is_empty(), "showModal should push a focus request");
+        assert!(reqs.iter().any(|r| r.is_some()), "focus request should be Some(nid)");
+    }
+
+    #[test]
+    fn dialog_show_modal_requests_focus_on_dialog_when_no_autofocus() {
+        let rt = runtime_with_dom(make_dialog_focus_doc());
+        // dlg2 has no [autofocus] child — should focus the dialog itself.
+        rt.eval("document.getElementById('dlg2').showModal();").unwrap();
+        let reqs = rt.take_focus_requests();
+        assert!(!reqs.is_empty(), "showModal without autofocus should push a focus request");
+        assert!(reqs.iter().any(|r| r.is_some()), "focus request should be Some(dialog_nid)");
+    }
+
+    #[test]
+    fn dialog_close_requests_blur_when_no_previous_focus() {
+        let rt = runtime_with_dom(make_dialog_focus_doc());
+        rt.eval("document.getElementById('dlg').showModal();").unwrap();
+        let _ = rt.take_focus_requests(); // drain showModal requests
+        rt.eval("document.getElementById('dlg').close();").unwrap();
+        let reqs = rt.take_focus_requests();
+        // No previous focus (nid=-1) → should push a blur request (None).
+        assert!(!reqs.is_empty(), "close should push a focus request");
+        assert!(reqs.iter().any(|r| r.is_none()), "close with no prev focus should push None (blur)");
+    }
+
+    #[test]
+    fn dialog_close_restores_previous_focus() {
+        let rt = runtime_with_dom(make_dialog_focus_doc());
+        // Simulate a previous focus on btn (set _lumen_last_focused_nid manually).
+        let btn_nid: i32 = match rt.eval("document.getElementById('btn').__nid__").unwrap() {
+            lumen_core::JsValue::Number(n) => n as i32,
+            _ => panic!("btn nid not a number"),
+        };
+        rt.eval(&format!("_lumen_last_focused_nid = {};", btn_nid)).unwrap();
+        rt.eval("document.getElementById('dlg').showModal();").unwrap();
+        let _ = rt.take_focus_requests(); // drain showModal
+        rt.eval("document.getElementById('dlg').close();").unwrap();
+        let reqs = rt.take_focus_requests();
+        // Should restore focus to btn.
+        assert!(
+            reqs.iter().any(|r| r == &Some(btn_nid as u32)),
+            "close should restore focus to the previously focused element"
+        );
+    }
+
+    #[test]
+    fn dialog_last_focused_nid_global_exists() {
+        let rt = runtime_with_dom(make_dialog_focus_doc());
+        // The global should be initialised to -1.
+        assert!(bool_eval(&rt, "_lumen_last_focused_nid === -1"));
     }
 
     // ── <selectlist> tests (Open UI Customizable Select §3, Phase 0) ─────────
