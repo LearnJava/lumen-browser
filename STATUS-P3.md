@@ -117,6 +117,14 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-160** (2026-06-15) — WOFF2-шрифты не декодировались («unexpected end of font data»),
+  падал любой реальный сайт с woff2-вебшрифтами. Корень — целиком в реконструкции transformed
+  `glyf`/`loca` (`font/src/woff2.rs`, WOFF2 spec §5.2): координаты точек читались из `flagStream`
+  вместо `glyphStream`, `instructionLength` — не в том порядке/стриме, формула триплет-декода
+  была произвольной, а синтезированная `loca` не согласовывалась с `head.indexToLocFormat`.
+  Переписано по эталонному алгоритму (`with_sign` + 6 диапазонов флага); `loca` всегда long-form +
+  патч `head` offset 50; bbox simple-глифа без явной записи считается по точкам; поддержан
+  `overlapSimpleBitmap`. Регресс — `tests/woff2_real_font.rs` на реальном Fira Mono Regular .woff2.
 - **BUG-161** (2026-06-15) — HTTP/2 HPACK-декодер отвергал легальный dynamic table size update
   (ya.ru не грузился): `H2Conn::connect_with_profile` создавал `Decoder::new()` с дефолтным
   `proto_max=4096`, хотя клиент анонсировал `SETTINGS_HEADER_TABLE_SIZE=65536`. Фикс — проставить
