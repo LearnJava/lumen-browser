@@ -228,6 +228,17 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Phase 0 limits (documented in module): dynamic `import(spec, { with: { … } })` options left untouched; attribute keys other than `type` stripped and ignored.
   - 11 unit tests (7 transformer + 4 end-to-end). All pass.
 
+- **HTML5 Drag and Drop API (HTML LS §9.10, PH3-9).** JS shim in `dom.rs`.
+  - `DataTransfer` class: `setData`/`getData`/`clearData`; `types` DOMStringList; `.effectAllowed`/`.dropEffect`.
+  - `DataTransferItem` class: `kind`, `type`, `getAsString(cb)`.
+  - `DataTransferItemList` class: index-access, `add(data, type)`, `remove(idx)`, `clear()`, `length`.
+  - `DragEvent` class: extends `MouseEvent`; `dataTransfer` property (auto-populated).
+  - `window.DragEvent`, `window.DataTransfer`, `window.DataTransferItem`, `window.DataTransferItemList` — all exported.
+  - `draggable` getter/setter on `Element` (backed by HTML attribute).
+  - `ondragstart`, `ondrag`, `ondragend`, `ondragenter`, `ondragover`, `ondragleave`, `ondrop` null-init properties on all elements.
+  - `_lumen_dispatch_drag_event(nid, type, x, y, data_json)` — called from shell; creates `DataTransfer` from JSON dict, dispatches via `_lumen_dispatch_rich`.
+  - 5 new tests (fires on element, coordinates, DataTransfer payload, bubbling, default-not-prevented). 12 total DnD tests (7 DataTransfer/DragEvent + 5 dispatch).
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
