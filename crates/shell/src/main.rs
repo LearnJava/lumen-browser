@@ -5630,11 +5630,47 @@ impl Lumen {
         }
         // Register lazy images with JS so _lumen_deliver_lazy_images can check them
         // on subsequent redraws (scroll, resize) via proximity threshold.
+        //
+        // After registration we run an immediate proximity check: push fresh
+        // layout rects into JS, fire the IntersectionObserver, drain and fetch.
+        // Without this, above-the-fold `loading="lazy"` images (most cards on
+        // sites like lenta.ru) never load on first paint — `relayout()` is the
+        // only other path that delivers observers, and it only runs on
+        // scroll/resize/zoom, not on the initial load. (BUG-163)
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let pairs: Vec<(u32, &str)> =
-                page.lazy_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
-            js.register_lazy_images(&pairs);
+        let initial_lazy_reqs: Vec<(u32, String)> = {
+            let mut reqs = Vec::new();
+            if let Some(js) = &self.js_ctx {
+                let pairs: Vec<(u32, &str)> =
+                    page.lazy_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
+                js.register_lazy_images(&pairs);
+                if !pairs.is_empty()
+                    && let Some(lb_ref) = self.layout_box.as_ref()
+                {
+                    let viewport = self.renderer.as_ref().map_or_else(
+                        || Size::new(1024.0, 720.0),
+                        |r| {
+                            let s = r.viewport_size();
+                            Size::new(s.width, s.height)
+                        },
+                    );
+                    js.update_layout_rects(collect_layout_rects(lb_ref));
+                    js.update_viewport_size(viewport.width, viewport.height);
+                    js.deliver_layout_observers();
+                    js.deliver_lazy_images();
+                    reqs = js.take_lazy_image_requests();
+                }
+            }
+            reqs
+        };
+        #[cfg(feature = "quickjs")]
+        if !initial_lazy_reqs.is_empty() {
+            self.fetch_and_register_lazy_images(initial_lazy_reqs);
+            // Images were registered after the request_redraw above — request
+            // another so the first paint actually shows them.
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
         }
         // JS may have requested navigation via location.href= etc.
         self.pending_js_navigate = page.js_navigate;

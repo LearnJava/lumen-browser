@@ -3872,8 +3872,12 @@ impl Renderer {
         // parsed_faces займёт &self.faces. Scroll offset не влияет на SIZE
         // (только на position), поэтому используем rect напрямую.
         for cmd in content.iter().chain(overlay.iter()) {
-            if let DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. } = cmd {
-                self.ensure_image_gpu_key(src, *rect, *object_fit, *object_position);
+            match cmd {
+                DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. }
+                | DisplayCommand::LazyImageSlot { rect, src, object_fit, object_position, .. } => {
+                    self.ensure_image_gpu_key(src, *rect, *object_fit, *object_position);
+                }
+                _ => {}
             }
         }
 
@@ -4508,12 +4512,39 @@ impl Renderer {
                         }
                     }
                 }
-                DisplayCommand::LazyImageSlot { rect, .. } => {
-                    // Render as grey placeholder — image not yet fetched.
+                DisplayCommand::LazyImageSlot { rect, src, object_fit, object_position, .. } => {
+                    // A lazy `<img>` stays a LazyImageSlot even after the shell
+                    // fetches it (the `loading="lazy"` attribute never clears).
+                    // Draw the registered image if present, else the grey
+                    // placeholder — same behaviour as DrawImage. (BUG-163)
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
+                    let alpha = 1.0_f32;
                     let scrolled = translate_rect(*rect, dx, dy);
+                    let fit = *object_fit;
+                    let pos = *object_position;
+                    let gpu_key = self.compute_image_gpu_key(src, scrolled, fit, pos);
+                    if let Some(gpu) = self.images.get(&gpu_key) {
+                        if let Some((visible, uv_min, uv_max)) = fit_image_quad(
+                            scrolled,
+                            (gpu.width, gpu.height),
+                            fit,
+                            pos,
+                        ) {
+                            let v_start = image_vertices.len() as u32;
+                            push_image_quad(&mut image_vertices, visible, uv_min, uv_max, alpha);
+                            if let Some(m) = transform_stack.last() {
+                                apply_affine_to_verts(&mut image_vertices[v_start as usize..], m);
+                            }
+                            let v_count = image_vertices.len() as u32 - v_start;
+                            let image_batch_idx = image_bind_groups.len() as u32;
+                            image_bind_groups.push(gpu.bind_group_linear.clone());
+                            draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
+                        }
+                        continue;
+                    }
+                    // Not yet fetched — grey placeholder.
                     let v_start = fill_vertices.len() as u32;
                     push_fill_quad(
                         &mut fill_vertices,

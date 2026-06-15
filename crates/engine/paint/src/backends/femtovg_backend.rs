@@ -1818,14 +1818,13 @@ impl FemtovgBackend {
             DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. } => {
                 self.draw_image_in_rect(rect, src, *object_fit, object_position);
             }
-            DisplayCommand::LazyImageSlot { rect, .. } => {
-                // Render as grey placeholder — image not yet fetched.
-                if rect.width > 0.0 && rect.height > 0.0 {
-                    let paint = femtovg::Paint::color(femtovg::Color::rgbf(0.85, 0.85, 0.85));
-                    let mut path = femtovg::Path::new();
-                    path.rect(rect.x, rect.y, rect.width, rect.height);
-                    self.canvas.fill_path(&path, &paint);
-                }
+            DisplayCommand::LazyImageSlot { rect, src, object_fit, object_position, .. } => {
+                // A lazy `<img>` keeps its `loading="lazy"` attribute even after
+                // the shell fetches it, so it still arrives here as a
+                // LazyImageSlot — not a DrawImage. Draw the image if it has been
+                // registered; `draw_image_in_rect` falls back to the grey
+                // placeholder when the src is not yet in the cache. (BUG-163)
+                self.draw_image_in_rect(rect, src, *object_fit, object_position);
             }
             DisplayCommand::DrawBackgroundImage {
                 rect, origin_rect, src, size, position, repeat, ..
