@@ -6,10 +6,7 @@
 
 ## In progress
 
-**PH3-9 — HTML5 Drag and Drop API (shell-side dispatch)**  
-Branch: p1-ph3-9-dnd  
-Next step: добавить `is_element_draggable()` в `lumen-dom`, затем `DragState` в shell и диспатч событий drag/drop  
-Files: `crates/dom/src/lib.rs`, `crates/shell/src/main.rs`
+— (idle, ожидание следующей задачи)
 
 ---
 
@@ -23,7 +20,7 @@ Files: `crates/dom/src/lib.rs`, `crates/shell/src/main.rs`
 | PH3-3 | ~~**getUserMedia Phase 1**~~ ✅ завершена | L | `lumen-js`, `lumen-shell` |
 | PH3-4 | ~~**Offscreen Canvas Phase 1**~~ ✅ завершена | M | `lumen-js`, `lumen-paint` |
 | PH3-5 | ~~**Web Workers Phase 1**~~ ✅ завершена | L | `lumen-js` |
-| PH3-9 | **HTML5 Drag and Drop API** 🟡 в работе | M | `lumen-dom`, `lumen-shell` |
+| PH3-9 | ~~**HTML5 Drag and Drop API**~~ ✅ завершена | M | `lumen-dom`, `lumen-js`, `lumen-shell` |
 
 ---
 
@@ -31,6 +28,7 @@ Files: `crates/dom/src/lib.rs`, `crates/shell/src/main.rs`
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-16 | PH3-9: HTML5 Drag and Drop API | `is_element_draggable()` в lumen-dom (HTML LS §9.3.3); `DndState` + `DND_THRESHOLD` + `js_drag_event()` в shell; полный lifecycle: dragstart→drag/dragover/dragenter/dragleave→drop/dragend. 231 тест lumen-dom, 2081 lumen-js. |
 | 2026-06-16 | PH3-8: Web Animations API Level 1 (JS runtime) | `DocumentTimeline`, `KeyframeEffect`, `Animation` (play/pause/cancel/finish/reverse), `AnimationPlaybackEvent`; `element.animate()` + `element.getAnimations()`; `document.timeline` + `document.getAnimations()`; интерполяция (числа/цвета/transform), easing (linear/ease/cubic-bezier/steps), fill/direction/iterations. 21 тест. |
 | 2026-06-16 | PH3-7: `contentEditable` + Input Events Level 2 + Selection routing | `node_is_contenteditable()`, `find_editing_host()` в lumen-dom; 5 Rust-биндингов + JS-свойства (`contentEditable`, `isContentEditable`) + `_lumen_handle_contenteditable_key()` в lumen-js; маршрутизация клавиш в shell через DOM (не eval_js). 17 новых тестов. |
 | 2026-06-16 | PH3-6: `<dialog>` focus management + `<form method="dialog">` | `showModal()` фокусирует [autofocus]-потомок или сам диалог; `close()` восстанавливает предыдущий фокус; `<form method="dialog">` закрывает родительский `<dialog>`. `find_ancestor_dialog()` в lumen-dom. 8 новых тестов. |
