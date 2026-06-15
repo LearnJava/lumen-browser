@@ -6,10 +6,7 @@
 
 ## In progress
 
-**9F.3 — Tor circuit: `--tor` CLI mode**  
-Branch: p1-ph2-9f3-tor  
-Next step: `extract_tor_mode()` в `shell/src/main.rs` + применить TorBrowser-профиль через config + connectivity check  
-Files: `crates/shell/src/main.rs:184`, `crates/shell/src/config.rs:204`
+—
 
 ---
 
@@ -31,6 +28,7 @@ Files: `crates/shell/src/main.rs:184`, `crates/shell/src/config.rs:204`
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | 9F.3: Tor circuit (`--tor` CLI) | `extract_tor_mode()` + `check_tor_connectivity()` + override `FingerprintProfile` → TorBrowser + `socks5://127.0.0.1:9050` + `no_persistent_state`. Завершает ADR-007 (все 6 слоёв). 6 тестов. |
 | 2026-06-15 | PH2-7: Accessibility tree + platform bridges Phase 1 | `WinUiaBridge` Phase 1: `init_hwnd()` + `NotifyWinEvent` (EVENT_OBJECT_FOCUS/REORDER/STATECHANGE) + `handle_wm_get_object` + `ax_role_to_msaa()` (60 вариантов). 125 тестов в lumen-a11y. |
 | 2026-06-15 | PH2-3: Профили + шифрование | `profile_vault` — AES-256-GCM key wrapping, PBKDF2-HMAC-SHA256 (100k iter). `ProfileRegistry`: `set_password`, `clear_password`, `unlock`, `is_encrypted`. 11 unit-тестов. |
 | 2026-06-15 | PH2-2: Site isolation Phase 1 | `lumen-network::coop` — COOP/COEP/CORP парсинг; 27 тестов. `window.crossOriginIsolated` + pipeline wiring. |
