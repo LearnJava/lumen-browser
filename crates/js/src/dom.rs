@@ -9008,6 +9008,8 @@ window.AnimationEvent        = AnimationEvent;
 window.TransitionEvent       = TransitionEvent;
 window.Animation             = Animation;
 window.KeyframeEffect        = KeyframeEffect;
+window.DocumentTimeline      = DocumentTimeline;
+window.AnimationPlaybackEvent = AnimationPlaybackEvent;
 window.StorageEvent          = StorageEvent;
 window.PopStateEvent         = PopStateEvent;
 window.HashChangeEvent       = HashChangeEvent;
@@ -10817,19 +10819,29 @@ function _lumen_notify_fullscreen_exit() {
     }
 }
 
-// ── Web Animations API (WAAPI Level 1) ────────────────────────────────────────
-// element.animate(keyframes, options) → Animation
-// KeyframeEffect / Animation / document.timeline / element.getAnimations()
+// ── Web Animations API Level 1 (W3C Web Animations §3) ─────────────────────
+// Pure JS implementation; ticks via a shared requestAnimationFrame loop.
+// P4 wires CSS animation-* properties separately; P2 handles compositor offload.
 //
-// P1 scope: value interpolation + JS objects. Style applied via element.style
-// (inline layer, overrides normal CSS). Compositor offload (P2) and CSS
-// animation-timeline scheduling (P4) are separate tasks.
+// External API surface (called by _lumen_make_element and document object):
+//   _wa_element_animate(target, keyframes, options) → Animation
+//   _wa_get_animations_for(target) → Animation[]
+//   _wa_doc_get_animations() → Animation[]
+//   _wa_doc_timeline — DocumentTimeline singleton
 
 // Current animation timeline time — updated at the start of every RAF tick.
 var _wa_current_time = 0;
-
 // Live registry of all non-idle Animation instances.
 var _wa_animations = [];
+
+// AnimationPlaybackEvent (W3C Web Animations §4.4.3) — fired on finish/cancel.
+function AnimationPlaybackEvent(type, init) {
+    Event.call(this, type, { bubbles: false, cancelable: false });
+    this.currentTime  = (init && init.currentTime  != null) ? init.currentTime  : null;
+    this.timelineTime = (init && init.timelineTime != null) ? init.timelineTime : null;
+}
+AnimationPlaybackEvent.prototype = Object.create(Event.prototype);
+AnimationPlaybackEvent.prototype.constructor = AnimationPlaybackEvent;
 
 // DocumentTimeline — wraps the document's global animation timeline.
 function DocumentTimeline(options) {
@@ -23923,5 +23935,67 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Web Animations API — additional coverage ──────────────────────────────
+
+    #[test]
+    fn wa_document_timeline_current_time_is_number() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof document.timeline.currentTime === 'number' || document.timeline.currentTime === null").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_document_timeline_class_exposed() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof window.DocumentTimeline === 'function'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_animation_playback_rate_default_one() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                 a.playbackRate",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn wa_animation_ready_is_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                 typeof a.ready === 'object' && a.ready !== null",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_element_get_animations_returns_running() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.animate([{opacity:'0'},{opacity:'1'}], 500); \
+                 el.getAnimations().length",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn wa_animation_playback_event_class_exposed() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof window.AnimationPlaybackEvent === 'function'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
     }
 }
