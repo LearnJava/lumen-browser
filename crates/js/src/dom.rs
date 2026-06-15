@@ -22506,8 +22506,9 @@ mod tests {
             var got = [];
             var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
             po.observe({entryTypes: ['largest-contentful-paint']});
-            _lumen_deliver_lcp_entry(42, 1024, 200.5, 210.5);
-            got.length === 1 && got[0].entryType === 'largest-contentful-paint' && got[0].size === 1024 && Math.abs(got[0].duration - 10) < 0.1
+            // NodeId 6 = <div id="main"> in make_doc() (nodes: root=0..text=8, len 9).
+            _lumen_deliver_lcp_entry(6, 1024, 200.5, 210.5);
+            got.length === 1 && got[0].entryType === 'largest-contentful-paint' && got[0].size === 1024 && got[0].element !== null && Math.abs(got[0].duration - 10) < 0.1
             "#
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
