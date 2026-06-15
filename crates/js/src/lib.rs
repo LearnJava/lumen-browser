@@ -246,6 +246,12 @@ pub struct QuickJsRuntime {
     /// drained by `pump_shared_workers()` and delivered to the matching client
     /// `port` via `_lumen_deliver_shared_worker_messages`.
     shared_worker_outbox: shared_worker::SharedWorkerOutbox,
+    /// Focus requests queued by JS via `_lumen_request_focus` / `_lumen_request_blur`.
+    ///
+    /// Each `Some(nid)` means "move keyboard focus to this node"; `None` means blur.
+    /// Populated by `showModal()` (focus autofocus/dialog) and `close()` (restore focus).
+    /// Drained by the shell in `about_to_wait` via `take_focus_requests()`.
+    pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
     /// `history.pushState` / `history.replaceState` URL-update notifications.
     ///
     /// Each call to `pushState`/`replaceState` with a non-empty URL appends an
@@ -343,6 +349,7 @@ impl QuickJsRuntime {
             console_messages: Arc::new(Mutex::new(Vec::new())),
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
+            pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
@@ -565,6 +572,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.pending_history_url_updates),
                 Arc::clone(&self.fullscreen_requests),
                 Arc::clone(&self.print_requests),
+                Arc::clone(&self.pending_focus_requests),
                 cross_origin_isolated,
             )
             .map_err(|e| rq_err(&ctx, e))?;
@@ -1562,6 +1570,48 @@ impl QuickJsRuntime {
     /// Returns an empty vec when no console calls have been made since the last drain.
     pub fn take_console_messages(&self) -> Vec<(u8, String)> {
         std::mem::take(&mut self.console_messages.lock().unwrap())
+    }
+
+    /// Drain JS dialog focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`.
+    ///
+    /// `None` = blur (clear focus); `Some(nid)` = move keyboard focus to that node.
+    /// Called by the shell in `about_to_wait` to apply focus changes from `showModal()` /
+    /// `close()` without touching the DOM directly from Rust.
+    pub fn take_focus_requests(&self) -> Vec<Option<u32>> {
+        std::mem::take(&mut self.pending_focus_requests.lock().unwrap())
+    }
+
+    /// Close a `<dialog>` as the result of a `<form method="dialog">` submission.
+    ///
+    /// Calls `dialog.close(return_value)` in JS so the close event fires and
+    /// `returnValue` is set.  `dialog_nid` is the dialog node's index; `return_value`
+    /// is the submit button's `value` attribute (may be empty).
+    pub fn fire_dialog_close(&self, dialog_nid: u32, return_value: &str) {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.ctx.with(|ctx| {
+            let rv = return_value.replace('\\', r"\\").replace('"', r#"\""#);
+            let script = format!(
+                "(function(){{var d=_lumen_make_element({dialog_nid});\
+                 if(d&&typeof d.close==='function')d.close(\"{rv}\");}})();"
+            );
+            ctx.eval::<(), _>(script.as_str()).ok();
+        });
+    }
+
+    /// Notify the JS runtime that the shell moved keyboard focus to a new node.
+    ///
+    /// Updates `_lumen_last_focused_nid` so that `showModal()` can save and restore
+    /// the previously focused element per HTML LS §6.6.3. `nid = None` means focus
+    /// was cleared (e.g. click on non-focusable area).
+    pub fn notify_focus_changed(&self, nid: Option<u32>) {
+        let n = nid.map(|n| n as i64).unwrap_or(-1_i64);
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.ctx.with(|ctx| {
+            let script = format!(
+                "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
+            );
+            ctx.eval::<(), _>(script.as_str()).ok();
+        });
     }
 
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
