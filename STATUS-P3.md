@@ -117,6 +117,11 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-161** (2026-06-15) — HTTP/2 HPACK-декодер отвергал легальный dynamic table size update
+  (ya.ru не грузился): `H2Conn::connect_with_profile` создавал `Decoder::new()` с дефолтным
+  `proto_max=4096`, хотя клиент анонсировал `SETTINGS_HEADER_TABLE_SIZE=65536`. Фикс — проставить
+  `decoder.set_proto_max(settings.header_table_size)` (`network/src/h2/conn.rs`); симметрия к тому,
+  как SETTINGS пира управляют нашим encoder.
 - **BUG-162** (2026-06-15) — детектор кодировки выдавал ibm866 на чистом ASCII (example.com): добавлен
   ASCII-shortcut в `detect()` (`encoding/src/detect.rs`) — нет байт ≥0x80 → UTF-8, минуя кириллическую
   эвристику (где `max_by` среди равных score возвращал последний — Cp866).
