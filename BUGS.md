@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-158)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-163)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -172,6 +172,11 @@
 | [BUG-155](bugs/BUG-155-FIXED.md) | FIXED 2026-06-15 | js | perf_observer_lcp_entry: index out of bounds — element_nid=42 за пределами тест-дока |
 | [BUG-156](bugs/BUG-156-FIXED.md) | FIXED 2026-06-15 | paint/layout | ЛОЖНАЯ РЕГРЕССИЯ TEST-27: устаревший lumen.exe в прогоне 06-15 |
 | [BUG-157](bugs/BUG-157-FIXED.md) | FIXED 2026-06-15 | paint | ЛОЖНАЯ РЕГРЕССИЯ TEST-40: та же причина — устаревший lumen.exe |
+| [BUG-158](bugs/BUG-158-OPEN.md) | OPEN | layout | карточки новостей lenta.ru налезают друг на друга: контейнеры схлопнуты в height=0, сиблинги рисуются на одном y |
+| [BUG-159](bugs/BUG-159-OPEN.md) | OPEN | paint | position:absolute потомок scroll-контейнера эмитится после PopScrollLayer (вне scroll-слоя) → ведёт себя как fixed, не скроллится |
+| [BUG-160](bugs/BUG-160-OPEN.md) | OPEN | font | WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов |
+| [BUG-161](bugs/BUG-161-OPEN.md) | OPEN | network | HTTP/2 HPACK «dynamic table size update exceeds negotiated max» → ya.ru не грузится |
+| [BUG-162](bugs/BUG-162-OPEN.md) | OPEN | encoding | детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8 |
 
 ---
 
