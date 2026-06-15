@@ -117,6 +117,18 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-165** (2026-06-15) — flex `align-content` (TEST-65: 16.40%) сдвигал строку,
+  прибавляя `offset` только к `children[i].rect.y`, но не к поддереву item-а. Потомки
+  flex-item-а уже разложены в абсолютных координатах, поэтому при сдвиге строки
+  оставались на месте. Заметнее всего на вложенных flex-контейнерах: grandparent
+  `__f` (дефолтный `align-content:stretch`) растягивал строки контейнеров, двигал их
+  боксы, но items оставались на не-растянутой позиции → вылезали выше контейнеров.
+  Фикс в `lay_out_flex` (`box_tree.rs` ~7090): `children[i].rect.y += offset` →
+  `shift_y_box(&mut children[i], offset)` (рекурсивный сдвиг поддерева, зеркало
+  `shift_tree` из абсолютного позиционирования). Регресс-тест
+  `flex_align_content_shifts_item_subtree`. Подтверждено `--dump-layout`: все items
+  сидят внутри контейнеров, совпадает с Edge.
+
 - **BUG-158** (2026-06-15) — карточки новостей lenta.ru налезали друг на друга.
   Корень: `<a class="card-mini _topnews">` — flex-item column-flex контейнера
   `.topnews__column` со стилем `flex:1` (→ `flex-basis:0`). В column-flex с
