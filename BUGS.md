@@ -176,7 +176,7 @@
 | [BUG-159](bugs/BUG-159-OPEN.md) | OPEN | paint | position:absolute потомок scroll-контейнера эмитится после PopScrollLayer (вне scroll-слоя) → ведёт себя как fixed, не скроллится |
 | [BUG-160](bugs/BUG-160-OPEN.md) | OPEN | font | WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов |
 | [BUG-161](bugs/BUG-161-OPEN.md) | OPEN | network | HTTP/2 HPACK «dynamic table size update exceeds negotiated max» → ya.ru не грузится |
-| [BUG-162](bugs/BUG-162-OPEN.md) | OPEN | encoding | детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8 |
+| [BUG-162](bugs/BUG-162-FIXED.md) | FIXED 2026-06-15 | encoding | детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8 |
 
 ---
 
