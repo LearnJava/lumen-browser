@@ -106,6 +106,20 @@ fn mark_offscreen_dirty(canvas_id: u32) {
     });
 }
 
+/// Create a new OffscreenCanvas pre-filled with existing RGBA8 pixel data.
+///
+/// Used by `transferControlToOffscreen()` to snapshot a DOM canvas into an
+/// OffscreenCanvas without going through JS hex encoding. Returns the new canvas ID.
+pub fn create_offscreen_from_pixels(w: u32, h: u32, pixels: Vec<u8>) -> u32 {
+    let id = NEXT_OFFSCREEN_ID.fetch_add(1, Ordering::Relaxed);
+    OFFSCREEN_CANVASES.with(|c| {
+        if let Ok(mut map) = c.try_borrow_mut() {
+            map.insert(id, Context2D::from_pixels(w, h, pixels));
+        }
+    });
+    id
+}
+
 /// Drain dirty offscreen canvases and return their RGBA buffers.
 ///
 /// Each tuple is `(canvas_id, width, height, rgba_pixels)` where `rgba_pixels`
@@ -897,6 +911,36 @@ mod tests {
             "#).unwrap();
             assert!(result);
         });
+    }
+
+    #[test]
+    fn create_offscreen_from_pixels_correct_id() {
+        reset_state();
+        // 1×1 opaque blue pixel
+        let pixels = vec![0u8, 0, 255, 255];
+        let id = super::create_offscreen_from_pixels(1, 1, pixels.clone());
+        assert!(id > 0);
+        OFFSCREEN_CANVASES.with(|c| {
+            if let Ok(map) = c.try_borrow() {
+                let ctx2d = map.get(&id).expect("canvas should be registered");
+                assert_eq!(ctx2d.width(), 1);
+                assert_eq!(ctx2d.height(), 1);
+                // Pixel data should match what we passed in
+                let stored = ctx2d.pixels();
+                assert_eq!(stored[0], 0,   "R=0");
+                assert_eq!(stored[1], 0,   "G=0");
+                assert_eq!(stored[2], 255, "B=255");
+                assert_eq!(stored[3], 255, "A=255");
+            }
+        });
+    }
+
+    #[test]
+    fn create_offscreen_from_pixels_unique_ids() {
+        reset_state();
+        let id1 = super::create_offscreen_from_pixels(2, 2, vec![0u8; 16]);
+        let id2 = super::create_offscreen_from_pixels(2, 2, vec![0u8; 16]);
+        assert_ne!(id1, id2, "each transfer should yield a distinct canvas ID");
     }
 
     #[test]

@@ -4059,11 +4059,13 @@ function _lumen_make_element(nid) {
         // CanvasRenderingContext2D; 'webgl'/'webgl2' fall through to null (the
         // functional WebGL path is the separate webgl_canvas shim). Only meaningful
         // on <canvas>; harmless on other elements (creates an unused buffer at most).
+        // Returns null when control has been transferred via transferControlToOffscreen.
         getContext: function(contextType) {
             var t = ('' + (contextType || '')).toLowerCase();
             if (t === '2d') {
                 if (_canvas2d_ctxs[nid]) return _canvas2d_ctxs[nid];
                 if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
+                if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) return null;
                 var d = _lumen_canvas_dims(nid);
                 _lumen_canvas2d_create(nid, d[0], d[1]);
                 var c2d = _lumen_make_canvas2d_ctx(this, nid);
@@ -4071,6 +4073,34 @@ function _lumen_make_element(nid) {
                 return c2d;
             }
             return null;
+        },
+        // HTMLCanvasElement.transferControlToOffscreen (HTML LS §4.12.14).
+        // Transfers the canvas bitmap to a new OffscreenCanvas and prevents future
+        // getContext() calls. The returned OffscreenCanvas can be sent to a Worker
+        // via postMessage with a transfer list.
+        transferControlToOffscreen: function() {
+            if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') {
+                throw new DOMException('transferControlToOffscreen: not a canvas element', 'InvalidStateError');
+            }
+            if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) {
+                throw new DOMException('Canvas control already transferred', 'InvalidStateError');
+            }
+            if (_canvas2d_ctxs[nid]) {
+                throw new DOMException('Canvas already has an active 2D context', 'InvalidStateError');
+            }
+            var d = _lumen_canvas_dims(nid);
+            _lumen_canvas2d_create(nid, d[0], d[1]);
+            var jsonStr = _lumen_canvas_transfer_control_to_offscreen(nid);
+            var obj = JSON.parse(jsonStr);
+            // Create an OffscreenCanvas JS object wrapping the pre-created native canvas.
+            // We set __canvas_id__ directly instead of calling the constructor so the
+            // native side does not allocate a second backing buffer.
+            var oc = Object.create(OffscreenCanvas.prototype);
+            oc.__canvas_id__ = obj.__canvas_id__;
+            oc.width = obj.width;
+            oc.height = obj.height;
+            oc._2d_context = null;
+            return oc;
         },
         // Privacy: blank data URL defeats canvas pixel-hash fingerprinting (ADR-007).
         toDataURL: function() {
