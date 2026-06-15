@@ -1567,6 +1567,21 @@ pub(crate) trait PersistentJs {
     /// restoration when the dialog closes. `nid = None` means focus was cleared.
     #[allow(dead_code)]
     fn notify_focus_changed(&self, _nid: Option<u32>) {}
+
+    /// Return the node ID of the current pointer capture target, if any.
+    ///
+    /// Non-consuming: the capture stays active until `take_pointer_capture()`.
+    /// Returns `None` when no capture is active.
+    /// Default: no capture support (always `None`).
+    #[allow(dead_code)]
+    fn pointer_capture_nid(&self) -> Option<u32> { None }
+
+    /// Atomically clear and return the current pointer capture target node ID.
+    ///
+    /// Called by the shell after `pointerup` (implicit release per W3C Pointer Events
+    /// L3 §4.1).  Returns `None` if no capture was active.
+    #[allow(dead_code)]
+    fn take_pointer_capture(&self) -> Option<u32> { None }
 }
 
 #[cfg(feature = "quickjs")]
@@ -1815,6 +1830,12 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn notify_focus_changed(&self, nid: Option<u32>) {
         self.rt.notify_focus_changed(nid);
+    }
+    fn pointer_capture_nid(&self) -> Option<u32> {
+        self.rt.pointer_capture_nid()
+    }
+    fn take_pointer_capture(&self) -> Option<u32> {
+        self.rt.take_pointer_capture()
     }
 }
 
@@ -7913,9 +7934,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
                         let xu = (pos.x as f32) / dpr;
                         let yu = (pos.y as f32) / dpr;
-                        let nid = hov.index() as u32;
-                        self.js_pointer_event(nid, "pointerup", xu, yu, 0, 0);
-                        self.js_mouse_event(nid, "mouseup", xu, yu, 0, 0);
+                        let hit_nid = hov.index() as u32;
+                        // Pointer Events L3 §4.1: route pointerup to capture target if active.
+                        let ptr_nid = self.js_ctx.as_ref()
+                            .and_then(|c| c.pointer_capture_nid())
+                            .unwrap_or(hit_nid);
+                        self.js_pointer_event(ptr_nid, "pointerup", xu, yu, 0, 0);
+                        self.js_mouse_event(hit_nid, "mouseup", xu, yu, 0, 0);
+                        // Pointer Events L3 §4.1: implicit release on pointerup.
+                        if let Some(cap_nid) = self.js_ctx.as_ref().and_then(|c| c.take_pointer_capture()) {
+                            self.js_capture_event(cap_nid, "lostpointercapture");
+                        }
                     }
                     // HTML5 DnD (PH3-9): fire drop + dragend on release.
                     #[cfg(feature = "quickjs")]
@@ -9171,6 +9200,18 @@ impl Lumen {
         }
     }
 
+    /// Dispatch a `gotpointercapture` or `lostpointercapture` event to DOM node `nid`.
+    ///
+    /// Calls `_lumen_dispatch_capture_event` (W3C Pointer Events L3 §4.1).
+    /// These events do not bubble per spec.  No-op when there is no JS context.
+    #[cfg(feature = "quickjs")]
+    fn js_capture_event(&self, nid: u32, event_type: &str) {
+        if let Some(ctx) = &self.js_ctx {
+            let script = format!("_lumen_dispatch_capture_event({}, '{}')", nid, event_type);
+            ctx.eval_js(&script);
+        }
+    }
+
     /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.
     ///
     /// Hit-tests the position (accounting for current scroll offset) and fires
@@ -9193,10 +9234,14 @@ impl Lumen {
         });
         #[cfg(feature = "quickjs")]
         if let Some(result) = hit.as_ref() {
-            let nid = result.node.index() as u32;
-            // Pointer Events L2 §10.5 — pointermove fires before mousemove.
-            self.js_pointer_event(nid, "pointermove", x_css, y_css, 0, 0);
-            self.js_mouse_event(nid, "mousemove", x_css, y_css, 0, 0);
+            // Pointer Events L3 §4.1: if a pointer capture is active, redirect
+            // pointermove (and all pointer events) to the captured element.
+            let hit_nid = result.node.index() as u32;
+            let ptr_nid = self.js_ctx.as_ref()
+                .and_then(|c| c.pointer_capture_nid())
+                .unwrap_or(hit_nid);
+            self.js_pointer_event(ptr_nid, "pointermove", x_css, y_css, 0, 0);
+            self.js_mouse_event(hit_nid, "mousemove", x_css, y_css, 0, 0);
         }
         #[cfg(not(feature = "quickjs"))]
         let _ = hit;

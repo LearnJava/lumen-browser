@@ -3265,9 +3265,31 @@ function _lumen_dispatch_pointer_event(start_nid, type, clientX, clientY, button
         ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
         altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
         pointerId: 1, pointerType: 'mouse', isPrimary: true,
-        pressure: buttons ? 0.5 : 0.0
+        pressure: buttons ? 0.5 : 0.0,
+        // Pointer Events Level 3 §4.1 — mouse always perpendicular to surface
+        altitudeAngle: Math.PI / 2, azimuthAngle: 0,
+        width: 1, height: 1,
+        tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
     });
+    // Level 3: getCoalescedEvents() / getPredictedEvents() — single event, no coalescing
+    ev.getCoalescedEvents = function() { return [ev]; };
+    ev.getPredictedEvents = function() { return []; };
     return _lumen_dispatch_rich(start_nid, ev);
+}
+
+// _lumen_dispatch_capture_event — fire gotpointercapture / lostpointercapture on a node.
+// W3C Pointer Events L3 §4.1: these events do NOT bubble.
+function _lumen_dispatch_capture_event(nid, type) {
+    var ev = new PointerEvent(type, {
+        bubbles: false, cancelable: false, isTrusted: true,
+        pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        altitudeAngle: Math.PI / 2, azimuthAngle: 0,
+        width: 1, height: 1,
+        tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
+    });
+    ev.getCoalescedEvents = function() { return []; };
+    ev.getPredictedEvents = function() { return []; };
+    _lumen_dispatch_rich(nid, ev);
 }
 
 // Called from shell for keydown / keyup / keypress events.
@@ -4048,6 +4070,28 @@ function _lumen_make_element(nid) {
         ondragover:   null,
         ondragleave:  null,
         ondrop:       null,
+        // Pointer Events Level 3 §4.1 — pointer capture
+        ongotpointercapture:  null,
+        onlostpointercapture: null,
+        setPointerCapture: function(pointerId) {
+            // Spec: InvalidStateError if element is not connected — skip check for Phase 0
+            if (typeof _lumen_set_capture_state === 'function') {
+                _lumen_set_capture_state(nid);
+            }
+            _lumen_dispatch_capture_event(nid, 'gotpointercapture');
+        },
+        releasePointerCapture: function(pointerId) {
+            if (typeof _lumen_release_capture_state === 'function') {
+                _lumen_release_capture_state();
+            }
+            _lumen_dispatch_capture_event(nid, 'lostpointercapture');
+        },
+        hasPointerCapture: function(pointerId) {
+            if (typeof _lumen_get_capture_nid === 'function') {
+                return _lumen_get_capture_nid() === nid;
+            }
+            return false;
+        },
         appendChild:     function(c) {
             if (!c || c.__nid__ === undefined) return c;
             if (c.__isDocumentFragment__) {
@@ -8101,6 +8145,7 @@ var window = {
     _lumen_dispatch_composition: _lumen_dispatch_composition,
     _lumen_dispatch_mouse_event:   _lumen_dispatch_mouse_event,
     _lumen_dispatch_pointer_event: _lumen_dispatch_pointer_event,
+    _lumen_dispatch_capture_event: _lumen_dispatch_capture_event,
     _lumen_dispatch_key_event:     _lumen_dispatch_key_event,
     _lumen_dispatch_rich:          _lumen_dispatch_rich,
     _lumen_set_ime_target: _lumen_set_ime_target,
@@ -24065,5 +24110,110 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let v = rt.eval("typeof window.AnimationPlaybackEvent === 'function'").unwrap();
         assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Pointer Events Level 3 §4.1 — pointer capture ────────────────────────
+
+    #[test]
+    fn pointer_event_level3_altitude_azimuth_properties() {
+        // L3 PointerEvent must expose altitudeAngle=π/2 and azimuthAngle=0 for mouse.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointerdown', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_event(el.__nid__, 'pointerdown', 0, 0, 0, 1, 0); \
+             Math.abs(got.altitudeAngle - Math.PI / 2) < 0.001 && got.azimuthAngle === 0 && \
+             got.width === 1 && got.height === 1 && \
+             got.tangentialPressure === 0 && got.tiltX === 0 && got.tiltY === 0 && \
+             got.twist === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_event_get_coalesced_events_returns_array() {
+        // getCoalescedEvents() must return an array containing the event itself.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var got = null; \
+             el.addEventListener('pointermove', function(e) { got = e; }); \
+             _lumen_dispatch_pointer_event(el.__nid__, 'pointermove', 5, 5, 0, 0, 0); \
+             Array.isArray(got.getCoalescedEvents()) && got.getCoalescedEvents().length === 1 && \
+             Array.isArray(got.getPredictedEvents()) && got.getPredictedEvents().length === 0"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_has_set_pointer_capture_method() {
+        // Element must expose setPointerCapture, releasePointerCapture, hasPointerCapture.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             typeof el.setPointerCapture === 'function' && \
+             typeof el.releasePointerCapture === 'function' && \
+             typeof el.hasPointerCapture === 'function'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_pointer_capture_fires_gotpointercapture() {
+        // setPointerCapture(1) must fire 'gotpointercapture' on the element (non-bubbling).
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var parent = document.createElement('div'); parent.appendChild(el); document.body.appendChild(parent); \
+             var got_on_el = false; var bubbled_to_parent = false; \
+             el.addEventListener('gotpointercapture', function(e) { got_on_el = true; }); \
+             parent.addEventListener('gotpointercapture', function(e) { bubbled_to_parent = true; }); \
+             el.setPointerCapture(1); \
+             got_on_el && !bubbled_to_parent"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn release_pointer_capture_fires_lostpointercapture() {
+        // releasePointerCapture(1) must fire 'lostpointercapture' on the element (non-bubbling).
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var lost = false; \
+             el.addEventListener('lostpointercapture', function() { lost = true; }); \
+             el.setPointerCapture(1); \
+             el.releasePointerCapture(1); \
+             lost"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn element_has_ongotpointercapture_handlers() {
+        // Element must expose ongotpointercapture and onlostpointercapture as null by default.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('button'); document.body.appendChild(el); \
+             el.ongotpointercapture === null && el.onlostpointercapture === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_capture_event_no_bubble() {
+        // _lumen_dispatch_capture_event must fire a non-bubbling PointerEvent.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var parent = document.createElement('div'); document.body.appendChild(parent); \
+             var child = document.createElement('span'); parent.appendChild(child); \
+             var fired = false; var bubbled = false; \
+             child.addEventListener('gotpointercapture', function(e) { fired = true; }); \
+             parent.addEventListener('gotpointercapture', function(e) { bubbled = true; }); \
+             _lumen_dispatch_capture_event(child.__nid__, 'gotpointercapture'); \
+             fired && !bubbled"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }

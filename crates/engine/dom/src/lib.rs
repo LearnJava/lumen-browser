@@ -967,6 +967,14 @@ pub struct Document {
     /// Set by the HTML parser when the viewport meta tag is encountered in `<head>`.
     /// Used by the shell to compute the effective CSS layout viewport width/scale.
     viewport_meta: Option<ViewportMeta>,
+    /// Active pointer captures: maps `pointerId` → captured `NodeId`.
+    ///
+    /// Set by `Element.setPointerCapture(pointerId)` (W3C Pointer Events L3 §4.1).
+    /// All pointer events for a captured `pointerId` are routed to the capture
+    /// target instead of the hit-tested element, until the capture is released.
+    /// Not serialised — captures are transient input state cleared on page restore.
+    #[serde(skip)]
+    pointer_captures: HashMap<u32, NodeId>,
 }
 
 impl Default for Document {
@@ -996,6 +1004,7 @@ impl Document {
             timing_origin: 0.0,
             js_refs: HashMap::new(),
             viewport_meta: None,
+            pointer_captures: HashMap::new(),
         }
     }
 
@@ -1834,6 +1843,37 @@ pub fn is_element_draggable(doc: &Document, node: NodeId) -> bool {
         return attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("href"));
     }
     tag.eq_ignore_ascii_case("img")
+}
+
+/// Set pointer capture for `pointer_id` to `node` (W3C Pointer Events L3 §4.1).
+///
+/// Returns `true` when a prior capture was replaced by a new target.
+/// Shell must fire `gotpointercapture` on `node` after calling this.
+pub fn set_pointer_capture(doc: &mut Document, node: NodeId, pointer_id: u32) -> bool {
+    doc.pointer_captures.insert(pointer_id, node).is_some()
+}
+
+/// Release pointer capture for `pointer_id` from `node`.
+///
+/// No-op when `node` does not hold the capture for `pointer_id`.
+/// Shell must fire `lostpointercapture` on `node` after calling this.
+pub fn release_pointer_capture(doc: &mut Document, node: NodeId, pointer_id: u32) {
+    if doc.pointer_captures.get(&pointer_id) == Some(&node) {
+        doc.pointer_captures.remove(&pointer_id);
+    }
+}
+
+/// Returns `true` if `node` currently holds pointer capture for `pointer_id`.
+pub fn has_pointer_capture(doc: &Document, node: NodeId, pointer_id: u32) -> bool {
+    doc.pointer_captures.get(&pointer_id) == Some(&node)
+}
+
+/// Returns the element that holds pointer capture for `pointer_id`, if any.
+///
+/// Shell uses this to redirect pointer events to the capture target instead of
+/// the element returned by hit testing.
+pub fn pointer_capture_target(doc: &Document, pointer_id: u32) -> Option<NodeId> {
+    doc.pointer_captures.get(&pointer_id).copied()
 }
 
 /// Собрать имена и значения submittable-контролов формы из DOM-атрибутов.
