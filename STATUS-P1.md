@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH3-3: getUserMedia Phase 1  branch: p1-ph3-3-getusermedia
-Next step: AudioCaptureProvider trait → crates/core/src/ext.rs:2872
+—
 
 ---
 
@@ -18,7 +17,7 @@ Next step: AudioCaptureProvider trait → crates/core/src/ext.rs:2872
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
 | PH3-1 | ~~**DevTools Elements styled-rules panel**~~ ✅ завершена | M | `lumen-shell` (devtools/) |
-| PH3-3 | **getUserMedia Phase 1** — реальный захват аудио через WinMM/WASAPI (Windows) / ALSA (Linux); `getUserMedia({audio:true})` → `MediaStream` с PCM | L | `lumen-js`, `lumen-shell` |
+| PH3-3 | ~~**getUserMedia Phase 1**~~ ✅ завершена | L | `lumen-js`, `lumen-shell` |
 | PH3-4 | **Offscreen Canvas Phase 1** — `new OffscreenCanvas(w,h)` + `transferControlToOffscreen()` + `postMessage` transfer; CPU render path | M | `lumen-js`, `lumen-paint` |
 | PH3-5 | **Web Workers Phase 1** — `new Worker(url)` → отдельный QuickJS-контекст в треде; `postMessage` / `onmessage` channel; `importScripts()` | L | `lumen-js`, `lumen-shell` |
 
@@ -28,6 +27,7 @@ Next step: AudioCaptureProvider trait → crates/core/src/ext.rs:2872
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH3-3: getUserMedia Phase 1 | `AudioCaptureProvider` + `PlatformAudioCapture` (cpal/WASAPI/ALSA); `__lumen_start_audio_capture` + JS MediaStreamTrack. 247 тестов. |
 | 2026-06-15 | PH3-2: `lumen-bidi-server` standalone крейт | WebDriver BiDi сервер вынесен из `shell/src/bidi/` в отдельный крейт. `lumen_bidi_server::spawn` — единственный публичный API. 89 тестов. |
 | 2026-06-15 | PH3-1: DevTools Styles-таб | `ComplexSelector::to_css_str()`, `matched_rules_for_node()`, `InspectorTab::Styles` — CSS правила для выбранного узла в DevTools. 16 новых тестов. |
 | 2026-06-15 | 9F.3: Tor circuit (`--tor` CLI) | `extract_tor_mode()` + `check_tor_connectivity()` + override `FingerprintProfile` → TorBrowser + `socks5://127.0.0.1:9050` + `no_persistent_state`. Завершает ADR-007 (все 6 слоёв). 6 тестов. |
