@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH3-2: `lumen-bidi-server` standalone крейт  branch: p1-ph3-2-bidi-server
-Next step: clippy+tests OK, готово к мержу  crates/bidi-server/src/lib.rs:1
+—
 
 ---
 
@@ -17,8 +16,7 @@ Next step: clippy+tests OK, готово к мержу  crates/bidi-server/src/l
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PH3-1 | **DevTools Elements styled-rules panel** — список CSS-правил, применённых к выбранному элементу; поверх existing inspector + `InProcessSession::computed_style_json`; правая панель inspector.rs | M | `lumen-shell` (devtools/) |
-| PH3-2 | **`lumen-bidi-server` standalone крейт** — вынос BiDi из `shell/src/bidi/` в отдельный крейт; shell импортирует; PH2-11 задел | M | `lumen-shell`, новый `lumen-bidi-server` |
+| PH3-1 | ~~**DevTools Elements styled-rules panel**~~ ✅ завершена | M | `lumen-shell` (devtools/) |
 | PH3-3 | **getUserMedia Phase 1** — реальный захват аудио через WinMM/WASAPI (Windows) / ALSA (Linux); `getUserMedia({audio:true})` → `MediaStream` с PCM | L | `lumen-js`, `lumen-shell` |
 | PH3-4 | **Offscreen Canvas Phase 1** — `new OffscreenCanvas(w,h)` + `transferControlToOffscreen()` + `postMessage` transfer; CPU render path | M | `lumen-js`, `lumen-paint` |
 | PH3-5 | **Web Workers Phase 1** — `new Worker(url)` → отдельный QuickJS-контекст в треде; `postMessage` / `onmessage` channel; `importScripts()` | L | `lumen-js`, `lumen-shell` |
@@ -29,6 +27,7 @@ Next step: clippy+tests OK, готово к мержу  crates/bidi-server/src/l
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH3-2: `lumen-bidi-server` standalone крейт | WebDriver BiDi сервер вынесен из `shell/src/bidi/` в отдельный крейт. `lumen_bidi_server::spawn` — единственный публичный API. 89 тестов. |
 | 2026-06-15 | PH3-1: DevTools Styles-таб | `ComplexSelector::to_css_str()`, `matched_rules_for_node()`, `InspectorTab::Styles` — CSS правила для выбранного узла в DevTools. 16 новых тестов. |
 | 2026-06-15 | 9F.3: Tor circuit (`--tor` CLI) | `extract_tor_mode()` + `check_tor_connectivity()` + override `FingerprintProfile` → TorBrowser + `socks5://127.0.0.1:9050` + `no_persistent_state`. Завершает ADR-007 (все 6 слоёв). 6 тестов. |
 | 2026-06-15 | PH2-7: Accessibility tree + platform bridges Phase 1 | `WinUiaBridge` Phase 1: `init_hwnd()` + `NotifyWinEvent` (EVENT_OBJECT_FOCUS/REORDER/STATECHANGE) + `handle_wm_get_object` + `ax_role_to_msaa()` (60 вариантов). 125 тестов в lumen-a11y. |
