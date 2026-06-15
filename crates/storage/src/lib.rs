@@ -35,6 +35,7 @@ pub mod print_prefs;
 pub mod permissions;
 pub mod permissions_policy;
 pub mod plugins;
+pub mod profile_vault;
 pub mod profiles;
 pub mod psl;
 pub mod push_subscriptions;

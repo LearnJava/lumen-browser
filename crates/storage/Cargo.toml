@@ -26,6 +26,15 @@ flate2.workspace = true
 # Provisional (§5): LZ4 frame compression for T2 sleeping-tab JS heap blobs (GG-5).
 # Faster compress/decompress than zlib at comparable ratio for binary/mixed data.
 lz4_flex.workspace = true
+# Permanent (§5, ADR-011): AES-256-GCM for per-profile storage key wrapping.
+# Already in the dependency graph via lumen-js — zero incremental build cost.
+aes-gcm = "0.10"
+# Permanent (§5, ADR-011): HMAC-SHA256 for PBKDF2 key derivation in profile vault.
+# Already in the dependency graph via lumen-js — zero incremental cost.
+hmac = "0.12"
+# Permanent (§5): OS CSPRNG for generating random key material (keys, salts, nonces).
+# Already in the dependency graph via lumen-js and lumen-network.
+getrandom = "0.2"
 
 [dev-dependencies]
 # Integration test only: serialise a real parsed `Document` to verify the
