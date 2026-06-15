@@ -233,6 +233,28 @@ fn main() -> ExitCode {
         config::init_global(cfg);
     }
 
+    let (tor_port, rest_args) = extract_tor_mode(&rest_args);
+
+    // --tor: переключить на профиль TorBrowser + SOCKS5 + без персистентного хранилища.
+    if let Some(port) = tor_port {
+        if !check_tor_connectivity(port) {
+            eprintln!(
+                "lumen --tor: Tor-демон недоступен на 127.0.0.1:{port} — \
+                 запустите Tor перед запуском Lumen"
+            );
+            return ExitCode::FAILURE;
+        }
+        let mut cfg = config::global().clone();
+        cfg.http_profile = lumen_network::HttpProfile::TorBrowser;
+        cfg.socks5_proxy = Some(format!("socks5://127.0.0.1:{port}"));
+        cfg.no_persistent_state = true;
+        config::init_global(cfg);
+        eprintln!(
+            "lumen: Tor-режим активирован (socks5://127.0.0.1:{port}, \
+             профиль TorBrowser, без персистентного хранилища)"
+        );
+    }
+
     let cli = if let Some(output) = pdf_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
         CliMode::PrintToPdf { source, output }
@@ -862,6 +884,7 @@ fn print_usage() {
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
+    eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
     eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
     eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
@@ -1115,6 +1138,49 @@ fn extract_proxy(args: &[String]) -> Result<(Option<String>, Vec<String>), Strin
         i += 1;
     }
     Ok((proxy, rest))
+}
+
+/// Извлечь `--tor` / `--tor-port N` из аргументов.
+///
+/// `--tor` активирует Tor-режим: профиль TorBrowser, SOCKS5 через локальный демон,
+/// без персистентного хранилища. `--tor-port N` переопределяет порт SOCKS5
+/// (по умолчанию 9050; Tor Browser bundle использует 9150).
+///
+/// Возвращает `(Some(port), остальные_аргументы)` или `(None, все_аргументы)`.
+fn extract_tor_mode(args: &[String]) -> (Option<u16>, Vec<String>) {
+    let mut port: u16 = 9050;
+    let mut tor_found = false;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--tor" {
+            tor_found = true;
+        } else if args[i] == "--tor-port" {
+            i += 1;
+            if let Some(p) = args.get(i).and_then(|s| s.parse().ok()) {
+                port = p;
+            }
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    if tor_found {
+        (Some(port), rest)
+    } else {
+        (None, rest)
+    }
+}
+
+/// Проверить доступность Tor-демона: попытаться открыть TCP-соединение к SOCKS5-порту.
+///
+/// Возвращает `true` если порт принимает соединения (таймаут 2 с). Не выполняет
+/// SOCKS5-хэндшейк — только проверяет что сокет слушает.
+fn check_tor_connectivity(port: u16) -> bool {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
 }
 
 /// Источник страницы. Запоминается в `Lumen`, чтобы reload (F5/Ctrl+R) мог
@@ -5517,10 +5583,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         #[cfg(target_os = "windows")]
         {
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = window.window_handle() {
-                if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                    self.platform_bridge.init_hwnd(h.hwnd.get());
-                }
+            if let Ok(handle) = window.window_handle()
+                && let RawWindowHandle::Win32(h) = handle.as_raw()
+            {
+                self.platform_bridge.init_hwnd(h.hwnd.get());
             }
         }
 
@@ -14467,5 +14533,51 @@ mod tests {
         // Malformed URL — should return None without panicking.
         let result = load_css_for_streaming("http://");
         assert!(result.is_none());
+    }
+
+    // ── extract_tor_mode ─────────────────────────────────────────────────────
+
+    #[test]
+    fn tor_mode_not_present() {
+        let (port, rest) = extract_tor_mode(&args(&["page.html"]));
+        assert!(port.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn tor_mode_basic() {
+        let (port, rest) = extract_tor_mode(&args(&["--tor", "page.html"]));
+        assert_eq!(port, Some(9050));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn tor_mode_custom_port() {
+        let (port, rest) = extract_tor_mode(&args(&["--tor", "--tor-port", "9150", "page.html"]));
+        assert_eq!(port, Some(9150));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn tor_mode_port_before_tor_flag() {
+        // --tor-port before --tor is consumed regardless of order.
+        let (port, rest) = extract_tor_mode(&args(&["--tor-port", "9150", "--tor"]));
+        assert_eq!(port, Some(9150));
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn tor_mode_no_flag_no_extra_port() {
+        // --tor-port without --tor → tor_found=false → return None (port consumed but no tor).
+        let (port, rest) = extract_tor_mode(&args(&["--tor-port", "9150", "page.html"]));
+        assert!(port.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn tor_mode_empty_args() {
+        let (port, rest) = extract_tor_mode(&[]);
+        assert!(port.is_none());
+        assert!(rest.is_empty());
     }
 }
