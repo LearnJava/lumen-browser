@@ -533,11 +533,21 @@ impl CompositorThread {
     /// Запускает compositor thread. `handle` — разделяемый доступ к state
     /// и notifier-у того же `ThreadedCompositor`, которым владеет main thread.
     pub fn spawn(handle: ThreadedCompositorHandle) -> Self {
+        Self::spawn_with_tick(handle, TARGET_FRAME_DURATION)
+    }
+
+    /// Like [`spawn`](Self::spawn) but with an explicit idle fallback tick.
+    ///
+    /// Production always uses `TARGET_FRAME_DURATION` (60 fps idle wakeup).
+    /// Tests inject a very large tick so that a `commit()` flush can *only*
+    /// be served by the condvar `notify()` path — making the notify-wakeup
+    /// assertion deterministic instead of racing the idle timer under load.
+    pub(crate) fn spawn_with_tick(handle: ThreadedCompositorHandle, tick: Duration) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_flag = Arc::clone(&shutdown);
         let notifier = Arc::clone(&handle.notifier);
         let join_handle = thread::spawn(move || {
-            compositor_thread_main(handle, shutdown_flag);
+            compositor_thread_main(handle, shutdown_flag, tick);
         });
         Self {
             shutdown,
@@ -565,9 +575,9 @@ impl Drop for CompositorThread {
     }
 }
 
-fn compositor_thread_main(handle: ThreadedCompositorHandle, shutdown: Arc<AtomicBool>) {
+fn compositor_thread_main(handle: ThreadedCompositorHandle, shutdown: Arc<AtomicBool>, tick: Duration) {
     while !shutdown.load(Ordering::Relaxed) {
-        handle.notifier.wait_for_next_tick(TARGET_FRAME_DURATION);
+        handle.notifier.wait_for_next_tick(tick);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
@@ -880,13 +890,45 @@ mod tests {
 
     // --- CompositorThread: реальный OS-поток ---
 
+    /// Idle fallback tick for the wakeup tests. Set far above any realistic
+    /// scheduler delay so that, within the test's deadline, the *only* thing
+    /// that can flush a committed tree is the `commit() → notify()` condvar
+    /// wakeup — never the idle timer. This isolates the notify path
+    /// deterministically and removes the wall-clock flakiness of BUG-122
+    /// (a tight 50 мс bound failed under parallel-session CPU contention).
+    const TEST_IDLE_TICK: Duration = Duration::from_secs(3600);
+
+    /// Generous wall-clock cap. A working notify wakes the thread in well
+    /// under a millisecond; this large bound trips only on a real lost-wakeup
+    /// or deadlock (which would otherwise hang for `TEST_IDLE_TICK`), never on
+    /// transient scheduler jitter.
+    const TEST_WAKE_DEADLINE: Duration = Duration::from_secs(10);
+
+    /// Block until the compositor thread has published an active tree, or fail
+    /// once `TEST_WAKE_DEADLINE` elapses. Returns the published tree.
+    fn await_active_tree(owner: &ThreadedCompositor) -> Arc<dyn LayerTree + Send + Sync> {
+        use std::time::Instant;
+        let deadline = Instant::now() + TEST_WAKE_DEADLINE;
+        loop {
+            if let Some(tree) = owner.active_tree() {
+                return tree;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "compositor thread не flush-нул за {TEST_WAKE_DEADLINE:?} — \
+                 потерянный wakeup или дедлок (idle tick = {TEST_IDLE_TICK:?})"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     #[test]
     fn compositor_thread_flushes_pending_asynchronously() {
-        use std::time::{Duration, Instant};
-
         let mut owner = ThreadedCompositor::new();
         let handle = owner.handle();
-        let ct = CompositorThread::spawn(handle);
+        // Disable the idle timer so the flush is served purely by the
+        // commit() notify path (see TEST_IDLE_TICK).
+        let ct = CompositorThread::spawn_with_tick(handle, TEST_IDLE_TICK);
 
         let bbox = Rect::new(0.0, 0.0, 256.0, 128.0);
         owner.commit(
@@ -894,54 +936,31 @@ mod tests {
             Arc::new(BasicLayerTree::single_layer(bbox, sample_commands())),
         );
 
-        // Vsync wakeup: поток должен flush-нуть значительно быстрее 200 мс.
-        let deadline = Instant::now() + Duration::from_millis(200);
-        loop {
-            if owner.active_tree().is_some() {
-                break;
-            }
-            assert!(Instant::now() < deadline, "compositor thread не flush-нул за 200 мс");
-            thread::sleep(Duration::from_millis(1));
-        }
-
-        let active = owner.active_tree().unwrap();
+        let active = await_active_tree(&owner);
         assert_eq!(active.layer(0).unwrap().bbox(), bbox);
         ct.shutdown();
     }
 
     #[test]
     fn compositor_thread_wakes_on_commit_faster_than_full_frame() {
-        // commit() вызывает notify() — поток должен проснуться << TARGET_FRAME_DURATION
-        use std::time::{Duration, Instant};
-
+        // commit() вызывает notify() — поток должен проснуться по condvar, а не
+        // по idle-таймеру. Idle tick поднят до часа, поэтому flush в пределах
+        // дедлайна доказывает именно notify-wakeup, без гонки с планировщиком ОС.
         let mut owner = ThreadedCompositor::new();
         let handle = owner.handle();
-        let ct = CompositorThread::spawn(handle);
+        let ct = CompositorThread::spawn_with_tick(handle, TEST_IDLE_TICK);
 
         // Даём потоку уйти в ожидание на condvar.
         thread::sleep(Duration::from_millis(5));
 
         let bbox = Rect::new(0.0, 0.0, 64.0, 64.0);
-        let t0 = Instant::now();
         owner.commit(
             Arc::new(PropertyTrees::empty()),
             Arc::new(BasicLayerTree::single_layer(bbox, Vec::new())),
         );
 
-        // Ждём flush; при condvar-wakeup должно уложиться в 50 мс
-        // (TARGET_FRAME_DURATION ~16.67 мс + планировщик ОС).
-        let deadline = t0 + Duration::from_millis(50);
-        loop {
-            if owner.active_tree().is_some() {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "vsync wakeup не сработал за 50 мс"
-            );
-            thread::sleep(Duration::from_millis(1));
-        }
-
+        let active = await_active_tree(&owner);
+        assert_eq!(active.layer(0).unwrap().bbox(), bbox);
         ct.shutdown();
     }
 
