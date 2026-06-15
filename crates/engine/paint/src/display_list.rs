@@ -2600,13 +2600,24 @@ fn fill_buckets(
 
         // BUG-131: собственный rect-клип этого non-SC box-а добавляется к
         // цепочке для дочерних SC (его inline push/pop их не охватывает).
-        // Scroll-слои не наследуем — переустановка translate конфликтовала бы
-        // с `set_transform` ребёнка (вне scope; overflow:hidden не затронут).
+        // BUG-159: scroll-слой такого non-SC box-а наследуем ТОЖЕ. Плоский
+        // `overflow:auto`/`scroll` контейнер, не являющийся SC-owner, эмитит
+        // `PushScrollLayer`/`PopScrollLayer` inline в `contents` текущего SC;
+        // их Pop закрывается ДО того, как дочерний stacking context рисуется
+        // (более поздний слот painting order), поэтому потомок сбегал бы и из
+        // scroll-клипа, и из scroll-translate — вёл бы себя как `position:fixed`
+        // (не скроллился при прокрутке). Переустанавливаем scroll-слой как
+        // внешний слой каждого дочернего SC, зеркалом clip-наследования. Если
+        // же scroll-контейнер сам owns stacking context — он оборачивает
+        // потомков через root_bg/post (PushScrollLayer в RootBackground,
+        // PopScrollLayer в CloseLayer после всех детей), и сюда не попадает.
         let mut child_clips: Vec<DisplayCommand> = inherited_clips.to_vec();
         for cmd in &ops.overflow_pre {
             if matches!(
                 cmd,
-                DisplayCommand::PushClipRect { .. } | DisplayCommand::PushClipRoundedRect { .. }
+                DisplayCommand::PushClipRect { .. }
+                    | DisplayCommand::PushClipRoundedRect { .. }
+                    | DisplayCommand::PushScrollLayer { .. }
             ) {
                 child_clips.push(cmd.clone());
             }
@@ -2616,9 +2627,24 @@ fn fill_buckets(
             let child_creates_sc =
                 box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
             if child_creates_sc {
+                // BUG-159: `position:fixed` привязан к viewport, `sticky` имеет
+                // собственную scroll-aware машинерию — ни тот, ни другой не
+                // должны наследовать scroll-translate предка, иначе fixed-оверлей
+                // уезжал бы вместе со страницей. Rect-клипы они по-прежнему
+                // наследуют (поведение BUG-131 без изменений).
+                let child_layers: Vec<DisplayCommand> =
+                    if matches!(child.style.position, Position::Fixed | Position::Sticky) {
+                        child_clips
+                            .iter()
+                            .filter(|c| !matches!(c, DisplayCommand::PushScrollLayer { .. }))
+                            .cloned()
+                            .collect()
+                    } else {
+                        child_clips.clone()
+                    };
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_clips);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_layers);
             } else {
                 fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &child_clips);
             }
@@ -8553,6 +8579,93 @@ mod tests {
         assert!(
             has_container_clip,
             "container's 100x100 overflow clip must wrap the transformed child"
+        );
+    }
+
+    #[test]
+    fn ordered_zindexed_child_scrolls_with_overflow_auto_ancestor() {
+        // BUG-159: a z-indexed (own-SC) child of a plain `overflow:auto` scroll
+        // container is emitted in a later painting-order slot. The container is
+        // NOT itself a stacking context, so its PushScrollLayer/PopScrollLayer are
+        // inline in the parent SC bucket and close before the child SC paints.
+        // Without re-establishment the child escapes the scroll layer and behaves
+        // like position:fixed (does not scroll). The fix re-pushes the scroll
+        // layer around the child SC — net open scroll-layer depth at the child
+        // must be >= 1.
+        let dl = build_ordered(
+            "<div class='scroll'><div class='inner'></div></div>",
+            "body { margin:0; } \
+             .scroll { width:100px; height:100px; overflow:auto; } \
+             .inner { position:relative; z-index:1; width:50px; height:200px; \
+                      background:#0000ff; }",
+        );
+        let inner_fill = dl
+            .iter()
+            .position(|c| matches!(
+                c,
+                DisplayCommand::FillRect { color, .. }
+                    if color.r == 0 && color.g == 0 && color.b == 255
+            ))
+            .expect("inner box FillRect must be emitted");
+        let mut depth: i32 = 0;
+        for c in &dl[..inner_fill] {
+            match c {
+                DisplayCommand::PushScrollLayer { .. } => depth += 1,
+                DisplayCommand::PopScrollLayer => depth -= 1,
+                _ => {}
+            }
+        }
+        assert!(
+            depth >= 1,
+            "z-indexed child must stay inside its overflow:auto ancestor's scroll \
+             layer (open scroll-layer depth = {depth}, expected >= 1)"
+        );
+        // The re-established scroll layer must clip to the container padding box.
+        let has_container_scroll = dl[..inner_fill].iter().any(|c| matches!(
+            c,
+            DisplayCommand::PushScrollLayer { clip_rect, .. }
+                if (clip_rect.width - 100.0).abs() < 0.5
+                    && (clip_rect.height - 100.0).abs() < 0.5
+        ));
+        assert!(
+            has_container_scroll,
+            "container's 100x100 scroll layer must wrap the z-indexed child"
+        );
+    }
+
+    #[test]
+    fn ordered_fixed_child_does_not_inherit_ancestor_scroll_layer() {
+        // BUG-159: position:fixed is anchored to the viewport — it must NOT
+        // inherit a scrolling ancestor's scroll-layer translate, or a fixed
+        // overlay would scroll away with the page. A fixed child of an
+        // `overflow:auto` container must paint with net scroll-layer depth 0.
+        let dl = build_ordered(
+            "<div class='scroll'><div class='fx'></div></div>",
+            "body { margin:0; } \
+             .scroll { width:100px; height:100px; overflow:auto; } \
+             .fx { position:fixed; top:0; left:0; width:50px; height:50px; \
+                   background:#00ff00; }",
+        );
+        let fx_fill = dl
+            .iter()
+            .position(|c| matches!(
+                c,
+                DisplayCommand::FillRect { color, .. }
+                    if color.r == 0 && color.g == 255 && color.b == 0
+            ))
+            .expect("fixed box FillRect must be emitted");
+        let mut depth: i32 = 0;
+        for c in &dl[..fx_fill] {
+            match c {
+                DisplayCommand::PushScrollLayer { .. } => depth += 1,
+                DisplayCommand::PopScrollLayer => depth -= 1,
+                _ => {}
+            }
+        }
+        assert_eq!(
+            depth, 0,
+            "fixed child must NOT inherit the scrolling ancestor's scroll layer \
+             (open scroll-layer depth = {depth}, expected 0)"
         );
     }
 

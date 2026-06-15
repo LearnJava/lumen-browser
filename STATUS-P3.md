@@ -117,6 +117,14 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-159** (2026-06-15) — z-indexed (own-SC) потомок плоского `overflow:auto`/`scroll`
+  scroll-контейнера (не являющегося SC-owner) сбегал из scroll-слоя: его `PushScrollLayer`/
+  `PopScrollLayer` эмитятся inline в `contents` родительского SC и закрываются до того, как
+  потомок-SC рисуется в позднем слоте painting order → потомок вёл себя как `position:fixed`
+  (не скроллился). Фикс в `fill_buckets` (`paint/src/display_list.rs`): non-SC ветка наследует
+  `PushScrollLayer` дочерним SC (зеркало clip-наследования BUG-131), `fixed`/`sticky` исключены.
+  Регресс-тесты `ordered_zindexed_child_scrolls_with_overflow_auto_ancestor` +
+  `ordered_fixed_child_does_not_inherit_ancestor_scroll_layer`; CPU snapshot gate байт-нейтрален.
 - **BUG-160** (2026-06-15) — WOFF2-шрифты не декодировались («unexpected end of font data»),
   падал любой реальный сайт с woff2-вебшрифтами. Корень — целиком в реконструкции transformed
   `glyf`/`loca` (`font/src/woff2.rs`, WOFF2 spec §5.2): координаты точек читались из `flagStream`
