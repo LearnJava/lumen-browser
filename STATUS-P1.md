@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH3-1: DevTools Elements styled-rules panel  branch: p1-ph3-1-devtools-styles
+Next step: реализовать `to_css_str()` + `matched_rules_for_node()` + Styles-таб
 
 ---
 
