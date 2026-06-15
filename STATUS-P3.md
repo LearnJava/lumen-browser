@@ -130,6 +130,15 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
   схлопывала item в 0. Регресс-тест `flex_column_basis_zero_item_keeps_content_height`
   (row-flex > column-flex > `flex:1`, двухпроходный путь). Проверено на живом lenta.ru.
 
+- **BUG-164** (2026-06-15) — внешние `<script src>` не скачивались/не исполнялись (сборщик
+  брал только инлайны), из-за чего SPA-бандлы (lenta.ru owlBundle.js и т.д.) молчали.
+  Новый `collect_scripts_ordered` помечает внешние скрипты как `ScriptSource::External`,
+  `resolve_script_sources` дозагружает их тела через subresource-фетчер
+  (`RequestDestination::Script`, зеркало `load_linked_stylesheets`), `run_scripts_with_dom`
+  принимает готовые classic/module списки в порядке документа. `src` побеждает inline,
+  не-JS блоки (importmap/ld+json/json/speculationrules) игнорируются. То же на restore из
+  hibernation. 5 регресс-тестов + функциональная проверка (инъекция `<p>` внешним скриптом
+  попала в display list). Снимает в части загрузки JS первопричину BUG-163.
 - **BUG-159** (2026-06-15) — z-indexed (own-SC) потомок плоского `overflow:auto`/`scroll`
   scroll-контейнера (не являющегося SC-owner) сбегал из scroll-слоя: его `PushScrollLayer`/
   `PopScrollLayer` эмитятся inline в `contents` родительского SC и закрываются до того, как

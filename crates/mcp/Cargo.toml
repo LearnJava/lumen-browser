@@ -1,6 +1,6 @@
 [package]
 name = "lumen-mcp"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 resolver = "3"
 publish = false

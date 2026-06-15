@@ -24,7 +24,10 @@ pub use h2_settings::{H2Settings, H2StreamPriority};
 pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hints_headers};
 
 /// HTTP/1.1 User-Agent value for Lumen-native profile.
-pub const DEFAULT_USER_AGENT: &str = "Lumen/0.0.1";
+///
+/// Tracks the workspace version (`CARGO_PKG_VERSION`) so it never drifts on a
+/// version bump — see the versioning policy in `CLAUDE.md`.
+pub const DEFAULT_USER_AGENT: &str = concat!("Lumen/", env!("CARGO_PKG_VERSION"));
 
 /// Chrome 130 User-Agent — used by `HttpProfile::Chrome` and `HttpProfile::Strict`
 /// to match current stable Chrome on Windows so sites that block unknown clients

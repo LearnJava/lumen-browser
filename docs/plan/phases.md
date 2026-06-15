@@ -2,7 +2,7 @@
 
 ## 16. Фазы разработки (реалистично)
 
-### Фаза 0 — Прототип (3 месяца)
+### Фаза 0 — Прототип (3 месяца) ✅ закрыта 2026-05-26
 - ✅ Workspace, base crates.
 - 🟡 HTML parser — минимум готов (см. выше).
 - 🟡 CSS parser — минимум готов (см. выше).
@@ -23,7 +23,7 @@
   - **Invariant 3: pure layout + paint** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D).
 - **Цель:** открыть простую текстовую статью без стилей. Доказательство концепции, **проверяемое из Rust без запуска отдельного процесса**, с зафиксированными tier-инвариантами для будущей лёгкости вкладки.
 
-### Фаза 1 — v0.1 «Reader» (9 месяцев от старта)
+### Фаза 1 — v0.1 «Reader» (9 месяцев от старта) ✅ в основном выполнена
 - **Базовая пригодность shell** — без этого «открыть Habr-статью» невозможно как демо:
   - **Font fallback / matcher.** Рендерер сейчас всегда `Inter Regular` — любая страница с эмодзи / CJK / `font-family: Roboto` падает в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText — без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` уже есть, не используется в paint.
   - **HiDPI / DPR-awareness.** ✅ paint-side: `Renderer` хранит `scale_factor` и делит viewport uniform на него (1 CSS px = `scale_factor` device px на 4K). ✅ Layout-side: viewport читается из `Renderer::viewport_size()` на каждый resize; `LayoutSource {document, stylesheet}` хранится в `Lumen` и переиспользуется для relayout без re-fetch/re-parse.
@@ -65,7 +65,7 @@
   - **Базовый T1 (paused)** — JS event loop pause/unpause при hide/show вкладки.
 - **Цель:** ежедневный браузер для чтения статей; AI-агенты могут управлять Lumen через MCP без обёрток; **простая вкладка занимает ≤ 100 MB peak RSS**.
 
-### Фаза 2 — v0.5 «Interactive» (18–24 месяца)
+### Фаза 2 — v0.5 «Interactive» (18–24 месяца) 🟡 текущая фаза (app v0.2.0 → v0.5 по завершении)
 - QuickJS интеграция.
 - Tier 1 Web APIs.
 - Формы, базовая интерактивность.

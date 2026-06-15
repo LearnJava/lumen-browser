@@ -49,7 +49,7 @@ fn try_dispatch(message: &str) -> Result<String, String> {
 
 fn handle_browser_get_version() -> JsonValue {
     let mut obj = BTreeMap::new();
-    obj.insert("jsVersion".into(), JsonValue::String("0.0.1".into()));
+    obj.insert("jsVersion".into(), JsonValue::String(env!("CARGO_PKG_VERSION").into()));
     obj.insert("product".into(), JsonValue::String(format!("Lumen/{}", env!("CARGO_PKG_VERSION"))));
     obj.insert("protocolVersion".into(), JsonValue::String("1.3".into()));
     obj.insert("revision".into(), JsonValue::String("rev0".into()));
