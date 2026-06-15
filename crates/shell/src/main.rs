@@ -855,7 +855,8 @@ fn run_dump(
     kind: DumpKind,
     event_sink: Arc<dyn EventSink>,
 ) -> Result<(), Box<dyn Error>> {
-    let raw = source.load_bytes(event_sink.clone(), None)?;
+    let cookie_jar = Arc::new(lumen_storage::CookieJar::open_in_memory()?);
+    let raw = source.load_bytes(event_sink.clone(), Some(cookie_jar))?;
     match kind {
         DumpKind::Source => {
             let encoding = lumen_encoding::detect(&raw.bytes, raw.content_type);
@@ -2475,28 +2476,21 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
                 Err(e) => eprintln!("Пропуск CSS {}: {e}", path.display()),
             },
             ResolvedResource::Url(url) => {
-                use lumen_core::event::{Event, TabId};
                 use lumen_core::url::Url;
-                use lumen_network::{Origin, RequestDestination};
+                use lumen_network::RequestDestination;
 
                 let sub_url = match Url::parse(&url) {
                     Ok(u) => u,
                     Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); continue; }
                 };
 
-                // SOP: cross-origin stylesheets blocked without CORS in Phase 0.
-                // Same-origin и file-base — пропускают проверку.
-                if let Some(page_origin) = base.origin()
-                    && let Ok(sub_origin) = Origin::from_url(&sub_url)
-                    && !page_origin.same_origin(&sub_origin)
-                {
-                    sink.emit(&Event::RequestBlocked {
-                        tab_id: TabId(0),
-                        url: sub_url,
-                        reason: "sop: cross-origin stylesheet".to_owned(),
-                    });
-                    continue;
-                }
+                // Cross-origin stylesheets are allowed by the web platform:
+                // `<link rel=stylesheet>` is fetched in no-cors mode and the
+                // resulting styles apply normally (Fetch §request, HTML §link).
+                // CORS only gates script-level CSSOM reads (cssRules), not the
+                // visual application — so we fetch cross-origin CSS like any
+                // browser. Real sites host CSS on CDN subdomains (icdn.*,
+                // static.*); blocking them left pages unstyled.
 
                 let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                 match client.fetch_subresource(&sub_url, RequestDestination::Style) {
